@@ -3,7 +3,7 @@
 from idis.validators.audit_event_validator import AuditEventValidator
 from idis.validators.muhasabah import MuhasabahValidator, validate_muhasabah
 from idis.validators.no_free_facts import NoFreeFactsValidator
-from idis.validators.sanad_integrity import SanadIntegrityValidator
+from idis.validators.sanad_integrity import SanadIntegrityValidator, validate_sanad_integrity
 from idis.validators.schema_validator import (
     SchemaValidator,
     ValidationError,
@@ -18,5 +18,6 @@ __all__ = [
     "MuhasabahValidator",
     "validate_muhasabah",
     "SanadIntegrityValidator",
+    "validate_sanad_integrity",
     "AuditEventValidator",
 ]

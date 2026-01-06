@@ -1,8 +1,17 @@
-"""Tests for SanadIntegrityValidator - proves fail-closed behavior."""
+"""Tests for SanadIntegrityValidator - proves fail-closed behavior.
+
+Phase 1.3: Sanad Integrity Validator tests covering:
+- Fail-closed behavior (None, non-dict inputs)
+- Required field validation (sanad_id, claim_id, transmission_chain)
+- Transmission node integrity
+- Chain linkage validity (cycles, orphans, multiple roots)
+- UUID format validation
+- Defect consistency (FATAL -> grade D)
+"""
 
 from __future__ import annotations
 
-from idis.validators import SanadIntegrityValidator
+from idis.validators import SanadIntegrityValidator, validate_sanad_integrity
 
 
 class TestSanadIntegrityFailClosed:
@@ -252,3 +261,330 @@ class TestClaimIntegrity:
         result = validator.validate_claim(invalid_claim)
         assert not result.passed
         assert any(e.code == "INVALID_CLAIM_VERDICT" for e in result.errors)
+
+
+class TestChainLinkageValidation:
+    """Tests for chain linkage integrity - cycles, orphans, multiple roots."""
+
+    def _make_base_sanad(self) -> dict:
+        """Create a base valid sanad for modification in tests."""
+        return {
+            "sanad_id": "550e8400-e29b-41d4-a716-446655440000",
+            "tenant_id": "550e8400-e29b-41d4-a716-446655440001",
+            "claim_id": "550e8400-e29b-41d4-a716-446655440002",
+            "primary_evidence_id": "550e8400-e29b-41d4-a716-446655440003",
+            "extraction_confidence": 0.98,
+            "corroboration_status": "AHAD_1",
+            "sanad_grade": "B",
+            "transmission_chain": [],
+        }
+
+    def test_valid_chain_with_linkage_passes(self) -> None:
+        """Valid chain with root + child nodes passes."""
+        validator = SanadIntegrityValidator()
+        sanad = self._make_base_sanad()
+        sanad["transmission_chain"] = [
+            {
+                "node_id": "550e8400-e29b-41d4-a716-446655440010",
+                "node_type": "INGEST",
+                "actor_type": "SYSTEM",
+                "actor_id": "ingestion-service",
+                "timestamp": "2026-01-06T10:00:00Z",
+            },
+            {
+                "node_id": "550e8400-e29b-41d4-a716-446655440011",
+                "node_type": "EXTRACT",
+                "actor_type": "AGENT",
+                "actor_id": "extractor-v1",
+                "timestamp": "2026-01-06T10:01:00Z",
+                "prev_node_id": "550e8400-e29b-41d4-a716-446655440010",
+            },
+        ]
+
+        result = validator.validate_sanad(sanad)
+        assert result.passed, f"Expected pass but got: {result.errors}"
+
+    def test_orphan_parent_reference_fails(self) -> None:
+        """Node referencing non-existent parent fails."""
+        validator = SanadIntegrityValidator()
+        sanad = self._make_base_sanad()
+        sanad["transmission_chain"] = [
+            {
+                "node_id": "550e8400-e29b-41d4-a716-446655440010",
+                "node_type": "INGEST",
+                "actor_type": "SYSTEM",
+                "actor_id": "ingestion-service",
+                "timestamp": "2026-01-06T10:00:00Z",
+            },
+            {
+                "node_id": "550e8400-e29b-41d4-a716-446655440011",
+                "node_type": "EXTRACT",
+                "actor_type": "AGENT",
+                "actor_id": "extractor-v1",
+                "timestamp": "2026-01-06T10:01:00Z",
+                "prev_node_id": "550e8400-e29b-41d4-a716-446655440099",  # Non-existent!
+            },
+        ]
+
+        result = validator.validate_sanad(sanad)
+        assert not result.passed
+        assert any(e.code == "SANAD_ORPHAN_REFERENCE" for e in result.errors)
+
+    def test_cycle_in_chain_fails(self) -> None:
+        """Cycle in transmission chain fails."""
+        validator = SanadIntegrityValidator()
+        sanad = self._make_base_sanad()
+        sanad["transmission_chain"] = [
+            {
+                "node_id": "550e8400-e29b-41d4-a716-446655440010",
+                "node_type": "INGEST",
+                "actor_type": "SYSTEM",
+                "actor_id": "ingestion-service",
+                "timestamp": "2026-01-06T10:00:00Z",
+                "prev_node_id": "550e8400-e29b-41d4-a716-446655440012",  # Creates cycle
+            },
+            {
+                "node_id": "550e8400-e29b-41d4-a716-446655440011",
+                "node_type": "EXTRACT",
+                "actor_type": "AGENT",
+                "actor_id": "extractor-v1",
+                "timestamp": "2026-01-06T10:01:00Z",
+                "prev_node_id": "550e8400-e29b-41d4-a716-446655440010",
+            },
+            {
+                "node_id": "550e8400-e29b-41d4-a716-446655440012",
+                "node_type": "NORMALIZE",
+                "actor_type": "AGENT",
+                "actor_id": "normalizer-v1",
+                "timestamp": "2026-01-06T10:02:00Z",
+                "prev_node_id": "550e8400-e29b-41d4-a716-446655440011",
+            },
+        ]
+
+        result = validator.validate_sanad(sanad)
+        assert not result.passed
+        assert any(e.code == "SANAD_CYCLE_DETECTED" for e in result.errors)
+
+    def test_multiple_roots_fails(self) -> None:
+        """Multiple root nodes (no parent) fails."""
+        validator = SanadIntegrityValidator()
+        sanad = self._make_base_sanad()
+        sanad["transmission_chain"] = [
+            {
+                "node_id": "550e8400-e29b-41d4-a716-446655440010",
+                "node_type": "INGEST",
+                "actor_type": "SYSTEM",
+                "actor_id": "ingestion-service",
+                "timestamp": "2026-01-06T10:00:00Z",
+                # No prev_node_id - root
+            },
+            {
+                "node_id": "550e8400-e29b-41d4-a716-446655440011",
+                "node_type": "EXTRACT",
+                "actor_type": "AGENT",
+                "actor_id": "extractor-v1",
+                "timestamp": "2026-01-06T10:01:00Z",
+                # No prev_node_id - another root!
+            },
+            {
+                "node_id": "550e8400-e29b-41d4-a716-446655440012",
+                "node_type": "NORMALIZE",
+                "actor_type": "AGENT",
+                "actor_id": "normalizer-v1",
+                "timestamp": "2026-01-06T10:02:00Z",
+                "prev_node_id": "550e8400-e29b-41d4-a716-446655440010",
+            },
+        ]
+
+        result = validator.validate_sanad(sanad)
+        assert not result.passed
+        assert any(e.code == "SANAD_MULTIPLE_ROOTS" for e in result.errors)
+
+    def test_orphan_node_not_connected_to_root_fails(self) -> None:
+        """Node not connected to root graph fails."""
+        validator = SanadIntegrityValidator()
+        sanad = self._make_base_sanad()
+        sanad["transmission_chain"] = [
+            {
+                "node_id": "550e8400-e29b-41d4-a716-446655440010",
+                "node_type": "INGEST",
+                "actor_type": "SYSTEM",
+                "actor_id": "ingestion-service",
+                "timestamp": "2026-01-06T10:00:00Z",
+            },
+            {
+                "node_id": "550e8400-e29b-41d4-a716-446655440011",
+                "node_type": "EXTRACT",
+                "actor_type": "AGENT",
+                "actor_id": "extractor-v1",
+                "timestamp": "2026-01-06T10:01:00Z",
+                "prev_node_id": "550e8400-e29b-41d4-a716-446655440010",
+            },
+            {
+                "node_id": "550e8400-e29b-41d4-a716-446655440012",
+                "node_type": "NORMALIZE",
+                "actor_type": "AGENT",
+                "actor_id": "normalizer-v1",
+                "timestamp": "2026-01-06T10:02:00Z",
+                "prev_node_id": "550e8400-e29b-41d4-a716-446655440013",  # Points to 13
+            },
+            {
+                "node_id": "550e8400-e29b-41d4-a716-446655440013",
+                "node_type": "CALCULATE",
+                "actor_type": "AGENT",
+                "actor_id": "calc-v1",
+                "timestamp": "2026-01-06T10:03:00Z",
+                # Points to 12 - cycle but isolated
+                "prev_node_id": "550e8400-e29b-41d4-a716-446655440012",
+            },
+        ]
+
+        result = validator.validate_sanad(sanad)
+        assert not result.passed
+        has_orphan_or_cycle = any(
+            e.code in ("SANAD_ORPHAN_NODE", "SANAD_CYCLE_DETECTED") for e in result.errors
+        )
+        assert has_orphan_or_cycle
+
+
+class TestUUIDValidation:
+    """Tests for UUID format validation."""
+
+    def test_invalid_sanad_id_format_fails(self) -> None:
+        """Invalid sanad_id UUID format fails."""
+        validator = SanadIntegrityValidator()
+        sanad = {
+            "sanad_id": "not-a-valid-uuid",  # Invalid!
+            "claim_id": "550e8400-e29b-41d4-a716-446655440002",
+            "primary_evidence_id": "550e8400-e29b-41d4-a716-446655440003",
+            "extraction_confidence": 0.98,
+            "corroboration_status": "AHAD_1",
+            "sanad_grade": "B",
+            "transmission_chain": [
+                {
+                    "node_id": "550e8400-e29b-41d4-a716-446655440004",
+                    "node_type": "EXTRACT",
+                    "actor_type": "AGENT",
+                    "actor_id": "extractor-v1",
+                    "timestamp": "2026-01-06T12:00:00Z",
+                }
+            ],
+        }
+
+        result = validator.validate_sanad(sanad)
+        assert not result.passed
+        assert any(e.code == "INVALID_UUID_FORMAT" for e in result.errors)
+
+    def test_invalid_node_id_format_fails(self) -> None:
+        """Invalid node_id UUID format fails."""
+        validator = SanadIntegrityValidator()
+        sanad = {
+            "sanad_id": "550e8400-e29b-41d4-a716-446655440000",
+            "claim_id": "550e8400-e29b-41d4-a716-446655440002",
+            "primary_evidence_id": "550e8400-e29b-41d4-a716-446655440003",
+            "extraction_confidence": 0.98,
+            "corroboration_status": "AHAD_1",
+            "sanad_grade": "B",
+            "transmission_chain": [
+                {
+                    "node_id": "invalid-node-id-123",  # Invalid!
+                    "node_type": "EXTRACT",
+                    "actor_type": "AGENT",
+                    "actor_id": "extractor-v1",
+                    "timestamp": "2026-01-06T12:00:00Z",
+                }
+            ],
+        }
+
+        result = validator.validate_sanad(sanad)
+        assert not result.passed
+        assert any(e.code == "INVALID_NODE_ID_FORMAT" for e in result.errors)
+
+    def test_missing_node_required_field_fails(self) -> None:
+        """Transmission node missing required field (e.g., actor_id) fails."""
+        validator = SanadIntegrityValidator()
+        sanad = {
+            "sanad_id": "550e8400-e29b-41d4-a716-446655440000",
+            "claim_id": "550e8400-e29b-41d4-a716-446655440002",
+            "primary_evidence_id": "550e8400-e29b-41d4-a716-446655440003",
+            "extraction_confidence": 0.98,
+            "corroboration_status": "AHAD_1",
+            "sanad_grade": "B",
+            "transmission_chain": [
+                {
+                    "node_id": "550e8400-e29b-41d4-a716-446655440004",
+                    "node_type": "EXTRACT",
+                    "actor_type": "AGENT",
+                    # actor_id is MISSING
+                    "timestamp": "2026-01-06T12:00:00Z",
+                }
+            ],
+        }
+
+        result = validator.validate_sanad(sanad)
+        assert not result.passed
+        assert any(e.code == "MISSING_ACTOR_ID" for e in result.errors)
+
+
+class TestPublicAPIFunction:
+    """Tests for the public validate_sanad_integrity function."""
+
+    def test_validate_sanad_integrity_passes_valid(self) -> None:
+        """Public API function passes valid sanad."""
+        valid_sanad = {
+            "sanad_id": "550e8400-e29b-41d4-a716-446655440000",
+            "tenant_id": "550e8400-e29b-41d4-a716-446655440001",
+            "claim_id": "550e8400-e29b-41d4-a716-446655440002",
+            "primary_evidence_id": "550e8400-e29b-41d4-a716-446655440003",
+            "extraction_confidence": 0.98,
+            "corroboration_status": "AHAD_1",
+            "sanad_grade": "B",
+            "transmission_chain": [
+                {
+                    "node_id": "550e8400-e29b-41d4-a716-446655440004",
+                    "node_type": "EXTRACT",
+                    "actor_type": "AGENT",
+                    "actor_id": "extractor-v1",
+                    "timestamp": "2026-01-06T12:00:00Z",
+                }
+            ],
+        }
+
+        result = validate_sanad_integrity(valid_sanad)
+        assert result.passed, f"Expected pass but got: {result.errors}"
+
+    def test_validate_sanad_integrity_fails_missing_sanad_id(self) -> None:
+        """Public API function fails on missing sanad_id."""
+        invalid_sanad = {
+            # sanad_id is MISSING
+            "claim_id": "550e8400-e29b-41d4-a716-446655440002",
+            "primary_evidence_id": "550e8400-e29b-41d4-a716-446655440003",
+            "extraction_confidence": 0.98,
+            "corroboration_status": "AHAD_1",
+            "sanad_grade": "B",
+            "transmission_chain": [
+                {
+                    "node_id": "550e8400-e29b-41d4-a716-446655440004",
+                    "node_type": "EXTRACT",
+                    "actor_type": "AGENT",
+                    "actor_id": "extractor-v1",
+                    "timestamp": "2026-01-06T12:00:00Z",
+                }
+            ],
+        }
+
+        result = validate_sanad_integrity(invalid_sanad)
+        assert not result.passed
+        assert any(e.code == "MISSING_SANAD_ID" for e in result.errors)
+
+    def test_validate_sanad_integrity_fails_closed_on_none(self) -> None:
+        """Public API function fails closed on None input."""
+        result = validate_sanad_integrity(None)  # type: ignore[arg-type]
+        assert not result.passed
+        assert result.errors[0].code == "FAIL_CLOSED"
+
+    def test_validate_sanad_integrity_fails_closed_on_non_dict(self) -> None:
+        """Public API function fails closed on non-dict input."""
+        result = validate_sanad_integrity([1, 2, 3])  # type: ignore[arg-type]
+        assert not result.passed
+        assert result.errors[0].code == "FAIL_CLOSED"

@@ -1,257 +1,210 @@
-# IDIS Architecture Decision Records (ADRs) — v6.3 Baseline
-**Version:** 6.3 (derived from IDIS v6.3 FINAL)  
-**Date:** 2026-01-06  
-**Status:** Draft decisions (lock these before Phase 2)  
-**Owner:** Salim Al‑Barami  
+# IDIS Architecture Decision Records (ADRs) — v6.3 Baseline (001–005)
+**Version:** 6.3 (aligned to IDIS v6.3 documentation)  
+**Date:** 2026-01-07  
+**Status:** Approved baseline (lock before Phase 2)  
+**Owner:** Salim Al-Barami  
 **Audience:** Solo builder (Windsurf/Cursor) + Verifier (Codex)
 
 ---
 
 ## How to use this file
-- Each ADR should be treated as a **decision gate**.
-- Cascade may implement only within the bounds of **Approved** ADRs.
-- Codex must reject work that contradicts an approved ADR unless the ADR is updated first.
-- Update ADRs only via commit with clear rationale and impact analysis.
+- Each ADR is a **decision gate**. Engineering work must stay within **Approved** ADR boundaries.
+- Cascade may implement only within the bounds of Approved ADRs.
+- Codex must **REJECT** any change that contradicts an Approved ADR unless the ADR is updated first.
+- Updating an ADR requires:
+  - explicit rationale
+  - impact analysis (security, ops, migration)
+  - commit + review (Codex gate)
+- This baseline intentionally contains **only ADR-001..ADR-005**.
+  - Any additional ADRs must live in a separate file (e.g., `docs/IDIS_ADRs_Supplemental_v6_3.md`).
 
 ---
 
 ## ADR-001: Architecture Style — Modular Monolith First, Services Later
-**Status:** Approved (default)  
-**Context:** IDIS is being built solo with AI assistance. Early microservices increase coordination overhead and slow progress. We need strong module boundaries but minimal operational complexity.
+**Status:** Approved  
+**Context:** IDIS is built solo with AI assistance. Early microservices increase coordination, CI/CD complexity, and operational risk. We need strong module boundaries without distributed-systems overhead.
 
-**Decision:** Start as a **modular monolith**:
-- One deployable backend initially.
-- Clear module boundaries and interfaces:
-  - `deal`, `documents`, `claims`, `sanad`, `defects`, `calcs`, `debate`, `deliverables`, `audit`, `integrations`, `auth`
-- Evolve to services only if and when:
-  - scaling demands it, or
-  - enterprise tenant isolation requires dedicated deployments.
+**Decision Drivers:**
+- Speed of Phase 0–4 delivery
+- Deterministic validation gates (Truth Layer)
+- Minimal operational complexity
+- Future extraction path (services later)
+
+**Options considered:**
+1) **Microservices from day one**
+   - Pros: independent scaling/deploy; team autonomy
+   - Cons: heavy ops overhead; slower solo execution; more failure modes
+2) **Modular monolith (single deployable, strict internal boundaries)**
+   - Pros: fastest iteration; simplest dev/test/CI; easiest end-to-end gating; fewer moving parts
+   - Cons: coarse scaling until services extracted
+3) **Hybrid split early (core monolith + a few services)**
+   - Pros: isolates a small set of hot paths
+   - Cons: inherits distributed complexity without clear early ROI
+
+**Decision:** Choose **Modular Monolith** for Phase 0–4 with explicit module boundaries and internal interfaces.
 
 **Consequences:**
-- Faster Phase 0–3 execution.
-- Easier local dev and testing.
-- Clean extraction to services later via module boundaries.
+- Faster iteration and simpler deployments.
+- Stronger reliability for early trust gates.
+- Service extraction becomes a deliberate later step.
 
 **Guardrails:**
-- No cross-module imports except via defined interfaces.
-- Shared utilities only in `core/` or `common/` packages.
+- Organize by domains/modules (e.g., `tenancy`, `auth`, `deals`, `documents`, `claims`, `sanad`, `defects`, `calcs`, `audit`, `integrations`, `deliverables`).
+- Avoid cross-module imports except via explicit interfaces/contracts.
+- Shared primitives only in `core/` or `common/` (no "god utils").
 
 ---
 
-## ADR-002: System of Record — PostgreSQL + Row-Level Security (RLS)
+## ADR-002: System of Record — PostgreSQL + Row-Level Security (RLS) Tenant Isolation
 **Status:** Approved  
-**Context:** IDIS requires tenant isolation and auditability. Postgres is a reliable system-of-record and supports RLS for tenant scoping.
+**Context:** IDIS requires strict tenant isolation, auditable state transitions, and deterministic server-side enforcement. PostgreSQL provides strong transactional guarantees and supports Row-Level Security (RLS).
 
-**Decision:**
-- Use **PostgreSQL** as system of record for:
-  - deals
-  - documents metadata
-  - claims registry
-  - defects
-  - human gates
-  - overrides
-  - audit events (append-only table) + optional immutable external sink
-  - debate session metadata/transcripts (structured storage)
-- Enforce **tenant_id everywhere** and enable **RLS policies** for tenant isolation.
+**Decision Drivers:**
+- Tenant isolation as a hard invariant
+- Auditability and traceability
+- Relational integrity for claims/sanad/defects/calcs
+- Predictable migrations and ops maturity
+
+**Options considered:**
+1) **PostgreSQL + RLS (DB-enforced isolation)**
+   - Pros: strongest practical isolation; central enforcement; standard enterprise posture
+   - Cons: requires discipline in RLS policies/migrations
+2) **PostgreSQL without RLS (app-only filtering)**
+   - Pros: simpler initial setup
+   - Cons: higher breach risk from query mistakes; weaker guarantees
+3) **Database-per-tenant**
+   - Pros: maximum blast-radius isolation
+   - Cons: expensive ops; complex migrations/analytics; not needed early
+
+**Decision:** Choose **PostgreSQL + RLS** as the system-of-record; enforce `tenant_id` on all tables and scope all access via tenant context.
 
 **Consequences:**
-- Strong enterprise-grade isolation.
-- Straightforward migrations.
-- Queryable audit events.
+- Enterprise-grade isolation baseline.
+- Simplifies compliance posture and audits.
+- Clear foundation for append-only audit events.
 
 **Guardrails:**
-- Every table must have `tenant_id`.
+- Every table includes `tenant_id` and is protected by RLS.
 - Every query must be tenant-scoped (middleware enforces tenant context).
-- Codex rejects any query not scoped by tenant_id (unless explicitly safe and documented).
+- No cross-tenant existence checks (avoid leakage side-channels).
+- Codex rejects any data access not tenant-scoped unless explicitly proven safe and documented.
 
 ---
 
-## ADR-003: Sanad Graph Storage — Postgres First, Graph DB Later
-**Status:** Approved (phased)  
-**Context:** The Sanad graph is core, but a full graph DB increases operational complexity. Early phases can operate on Postgres tables + adjacency-style joins.
+## ADR-003: Sanad / Provenance Graph — Property Graph Store + Postgres Projection
+**Status:** Approved  
+**Context:** v6.3 defines a Sanad/provenance **graph schema** and expects a **property graph** store (e.g., Neo4j/Arango/Neptune). PostgreSQL remains the system-of-record for structured entities and projections; the graph stores provenance relationships.
 
-**Decision:**
-- Phase 1–4:
-  - Store Sanad objects in Postgres with structured fields:
-    - primary evidence ref
-    - transmission_chain JSONB
-    - corroboration metadata
-    - grade/verdict/action fields
-    - defects list (FK to defects table)
-  - Provide an interface layer that abstracts graph queries.
-- Phase 5+ (optional):
-  - Evaluate Neo4j/ArangoDB/Neptune only when:
-    - graph traversal is a bottleneck, or
-    - Sanad Map visualization and cross-claim traversals require it.
+**Decision Drivers:**
+- Alignment with v6.3 graph schema expectations
+- Deterministic integrity validation (cycles/orphans/roots)
+- Tenant-safe graph boundaries (no cross-tenant edges)
+- Operational feasibility while building solo
+
+**Options considered:**
+1) **Property graph DB as primary provenance store (Neo4j/Arango/Neptune) + Postgres projection**
+   - Pros: aligns with v6.3; enables traversals/visualization; clean provenance queries
+   - Cons: additional datastore to operate
+2) **Postgres-only (JSONB/adjacency)**
+   - Pros: minimal infra
+   - Cons: conflicts with v6.3 graph-layer expectations; harder long-term traversal/visualization
+3) **Dual-write from day one (Postgres + Graph)**
+   - Pros: immediate graph availability
+   - Cons: higher complexity; consistency risks early
+
+**Decision:** Choose **Option 1**:
+- Maintain **PostgreSQL** as the system-of-record (rows + projections).
+- Maintain a **property graph DB** for Sanad/provenance relationships per v6.3 graph schema.
+- Implementation sequencing:
+  - Early phases may validate and store a materialized chain/projection in Postgres, but the architecture remains graph-backed for provenance.
+  - Introduce the graph write/read path as soon as the datastore is provisioned; do not treat the graph as optional.
 
 **Consequences:**
-- Faster implementation.
-- Less operational overhead.
-- Graph DB can be added later without breaking contracts.
+- Aligns the system to the v6.3 data model.
+- Enables graph traversal and UI visualization without redesign.
+- Requires operating an additional datastore when enabled.
 
 **Guardrails:**
-- Maintain graph-friendly IDs and edges in schema even if stored in Postgres.
-- Do not embed cross-tenant graph edges.
+- Graph nodes/edges must be tenant-scoped; no cross-tenant edges/traversals.
+- Provide a repository/interface layer so code is not hardwired to one graph vendor.
+- Keep stable graph-friendly IDs (UUIDs) across Postgres and the graph store.
+- Any change to graph vendor/strategy requires a new ADR with migration plan.
 
 ---
 
-## ADR-004: Vector Retrieval — pgvector First
-**Status:** Approved (default)  
-**Context:** IDIS may need semantic search over docs and claims. Dedicated vector DB adds complexity.
+## ADR-004: Eventing / Async Jobs — RabbitMQ/Queue for MVP; Kafka/Redpanda When Needed
+**Status:** Approved  
+**Context:** v6.3 tech stack recommends **Kafka/Redpanda** as the event bus, with **RabbitMQ** acceptable for MVP. IDIS needs async ingestion/OCR/calcs/deliverables with retries and idempotency; avoid heavy ops early while keeping an upgrade path.
 
-**Decision:**
-- Use **pgvector** inside Postgres for:
-  - embeddings of document spans (optional)
-  - embeddings of claims (optional)
-- Dedicated vector stores (Pinecone/Weaviate/Qdrant) considered only after:
-  - retrieval latency or cost becomes problematic
-  - enterprise requirements demand it
+**Decision Drivers:**
+- Minimal operational burden for solo build
+- Deterministic job execution and retry semantics
+- Idempotency and tenant-scoped job payloads
+- Clear migration path to Kafka/Redpanda if required
+
+**Options considered:**
+1) **Kafka/Redpanda from day one**
+   - Pros: replay, ordering, high throughput ecosystem
+   - Cons: heavier ops; slows solo build early
+2) **RabbitMQ / managed queue for MVP (queue-first)**
+   - Pros: simpler ops; sufficient for Phase 2–4 workflows; straightforward DLQ patterns
+   - Cons: fewer streaming semantics; later migration if replay/ordering becomes essential
+3) **Synchronous-only processing**
+   - Pros: simplest code
+   - Cons: poor UX; fragile; long request times; limits scalability
+
+**Decision:** Choose **Option 2** for MVP:
+- Start with **RabbitMQ or a managed queue** abstraction for async jobs.
+- Keep an internal event/job interface so migration to **Kafka/Redpanda** is a controlled swap if requirements demand it.
 
 **Consequences:**
-- Minimal infrastructure.
-- Simple tenant scoping with RLS.
+- Faster delivery with manageable ops.
+- Kafka/Redpanda remains the scale path when justified.
 
 **Guardrails:**
-- Embeddings must be tenant-scoped.
-- No cross-tenant retrieval.
+- All jobs must be idempotent (idempotency keys + dedupe).
+- Every job payload includes `tenant_id` and `deal_id`.
+- Retries with backoff + Dead Letter Queue pattern.
+- Emit audit events for job lifecycle once audit pipeline is wired.
 
 ---
 
-## ADR-005: Eventing / Async Jobs — Queue First (SQS-like), Kafka Later
-**Status:** Approved (phased)  
-**Context:** IDIS ingestion and OCR are asynchronous. Kafka is heavy early.
+## ADR-005: Deployment Target — Docker + GitHub Actions Now; Kubernetes Later
+**Status:** Approved  
+**Context:** Early Kubernetes introduces unnecessary operational overhead. Docker-based workflows with GitHub Actions provide strong CI discipline and reproducible builds; Kubernetes can be added later for enterprise orchestration.
 
-**Decision:**
-- Use a managed queue pattern first (SQS/PubSub/Service Bus) or a simple job runner abstraction:
-  - ingestion tasks
-  - OCR tasks
-  - calc runs
-  - deliverable generation
-- Kafka introduced only if:
-  - high throughput demands it
-  - strict ordering and replay semantics needed beyond current webhooks/audit logs
+**Decision Drivers:**
+- Deterministic CI gates
+- Reproducible builds and deployments
+- Minimal ops overhead early
+- Clean migration path to Kubernetes
+
+**Options considered:**
+1) **Docker + GitHub Actions CI (Phase 0–4)**
+   - Pros: simplest; portable; repeatable; aligns with solo build
+   - Cons: less orchestration capability than Kubernetes
+2) **Kubernetes from day one**
+   - Pros: standard enterprise orchestration; scaling primitives
+   - Cons: heavy overhead; slows early phases
+3) **Serverless-first**
+   - Pros: minimal infra
+   - Cons: awkward for stateful system-of-record workflows and deterministic pipelines
+
+**Decision:** Choose **Option 1** for Phase 0–4:
+- Docker images built and pinned to commit SHA.
+- GitHub Actions CI enforces ruff/mypy/pytest gates.
+- Kubernetes deferred until justified; adoption requires a new ADR with migration/rollback.
 
 **Consequences:**
-- Faster implementation.
-- Lower operational cost.
+- Faster iteration and simpler deployments.
+- Strong reproducibility for trust gates.
 
 **Guardrails:**
-- All jobs must be idempotent (use Idempotency-Key and job dedupe).
-- Jobs must carry tenant_id and deal_id.
-
----
-
-## ADR-006: API Style — REST + OpenAPI as Source of Truth
-**Status:** Approved  
-**Context:** Enterprise integrations require stable contracts. The OpenAPI spec is already defined.
-
-**Decision:**
-- REST API with strict OpenAPI contract.
-- Server validates request bodies against schemas.
-- Contract tests run in CI to prevent drift.
-
-**Consequences:**
-- Predictable integrations.
-- Easier client generation.
-
-**Guardrails:**
-- No endpoint added without OpenAPI update.
-- No breaking changes without versioning (v1/v2).
-
----
-
-## ADR-007: Auth — SSO via OIDC, RBAC + Deal-Level ABAC
-**Status:** Approved (baseline)  
-**Context:** Enterprise customers expect SSO and strict access controls.
-
-**Decision:**
-- Use OIDC (Okta/Azure AD).
-- JWT contains tenant_id, roles.
-- Enforce RBAC roles:
-  - ANALYST, PARTNER, IC_MEMBER, ADMIN, AUDITOR, INTEGRATION_SERVICE
-- Enforce deal-level ABAC via assignments/groups.
-
-**Guardrails:**
-- Auth enforced server-side.
-- Break-glass requires justification and audit event.
-
----
-
-## ADR-008: Audit Logging — Append-Only Events in Postgres + Optional External Sink
-**Status:** Approved  
-**Context:** IDIS requires immutable traceability.
-
-**Decision:**
-- Append-only `audit_events` table in Postgres (tenant-scoped).
-- Optional external immutable sink (object store WORM) for enterprise tier.
-- Audit taxonomy enforced (see `IDIS_Audit_Event_Taxonomy_v6_3.md`).
-
-**Guardrails:**
-- Every mutating operation emits an audit event.
-- No raw Class-3 content in audit payloads (refs/hashes only).
-
----
-
-## ADR-009: Testing Strategy — Gates First
-**Status:** Approved  
-**Context:** The project must be enterprise-grade and built solo.
-
-**Decision:**
-- CI requires:
-  - ruff format/check
-  - mypy
-  - pytest
-- Evaluation harness gates must be implemented before prompt/calc changes are promoted.
-
-**Guardrails:**
-- No-Free-Facts, Muḥāsabah, Sanad integrity: 0 tolerance regressions.
-
----
-
-## ADR-010: Deployment — Docker First, K8s Later
-**Status:** Approved (phased)  
-**Context:** Solo build: K8s adds overhead. Enterprise deployments can later use K8s.
-
-**Decision:**
-- Phase 0–4: Docker-based local dev; GitHub Actions CI.
-- Phase 5+: add Helm/Terraform and k8s manifests as needed.
-
-**Guardrails:**
-- Environments: dev/staging/prod separated.
-- Secrets managed via vault/secrets manager (never in git).
-
----
-
-## ADR-011: “No Cross-Tenant Existence Checks” (Leakage Rule)
-**Status:** Approved  
-**Context:** Prevent side-channel leakage about other tenants.
-
-**Decision:**
-- When validating references, treat unknown refs as `unknown_or_out_of_scope`.
-- Never query other tenants to see if a ref exists.
-- Audit events must not reveal cross-tenant existence.
-
-**Guardrails:**
-- Codex rejects any code that attempts cross-tenant existence lookups.
-
----
-
-## ADR-012: Human Gates and Overrides — Always Explicit and Audited
-**Status:** Approved  
-**Context:** IDIS has human verification gates and partner overrides.
-
-**Decision:**
-- Any override requires:
-  - role PARTNER+
-  - justification string
-  - audit event (CRITICAL)
-- Human gate actions are immutable records.
-
-**Guardrails:**
-- Overrides never silent.
-- Overrides never remove audit history.
+- Separate dev/staging/prod environments.
+- Secrets never in git; use a secrets manager/vault pattern.
+- Immutable build artifacts; deploy by digest/tag pinned to commit.
 
 ---
 
 ## Decision Log
-- 2026-01-06: Initial ADR set created from IDIS v6.3; approved as default baseline.
+- 2026-01-07: Locked ADR-001..ADR-005 as the v6.3 baseline architecture decisions prior to Phase 2.

@@ -34,7 +34,7 @@ class TestMuhasabahPositive:
 
         valid_record = {
             "muhasabah_id": "550e8400-e29b-41d4-a716-446655440000",
-            "agent_id": "financial-analyst-v1",
+            "agent_id": "550e8400-e29b-41d4-a716-446655440003",
             "output_id": "550e8400-e29b-41d4-a716-446655440001",
             "supported_claim_ids": ["550e8400-e29b-41d4-a716-446655440002"],
             "confidence": 0.85,
@@ -63,7 +63,7 @@ class TestMuhasabahPositive:
         validator = MuhasabahValidator()
 
         record = {
-            "agent_id": "opinion-agent",
+            "agent_id": "550e8400-e29b-41d4-a716-446655440010",
             "output_id": "550e8400-e29b-41d4-a716-446655440001",
             "supported_claim_ids": [],
             "confidence": 0.4,
@@ -79,7 +79,7 @@ class TestMuhasabahPositive:
         validator = MuhasabahValidator()
 
         record = {
-            "agent_id": "uncertain-agent",
+            "agent_id": "550e8400-e29b-41d4-a716-446655440011",
             "output_id": "550e8400-e29b-41d4-a716-446655440001",
             "supported_claim_ids": ["550e8400-e29b-41d4-a716-446655440002"],
             "confidence": 0.45,
@@ -114,7 +114,7 @@ class TestMuhasabahNegative:
         validator = MuhasabahValidator()
 
         record = {
-            "agent_id": "factual-agent",
+            "agent_id": "550e8400-e29b-41d4-a716-446655440012",
             "output_id": "550e8400-e29b-41d4-a716-446655440001",
             "supported_claim_ids": [],  # Empty - violation!
             "confidence": 0.7,
@@ -125,16 +125,19 @@ class TestMuhasabahNegative:
         assert not result.passed
         assert any(e.code == "NO_SUPPORTING_REFERENCES" for e in result.errors)
 
-    def test_high_confidence_no_uncertainties_fails(self) -> None:
-        """Confidence > 0.80 without uncertainties fails."""
+    def test_high_confidence_no_uncertainties_but_falsifiability_passes(self) -> None:
+        """Confidence > 0.80 without uncertainties but WITH falsifiability tests passes.
+
+        Per v6.3 spec: high confidence requires uncertainties OR falsifiability_tests.
+        """
         validator = MuhasabahValidator()
 
         record = {
-            "agent_id": "overconfident-agent",
+            "agent_id": "550e8400-e29b-41d4-a716-446655440013",
             "output_id": "550e8400-e29b-41d4-a716-446655440001",
             "supported_claim_ids": ["550e8400-e29b-41d4-a716-446655440002"],
             "confidence": 0.95,  # High confidence
-            "uncertainties": [],  # Empty - violation!
+            "uncertainties": [],  # Empty but OK because falsifiability_tests present
             "falsifiability_tests": [
                 {
                     "test_description": "Test",
@@ -146,32 +149,32 @@ class TestMuhasabahNegative:
         }
 
         result = validator.validate(record)
-        assert not result.passed
-        assert any(e.code == "HIGH_CONFIDENCE_NO_UNCERTAINTIES" for e in result.errors)
+        assert result.passed, f"Expected pass but got: {result.errors}"
 
-    def test_material_confidence_no_falsifiability_fails(self) -> None:
-        """Confidence > 0.50 without falsifiability tests fails."""
+    def test_recommendation_no_falsifiability_fails(self) -> None:
+        """Recommendation field present without falsifiability tests fails."""
         validator = MuhasabahValidator()
 
         record = {
-            "agent_id": "confident-agent",
+            "agent_id": "550e8400-e29b-41d4-a716-446655440014",
             "output_id": "550e8400-e29b-41d4-a716-446655440001",
             "supported_claim_ids": ["550e8400-e29b-41d4-a716-446655440002"],
-            "confidence": 0.75,  # > 0.50
+            "confidence": 0.75,
+            "recommendation": "Proceed to IC",  # Recommendation present
             "falsifiability_tests": [],  # Empty - violation!
             "timestamp": "2026-01-06T12:00:00Z",
         }
 
         result = validator.validate(record)
         assert not result.passed
-        assert any(e.code == "MATERIAL_CONFIDENCE_NO_FALSIFIABILITY" for e in result.errors)
+        assert any(e.code == "RECOMMENDATION_NO_FALSIFIABILITY" for e in result.errors)
 
     def test_confidence_out_of_range_fails(self) -> None:
         """Confidence outside 0-1 range fails."""
         validator = MuhasabahValidator()
 
         record = {
-            "agent_id": "agent",
+            "agent_id": "550e8400-e29b-41d4-a716-446655440015",
             "output_id": "550e8400-e29b-41d4-a716-446655440001",
             "supported_claim_ids": ["550e8400-e29b-41d4-a716-446655440002"],
             "confidence": 1.5,  # Invalid!
@@ -187,7 +190,7 @@ class TestMuhasabahNegative:
         validator = MuhasabahValidator()
 
         record = {
-            "agent_id": "agent",
+            "agent_id": "550e8400-e29b-41d4-a716-446655440016",
             "output_id": "550e8400-e29b-41d4-a716-446655440001",
             "supported_claim_ids": ["550e8400-e29b-41d4-a716-446655440002"],
             "confidence": 0.85,

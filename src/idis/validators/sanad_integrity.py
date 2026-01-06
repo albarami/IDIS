@@ -328,6 +328,8 @@ class SanadIntegrityValidator:
         children: dict[str, list[str]] = {}
 
         for node in transmission_chain:
+            if not isinstance(node, dict):
+                continue
             node_id = node.get("node_id")
             if not node_id:
                 continue
@@ -377,19 +379,23 @@ class SanadIntegrityValidator:
             )
 
         def detect_cycle(node_id: str, visited: set[str], rec_stack: set[str]) -> bool:
-            """DFS cycle detection."""
+            """DFS cycle detection - returns whether a cycle was found."""
             visited.add(node_id)
             rec_stack.add(node_id)
 
+            cycle_found = False
             for child_id in children.get(node_id, []):
                 if child_id not in visited:
-                    if detect_cycle(child_id, visited, rec_stack):
-                        return True
+                    child_has_cycle = detect_cycle(child_id, visited, rec_stack)
+                    if child_has_cycle:
+                        cycle_found = child_has_cycle
+                        break
                 elif child_id in rec_stack:
-                    return True
+                    cycle_found = child_id in rec_stack
+                    break
 
             rec_stack.discard(node_id)
-            return False
+            return cycle_found
 
         visited: set[str] = set()
         for node_id in node_ids:
@@ -589,10 +595,18 @@ class SanadIntegrityValidator:
             errors.extend(self._validate_chain_linkage(transmission_chain))
 
         # Validate defects if present
-        defects = data.get("defects", [])
+        defects = data.get("defects")
         has_fatal_defect = False
 
-        if isinstance(defects, list):
+        if defects is not None and not isinstance(defects, list):
+            errors.append(
+                ValidationError(
+                    code="DEFECTS_NOT_LIST",
+                    message="defects must be a list",
+                    path="$.defects",
+                )
+            )
+        elif isinstance(defects, list):
             for i, defect in enumerate(defects):
                 if not isinstance(defect, dict):
                     errors.append(

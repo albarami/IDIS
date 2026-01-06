@@ -588,3 +588,111 @@ class TestPublicAPIFunction:
         result = validate_sanad_integrity([1, 2, 3])  # type: ignore[arg-type]
         assert not result.passed
         assert result.errors[0].code == "FAIL_CLOSED"
+
+
+class TestFailClosedRobustness:
+    """Regression tests for fail-closed robustness on malformed input."""
+
+    def test_malformed_transmission_chain_node_not_dict_fails(self) -> None:
+        """transmission_chain with non-dict elements fails closed without raising."""
+        validator = SanadIntegrityValidator()
+        sanad = {
+            "sanad_id": "550e8400-e29b-41d4-a716-446655440000",
+            "claim_id": "550e8400-e29b-41d4-a716-446655440002",
+            "primary_evidence_id": "550e8400-e29b-41d4-a716-446655440003",
+            "extraction_confidence": 0.98,
+            "corroboration_status": "AHAD_1",
+            "sanad_grade": "B",
+            "transmission_chain": ["not-a-dict", 123, None],  # Malformed!
+        }
+
+        result = validator.validate_sanad(sanad)
+        assert not result.passed
+        assert any(e.code == "INVALID_NODE" for e in result.errors)
+
+    def test_defects_not_list_fails(self) -> None:
+        """defects as non-list fails with DEFECTS_NOT_LIST error."""
+        validator = SanadIntegrityValidator()
+        sanad = {
+            "sanad_id": "550e8400-e29b-41d4-a716-446655440000",
+            "claim_id": "550e8400-e29b-41d4-a716-446655440002",
+            "primary_evidence_id": "550e8400-e29b-41d4-a716-446655440003",
+            "extraction_confidence": 0.98,
+            "corroboration_status": "AHAD_1",
+            "sanad_grade": "B",
+            "transmission_chain": [
+                {
+                    "node_id": "550e8400-e29b-41d4-a716-446655440004",
+                    "node_type": "EXTRACT",
+                    "actor_type": "AGENT",
+                    "actor_id": "extractor-v1",
+                    "timestamp": "2026-01-06T12:00:00Z",
+                }
+            ],
+            "defects": "oops",  # Not a list!
+        }
+
+        result = validator.validate_sanad(sanad)
+        assert not result.passed
+        assert any(e.code == "DEFECTS_NOT_LIST" for e in result.errors)
+
+    def test_defects_as_dict_fails(self) -> None:
+        """defects as dict (not list) fails with DEFECTS_NOT_LIST error."""
+        validator = SanadIntegrityValidator()
+        sanad = {
+            "sanad_id": "550e8400-e29b-41d4-a716-446655440000",
+            "claim_id": "550e8400-e29b-41d4-a716-446655440002",
+            "primary_evidence_id": "550e8400-e29b-41d4-a716-446655440003",
+            "extraction_confidence": 0.98,
+            "corroboration_status": "AHAD_1",
+            "sanad_grade": "B",
+            "transmission_chain": [
+                {
+                    "node_id": "550e8400-e29b-41d4-a716-446655440004",
+                    "node_type": "EXTRACT",
+                    "actor_type": "AGENT",
+                    "actor_id": "extractor-v1",
+                    "timestamp": "2026-01-06T12:00:00Z",
+                }
+            ],
+            "defects": {"type": "BROKEN"},  # Dict instead of list!
+        }
+
+        result = validator.validate_sanad(sanad)
+        assert not result.passed
+        assert any(e.code == "DEFECTS_NOT_LIST" for e in result.errors)
+
+    def test_chain_linkage_still_detects_cycle(self) -> None:
+        """Cycle detection still works after refactor (regression test)."""
+        validator = SanadIntegrityValidator()
+        sanad = {
+            "sanad_id": "550e8400-e29b-41d4-a716-446655440000",
+            "tenant_id": "550e8400-e29b-41d4-a716-446655440001",
+            "claim_id": "550e8400-e29b-41d4-a716-446655440002",
+            "primary_evidence_id": "550e8400-e29b-41d4-a716-446655440003",
+            "extraction_confidence": 0.98,
+            "corroboration_status": "AHAD_1",
+            "sanad_grade": "B",
+            "transmission_chain": [
+                {
+                    "node_id": "550e8400-e29b-41d4-a716-446655440010",
+                    "node_type": "INGEST",
+                    "actor_type": "SYSTEM",
+                    "actor_id": "ingestion-service",
+                    "timestamp": "2026-01-06T10:00:00Z",
+                    "prev_node_id": "550e8400-e29b-41d4-a716-446655440011",  # Cycle!
+                },
+                {
+                    "node_id": "550e8400-e29b-41d4-a716-446655440011",
+                    "node_type": "EXTRACT",
+                    "actor_type": "AGENT",
+                    "actor_id": "extractor-v1",
+                    "timestamp": "2026-01-06T10:01:00Z",
+                    "prev_node_id": "550e8400-e29b-41d4-a716-446655440010",  # Back ref
+                },
+            ],
+        }
+
+        result = validator.validate_sanad(sanad)
+        assert not result.passed
+        assert any(e.code == "SANAD_CYCLE_DETECTED" for e in result.errors)

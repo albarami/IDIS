@@ -132,18 +132,23 @@ class NoFreeFactsValidator:
         return sorted(assertions, key=lambda a: a.position)
 
     def _is_section_subjective(self, section: dict[str, Any]) -> bool:
-        """Check if a section is explicitly marked as subjective."""
+        """Check if a section is explicitly marked as subjective.
+
+        Returns computed boolean based on explicit checks - no default-pass.
+        """
         # Explicit is_subjective flag takes precedence
-        if section.get("is_subjective") is True:
-            return True
+        has_subjective_flag = section.get("is_subjective") is True
 
         # Check for subjective label/type
         section_type = section.get("type", "").upper()
-        if section_type == "SUBJECTIVE":
-            return True
+        has_subjective_type = section_type == "SUBJECTIVE"
 
         label = section.get("label", "").upper()
-        return "SUBJECTIVE" in label
+        has_subjective_label = "SUBJECTIVE" in label
+
+        # Return computed boolean - section is subjective if ANY condition is met
+        is_subjective = has_subjective_flag or has_subjective_type or has_subjective_label
+        return is_subjective
 
     def _get_section_refs(self, section: dict[str, Any]) -> tuple[list[str], list[str]]:
         """Get referenced_claim_ids and referenced_calc_ids from a section.

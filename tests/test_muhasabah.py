@@ -123,12 +123,13 @@ class TestMuhasabahNegative:
 
         result = validator.validate(record)
         assert not result.passed
-        assert any(e.code == "NO_SUPPORTING_REFERENCES" for e in result.errors)
+        assert any(e.code == "NO_SUPPORTING_CLAIM_IDS" for e in result.errors)
 
-    def test_high_confidence_no_uncertainties_but_falsifiability_passes(self) -> None:
-        """Confidence > 0.80 without uncertainties but WITH falsifiability tests passes.
+    def test_high_confidence_no_uncertainties_but_falsifiability_fails(self) -> None:
+        """Confidence > 0.80 without uncertainties FAILS even with falsifiability tests.
 
-        Per v6.3 spec: high confidence requires uncertainties OR falsifiability_tests.
+        Per v6.3 TDD line 164: Reject if confidence > 0.80 AND uncertainties empty.
+        falsifiability_tests do NOT substitute for uncertainties.
         """
         validator = MuhasabahValidator()
 
@@ -137,7 +138,7 @@ class TestMuhasabahNegative:
             "output_id": "550e8400-e29b-41d4-a716-446655440001",
             "supported_claim_ids": ["550e8400-e29b-41d4-a716-446655440002"],
             "confidence": 0.95,  # High confidence
-            "uncertainties": [],  # Empty but OK because falsifiability_tests present
+            "uncertainties": [],  # Empty - violation! falsifiability_tests do NOT substitute
             "falsifiability_tests": [
                 {
                     "test_description": "Test",
@@ -149,7 +150,10 @@ class TestMuhasabahNegative:
         }
 
         result = validator.validate(record)
-        assert result.passed, f"Expected pass but got: {result.errors}"
+        assert not result.passed, (
+            "High confidence requires uncertainties; falsifiability_tests do NOT substitute"
+        )
+        assert any(e.code == "HIGH_CONFIDENCE_NO_UNCERTAINTIES" for e in result.errors)
 
     def test_recommendation_no_falsifiability_fails(self) -> None:
         """Recommendation field present without falsifiability tests fails."""

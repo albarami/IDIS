@@ -3,10 +3,14 @@
 Tests cover:
 - PASS: valid record with supported_claim_ids, confidence 0.7
 - FAIL: missing required field (agent_id)
-- FAIL: confidence 0.9 with empty uncertainties and empty falsifiability_tests
-- FAIL: supported_claim_ids empty
+- FAIL: confidence 0.9 with empty uncertainties (falsifiability_tests do NOT substitute)
+- FAIL: supported_claim_ids empty (calc_ids do NOT substitute)
 - PASS: confidence 0.9 but uncertainties present
 - PASS: recommendation present and falsifiability_tests present
+
+Phase 1.2.1 Regression Tests:
+- FAIL: high confidence with empty uncertainties but non-empty falsifiability_tests
+- FAIL: non-subjective with empty claim_ids but non-empty calc_ids
 """
 
 from __future__ import annotations
@@ -73,10 +77,11 @@ class TestValidateMuhasabahPass:
         assert result.passed is True
         assert len(result.errors) == 0
 
-    def test_confidence_0_9_with_falsifiability_tests_present(self) -> None:
-        """PASS: confidence 0.9 but falsifiability_tests present (alternative to uncertainties)."""
+    def test_confidence_0_9_with_uncertainties_and_falsifiability(self) -> None:
+        """PASS: confidence 0.9 with both uncertainties and falsifiability_tests."""
         record = _make_valid_record(
             confidence=0.9,
+            uncertainties=[_make_uncertainty()],
             falsifiability_tests=[_make_falsifiability_test()],
         )
         result = validate_muhasabah(record)
@@ -190,7 +195,7 @@ class TestValidateMuhasabahFail:
 
         assert result.passed is False
         error_codes = [e.code for e in result.errors]
-        assert "NO_SUPPORTING_REFERENCES" in error_codes
+        assert "NO_SUPPORTING_CLAIM_IDS" in error_codes
 
     def test_recommendation_without_falsifiability_tests(self) -> None:
         """FAIL: recommendation present but no falsifiability_tests."""
@@ -333,8 +338,8 @@ class TestValidateMuhasabahConfidenceRange:
 
         assert result.passed is True
 
-    def test_confidence_0_81_requires_uncertainties_or_falsifiability(self) -> None:
-        """FAIL: confidence 0.81 requires uncertainties OR falsifiability_tests."""
+    def test_confidence_0_81_requires_uncertainties(self) -> None:
+        """FAIL: confidence 0.81 requires uncertainties (falsifiability_tests do NOT substitute)."""
         record = _make_valid_record(
             confidence=0.81,
             uncertainties=[],
@@ -346,3 +351,56 @@ class TestValidateMuhasabahConfidenceRange:
         assert result.passed is False
         error_codes = [e.code for e in result.errors]
         assert "HIGH_CONFIDENCE_NO_UNCERTAINTIES" in error_codes
+
+
+class TestValidateMuhasabahRegressionPhase121:
+    """Regression tests for Phase 1.2.1 - hardened rules.
+
+    These tests verify that bypasses have been removed:
+    1. falsifiability_tests do NOT substitute for uncertainties at high confidence
+    2. supported_calc_ids do NOT substitute for supported_claim_ids
+    """
+
+    def test_high_confidence_with_falsifiability_but_no_uncertainties_fails(self) -> None:
+        """FAIL: high confidence with empty uncertainties but non-empty falsifiability_tests.
+
+        Regression test: falsifiability_tests do NOT substitute for uncertainties.
+        Per TDD v6.3 line 164: Reject if confidence > 0.80 AND uncertainties empty.
+        """
+        record = _make_valid_record(
+            confidence=0.95,
+            uncertainties=[],
+            falsifiability_tests=[_make_falsifiability_test()],
+            is_subjective=False,
+        )
+
+        result = validate_muhasabah(record)
+
+        assert result.passed is False, (
+            "High confidence with falsifiability_tests but no uncertainties must FAIL. "
+            "falsifiability_tests do NOT substitute for uncertainties."
+        )
+        error_codes = [e.code for e in result.errors]
+        assert "HIGH_CONFIDENCE_NO_UNCERTAINTIES" in error_codes
+
+    def test_non_subjective_with_calc_ids_but_no_claim_ids_fails(self) -> None:
+        """FAIL: non-subjective with empty supported_claim_ids but non-empty supported_calc_ids.
+
+        Regression test: supported_calc_ids do NOT substitute for supported_claim_ids.
+        Per TDD v6.3 line 158: supported_claim_ids MUST be non-empty for factual outputs.
+        """
+        record = _make_valid_record(
+            supported_claim_ids=[],
+            supported_calc_ids=[str(uuid.uuid4())],
+            is_subjective=False,
+            confidence=0.7,
+        )
+
+        result = validate_muhasabah(record)
+
+        assert result.passed is False, (
+            "Non-subjective output with calc_ids but no claim_ids must FAIL. "
+            "supported_calc_ids do NOT substitute for supported_claim_ids."
+        )
+        error_codes = [e.code for e in result.errors]
+        assert "NO_SUPPORTING_CLAIM_IDS" in error_codes

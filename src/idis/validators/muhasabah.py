@@ -1,8 +1,8 @@
 """Muḥāsabah Validator - enforces self-accounting rules for agent outputs.
 
 HARD GATE: All agent outputs MUST carry a MuḥāsabahRecord with:
-- supported_claim_ids / supported_calc_ids (non-empty unless SUBJECTIVE)
-- uncertainty register (mandatory when confidence > 0.80 without falsifiability_tests)
+- supported_claim_ids (non-empty unless SUBJECTIVE; calc_ids do NOT substitute)
+- uncertainty register (mandatory when confidence > 0.80; falsifiability_tests do NOT substitute)
 - falsifiability tests (mandatory for recommendation-driving outputs)
 
 Reject agent output if validation fails. FAIL-CLOSED.
@@ -42,10 +42,11 @@ def validate_muhasabah(record: dict[str, Any]) -> ValidationResult:
 class MuhasabahValidator:
     """Validates Muḥāsabah records for compliance with trust invariants.
 
-    Rules (from spec v6.3):
+    Rules (from spec v6.3 TDD - normative):
     1. Required fields: agent_id, output_id, supported_claim_ids, confidence, timestamp
-    2. If supported_claim_ids empty AND not subjective → REJECT
-    3. If confidence > 0.80: must include non-empty uncertainties OR falsifiability_tests
+    2. If supported_claim_ids empty AND not subjective → REJECT (calc_ids do NOT substitute)
+    3. If confidence > 0.80: must include non-empty uncertainties (falsifiability_tests
+       do NOT substitute)
     4. If recommendation/decision field present → must include falsifiability_tests
     5. All IDs must be UUID-like strings
     """
@@ -173,25 +174,24 @@ class MuhasabahValidator:
         if not isinstance(supported_calc_ids, list):
             supported_calc_ids = []
 
-        # RULE 1: Non-subjective outputs must have claim/calc references
+        # RULE 1: Non-subjective outputs must have supported_claim_ids (calc_ids do NOT substitute)
         if not is_subjective:
             has_claim_refs = len(supported_claim_ids) > 0
-            has_calc_refs = len(supported_calc_ids) > 0
 
-            if not has_claim_refs and not has_calc_refs:
+            if not has_claim_refs:
                 errors.append(
                     ValidationError(
-                        code="NO_SUPPORTING_REFERENCES",
+                        code="NO_SUPPORTING_CLAIM_IDS",
                         message=(
-                            "Non-subjective output requires supported_claim_ids or "
-                            "supported_calc_ids to be non-empty. Set is_subjective=true "
-                            "if this output contains no factual assertions."
+                            "Non-subjective output requires supported_claim_ids to be non-empty. "
+                            "supported_calc_ids do NOT substitute for claim references. "
+                            "Set is_subjective=true if this output contains no factual assertions."
                         ),
                         path="$.supported_claim_ids",
                     )
                 )
 
-        # RULE 2: High confidence requires uncertainties OR falsifiability_tests
+        # RULE 2: High confidence requires uncertainties (falsifiability_tests do NOT substitute)
         has_uncertainties = isinstance(uncertainties, list) and len(uncertainties) > 0
         has_falsifiability = (
             isinstance(falsifiability_tests, list) and len(falsifiability_tests) > 0
@@ -201,14 +201,14 @@ class MuhasabahValidator:
             isinstance(confidence, (int, float))
             and confidence > self.HIGH_CONFIDENCE_THRESHOLD
             and not has_uncertainties
-            and not has_falsifiability
         ):
             errors.append(
                 ValidationError(
                     code="HIGH_CONFIDENCE_NO_UNCERTAINTIES",
                     message=(
                         f"Confidence {confidence:.2f} > {self.HIGH_CONFIDENCE_THRESHOLD} "
-                        f"requires non-empty uncertainties OR falsifiability_tests array."
+                        f"requires non-empty uncertainties array. "
+                        f"falsifiability_tests do NOT substitute for uncertainties."
                     ),
                     path="$.uncertainties",
                 )

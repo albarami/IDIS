@@ -127,8 +127,7 @@ class SanadIntegrityValidator:
                 ValidationError(
                     code="INVALID_ACTOR_TYPE",
                     message=(
-                        f"Invalid actor_type: {actor_type}. "
-                        f"Must be one of: {VALID_ACTOR_TYPES}"
+                        f"Invalid actor_type: {actor_type}. Must be one of: {VALID_ACTOR_TYPES}"
                     ),
                     path=f"{base_path}.actor_type",
                 )
@@ -196,8 +195,7 @@ class SanadIntegrityValidator:
                 ValidationError(
                     code="INVALID_DEFECT_TYPE",
                     message=(
-                        f"Invalid defect_type: {defect_type}. "
-                        f"Must be one of: {VALID_DEFECT_TYPES}"
+                        f"Invalid defect_type: {defect_type}. Must be one of: {VALID_DEFECT_TYPES}"
                     ),
                     path=f"{base_path}.defect_type",
                 )
@@ -217,8 +215,7 @@ class SanadIntegrityValidator:
                 ValidationError(
                     code="INVALID_SEVERITY",
                     message=(
-                        f"Invalid severity: {severity}. "
-                        f"Must be one of: {VALID_DEFECT_SEVERITIES}"
+                        f"Invalid severity: {severity}. Must be one of: {VALID_DEFECT_SEVERITIES}"
                     ),
                     path=f"{base_path}.severity",
                 )
@@ -521,8 +518,7 @@ class SanadIntegrityValidator:
                 ValidationError(
                     code="INVALID_CLAIM_VERDICT",
                     message=(
-                        f"Invalid claim_verdict: {claim_verdict}. "
-                        f"Must be one of: {VALID_VERDICTS}"
+                        f"Invalid claim_verdict: {claim_verdict}. Must be one of: {VALID_VERDICTS}"
                     ),
                     path="$.claim_verdict",
                 )
@@ -543,8 +539,7 @@ class SanadIntegrityValidator:
                 ValidationError(
                     code="INVALID_CLAIM_ACTION",
                     message=(
-                        f"Invalid claim_action: {claim_action}. "
-                        f"Must be one of: {VALID_ACTIONS}"
+                        f"Invalid claim_action: {claim_action}. Must be one of: {VALID_ACTIONS}"
                     ),
                     path="$.claim_action",
                 )

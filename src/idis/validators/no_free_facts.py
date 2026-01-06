@@ -1,10 +1,30 @@
 """No-Free-Facts Validator - enforces evidence-backed facts in IC-bound outputs.
 
-HARD GATE: Any factual statement in IC-bound outputs MUST reference:
+HARD GATE: Any factual assertion in IC-bound outputs MUST reference:
 - claim_id (with Sanad chain), OR
 - calc_id (with Calc-Sanad lineage)
 
 If not, the output MUST be labeled SUBJECTIVE or rejected.
+
+Canonical deliverable structure (enforced):
+{
+  "deliverable_type": "IC_MEMO",
+  "sections": [
+    {
+      "text": "Revenue grew 20% YoY.",
+      "is_factual": true,
+      "is_subjective": false,
+      "referenced_claim_ids": ["<uuid>"],
+      "referenced_calc_ids": []
+    }
+  ]
+}
+
+Rules:
+- If is_subjective == true → No-Free-Facts does not apply to that section.
+- If is_factual == true and both referenced_claim_ids and referenced_calc_ids are empty
+  → ERROR and overall FAIL.
+- Refs elsewhere in the document do NOT satisfy this section (per-section validation).
 """
 
 from __future__ import annotations
@@ -15,7 +35,7 @@ from typing import Any
 
 from idis.validators.schema_validator import ValidationError, ValidationResult
 
-# Patterns that indicate factual assertions (numeric claims, market sizes, etc.)
+# Patterns that indicate factual assertions (used as FALLBACK heuristic only)
 FACTUAL_PATTERNS = [
     # Currency amounts
     r"\$[\d,]+(?:\.\d+)?(?:\s*(?:M|B|K|million|billion|thousand))?",
@@ -38,6 +58,9 @@ FACTUAL_PATTERNS = [
     # Time-based claims (specific dates/periods)
     r"(?:in|by|since|as of)\s+(?:Q[1-4]\s+)?\d{4}",
     r"(?:FY|CY)\s*\d{2,4}",
+    # Explicit fact markers (plain text factual assertions)
+    r"(?:the\s+)?fact\s+(?:is|that)",
+    r"(?:it\s+is\s+)?(?:a\s+)?(?:known|established|confirmed)\s+fact",
 ]
 
 # Compiled patterns for efficiency
@@ -60,6 +83,21 @@ class NoFreeFactsValidator:
     - All factual assertions MUST be backed by claim_id or calc_id
     - Outputs without proper references are REJECTED (fail closed)
     - Subjective sections are allowed if explicitly marked
+    - Per-section validation: refs elsewhere do NOT satisfy a section
+
+    Canonical input structure (preferred):
+    {
+      "deliverable_type": "IC_MEMO",
+      "sections": [
+        {
+          "text": "...",
+          "is_factual": true/false,
+          "is_subjective": true/false,
+          "referenced_claim_ids": [...],
+          "referenced_calc_ids": [...]
+        }
+      ]
+    }
     """
 
     def __init__(self) -> None:
@@ -67,7 +105,10 @@ class NoFreeFactsValidator:
         pass
 
     def _extract_factual_assertions(self, text: str) -> list[FactualAssertion]:
-        """Extract potential factual assertions from text."""
+        """Extract potential factual assertions from text using heuristic patterns.
+
+        This is a FALLBACK method used only when is_factual field is not provided.
+        """
         assertions: list[FactualAssertion] = []
         seen_positions: set[tuple[int, int]] = set()
 
@@ -86,53 +127,9 @@ class NoFreeFactsValidator:
 
         return sorted(assertions, key=lambda a: a.position)
 
-    def _get_referenced_ids(self, data: dict[str, Any]) -> tuple[set[str], set[str]]:
-        """Extract claim_ids and calc_ids from deliverable data."""
-        claim_ids: set[str] = set()
-        calc_ids: set[str] = set()
-
-        def extract_refs(obj: Any, path: str = "") -> None:
-            if isinstance(obj, dict):
-                # Direct references
-                if "claim_id" in obj and obj["claim_id"]:
-                    claim_ids.add(str(obj["claim_id"]))
-                if "calc_id" in obj and obj["calc_id"]:
-                    calc_ids.add(str(obj["calc_id"]))
-
-                # Arrays of references
-                if "claim_ids" in obj and isinstance(obj["claim_ids"], list):
-                    for cid in obj["claim_ids"]:
-                        if cid:
-                            claim_ids.add(str(cid))
-                if "calc_ids" in obj and isinstance(obj["calc_ids"], list):
-                    for cid in obj["calc_ids"]:
-                        if cid:
-                            calc_ids.add(str(cid))
-
-                # Supported claim/calc refs (common in deliverables)
-                if "supported_claim_ids" in obj and isinstance(obj["supported_claim_ids"], list):
-                    for cid in obj["supported_claim_ids"]:
-                        if cid:
-                            claim_ids.add(str(cid))
-                if "supported_calc_ids" in obj and isinstance(obj["supported_calc_ids"], list):
-                    for cid in obj["supported_calc_ids"]:
-                        if cid:
-                            calc_ids.add(str(cid))
-
-                # Recurse into nested objects
-                for key, value in obj.items():
-                    extract_refs(value, f"{path}.{key}")
-
-            elif isinstance(obj, list):
-                for i, item in enumerate(obj):
-                    extract_refs(item, f"{path}[{i}]")
-
-        extract_refs(data)
-        return claim_ids, calc_ids
-
     def _is_section_subjective(self, section: dict[str, Any]) -> bool:
         """Check if a section is explicitly marked as subjective."""
-        # Check for explicit subjective flag
+        # Explicit is_subjective flag takes precedence
         if section.get("is_subjective") is True:
             return True
 
@@ -144,39 +141,172 @@ class NoFreeFactsValidator:
         label = section.get("label", "").upper()
         return "SUBJECTIVE" in label
 
-    def _get_text_content(self, data: dict[str, Any]) -> list[tuple[str, str, bool]]:
-        """Extract text content with paths and subjective flags."""
-        content: list[tuple[str, str, bool]] = []
+    def _get_section_refs(self, section: dict[str, Any]) -> tuple[list[str], list[str]]:
+        """Get referenced_claim_ids and referenced_calc_ids from a section.
 
-        def extract_text(obj: Any, path: str = "$", is_subjective: bool = False) -> None:
-            if isinstance(obj, dict):
-                # Check if this section is subjective
-                section_subjective = is_subjective or self._is_section_subjective(obj)
+        Only returns refs that are LOCAL to this section (per-section validation).
+        """
+        claim_ids: list[str] = []
+        calc_ids: list[str] = []
 
-                # Extract text fields
-                for text_field in ["text", "content", "narrative", "summary", "description"]:
-                    if text_field in obj and isinstance(obj[text_field], str):
-                        content.append(
-                            (f"{path}.{text_field}", obj[text_field], section_subjective)
+        # Primary fields for per-section refs
+        if "referenced_claim_ids" in section:
+            refs = section["referenced_claim_ids"]
+            if isinstance(refs, list):
+                claim_ids.extend(str(r) for r in refs if r)
+
+        if "referenced_calc_ids" in section:
+            refs = section["referenced_calc_ids"]
+            if isinstance(refs, list):
+                calc_ids.extend(str(r) for r in refs if r)
+
+        # Also accept alternative field names for compatibility
+        if "claim_ids" in section:
+            refs = section["claim_ids"]
+            if isinstance(refs, list):
+                claim_ids.extend(str(r) for r in refs if r)
+
+        if "calc_ids" in section:
+            refs = section["calc_ids"]
+            if isinstance(refs, list):
+                calc_ids.extend(str(r) for r in refs if r)
+
+        return claim_ids, calc_ids
+
+    def _validate_structured_sections(
+        self, sections: list[Any]
+    ) -> tuple[list[ValidationError], bool]:
+        """Validate sections with explicit is_factual/is_subjective fields.
+
+        Returns:
+            Tuple of (errors, has_structured_sections)
+        """
+        errors: list[ValidationError] = []
+        has_structured = False
+
+        for i, section in enumerate(sections):
+            if not isinstance(section, dict):
+                continue
+
+            # Check if this section has explicit structure
+            has_is_factual = "is_factual" in section
+            has_is_subjective = "is_subjective" in section
+
+            if has_is_factual or has_is_subjective:
+                has_structured = True
+
+            # RULE: If is_subjective == true, skip No-Free-Facts checks
+            if self._is_section_subjective(section):
+                continue
+
+            # RULE: If is_factual == true, must have LOCAL refs
+            is_factual = section.get("is_factual", False)
+            if is_factual:
+                claim_ids, calc_ids = self._get_section_refs(section)
+
+                if not claim_ids and not calc_ids:
+                    # HARD ERROR: Factual section without local refs
+                    section_text = section.get("text", "<no text>")
+                    # Truncate for display
+                    display_text = (
+                        section_text[:50] + "..." if len(section_text) > 50 else section_text
+                    )
+                    errors.append(
+                        ValidationError(
+                            code="NO_FREE_FACTS_UNREFERENCED_FACT",
+                            message=(
+                                f"Factual section (is_factual=true) has no local "
+                                f"referenced_claim_ids or referenced_calc_ids. "
+                                f"Text: '{display_text}'"
+                            ),
+                            path=f"$.sections[{i}]",
+                        )
+                    )
+
+        return errors, has_structured
+
+    def _validate_fallback_heuristic(self, data: dict[str, Any]) -> list[ValidationError]:
+        """Fallback validation using heuristic pattern detection.
+
+        Used when sections don't have explicit is_factual/is_subjective fields.
+        This is more conservative - any detected factual assertion without
+        local refs in the same section is an ERROR.
+        """
+        errors: list[ValidationError] = []
+
+        # Check sections first
+        sections = data.get("sections", [])
+        if isinstance(sections, list):
+            for i, section in enumerate(sections):
+                if not isinstance(section, dict):
+                    continue
+
+                # Skip subjective sections
+                if self._is_section_subjective(section):
+                    continue
+
+                # Get text content
+                text = section.get("text", "") or section.get("content", "")
+                if not text:
+                    continue
+
+                # Extract factual assertions using heuristics
+                assertions = self._extract_factual_assertions(text)
+                if not assertions:
+                    continue
+
+                # Get LOCAL refs for this section
+                claim_ids, calc_ids = self._get_section_refs(section)
+
+                # If factual assertions found but no local refs -> ERROR
+                if not claim_ids and not calc_ids:
+                    for assertion in assertions:
+                        errors.append(
+                            ValidationError(
+                                code="NO_FREE_FACTS_VIOLATION",
+                                message=(
+                                    f"Factual assertion '{assertion.text}' found "
+                                    f"without local referenced_claim_ids or "
+                                    f"referenced_calc_ids in this section"
+                                ),
+                                path=f"$.sections[{i}].text",
+                            )
                         )
 
-                # Recurse
-                for key, value in obj.items():
-                    if key not in ["text", "content", "narrative", "summary", "description"]:
-                        extract_text(value, f"{path}.{key}", section_subjective)
+        # Also check top-level content field (legacy format)
+        top_content = data.get("content", "")
+        if top_content and isinstance(top_content, str):
+            assertions = self._extract_factual_assertions(top_content)
+            if assertions:
+                # Check for any top-level refs
+                top_claim_ids = data.get("supported_claim_ids", []) or data.get("claim_ids", [])
+                top_calc_ids = data.get("supported_calc_ids", []) or data.get("calc_ids", [])
 
-            elif isinstance(obj, list):
-                for i, item in enumerate(obj):
-                    extract_text(item, f"{path}[{i}]", is_subjective)
+                if not top_claim_ids and not top_calc_ids:
+                    for assertion in assertions:
+                        errors.append(
+                            ValidationError(
+                                code="NO_FREE_FACTS_VIOLATION",
+                                message=(
+                                    f"Factual assertion '{assertion.text}' found "
+                                    f"without any claim_id or calc_id references"
+                                ),
+                                path="$.content",
+                            )
+                        )
 
-        extract_text(data)
-        return content
+        return errors
 
     def validate(self, data: Any) -> ValidationResult:
         """Validate a deliverable for No-Free-Facts compliance.
 
+        FAIL-CLOSED BEHAVIOR:
+        - If is_factual=true and no local refs → FAIL
+        - If heuristic detects facts and no local refs → FAIL
+        - Refs elsewhere in document do NOT satisfy a section
+
         Args:
-            data: Deliverable JSON data
+            data: Deliverable JSON data with canonical structure
 
         Returns:
             ValidationResult - FAILS if unreferenced factual assertions found
@@ -188,87 +318,26 @@ class NoFreeFactsValidator:
         if not isinstance(data, dict):
             return ValidationResult.fail_closed("Data must be a dictionary")
 
-        # Note: We validate all deliverables strictly, whether IC-bound or not
-        # The ic_bound flag could be used for future differentiation if needed
-
-        # Get referenced IDs
-        claim_ids, calc_ids = self._get_referenced_ids(data)
-
-        # If no references at all and there's text content, that's suspicious
-        # but we need to check if there are actual factual assertions
-
-        # Extract text content
-        text_content = self._get_text_content(data)
-
         errors: list[ValidationError] = []
-        warnings: list[ValidationError] = []
 
-        for path, text, is_subjective in text_content:
-            assertions = self._extract_factual_assertions(text)
-
-            if assertions and not is_subjective:
-                # Found factual assertions in non-subjective section
-                # Check if we have ANY references
-                if not claim_ids and not calc_ids:
-                    # No references at all - definite violation
-                    for assertion in assertions:
-                        errors.append(
-                            ValidationError(
-                                code="NO_FREE_FACTS_VIOLATION",
-                                message=(
-                                    f"Factual assertion '{assertion.text}' found without any "
-                                    f"claim_id or calc_id references in deliverable"
-                                ),
-                                path=path,
-                            )
-                        )
-                else:
-                    # Has some references - warn but don't fail
-                    # (We can't definitively map assertions to specific refs without more context)
-                    for assertion in assertions:
-                        warnings.append(
-                            ValidationError(
-                                code="UNVERIFIED_ASSERTION",
-                                message=(
-                                    f"Factual assertion '{assertion.text}' - verify it is backed "
-                                    f"by a referenced claim_id or calc_id"
-                                ),
-                                path=path,
-                            )
-                        )
-
-        # Check for sections that MUST have references
+        # Get sections
         sections = data.get("sections", [])
-        if isinstance(sections, list):
-            for i, section in enumerate(sections):
-                if isinstance(section, dict):
-                    # IC-critical sections must have references
-                    section_type = section.get("type", "").upper()
-                    if section_type in ("FINANCIAL", "MARKET", "TRACTION", "KEY_METRICS"):
-                        section_claims = section.get("claim_ids", []) or section.get(
-                            "supported_claim_ids", []
-                        )
-                        section_calcs = section.get("calc_ids", []) or section.get(
-                            "supported_calc_ids", []
-                        )
 
-                        if (
-                            not section_claims
-                            and not section_calcs
-                            and not self._is_section_subjective(section)
-                        ):
-                            errors.append(
-                                ValidationError(
-                                    code="MISSING_REFERENCES",
-                                    message=(
-                                        f"Section of type '{section_type}' requires claim_ids "
-                                        f"or calc_ids but has none"
-                                    ),
-                                    path=f"$.sections[{i}]",
-                                )
-                            )
+        if isinstance(sections, list) and sections:
+            # Try structured validation first (preferred)
+            structured_errors, has_structured = self._validate_structured_sections(sections)
+            errors.extend(structured_errors)
+
+            # If no structured fields found, use fallback heuristic
+            if not has_structured:
+                fallback_errors = self._validate_fallback_heuristic(data)
+                errors.extend(fallback_errors)
+        else:
+            # No sections - use fallback heuristic on any content
+            fallback_errors = self._validate_fallback_heuristic(data)
+            errors.extend(fallback_errors)
 
         if errors:
             return ValidationResult.fail(errors)
 
-        return ValidationResult.success(warnings if warnings else None)
+        return ValidationResult.success()

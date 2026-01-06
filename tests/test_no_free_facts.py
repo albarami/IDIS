@@ -430,3 +430,173 @@ class TestNoFreeFactsErrorStructure:
             assert error.path, "Error must have a path"
             # Path should reference the section
             assert "sections[0]" in error.path
+
+
+class TestNoFreeFactsBypassPrevention:
+    """Regression tests for bypass prevention.
+
+    These tests verify that the validator cannot be bypassed via:
+    1. Mixed structured/unstructured sections
+    2. Mislabeling is_factual=false on factual content
+    """
+
+    def test_mixed_structured_unstructured_bypass_blocked(self) -> None:
+        """FAIL: Mixed structured/unstructured - unstructured factual section must fail.
+
+        Scenario:
+        - Section A: structured factual with refs (passes)
+        - Section B: unstructured (no is_factual) with "This is a fact..." and no refs
+
+        Expected: Overall FAIL because Section B contains factual content without refs.
+        The presence of structured Section A must NOT disable heuristics for Section B.
+        """
+        validator = NoFreeFactsValidator()
+
+        deliverable = {
+            "deliverable_type": "IC_MEMO",
+            "sections": [
+                {
+                    "text": "Revenue is $10M ARR.",
+                    "is_factual": True,
+                    "is_subjective": False,
+                    "referenced_claim_ids": ["550e8400-e29b-41d4-a716-446655440000"],
+                    "referenced_calc_ids": [],
+                },
+                {
+                    "text": "The fact is that market conditions are favorable.",
+                    # NO is_factual field - heuristics must still run!
+                    # NO refs - should trigger failure
+                },
+            ],
+        }
+
+        result = validator.validate(deliverable)
+        assert not result.passed, (
+            "Expected FAIL - Section B has factual content ('the fact is') without refs. "
+            "Structured Section A must NOT disable heuristics for unstructured Section B."
+        )
+        assert any(e.code == "NO_FREE_FACTS_VIOLATION" for e in result.errors)
+        assert any("sections[1]" in e.path for e in result.errors)
+
+    def test_mixed_structured_unstructured_with_currency_bypass_blocked(self) -> None:
+        """FAIL: Unstructured section with $5M must fail even if other sections are structured."""
+        validator = NoFreeFactsValidator()
+
+        deliverable = {
+            "deliverable_type": "IC_MEMO",
+            "sections": [
+                {
+                    "text": "Company overview.",
+                    "is_factual": False,
+                    "is_subjective": False,
+                    "referenced_claim_ids": [],
+                    "referenced_calc_ids": [],
+                },
+                {
+                    "text": "They raised $5M in their Series A.",
+                    # NO is_factual - but contains $5M which is factual
+                },
+            ],
+        }
+
+        result = validator.validate(deliverable)
+        assert not result.passed, (
+            "Expected FAIL - Section B has '$5M' without refs. "
+            "Heuristics must run on unstructured sections."
+        )
+        assert any(e.code == "NO_FREE_FACTS_VIOLATION" for e in result.errors)
+
+    def test_mislabel_is_factual_false_bypass_blocked(self) -> None:
+        """FAIL: Mislabeling is_factual=false on factual content must still fail.
+
+        Scenario:
+        - Section with is_factual=false, is_subjective=false
+        - Text contains "Revenue is $5M." which is clearly factual
+        - No refs provided
+
+        Expected: FAIL because heuristics detect the factual content.
+        Setting is_factual=false does NOT disable heuristic checking.
+        """
+        validator = NoFreeFactsValidator()
+
+        deliverable = {
+            "deliverable_type": "IC_MEMO",
+            "sections": [
+                {
+                    "text": "Revenue is $5M.",
+                    "is_factual": False,  # MISLABELED - text is clearly factual
+                    "is_subjective": False,
+                    "referenced_claim_ids": [],
+                    "referenced_calc_ids": [],
+                }
+            ],
+        }
+
+        result = validator.validate(deliverable)
+        assert not result.passed, (
+            "Expected FAIL - is_factual=false but text contains '$5M'. "
+            "Heuristics must catch mislabeled factual content."
+        )
+        assert any(e.code == "NO_FREE_FACTS_VIOLATION" for e in result.errors)
+        assert any("$5M" in e.message for e in result.errors)
+
+    def test_mislabel_with_percentage_bypass_blocked(self) -> None:
+        """FAIL: Mislabeling on percentage content must fail."""
+        validator = NoFreeFactsValidator()
+
+        deliverable = {
+            "deliverable_type": "IC_MEMO",
+            "sections": [
+                {
+                    "text": "Gross margin is 75% which is strong.",
+                    "is_factual": False,  # MISLABELED
+                    "is_subjective": False,
+                    "referenced_claim_ids": [],
+                    "referenced_calc_ids": [],
+                }
+            ],
+        }
+
+        result = validator.validate(deliverable)
+        assert not result.passed, "Expected FAIL - '75%' is factual despite is_factual=false"
+        assert any(e.code == "NO_FREE_FACTS_VIOLATION" for e in result.errors)
+
+    def test_mislabel_with_refs_passes(self) -> None:
+        """PASS: Mislabeled section with refs should still pass."""
+        validator = NoFreeFactsValidator()
+
+        deliverable = {
+            "deliverable_type": "IC_MEMO",
+            "sections": [
+                {
+                    "text": "Revenue is $5M.",
+                    "is_factual": False,  # Mislabeled but has refs
+                    "is_subjective": False,
+                    "referenced_claim_ids": ["550e8400-e29b-41d4-a716-446655440000"],
+                    "referenced_calc_ids": [],
+                }
+            ],
+        }
+
+        result = validator.validate(deliverable)
+        assert result.passed, f"Expected pass - section has refs: {result.errors}"
+
+    def test_truly_non_factual_content_passes_without_refs(self) -> None:
+        """PASS: Truly non-factual content (no heuristic matches) passes without refs."""
+        validator = NoFreeFactsValidator()
+
+        deliverable = {
+            "deliverable_type": "IC_MEMO",
+            "sections": [
+                {
+                    "text": "The team seems motivated and experienced.",
+                    "is_factual": False,
+                    "is_subjective": False,
+                    "referenced_claim_ids": [],
+                    "referenced_calc_ids": [],
+                }
+            ],
+        }
+
+        result = validator.validate(deliverable)
+        assert result.passed, f"Expected pass - text has no factual markers: {result.errors}"

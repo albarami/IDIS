@@ -35,7 +35,8 @@ from typing import Any
 
 from idis.validators.schema_validator import ValidationError, ValidationResult
 
-# Patterns that indicate factual assertions (used as FALLBACK heuristic only)
+# Patterns that indicate factual assertions (conservative heuristics)
+# Applied per-section when is_factual is missing or false
 FACTUAL_PATTERNS = [
     # Currency amounts
     r"\$[\d,]+(?:\.\d+)?(?:\s*(?:M|B|K|million|billion|thousand))?",
@@ -49,8 +50,8 @@ FACTUAL_PATTERNS = [
     # Market size claims
     r"(?:TAM|SAM|SOM)\s+(?:of\s+)?\$?[\d,]+",
     r"market\s+(?:size|opportunity)\s+(?:of\s+)?\$?[\d,]+",
-    # Revenue/ARR claims
-    r"(?:ARR|MRR|revenue)\s+(?:of\s+)?\$?[\d,]+",
+    # Revenue/ARR/financial metrics
+    r"(?:ARR|MRR|revenue|GM|gross\s+margin|churn)\s+(?:of\s+|is\s+)?\$?[\d,]+",
     r"\$?[\d,]+(?:\.\d+)?(?:\s*(?:M|B|K))?\s+(?:ARR|MRR|revenue)",
     # User/customer metrics
     r"[\d,]+\s+(?:users|customers|clients|subscribers)",
@@ -61,6 +62,9 @@ FACTUAL_PATTERNS = [
     # Explicit fact markers (plain text factual assertions)
     r"(?:the\s+)?fact\s+(?:is|that)",
     r"(?:it\s+is\s+)?(?:a\s+)?(?:known|established|confirmed)\s+fact",
+    # Funding/investment cues
+    r"(?:raised|funding|Series\s+[A-Z]|valuation)\s+(?:of\s+)?\$?[\d,]+",
+    r"\$[\d,]+(?:\.\d+)?(?:\s*(?:M|B|K))?\s+(?:raised|valuation|funding)",
 ]
 
 # Compiled patterns for efficiency
@@ -173,110 +177,104 @@ class NoFreeFactsValidator:
 
         return claim_ids, calc_ids
 
-    def _validate_structured_sections(
-        self, sections: list[Any]
-    ) -> tuple[list[ValidationError], bool]:
-        """Validate sections with explicit is_factual/is_subjective fields.
+    def _looks_like_fact(self, text: str) -> list[FactualAssertion]:
+        """Check if text looks like it contains factual assertions.
 
-        Returns:
-            Tuple of (errors, has_structured_sections)
+        Conservative heuristic detection for:
+        - Numeric values (%, $, years, metrics)
+        - Explicit fact markers ("the fact is", etc.)
+        - Finance cues (raised, funding, Series A/B, valuation)
+
+        Returns list of detected factual assertions (empty if none found).
+        """
+        return self._extract_factual_assertions(text)
+
+    def _validate_section(self, section: dict[str, Any], index: int) -> list[ValidationError]:
+        """Validate a single section for No-Free-Facts compliance.
+
+        Per-section logic (applied to EVERY section):
+        1. If is_subjective == true → skip (return ok)
+        2. Else if is_factual == true → must have local refs or FAIL
+        3. Else (is_factual missing OR is_factual == false) → run heuristics:
+           - If text looks factual and no local refs → FAIL
+           - If text does not look factual → allow without refs
+
+        This ensures NO bypass via mixed structured/unstructured or mislabeling.
         """
         errors: list[ValidationError] = []
-        has_structured = False
+
+        # RULE 1: If is_subjective == true, skip No-Free-Facts for this section
+        if self._is_section_subjective(section):
+            return errors
+
+        # Get local refs for this section
+        claim_ids, calc_ids = self._get_section_refs(section)
+        has_local_refs = bool(claim_ids or calc_ids)
+
+        # Get text content
+        text = section.get("text", "") or section.get("content", "")
+
+        # RULE 2: If is_factual == true, must have local refs
+        is_factual_explicit = section.get("is_factual")
+        if is_factual_explicit is True:
+            if not has_local_refs:
+                display_text = text[:50] + "..." if len(text) > 50 else text
+                errors.append(
+                    ValidationError(
+                        code="NO_FREE_FACTS_UNREFERENCED_FACT",
+                        message=(
+                            f"Factual section (is_factual=true) has no local "
+                            f"referenced_claim_ids or referenced_calc_ids. "
+                            f"Text: '{display_text}'"
+                        ),
+                        path=f"$.sections[{index}]",
+                    )
+                )
+            return errors
+
+        # RULE 3: is_factual missing OR is_factual == false → run heuristics
+        # This catches mislabeling (is_factual=false but text is "$5M revenue")
+        # and unstructured sections in mixed documents
+        if text:
+            assertions = self._looks_like_fact(text)
+            if assertions and not has_local_refs:
+                for assertion in assertions:
+                    errors.append(
+                        ValidationError(
+                            code="NO_FREE_FACTS_VIOLATION",
+                            message=(
+                                f"Factual assertion '{assertion.text}' found "
+                                f"without local referenced_claim_ids or "
+                                f"referenced_calc_ids in this section"
+                            ),
+                            path=f"$.sections[{index}].text",
+                        )
+                    )
+
+        return errors
+
+    def _validate_sections(self, sections: list[Any]) -> list[ValidationError]:
+        """Validate all sections with per-section enforcement.
+
+        NO global skip of heuristics - each section is validated independently.
+        """
+        errors: list[ValidationError] = []
 
         for i, section in enumerate(sections):
             if not isinstance(section, dict):
                 continue
+            section_errors = self._validate_section(section, i)
+            errors.extend(section_errors)
 
-            # Check if this section has explicit structure
-            has_is_factual = "is_factual" in section
-            has_is_subjective = "is_subjective" in section
+        return errors
 
-            if has_is_factual or has_is_subjective:
-                has_structured = True
-
-            # RULE: If is_subjective == true, skip No-Free-Facts checks
-            if self._is_section_subjective(section):
-                continue
-
-            # RULE: If is_factual == true, must have LOCAL refs
-            is_factual = section.get("is_factual", False)
-            if is_factual:
-                claim_ids, calc_ids = self._get_section_refs(section)
-
-                if not claim_ids and not calc_ids:
-                    # HARD ERROR: Factual section without local refs
-                    section_text = section.get("text", "<no text>")
-                    # Truncate for display
-                    display_text = (
-                        section_text[:50] + "..." if len(section_text) > 50 else section_text
-                    )
-                    errors.append(
-                        ValidationError(
-                            code="NO_FREE_FACTS_UNREFERENCED_FACT",
-                            message=(
-                                f"Factual section (is_factual=true) has no local "
-                                f"referenced_claim_ids or referenced_calc_ids. "
-                                f"Text: '{display_text}'"
-                            ),
-                            path=f"$.sections[{i}]",
-                        )
-                    )
-
-        return errors, has_structured
-
-    def _validate_fallback_heuristic(self, data: dict[str, Any]) -> list[ValidationError]:
-        """Fallback validation using heuristic pattern detection.
-
-        Used when sections don't have explicit is_factual/is_subjective fields.
-        This is more conservative - any detected factual assertion without
-        local refs in the same section is an ERROR.
-        """
+    def _validate_top_level_content(self, data: dict[str, Any]) -> list[ValidationError]:
+        """Validate top-level content field (legacy format)."""
         errors: list[ValidationError] = []
 
-        # Check sections first
-        sections = data.get("sections", [])
-        if isinstance(sections, list):
-            for i, section in enumerate(sections):
-                if not isinstance(section, dict):
-                    continue
-
-                # Skip subjective sections
-                if self._is_section_subjective(section):
-                    continue
-
-                # Get text content
-                text = section.get("text", "") or section.get("content", "")
-                if not text:
-                    continue
-
-                # Extract factual assertions using heuristics
-                assertions = self._extract_factual_assertions(text)
-                if not assertions:
-                    continue
-
-                # Get LOCAL refs for this section
-                claim_ids, calc_ids = self._get_section_refs(section)
-
-                # If factual assertions found but no local refs -> ERROR
-                if not claim_ids and not calc_ids:
-                    for assertion in assertions:
-                        errors.append(
-                            ValidationError(
-                                code="NO_FREE_FACTS_VIOLATION",
-                                message=(
-                                    f"Factual assertion '{assertion.text}' found "
-                                    f"without local referenced_claim_ids or "
-                                    f"referenced_calc_ids in this section"
-                                ),
-                                path=f"$.sections[{i}].text",
-                            )
-                        )
-
-        # Also check top-level content field (legacy format)
         top_content = data.get("content", "")
         if top_content and isinstance(top_content, str):
-            assertions = self._extract_factual_assertions(top_content)
+            assertions = self._looks_like_fact(top_content)
             if assertions:
                 # Check for any top-level refs
                 top_claim_ids = data.get("supported_claim_ids", []) or data.get("claim_ids", [])
@@ -300,9 +298,10 @@ class NoFreeFactsValidator:
     def validate(self, data: Any) -> ValidationResult:
         """Validate a deliverable for No-Free-Facts compliance.
 
-        FAIL-CLOSED BEHAVIOR:
-        - If is_factual=true and no local refs → FAIL
-        - If heuristic detects facts and no local refs → FAIL
+        FAIL-CLOSED BEHAVIOR (per-section, no global bypasses):
+        - If is_subjective == true → skip that section
+        - If is_factual == true and no local refs → FAIL
+        - If is_factual missing/false → run heuristics, if factual and no refs → FAIL
         - Refs elsewhere in document do NOT satisfy a section
 
         Args:
@@ -320,22 +319,16 @@ class NoFreeFactsValidator:
 
         errors: list[ValidationError] = []
 
-        # Get sections
+        # Validate sections with per-section enforcement
+        # NO global skip of heuristics - each section validated independently
         sections = data.get("sections", [])
-
         if isinstance(sections, list) and sections:
-            # Try structured validation first (preferred)
-            structured_errors, has_structured = self._validate_structured_sections(sections)
-            errors.extend(structured_errors)
+            section_errors = self._validate_sections(sections)
+            errors.extend(section_errors)
 
-            # If no structured fields found, use fallback heuristic
-            if not has_structured:
-                fallback_errors = self._validate_fallback_heuristic(data)
-                errors.extend(fallback_errors)
-        else:
-            # No sections - use fallback heuristic on any content
-            fallback_errors = self._validate_fallback_heuristic(data)
-            errors.extend(fallback_errors)
+        # Also validate top-level content (legacy format)
+        top_level_errors = self._validate_top_level_content(data)
+        errors.extend(top_level_errors)
 
         if errors:
             return ValidationResult.fail(errors)

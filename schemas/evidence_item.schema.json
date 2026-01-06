@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://idis.example.com/schemas/evidence_item.schema.json",
+  "title": "EvidenceItem",
+  "description": "An evidence item that supports or contradicts a claim, with source grading.",
+  "type": "object",
+  "required": [
+    "evidence_id",
+    "tenant_id",
+    "deal_id",
+    "source_grade",
+    "verification_status"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "evidence_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for the evidence item"
+    },
+    "tenant_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Tenant isolation key"
+    },
+    "deal_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Deal this evidence belongs to"
+    },
+    "source_span_id": {
+      "type": ["string", "null"],
+      "format": "uuid",
+      "description": "Reference to the document span where this evidence was extracted"
+    },
+    "source_system": {
+      "type": ["string", "null"],
+      "description": "Origin system (e.g., Stripe, QuickBooks, Bank, Audit, Deck, ResearchProvider)"
+    },
+    "upstream_origin_id": {
+      "type": ["string", "null"],
+      "description": "Required for independence tests in corroboration"
+    },
+    "retrieval_timestamp": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "When this evidence was retrieved from the source"
+    },
+    "verification_status": {
+      "type": "string",
+      "enum": ["UNVERIFIED", "VERIFIED", "CONTRADICTED"],
+      "description": "Current verification status of this evidence"
+    },
+    "source_grade": {
+      "type": "string",
+      "enum": ["A", "B", "C", "D"],
+      "description": "Public source grade (Tier 1)"
+    },
+    "source_rank_subgrade": {
+      "type": ["string", "null"],
+      "enum": [null, "A+", "A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D"],
+      "description": "Internal analytics subgrade (not used in gating)"
+    },
+    "rationale": {
+      "type": "object",
+      "description": "Explanation for the assigned grade",
+      "additionalProperties": true
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

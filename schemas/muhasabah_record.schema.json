@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://idis.example.com/schemas/muhasabah_record.schema.json",
+  "title": "MuhasabahRecord",
+  "description": "Self-accounting record required for every agent output. Enforces evidence-backed outputs.",
+  "type": "object",
+  "required": [
+    "muhasabah_id",
+    "agent_id",
+    "output_id",
+    "supported_claim_ids",
+    "confidence",
+    "timestamp"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "muhasabah_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this record"
+    },
+    "tenant_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Tenant isolation key"
+    },
+    "agent_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Identifier of the agent that produced the output"
+    },
+    "output_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Reference to the agent output this record covers"
+    },
+    "supported_claim_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "description": "Claims that support the assertions in this output"
+    },
+    "supported_calc_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "description": "Calculations that support numeric assertions in this output"
+    },
+    "falsifiability_tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["test_description", "required_evidence", "pass_fail_rule"],
+        "additionalProperties": false,
+        "properties": {
+          "test_description": {
+            "type": "string",
+            "minLength": 1,
+            "description": "What this test checks"
+          },
+          "required_evidence": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Evidence needed to run this test"
+          },
+          "pass_fail_rule": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Criteria for pass/fail"
+          }
+        }
+      },
+      "description": "Tests that could falsify this output"
+    },
+    "uncertainties": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["uncertainty", "impact", "mitigation"],
+        "additionalProperties": false,
+        "properties": {
+          "uncertainty": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Description of the uncertainty"
+          },
+          "impact": {
+            "type": "string",
+            "enum": ["HIGH", "MEDIUM", "LOW"],
+            "description": "Impact level if this uncertainty materializes"
+          },
+          "mitigation": {
+            "type": "string",
+            "minLength": 1,
+            "description": "How to mitigate or address this uncertainty"
+          }
+        }
+      },
+      "description": "Known uncertainties in this output"
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "description": "Agent's confidence in this output (0-1)"
+    },
+    "failure_modes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Potential ways this output could be wrong"
+    },
+    "is_subjective": {
+      "type": "boolean",
+      "default": false,
+      "description": "If true, output is explicitly subjective and does not require claim refs"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When this record was created"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

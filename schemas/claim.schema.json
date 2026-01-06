@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://idis.example.com/schemas/claim.schema.json",
+  "title": "Claim",
+  "description": "An atomic factual assertion extracted from deal materials, with grade, verdict, and action.",
+  "type": "object",
+  "required": [
+    "claim_id",
+    "tenant_id",
+    "deal_id",
+    "claim_class",
+    "claim_text",
+    "claim_grade",
+    "claim_verdict",
+    "claim_action",
+    "created_at"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "claim_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this claim"
+    },
+    "tenant_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Tenant isolation key"
+    },
+    "deal_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Deal this claim belongs to"
+    },
+    "claim_class": {
+      "type": "string",
+      "enum": [
+        "FINANCIAL",
+        "TRACTION",
+        "MARKET_SIZE",
+        "COMPETITION",
+        "TEAM",
+        "LEGAL_TERMS",
+        "TECHNICAL",
+        "OTHER"
+      ],
+      "description": "Category of the claim"
+    },
+    "claim_text": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The textual assertion"
+    },
+    "predicate": {
+      "type": ["string", "null"],
+      "description": "Structured predicate form of the claim"
+    },
+    "value": {
+      "type": ["object", "null"],
+      "description": "Structured quantity if claim is numeric",
+      "properties": {
+        "value": {
+          "type": "number"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "currency": {
+          "type": ["string", "null"]
+        },
+        "as_of": {
+          "type": ["string", "null"],
+          "format": "date"
+        },
+        "time_window": {
+          "type": ["object", "null"],
+          "properties": {
+            "label": {
+              "type": "string"
+            },
+            "start_date": {
+              "type": ["string", "null"],
+              "format": "date"
+            },
+            "end_date": {
+              "type": ["string", "null"],
+              "format": "date"
+            }
+          }
+        }
+      },
+      "required": ["value", "unit"]
+    },
+    "sanad_id": {
+      "type": ["string", "null"],
+      "format": "uuid",
+      "description": "Reference to the Sanad chain for this claim"
+    },
+    "claim_grade": {
+      "type": "string",
+      "enum": ["A", "B", "C", "D"],
+      "description": "Computed Sanad grade (A/B/C/D)"
+    },
+    "corroboration": {
+      "type": "object",
+      "description": "Corroboration status and independent chain count",
+      "required": ["level", "independent_chain_count"],
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": ["NONE", "AHAD_1", "AHAD_2", "MUTAWATIR"]
+        },
+        "independent_chain_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "claim_verdict": {
+      "type": "string",
+      "enum": ["VERIFIED", "INFLATED", "CONTRADICTED", "UNVERIFIED", "SUBJECTIVE"],
+      "description": "Verdict on the claim's validity"
+    },
+    "claim_action": {
+      "type": "string",
+      "enum": [
+        "NONE",
+        "REQUEST_DATA",
+        "FLAG",
+        "RED_FLAG",
+        "HUMAN_GATE",
+        "PARTNER_OVERRIDE_REQUIRED"
+      ],
+      "description": "Required action based on grade/verdict"
+    },
+    "defect_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "description": "Defects affecting this claim"
+    },
+    "materiality": {
+      "type": "string",
+      "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"],
+      "description": "Importance of this claim to the deal"
+    },
+    "ic_bound": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether this claim is bound for IC deliverables"
+    },
+    "primary_span_id": {
+      "type": ["string", "null"],
+      "format": "uuid",
+      "description": "Primary document span for this claim"
+    },
+    "created_by": {
+      "type": ["string", "null"],
+      "format": "uuid",
+      "description": "Actor who created this claim"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

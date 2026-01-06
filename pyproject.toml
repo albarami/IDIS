@@ -10,6 +10,7 @@ dependencies = [
     "fastapi>=0.109.0",
     "uvicorn[standard]>=0.27.0",
     "pydantic>=2.5.0",
+    "jsonschema>=4.21.0",
 ]
 
 [project.optional-dependencies]
@@ -68,6 +69,10 @@ files = ["src"]
 
 [[tool.mypy.overrides]]
 module = ["uvicorn.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["jsonschema.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

@@ -1,0 +1,206 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://idis.example.com/schemas/audit_event.schema.json",
+  "title": "AuditEvent",
+  "description": "Immutable audit event for all mutating operations. Append-only.",
+  "type": "object",
+  "required": [
+    "event_id",
+    "occurred_at",
+    "tenant_id",
+    "actor",
+    "request",
+    "resource",
+    "event_type",
+    "severity",
+    "summary"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this audit event"
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Server-side timestamp of when this event occurred"
+    },
+    "tenant_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Tenant isolation key"
+    },
+    "actor": {
+      "type": "object",
+      "required": ["actor_type", "actor_id"],
+      "additionalProperties": false,
+      "properties": {
+        "actor_type": {
+          "type": "string",
+          "enum": ["HUMAN", "SERVICE"],
+          "description": "Type of actor"
+        },
+        "actor_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Identifier of the actor"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Roles held by actor at time of action"
+        },
+        "ip": {
+          "type": ["string", "null"],
+          "description": "IP address of the actor"
+        },
+        "user_agent": {
+          "type": ["string", "null"],
+          "description": "User agent string"
+        }
+      }
+    },
+    "request": {
+      "type": "object",
+      "required": ["request_id", "method", "path", "status_code"],
+      "additionalProperties": false,
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Unique request identifier for correlation"
+        },
+        "idempotency_key": {
+          "type": ["string", "null"],
+          "description": "Idempotency key if provided"
+        },
+        "trace_id": {
+          "type": ["string", "null"],
+          "description": "Distributed trace ID"
+        },
+        "span_id": {
+          "type": ["string", "null"],
+          "description": "Span ID within the trace"
+        },
+        "method": {
+          "type": "string",
+          "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"],
+          "description": "HTTP method"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Request path"
+        },
+        "status_code": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 599,
+          "description": "HTTP response status code"
+        }
+      }
+    },
+    "resource": {
+      "type": "object",
+      "required": ["resource_type", "resource_id"],
+      "additionalProperties": false,
+      "properties": {
+        "resource_type": {
+          "type": "string",
+          "enum": [
+            "deal",
+            "document",
+            "claim",
+            "sanad",
+            "defect",
+            "calc",
+            "debate",
+            "deliverable",
+            "human_gate",
+            "override",
+            "integration",
+            "webhook"
+          ],
+          "description": "Type of resource affected"
+        },
+        "resource_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Identifier of the affected resource"
+        },
+        "deal_id": {
+          "type": ["string", "null"],
+          "format": "uuid",
+          "description": "Deal context if applicable"
+        }
+      }
+    },
+    "event_type": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Specific event type from taxonomy (e.g., deal.created, claim.verdict.changed)"
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"],
+      "description": "Severity level of this event"
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable summary of the event"
+    },
+    "diff": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "before_ref": {
+          "type": ["string", "null"],
+          "description": "Object store reference to state before change"
+        },
+        "after_ref": {
+          "type": ["string", "null"],
+          "description": "Object store reference to state after change"
+        },
+        "changed_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "List of field names that changed"
+        }
+      },
+      "description": "Diff information for update operations"
+    },
+    "payload": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "safe": {
+          "type": ["object", "null"],
+          "additionalProperties": true,
+          "description": "Safe fields only (no PII or sensitive data)"
+        },
+        "hashes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Hashes of sensitive content"
+        },
+        "refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "References to related entities"
+        }
+      },
+      "description": "Additional payload (redacted per policy)"
+    }
+  }
+}

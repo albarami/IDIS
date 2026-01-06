@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://idis.example.com/schemas/transmission_node.schema.json",
+  "title": "TransmissionNode",
+  "description": "A step in the chain of custody/transformation for evidence or claims.",
+  "type": "object",
+  "required": [
+    "node_id",
+    "node_type",
+    "actor_type",
+    "actor_id",
+    "timestamp"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "node_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this transmission node"
+    },
+    "node_type": {
+      "type": "string",
+      "enum": ["INGEST", "EXTRACT", "NORMALIZE", "RECONCILE", "CALCULATE", "INFER", "HUMAN_VERIFY", "EXPORT"],
+      "description": "Type of transformation/operation performed at this node"
+    },
+    "actor_type": {
+      "type": "string",
+      "enum": ["AGENT", "HUMAN", "SYSTEM"],
+      "description": "Type of actor that performed this operation"
+    },
+    "actor_id": {
+      "type": "string",
+      "description": "Identifier of the actor (agent_id, user_id, or system component)"
+    },
+    "input_refs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "description": "References to inputs consumed by this node"
+    },
+    "output_refs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "description": "References to outputs produced by this node"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When this transformation occurred"
+    },
+    "confidence": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Extraction/transformation confidence score"
+    },
+    "dhabt_score": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Historical precision score for this actor/operation type"
+    },
+    "verification_method": {
+      "type": ["string", "null"],
+      "enum": [null, "auto", "cross-check", "human-verified"],
+      "description": "How this node's output was verified"
+    },
+    "notes": {
+      "type": ["string", "null"],
+      "description": "Additional notes about this transformation"
+    }
+  }
+}

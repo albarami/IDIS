@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://idis.example.com/schemas/calc_sanad.schema.json",
+  "title": "CalcSanad",
+  "description": "Provenance record for deterministic calculations.",
+  "type": "object",
+  "required": [
+    "calc_sanad_id",
+    "tenant_id",
+    "calc_id",
+    "input_claim_ids",
+    "input_min_sanad_grade",
+    "calc_grade",
+    "calc_type",
+    "formula_hash",
+    "code_version",
+    "output",
+    "reproducibility_hash"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "calc_sanad_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this calc provenance record"
+    },
+    "tenant_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Tenant isolation key"
+    },
+    "deal_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Deal this calculation belongs to"
+    },
+    "calc_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Reference to the deterministic calculation"
+    },
+    "calc_type": {
+      "type": "string",
+      "description": "Type of calculation (e.g., IRR, MOIC, GM, NRR, CAC_PAYBACK)"
+    },
+    "input_claim_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "description": "Claims used as inputs to this calculation"
+    },
+    "inputs": {
+      "type": "object",
+      "description": "Raw numeric inputs used in calculation",
+      "additionalProperties": true
+    },
+    "input_min_sanad_grade": {
+      "type": "string",
+      "enum": ["A", "B", "C", "D"],
+      "description": "Minimum Sanad grade among input claims"
+    },
+    "calc_grade": {
+      "type": "string",
+      "enum": ["A", "B", "C", "D"],
+      "description": "Derived grade for this calculation (min of inputs; D if any D in material)"
+    },
+    "formula_hash": {
+      "type": "string",
+      "description": "Hash of the formula/algorithm used"
+    },
+    "code_version": {
+      "type": "string",
+      "description": "Git SHA or package version of calc engine"
+    },
+    "output": {
+      "type": "object",
+      "description": "Typed numeric outputs from the calculation",
+      "additionalProperties": true
+    },
+    "reproducibility_hash": {
+      "type": "string",
+      "description": "Hash of inputs + formula_hash + code_version + output"
+    },
+    "explanation": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "description": "Explanation of how grade was derived"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

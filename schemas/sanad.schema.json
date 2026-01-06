@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://idis.example.com/schemas/sanad.schema.json",
+  "title": "Sanad",
+  "description": "Claim-level evidence chain with grade, corroboration, and defects.",
+  "type": "object",
+  "required": [
+    "sanad_id",
+    "tenant_id",
+    "claim_id",
+    "primary_evidence_id",
+    "extraction_confidence",
+    "corroboration_status",
+    "sanad_grade",
+    "transmission_chain"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "sanad_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this Sanad"
+    },
+    "tenant_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Tenant isolation key"
+    },
+    "claim_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "The claim this Sanad supports"
+    },
+    "deal_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Deal this Sanad belongs to"
+    },
+    "primary_evidence_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Primary evidence item for this claim"
+    },
+    "corroborating_evidence_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "description": "Additional evidence items supporting this claim"
+    },
+    "extraction_confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Confidence of extraction (0-1)"
+    },
+    "dhabt_score": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Historical precision score for extractor"
+    },
+    "corroboration_status": {
+      "type": "string",
+      "enum": ["NONE", "AHAD_1", "AHAD_2", "MUTAWATIR"],
+      "description": "Level of independent corroboration"
+    },
+    "sanad_grade": {
+      "type": "string",
+      "enum": ["A", "B", "C", "D"],
+      "description": "Computed grade for this Sanad"
+    },
+    "grade_explanation": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "description": "Rationale for the computed grade"
+    },
+    "transmission_chain": {
+      "type": "array",
+      "items": {
+        "$ref": "transmission_node.schema.json"
+      },
+      "minItems": 1,
+      "description": "Chain of custody/transformation nodes"
+    },
+    "defects": {
+      "type": "array",
+      "items": {
+        "$ref": "defect.schema.json"
+      },
+      "description": "Defects found in this Sanad"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

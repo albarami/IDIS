@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://idis.example.com/schemas/defect.schema.json",
+  "title": "Defect",
+  "description": "A structured fault in the evidence chain (ʿIlal-inspired).",
+  "type": "object",
+  "required": [
+    "defect_id",
+    "defect_type",
+    "severity",
+    "description",
+    "cure_protocol",
+    "status",
+    "affected_claim_ids",
+    "timestamp"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "defect_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this defect"
+    },
+    "tenant_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Tenant isolation key"
+    },
+    "deal_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Deal this defect belongs to"
+    },
+    "defect_type": {
+      "type": "string",
+      "enum": [
+        "BROKEN_CHAIN",
+        "MISSING_LINK",
+        "UNKNOWN_SOURCE",
+        "CONCEALMENT",
+        "INCONSISTENCY",
+        "ANOMALY_VS_STRONGER_SOURCES",
+        "CHRONO_IMPOSSIBLE",
+        "CHAIN_GRAFTING",
+        "CIRCULARITY",
+        "STALENESS",
+        "UNIT_MISMATCH",
+        "TIME_WINDOW_MISMATCH",
+        "SCOPE_DRIFT",
+        "IMPLAUSIBILITY"
+      ],
+      "description": "Categorical type of the defect"
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["FATAL", "MAJOR", "MINOR"],
+      "description": "Impact severity of this defect"
+    },
+    "detected_by": {
+      "type": ["string", "null"],
+      "format": "uuid",
+      "description": "Actor who detected this defect"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable description of the defect"
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "description": "References to evidence supporting this defect finding"
+    },
+    "cure_protocol": {
+      "type": "string",
+      "enum": [
+        "REQUEST_SOURCE",
+        "REQUIRE_REAUDIT",
+        "HUMAN_ARBITRATION",
+        "RECONSTRUCT_CHAIN",
+        "DISCARD_CLAIM"
+      ],
+      "description": "Required action to address this defect"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["OPEN", "CURED", "WAIVED"],
+      "description": "Current status of this defect"
+    },
+    "waiver_reason": {
+      "type": ["string", "null"],
+      "description": "Justification if defect was waived"
+    },
+    "waived_by": {
+      "type": ["string", "null"],
+      "format": "uuid",
+      "description": "Actor who approved the waiver"
+    },
+    "affected_claim_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "description": "Claims affected by this defect"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When this defect was detected"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

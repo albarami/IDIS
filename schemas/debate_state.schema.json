@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://idis.example.com/schemas/debate_state.schema.json",
+  "title": "DebateState",
+  "description": "State of a LangGraph debate session.",
+  "type": "object",
+  "required": [
+    "deal_id",
+    "round_number",
+    "messages",
+    "utility_scores",
+    "arbiter_decisions",
+    "consensus_reached"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "debate_run_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this debate run"
+    },
+    "tenant_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Tenant isolation key"
+    },
+    "deal_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Deal being debated"
+    },
+    "claim_registry_ref": {
+      "type": ["string", "null"],
+      "description": "Reference to claim registry snapshot"
+    },
+    "sanad_graph_ref": {
+      "type": ["string", "null"],
+      "description": "Reference to Sanad graph snapshot"
+    },
+    "open_questions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Unresolved questions in the debate"
+    },
+    "round_number": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10,
+      "description": "Current round number (1-indexed, max typically 5)"
+    },
+    "messages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["message_id", "round_number", "role", "content", "timestamp"],
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "round_number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "agent_id": {
+            "type": ["string", "null"]
+          },
+          "role": {
+            "type": "string",
+            "enum": ["advocate", "sanad_breaker", "arbiter", "system"]
+          },
+          "content": {
+            "type": "string"
+          },
+          "claim_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "description": "Messages exchanged in the debate"
+    },
+    "utility_scores": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "number"
+      },
+      "description": "Utility scores by agent/role"
+    },
+    "arbiter_decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "description": "Decisions made by the arbiter"
+    },
+    "consensus_reached": {
+      "type": "boolean",
+      "description": "Whether consensus was reached"
+    },
+    "stop_reason": {
+      "type": ["string", "null"],
+      "enum": [
+        null,
+        "CONSENSUS",
+        "STABLE_DISSENT",
+        "EVIDENCE_EXHAUSTED",
+        "MAX_ROUNDS",
+        "CRITICAL_DEFECT"
+      ],
+      "description": "Reason the debate stopped (if stopped)"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "ended_at": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    }
+  }
+}

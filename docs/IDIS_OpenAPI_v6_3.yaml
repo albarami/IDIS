@@ -1,0 +1,1306 @@
+openapi: 3.0.3
+info:
+  title: IDIS API (VC Edition) — v6.3
+  version: "6.3"
+  description: >
+    Enterprise-grade API contract for IDIS (Institutional Deal Intelligence System), derived from IDIS v6.3.
+    This API enables deal intake, document ingestion, claim registry access, Sanad chain retrieval,
+    deterministic calculation runs, LangGraph debate runs, human verification gates, overrides,
+    deliverable generation, audit logging, and integrations.
+
+servers:
+  - url: https://api.idis.example.com
+    description: Production
+  - url: https://api-staging.idis.example.com
+    description: Staging
+
+tags:
+  - name: Health
+  - name: Tenancy
+  - name: Deals
+  - name: Documents
+  - name: Claims
+  - name: Sanad
+  - name: Defects
+  - name: Calculations
+  - name: Runs
+  - name: Debate
+  - name: Human Gates
+  - name: Overrides
+  - name: Deliverables
+  - name: Audit
+  - name: Integrations
+  - name: Webhooks
+
+security:
+  - bearerAuth: []
+  - apiKeyAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Health check
+      operationId: getHealth
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  time: { type: string, format: date-time }
+                  version: { type: string, example: "6.3" }
+
+  /v1/tenants/me:
+    get:
+      tags: [Tenancy]
+      summary: Get current tenant context
+      operationId: getTenantMe
+      responses:
+        "200":
+          description: Tenant context
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantContext"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/deals:
+    get:
+      tags: [Deals]
+      summary: List deals
+      operationId: listDeals
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/DealStatus" }
+        - name: stage
+          in: query
+          schema: { $ref: "#/components/schemas/DealStage" }
+        - name: q
+          in: query
+          description: Full-text search (name, company, tags)
+          schema: { type: string }
+      responses:
+        "200":
+          description: Deal list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedDealList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    post:
+      tags: [Deals]
+      summary: Create a deal
+      operationId: createDeal
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDealRequest"
+      responses:
+        "201":
+          description: Deal created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Deal"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /v1/deals/{dealId}:
+    get:
+      tags: [Deals]
+      summary: Get deal by ID
+      operationId: getDeal
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+      responses:
+        "200":
+          description: Deal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Deal"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    patch:
+      tags: [Deals]
+      summary: Update deal fields
+      operationId: updateDeal
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateDealRequest"
+      responses:
+        "200":
+          description: Updated deal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Deal"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/deals/{dealId}/documents:
+    get:
+      tags: [Documents]
+      summary: List documents for a deal
+      operationId: listDealDocuments
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Document list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedDocumentList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    post:
+      tags: [Documents]
+      summary: Attach a document (upload metadata or provide external link)
+      description: >
+        Creates a DocumentArtifact record and (optionally) starts ingestion.
+        Raw file upload is typically performed using pre-signed URLs or a dedicated upload endpoint.
+      operationId: createDealDocument
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDocumentRequest"
+      responses:
+        "201":
+          description: Document created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentArtifact"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /v1/documents/{docId}/ingest:
+    post:
+      tags: [Documents]
+      summary: Trigger ingestion for a document
+      operationId: ingestDocument
+      parameters:
+        - $ref: "#/components/parameters/DocId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                priority:
+                  type: string
+                  enum: [LOW, NORMAL, HIGH]
+                  default: NORMAL
+      responses:
+        "202":
+          description: Ingestion started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunRef"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/deals/{dealId}/claims:
+    get:
+      tags: [Claims]
+      summary: List claims for a deal
+      operationId: listDealClaims
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - name: verdict
+          in: query
+          schema: { $ref: "#/components/schemas/ClaimVerdict" }
+        - name: grade
+          in: query
+          schema: { $ref: "#/components/schemas/SanadGrade" }
+        - name: materiality
+          in: query
+          schema: { $ref: "#/components/schemas/Materiality" }
+      responses:
+        "200":
+          description: Claim list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedClaimList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    post:
+      tags: [Claims]
+      summary: Create/Propose a claim
+      operationId: createClaim
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateClaimRequest"
+      responses:
+        "201":
+          description: Claim created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Claim"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /v1/claims/{claimId}:
+    get:
+      tags: [Claims]
+      summary: Get claim by ID
+      operationId: getClaim
+      parameters:
+        - $ref: "#/components/parameters/ClaimId"
+      responses:
+        "200":
+          description: Claim
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Claim"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    patch:
+      tags: [Claims]
+      summary: Update claim (e.g., human verification or correction)
+      operationId: updateClaim
+      parameters:
+        - $ref: "#/components/parameters/ClaimId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateClaimRequest"
+      responses:
+        "200":
+          description: Updated claim
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Claim"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/claims/{claimId}/sanad:
+    get:
+      tags: [Sanad]
+      summary: Get Sanad chain for a claim
+      operationId: getClaimSanad
+      parameters:
+        - $ref: "#/components/parameters/ClaimId"
+      responses:
+        "200":
+          description: Sanad chain
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Sanad"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/deals/{dealId}/defects:
+    get:
+      tags: [Defects]
+      summary: List defects for a deal
+      operationId: listDealDefects
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - name: severity
+          in: query
+          schema: { $ref: "#/components/schemas/DefectSeverity" }
+      responses:
+        "200":
+          description: Defect list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedDefectList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/deals/{dealId}/calcs:
+    get:
+      tags: [Calculations]
+      summary: List deterministic calculation runs for a deal
+      operationId: listDealCalcs
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Calc list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedCalcList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    post:
+      tags: [Calculations]
+      summary: Run deterministic calculation engine
+      operationId: runCalc
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RunCalcRequest"
+      responses:
+        "202":
+          description: Calc run started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunRef"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/deals/{dealId}/runs:
+    post:
+      tags: [Runs]
+      summary: Start an IDIS pipeline run (snapshot or full)
+      operationId: startRun
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartRunRequest"
+      responses:
+        "202":
+          description: Run started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunRef"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/runs/{runId}:
+    get:
+      tags: [Runs]
+      summary: Get run status
+      operationId: getRun
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Run status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/deals/{dealId}/debate:
+    post:
+      tags: [Debate]
+      summary: Start LangGraph debate session (full analysis path)
+      operationId: startDebate
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartDebateRequest"
+      responses:
+        "202":
+          description: Debate started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunRef"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/debate/{debateId}:
+    get:
+      tags: [Debate]
+      summary: Get debate session (transcript + decisions)
+      operationId: getDebate
+      parameters:
+        - $ref: "#/components/parameters/DebateId"
+      responses:
+        "200":
+          description: Debate session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DebateSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/deals/{dealId}/human-gates:
+    get:
+      tags: [Human Gates]
+      summary: List human verification gates for a deal
+      operationId: listHumanGates
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Human gates
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedHumanGateList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    post:
+      tags: [Human Gates]
+      summary: Submit a human verification action (approve/correct/reject)
+      operationId: submitHumanGateAction
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubmitHumanGateActionRequest"
+      responses:
+        "201":
+          description: Human gate action recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HumanGateAction"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/deals/{dealId}/overrides:
+    post:
+      tags: [Overrides]
+      summary: Create a partner override (e.g., allow IC export with caveats)
+      operationId: createOverride
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOverrideRequest"
+      responses:
+        "201":
+          description: Override created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Override"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/deals/{dealId}/deliverables:
+    get:
+      tags: [Deliverables]
+      summary: List deliverables generated for a deal
+      operationId: listDeliverables
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Deliverables list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedDeliverableList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    post:
+      tags: [Deliverables]
+      summary: Generate a deliverable (snapshot/memo/truth_dashboard pack)
+      operationId: generateDeliverable
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenerateDeliverableRequest"
+      responses:
+        "202":
+          description: Deliverable generation started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunRef"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/audit/events:
+    get:
+      tags: [Audit]
+      summary: Query audit events
+      operationId: listAuditEvents
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - name: dealId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: eventType
+          in: query
+          schema: { type: string }
+        - name: after
+          in: query
+          schema: { type: string, format: date-time }
+        - name: before
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        "200":
+          description: Audit events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedAuditEventList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/integrations:
+    get:
+      tags: [Integrations]
+      summary: List available integrations and connection status
+      operationId: listIntegrations
+      responses:
+        "200":
+          description: Integrations
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntegrationList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/webhooks:
+    post:
+      tags: [Webhooks]
+      summary: Create webhook subscription
+      operationId: createWebhook
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWebhookRequest"
+      responses:
+        "201":
+          description: Webhook created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Webhook"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-IDIS-API-Key
+
+  parameters:
+    DealId:
+      name: dealId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    DocId:
+      name: docId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ClaimId:
+      name: claimId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    RunId:
+      name: runId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    DebateId:
+      name: debateId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Idempotency key for safe retries on POST/PATCH operations.
+      schema: { type: string, minLength: 8, maxLength: 128 }
+
+  responses:
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Not Found
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    BadRequest:
+      description: Bad Request
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Conflict:
+      description: Conflict / Idempotency collision
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string, example: "bad_request" }
+        message: { type: string, example: "Invalid field: deal.name" }
+        details:
+          type: object
+          additionalProperties: true
+        request_id: { type: string, example: "req_123" }
+
+    TenantContext:
+      type: object
+      required: [tenant_id, name, timezone, data_region]
+      properties:
+        tenant_id: { type: string, format: uuid }
+        name: { type: string }
+        timezone: { type: string, example: "Asia/Qatar" }
+        data_region: { type: string, example: "me-south-1" }
+
+    DealStatus:
+      type: string
+      enum: [NEW, INTAKE, SCREENING, DEEP_DIVE, IC_READY, DECLINED, ARCHIVED]
+
+    DealStage:
+      type: string
+      enum: [SEED, SERIES_A, SERIES_B, GROWTH, LATER, OTHER]
+
+    Materiality:
+      type: string
+      enum: [LOW, MEDIUM, HIGH, CRITICAL]
+
+    SanadGrade:
+      type: string
+      enum: [A, B, C, D]
+
+    CorroborationLevel:
+      type: string
+      enum: [AHAD, MUTAWATIR]
+
+    ClaimVerdict:
+      type: string
+      enum: [VERIFIED, INFLATED, CONTRADICTED, UNVERIFIED, SUBJECTIVE]
+
+    ClaimAction:
+      type: string
+      enum: [NONE, REQUEST_DATA, FLAG, RED_FLAG, HUMAN_GATE, PARTNER_OVERRIDE_REQUIRED]
+
+    DefectSeverity:
+      type: string
+      enum: [FATAL, MAJOR, MINOR]
+
+    Deal:
+      type: object
+      required: [deal_id, name, company_name, status, stage, created_at]
+      properties:
+        deal_id: { type: string, format: uuid }
+        name: { type: string }
+        company_name: { type: string }
+        status: { $ref: "#/components/schemas/DealStatus" }
+        stage: { $ref: "#/components/schemas/DealStage" }
+        tags:
+          type: array
+          items: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    CreateDealRequest:
+      type: object
+      required: [name, company_name]
+      properties:
+        name: { type: string }
+        company_name: { type: string }
+        stage: { $ref: "#/components/schemas/DealStage" }
+        tags:
+          type: array
+          items: { type: string }
+        external_refs:
+          type: object
+          additionalProperties: true
+
+    UpdateDealRequest:
+      type: object
+      properties:
+        status: { $ref: "#/components/schemas/DealStatus" }
+        stage: { $ref: "#/components/schemas/DealStage" }
+        tags:
+          type: array
+          items: { type: string }
+
+    DocumentArtifact:
+      type: object
+      required: [doc_id, deal_id, doc_type, title, source_system, version_id, ingested_at]
+      properties:
+        doc_id: { type: string, format: uuid }
+        deal_id: { type: string, format: uuid }
+        doc_type:
+          type: string
+          enum: [PITCH_DECK, FINANCIAL_MODEL, DATA_ROOM_FILE, TRANSCRIPT, TERM_SHEET, OTHER]
+        title: { type: string }
+        source_system: { type: string }
+        version_id: { type: string }
+        ingested_at: { type: string, format: date-time }
+        sha256: { type: string }
+        uri: { type: string }
+        metadata:
+          type: object
+          additionalProperties: true
+
+    CreateDocumentRequest:
+      type: object
+      required: [doc_type, title]
+      properties:
+        doc_type: { $ref: "#/components/schemas/DocumentArtifact/properties/doc_type" }
+        title: { type: string }
+        source_system: { type: string, example: "DocSend" }
+        uri:
+          type: string
+          description: External link or object storage uri
+        sha256: { type: string }
+        metadata:
+          type: object
+          additionalProperties: true
+        auto_ingest:
+          type: boolean
+          default: true
+
+    Quantity:
+      type: object
+      required: [value, unit]
+      properties:
+        value: { type: number }
+        unit: { type: string }
+        currency: { type: string, nullable: true }
+        as_of: { type: string, format: date, nullable: true }
+        time_window:
+          type: object
+          nullable: true
+          properties:
+            label: { type: string }
+            start_date: { type: string, format: date, nullable: true }
+            end_date: { type: string, format: date, nullable: true }
+
+    Claim:
+      type: object
+      required: [claim_id, deal_id, claim_class, claim_text, claim_grade, corroboration, claim_verdict, claim_action, created_at]
+      properties:
+        claim_id: { type: string, format: uuid }
+        deal_id: { type: string, format: uuid }
+        claim_class:
+          type: string
+          enum: [FINANCIAL, TRACTION, MARKET_SIZE, COMPETITION, TEAM, LEGAL_TERMS, TECHNICAL, OTHER]
+        claim_text: { type: string }
+        predicate: { type: string, nullable: true }
+        value: { $ref: "#/components/schemas/Quantity" }
+        sanad_id: { type: string, format: uuid, nullable: true }
+        claim_grade: { $ref: "#/components/schemas/SanadGrade" }
+        corroboration:
+          type: object
+          required: [level, independent_chain_count]
+          properties:
+            level: { $ref: "#/components/schemas/CorroborationLevel" }
+            independent_chain_count: { type: integer, minimum: 0 }
+        claim_verdict: { $ref: "#/components/schemas/ClaimVerdict" }
+        claim_action: { $ref: "#/components/schemas/ClaimAction" }
+        defect_ids:
+          type: array
+          items: { type: string, format: uuid }
+        materiality: { $ref: "#/components/schemas/Materiality" }
+        ic_bound: { type: boolean, default: false }
+        created_at: { type: string, format: date-time }
+
+    CreateClaimRequest:
+      type: object
+      required: [claim_class, claim_text]
+      properties:
+        claim_class: { $ref: "#/components/schemas/Claim/properties/claim_class" }
+        claim_text: { type: string }
+        predicate: { type: string }
+        value: { $ref: "#/components/schemas/Quantity" }
+        evidence_ids:
+          type: array
+          items: { type: string, format: uuid }
+        materiality: { $ref: "#/components/schemas/Materiality" }
+        ic_bound: { type: boolean, default: false }
+
+    UpdateClaimRequest:
+      type: object
+      properties:
+        claim_text: { type: string }
+        value: { $ref: "#/components/schemas/Quantity" }
+        claim_verdict: { $ref: "#/components/schemas/ClaimVerdict" }
+        claim_action: { $ref: "#/components/schemas/ClaimAction" }
+        human_verified: { type: boolean }
+        notes: { type: string }
+
+    TransmissionNode:
+      type: object
+      required: [node_id, node_type, actor_type, actor_id, timestamp]
+      properties:
+        node_id: { type: string, format: uuid }
+        node_type:
+          type: string
+          enum: [INGEST, EXTRACT, NORMALIZE, RECONCILE, CALCULATE, INFER, HUMAN_VERIFY, EXPORT]
+        actor_type:
+          type: string
+          enum: [AGENT, HUMAN, SYSTEM]
+        actor_id: { type: string }
+        input_refs:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        output_refs:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        timestamp: { type: string, format: date-time }
+        confidence: { type: number, minimum: 0, maximum: 1, nullable: true }
+        dhabt_score: { type: number, minimum: 0, maximum: 1, nullable: true }
+        verification_method:
+          type: string
+          enum: [auto, cross-check, human-verified]
+          nullable: true
+        notes: { type: string, nullable: true }
+
+    Sanad:
+      type: object
+      required: [sanad_id, claim_id, deal_id, primary_evidence_id, computed, transmission_chain]
+      properties:
+        sanad_id: { type: string, format: uuid }
+        claim_id: { type: string, format: uuid }
+        deal_id: { type: string, format: uuid }
+        primary_evidence_id: { type: string, format: uuid }
+        corroborating_evidence_ids:
+          type: array
+          items: { type: string, format: uuid }
+        transmission_chain:
+          type: array
+          items: { $ref: "#/components/schemas/TransmissionNode" }
+        computed:
+          type: object
+          required: [grade, corroboration_level, independent_chain_count]
+          properties:
+            grade: { $ref: "#/components/schemas/SanadGrade" }
+            grade_rationale: { type: string }
+            corroboration_level: { $ref: "#/components/schemas/CorroborationLevel" }
+            independent_chain_count: { type: integer, minimum: 0 }
+
+    Defect:
+      type: object
+      required: [defect_id, deal_id, defect_type, severity, description, created_at]
+      properties:
+        defect_id: { type: string, format: uuid }
+        deal_id: { type: string, format: uuid }
+        defect_type:
+          type: string
+          enum:
+            - BROKEN_CHAIN
+            - MISSING_LINK
+            - UNKNOWN_SOURCE
+            - CONCEALMENT
+            - INCONSISTENCY
+            - ANOMALY_VS_STRONGER_SOURCES
+            - CHRONO_IMPOSSIBLE
+            - CHAIN_GRAFTING
+            - CIRCULARITY
+            - STALENESS
+            - UNIT_MISMATCH
+            - TIME_WINDOW_MISMATCH
+            - SCOPE_DRIFT
+            - IMPLAUSIBILITY_REQUIRES_PROOF
+        severity: { $ref: "#/components/schemas/DefectSeverity" }
+        description: { type: string }
+        affected_claim_ids:
+          type: array
+          items: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+
+    RunRef:
+      type: object
+      required: [run_id, status]
+      properties:
+        run_id: { type: string, format: uuid }
+        status: { type: string, enum: [QUEUED, RUNNING, SUCCEEDED, FAILED] }
+
+    StartRunRequest:
+      type: object
+      required: [mode]
+      properties:
+        mode: { type: string, enum: [SNAPSHOT, FULL] }
+
+    RunStatus:
+      type: object
+      required: [run_id, status, started_at]
+      properties:
+        run_id: { type: string, format: uuid }
+        status: { type: string, enum: [QUEUED, RUNNING, SUCCEEDED, FAILED] }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time, nullable: true }
+
+    RunCalcRequest:
+      type: object
+      required: [calc_name]
+      properties:
+        calc_name: { type: string }
+
+    StartDebateRequest:
+      type: object
+      properties:
+        protocol_version: { type: string, default: "v1" }
+        max_rounds: { type: integer, minimum: 1, maximum: 10, default: 5 }
+
+    DebateSession:
+      type: object
+      required: [debate_id, deal_id, protocol_version, created_at]
+      properties:
+        debate_id: { type: string, format: uuid }
+        deal_id: { type: string, format: uuid }
+        protocol_version: { type: string }
+        rounds:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        created_at: { type: string, format: date-time }
+
+    HumanGate:
+      type: object
+      required: [gate_id, deal_id, gate_type, status, created_at]
+      properties:
+        gate_id: { type: string, format: uuid }
+        deal_id: { type: string, format: uuid }
+        gate_type: { type: string }
+        status: { type: string }
+        created_at: { type: string, format: date-time }
+
+    SubmitHumanGateActionRequest:
+      type: object
+      required: [gate_id, action]
+      properties:
+        gate_id: { type: string, format: uuid }
+        action: { type: string }
+        notes: { type: string }
+
+    HumanGateAction:
+      type: object
+      required: [action_id, gate_id, action, actor_id, created_at]
+      properties:
+        action_id: { type: string, format: uuid }
+        gate_id: { type: string, format: uuid }
+        action: { type: string }
+        actor_id: { type: string }
+        created_at: { type: string, format: date-time }
+
+    CreateOverrideRequest:
+      type: object
+      required: [override_type, justification]
+      properties:
+        override_type: { type: string }
+        justification: { type: string }
+
+    Override:
+      type: object
+      required: [override_id, deal_id, override_type, justification, status, created_at]
+      properties:
+        override_id: { type: string, format: uuid }
+        deal_id: { type: string, format: uuid }
+        override_type: { type: string }
+        justification: { type: string }
+        status: { type: string }
+        created_at: { type: string, format: date-time }
+
+    GenerateDeliverableRequest:
+      type: object
+      required: [deliverable_type]
+      properties:
+        deliverable_type: { type: string }
+        format: { type: string, enum: [PDF, DOCX, JSON], default: PDF }
+
+    Deliverable:
+      type: object
+      required: [deliverable_id, deal_id, deliverable_type, status, created_at]
+      properties:
+        deliverable_id: { type: string, format: uuid }
+        deal_id: { type: string, format: uuid }
+        deliverable_type: { type: string }
+        status: { type: string }
+        uri: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    AuditEvent:
+      type: object
+      required: [event_id, event_type, occurred_at]
+      properties:
+        event_id: { type: string, format: uuid }
+        event_type: { type: string }
+        occurred_at: { type: string, format: date-time }
+
+    CreateWebhookRequest:
+      type: object
+      required: [url, events]
+      properties:
+        url: { type: string }
+        events:
+          type: array
+          items: { type: string }
+        secret: { type: string, nullable: true }
+        active: { type: boolean, default: true }
+
+    Webhook:
+      type: object
+      required: [webhook_id, url, events, active, created_at]
+      properties:
+        webhook_id: { type: string, format: uuid }
+        url: { type: string }
+        events:
+          type: array
+          items: { type: string }
+        active: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    Integration:
+      type: object
+      required: [integration_id, name, category, status]
+      properties:
+        integration_id: { type: string }
+        name: { type: string }
+        category: { type: string }
+        status: { type: string }
+
+    IntegrationList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Integration" }
+
+    PaginatedDealList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Deal" }
+        next_cursor: { type: string, nullable: true }
+
+    PaginatedDocumentList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/DocumentArtifact" }
+        next_cursor: { type: string, nullable: true }
+
+    PaginatedClaimList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Claim" }
+        next_cursor: { type: string, nullable: true }
+
+    PaginatedDefectList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Defect" }
+        next_cursor: { type: string, nullable: true }
+
+    PaginatedCalcList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { type: object }
+        next_cursor: { type: string, nullable: true }
+
+    PaginatedHumanGateList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/HumanGate" }
+        next_cursor: { type: string, nullable: true }
+
+    PaginatedDeliverableList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Deliverable" }
+        next_cursor: { type: string, nullable: true }
+
+    PaginatedAuditEventList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AuditEvent" }
+        next_cursor: { type: string, nullable: true }

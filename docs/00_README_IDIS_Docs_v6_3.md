@@ -26,8 +26,10 @@ This folder contains the enterprise-grade documentation set required to build ID
 - `IDIS_Prompt_Registry_and_Model_Policy_v6_3.md`
 
 6) **Execution & Traceability**
-- `10_IDIS_GoLive_Execution_Plan_v6_3.md` — Authoritative phase roadmap with deliverables, gates, and go-live checklist
-- `11_IDIS_Traceability_Matrix_v6_3.md` — Requirements → Docs → Code → Tests → Evidence mapping
+- `IDIS_Master_Execution_Plan_v6_3.md` — **Authoritative** phase roadmap (Phase 0→7), invariants, Go-Live checklist
+- `IDIS_v6_3_Traceability_Matrix.md` — **Authoritative** Requirements → Code → Tests → Phase gates mapping
+- `10_IDIS_GoLive_Execution_Plan_v6_3.md` — Extended execution plan (supplemental)
+- `11_IDIS_Traceability_Matrix_v6_3.md` — Extended traceability (supplemental)
 
 ## Suggested Repo Layout (when you start coding)
 

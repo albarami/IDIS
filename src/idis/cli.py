@@ -1,11 +1,15 @@
-"""IDIS CLI - Command-line interface for validation and utilities.
+"""IDIS CLI - Deterministic command-line interface for trust validators.
 
 Usage:
-    python -m idis validate schema <schema_name> <path_to_json>
-    python -m idis validate no-free-facts <path_to_deliverable_json>
-    python -m idis validate muhasabah <path_to_muhasabah_json>
-    python -m idis validate sanad <path_to_sanad_json>
-    python -m idis validate audit-event <path_to_audit_event_json>
+    python -m idis validate --validator <name> [--input PATH]
+    python -m idis schemas check
+
+Validators: no_free_facts, muhasabah, sanad_integrity, audit_event
+
+Exit codes:
+    0: Validation passed
+    2: Validation failed
+    1: Internal error (unexpected)
 """
 
 from __future__ import annotations
@@ -13,116 +17,152 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from pathlib import Path
 from typing import Any
 
 from idis.validators import (
-    AuditEventValidator,
-    MuhasabahValidator,
-    NoFreeFactsValidator,
-    SanadIntegrityValidator,
-    SchemaValidator,
     ValidationResult,
+    validate_audit_event,
+    validate_muhasabah,
+    validate_no_free_facts,
+    validate_sanad_integrity,
 )
 
+# Valid validator names (underscore format as specified)
+VALID_VALIDATORS = frozenset(
+    {
+        "no_free_facts",
+        "muhasabah",
+        "sanad_integrity",
+        "audit_event",
+    }
+)
 
-def print_result(result: ValidationResult, verbose: bool = False) -> int:
-    """Print validation result and return exit code."""
-    if result.passed:
-        print("✓ PASSED")
-        if result.warnings and verbose:
-            print(f"\nWarnings ({len(result.warnings)}):")
-            for w in result.warnings:
-                print(f"  [{w.code}] {w.path}: {w.message}")
-        return 0
-    else:
-        print("✗ FAILED")
-        print(f"\nErrors ({len(result.errors)}):")
-        for e in result.errors:
-            print(f"  [{e.code}] {e.path}: {e.message}")
-        return 1
+# Validator dispatch map
+VALIDATOR_DISPATCH: dict[str, Any] = {
+    "no_free_facts": validate_no_free_facts,
+    "muhasabah": validate_muhasabah,
+    "sanad_integrity": validate_sanad_integrity,
+    "audit_event": validate_audit_event,
+}
 
 
-def load_json_file(path: str) -> dict[str, Any] | list[Any] | None:
-    """Load JSON from file path."""
+def _result_to_dict(result: ValidationResult) -> dict[str, Any]:
+    """Convert ValidationResult to a deterministic dict for JSON output."""
+    errors_list = []
+    for e in result.errors:
+        errors_list.append(
+            {
+                "code": e.code,
+                "message": e.message,
+                "path": e.path,
+            }
+        )
+    warnings_list = []
+    for w in result.warnings:
+        warnings_list.append(
+            {
+                "code": w.code,
+                "message": w.message,
+                "path": w.path,
+            }
+        )
+    return {
+        "errors": errors_list,
+        "pass": result.passed,
+        "warnings": warnings_list,
+    }
+
+
+def _output_json(data: dict[str, Any]) -> None:
+    """Output JSON to stdout with deterministic ordering."""
+    print(json.dumps(data, sort_keys=True, indent=2))
+
+
+def _make_error_result(code: str, message: str) -> dict[str, Any]:
+    """Create a failed ValidationResult dict with a single error."""
+    return {
+        "errors": [{"code": code, "message": message, "path": "$"}],
+        "pass": False,
+        "warnings": [],
+    }
+
+
+def _load_json_input(input_path: str | None) -> tuple[Any, str | None]:
+    """Load JSON from file or stdin.
+
+    Returns:
+        Tuple of (parsed_data, error_message). If error_message is not None,
+        parsed_data should be ignored.
+    """
     try:
-        file_path = Path(path)
-        if not file_path.exists():
-            print(f"Error: File not found: {path}", file=sys.stderr)
-            return None
-
-        with file_path.open("r", encoding="utf-8") as f:
-            result: dict[str, Any] | list[Any] = json.load(f)
-            return result
-    except json.JSONDecodeError as e:
-        print(f"Error: Invalid JSON in {path}: {e}", file=sys.stderr)
-        return None
-    except OSError as e:
-        print(f"Error: Cannot read file {path}: {e}", file=sys.stderr)
-        return None
-
-
-def cmd_validate_schema(args: argparse.Namespace) -> int:
-    """Validate JSON against a schema."""
-    validator = SchemaValidator()
-
-    # List available schemas if requested
-    if args.schema_name == "list":
-        schemas = validator.list_available_schemas()
-        if schemas:
-            print("Available schemas:")
-            for s in sorted(schemas):
-                print(f"  - {s}")
+        if input_path:
+            with open(input_path, encoding="utf-8") as f:
+                content = f.read()
         else:
-            print("No schemas found in schemas/ directory")
-        return 0
+            content = sys.stdin.read()
 
-    result = validator.validate_json_file(args.schema_name, args.json_path)
-    return print_result(result, args.verbose)
+        if not content.strip():
+            return None, "Empty input"
 
-
-def cmd_validate_no_free_facts(args: argparse.Namespace) -> int:
-    """Validate deliverable for No-Free-Facts compliance."""
-    data = load_json_file(args.json_path)
-    if data is None:
-        return 1
-
-    validator = NoFreeFactsValidator()
-    result = validator.validate(data)
-    return print_result(result, args.verbose)
+        return json.loads(content), None
+    except FileNotFoundError:
+        return None, f"File not found: {input_path}"
+    except json.JSONDecodeError as e:
+        return None, f"Invalid JSON: {e}"
+    except OSError as e:
+        return None, f"Cannot read input: {e}"
 
 
-def cmd_validate_muhasabah(args: argparse.Namespace) -> int:
-    """Validate Muḥāsabah record."""
-    data = load_json_file(args.json_path)
-    if data is None:
-        return 1
+def cmd_validate(args: argparse.Namespace) -> int:
+    """Execute validate command with deterministic JSON output.
 
-    validator = MuhasabahValidator()
-    result = validator.validate(data)
-    return print_result(result, args.verbose)
+    Exit codes:
+        0: pass=True
+        2: pass=False (validation failed or invalid input)
+    """
+    validator_name = args.validator
+    input_path = args.input
+
+    # Check for valid validator name (fail-closed)
+    if validator_name not in VALID_VALIDATORS:
+        result = _make_error_result(
+            "INVALID_VALIDATOR",
+            f"Unknown validator: '{validator_name}'. Valid options: {sorted(VALID_VALIDATORS)}",
+        )
+        _output_json(result)
+        return 2
+
+    # Load JSON input
+    data, error_msg = _load_json_input(input_path)
+    if error_msg is not None:
+        result = _make_error_result("INVALID_JSON", error_msg)
+        _output_json(result)
+        return 2
+
+    # Dispatch to validator
+    validator_fn = VALIDATOR_DISPATCH[validator_name]
+    validation_result = validator_fn(data)
+
+    # Output deterministic JSON
+    result_dict = _result_to_dict(validation_result)
+    _output_json(result_dict)
+
+    return 0 if validation_result.passed else 2
 
 
-def cmd_validate_sanad(args: argparse.Namespace) -> int:
-    """Validate Sanad record."""
-    data = load_json_file(args.json_path)
-    if data is None:
-        return 1
+def cmd_schemas_check(args: argparse.Namespace) -> int:
+    """Execute schemas check command.
 
-    validator = SanadIntegrityValidator()
-    result = validator.validate_sanad(data)
-    return print_result(result, args.verbose)
+    Exit codes:
+        0: pass=True (all required schemas present and valid)
+        2: pass=False (missing or invalid schemas)
+    """
+    from idis.schemas.registry import SchemaRegistry
 
-
-def cmd_validate_audit_event(args: argparse.Namespace) -> int:
-    """Validate audit event."""
-    data = load_json_file(args.json_path)
-    if data is None:
-        return 1
-
-    validator = AuditEventValidator()
-    result = validator.validate(data)
-    return print_result(result, args.verbose)
+    registry = SchemaRegistry()
+    result = registry.check_completeness()
+    _output_json(result)
+    return 0 if result["pass"] else 2
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -131,113 +171,78 @@ def create_parser() -> argparse.ArgumentParser:
         prog="idis",
         description="IDIS - Institutional Deal Intelligence System CLI",
     )
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Show verbose output including warnings",
-    )
 
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
     # validate command
     validate_parser = subparsers.add_parser(
         "validate",
-        help="Validate JSON data against schemas or rules",
+        help="Validate JSON data using trust validators",
     )
-    validate_subparsers = validate_parser.add_subparsers(
-        dest="validator",
-        help="Validator type",
+    validate_parser.add_argument(
+        "--validator",
+        required=True,
+        choices=sorted(VALID_VALIDATORS),
+        help="Validator to use",
     )
-
-    # validate schema
-    schema_parser = validate_subparsers.add_parser(
-        "schema",
-        help="Validate against JSON schema",
-    )
-    schema_parser.add_argument(
-        "schema_name",
-        help="Schema name (e.g., claim, sanad, defect) or 'list' to show available",
-    )
-    schema_parser.add_argument(
-        "json_path",
-        nargs="?",
-        default="",
-        help="Path to JSON file to validate",
+    validate_parser.add_argument(
+        "--input",
+        required=False,
+        default=None,
+        metavar="PATH",
+        help="Path to JSON file (reads from stdin if omitted)",
     )
 
-    # validate no-free-facts
-    nff_parser = validate_subparsers.add_parser(
-        "no-free-facts",
-        help="Validate deliverable for No-Free-Facts compliance",
+    # schemas command with check subcommand
+    schemas_parser = subparsers.add_parser(
+        "schemas",
+        help="Schema registry operations",
     )
-    nff_parser.add_argument(
-        "json_path",
-        help="Path to deliverable JSON file",
+    schemas_subparsers = schemas_parser.add_subparsers(
+        dest="schemas_command",
+        help="Schema subcommands",
     )
-
-    # validate muhasabah
-    muh_parser = validate_subparsers.add_parser(
-        "muhasabah",
-        help="Validate Muḥāsabah record",
-    )
-    muh_parser.add_argument(
-        "json_path",
-        help="Path to Muḥāsabah JSON file",
-    )
-
-    # validate sanad
-    sanad_parser = validate_subparsers.add_parser(
-        "sanad",
-        help="Validate Sanad record",
-    )
-    sanad_parser.add_argument(
-        "json_path",
-        help="Path to Sanad JSON file",
-    )
-
-    # validate audit-event
-    audit_parser = validate_subparsers.add_parser(
-        "audit-event",
-        help="Validate audit event",
-    )
-    audit_parser.add_argument(
-        "json_path",
-        help="Path to audit event JSON file",
+    schemas_subparsers.add_parser(
+        "check",
+        help="Check schema registry completeness and loadability",
     )
 
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Main entry point."""
-    parser = create_parser()
-    args = parser.parse_args(argv)
+    """Main entry point.
 
-    if args.command is None:
-        parser.print_help()
-        return 0
+    Exit codes:
+        0: Success / validation passed
+        2: Validation failed / schema check failed
+        1: Internal error (unexpected)
+    """
+    try:
+        parser = create_parser()
+        args = parser.parse_args(argv)
 
-    if args.command == "validate":
-        if args.validator is None:
-            parser.parse_args(["validate", "--help"])
+        if args.command is None:
+            parser.print_help()
             return 0
 
-        if args.validator == "schema":
-            if args.schema_name != "list" and not args.json_path:
-                print("Error: json_path required for schema validation", file=sys.stderr)
-                return 1
-            return cmd_validate_schema(args)
-        elif args.validator == "no-free-facts":
-            return cmd_validate_no_free_facts(args)
-        elif args.validator == "muhasabah":
-            return cmd_validate_muhasabah(args)
-        elif args.validator == "sanad":
-            return cmd_validate_sanad(args)
-        elif args.validator == "audit-event":
-            return cmd_validate_audit_event(args)
+        if args.command == "validate":
+            return cmd_validate(args)
 
-    return 0
+        if args.command == "schemas":
+            if getattr(args, "schemas_command", None) == "check":
+                return cmd_schemas_check(args)
+            else:
+                parser.parse_args(["schemas", "--help"])
+                return 0
+
+        return 0
+
+    except Exception as e:
+        # Fail-closed: unexpected errors return exit code 1
+        error_result = _make_error_result("INTERNAL_ERROR", str(e))
+        _output_json(error_result)
+        return 1
 
 
 if __name__ == "__main__":

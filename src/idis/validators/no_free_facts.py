@@ -80,6 +80,19 @@ class FactualAssertion:
     pattern_matched: str
 
 
+def validate_no_free_facts(data: Any) -> ValidationResult:
+    """Validate a deliverable for No-Free-Facts compliance (public function API).
+
+    Args:
+        data: Deliverable JSON data
+
+    Returns:
+        ValidationResult with pass (bool), errors, warnings
+    """
+    validator = NoFreeFactsValidator()
+    return validator.validate(data)
+
+
 class NoFreeFactsValidator:
     """Validates that IC-bound outputs have no unreferenced factual assertions.
 

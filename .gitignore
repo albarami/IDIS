@@ -53,3 +53,6 @@ secrets/
 # Runtime audit artifacts (never commit)
 audit_events.jsonl
 var/audit/
+
+# Runtime idempotency store (never commit)
+var/idempotency/

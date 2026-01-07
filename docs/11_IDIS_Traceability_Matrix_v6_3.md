@@ -402,15 +402,19 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | **Tests** | GDBS-S, GDBS-F, GDBS-A benchmark suites |
 | **Phase Gate** | Phase 5 (Gate 1-2); Phase 6 (Gate 3); Phase 7 (Gate 4) |
 | **Evidence Artifact** | Gate results in CI; evaluation_results_ref on prompt artifacts |
+| **Implementation Status** | Planned — Gate 0 in CI; Gates 1-4 pending harness build |
 
-**Gate Requirements:**
-| Gate | Requirements | Environment |
-|------|--------------|-------------|
-| Gate 0 | Schema validation, lint, type checks | dev |
-| Gate 1 | No-Free-Facts 0, Muḥāsabah ≥98%, audit 100%, tenant isolation | staging |
-| Gate 2 | Sanad coverage ≥95%, defect recall ≥90%, calc repro ≥99.9% | staging |
-| Gate 3 | GDBS-F end-to-end, debate completion ≥98% | preprod |
-| Gate 4 | Human review (10 deal sample) | preprod |
+**Gate Requirements (Hard vs Soft Classification):**
+| Gate | Type | Requirements | Environment | Failure Impact |
+|------|------|--------------|-------------|----------------|
+| Gate 0 | **HARD** | Schema validation, lint, type checks, unit tests | dev | Block merge |
+| Gate 1 | **HARD** | No-Free-Facts 0, Muḥāsabah ≥98%, audit 100%, tenant isolation | staging | Block staging deploy |
+| Gate 2 | **HARD** | Sanad coverage ≥95%, defect recall ≥90%, calc repro ≥99.9% | staging | Block preprod deploy |
+| Gate 3 | **SOFT** | GDBS-F end-to-end, debate completion ≥98% | preprod | Flag for review |
+| Gate 4 | **SOFT** | Human review (10 deal sample) | preprod | Flag for review |
+
+**Hard Gates:** Automated enforcement, no override without security approval.
+**Soft Gates:** Automated check, manual override with documented justification allowed.
 
 ---
 
@@ -451,57 +455,106 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 
 ## 8) Full Traceability Matrix (Summary Table)
 
-| Req ID | Requirement | Source Doc | Enforcing Component | Test File | Phase | Evidence |
-|--------|-------------|------------|---------------------|-----------|-------|----------|
-| TI-001 | Tenant isolation | Security §6 | TenantContextMiddleware | test_api_tenancy_auth.py | 0/2/7 | AuditEvent.tenant_id |
-| AI-001 | Audit 100% coverage | Audit §2 | AuditMiddleware | test_audit_coverage.py | 2.3 | AuditEvent records |
-| NFF-001 | No-Free-Facts | TDD §1.1 | NoFreeFacts validator | test_no_free_facts.py | 2/6 | muhasabah.rejected |
-| MUH-001 | Muḥāsabah gate | TDD §4.4 | MuhasabahValidator | test_muhasabah_validator.py | 5 | muhasabah.recorded |
-| DN-001 | Calc reproducibility | TDD §1.1 | CalcEngine | test_calc_reproducibility.py | 4 | CalcSanad record |
-| FC-001 | Fail-closed | TDD §10 | All validators | test_fail_closed.py | 0+ | Rejection events |
-| SAN-001 | Sanad integrity | TDD §4.2 | SanadGrader | test_sanad_grade_algorithm.py | 3 | Sanad records |
-| SAN-002 | Independence rules | TDD §5.2 | IndependenceChecker | test_independence_rules.py | 3 | corroboration_status |
-| DEF-001 | Defect handling | TDD §4.3 | DefectService | test_defect_severity.py | 3 | Defect records |
-| API-001 | Idempotency | API §4.1 | IdempotencyMiddleware | test_idempotency.py | 2.5 | request_id |
-| API-002 | Error model | API §8 | ErrorHandler | test_error_model.py | 2.6 | Error responses |
-| API-003 | Rate limiting | API §4.3 | RateLimitMiddleware | test_rate_limiting.py | 2.7 | 429 responses |
-| WH-001 | Webhook signing | API §6 | WebhookService | test_webhook_signing.py | 2.8 | delivery events |
-| DR-001 | Data residency | Residency §3 | data_region field | test_data_residency.py | 7 | Region metadata |
-| BYOL-001 | BYOL isolation | Residency §7 | EnrichmentService | test_byol_isolation.py | 7 | EnrichmentRecord |
-| OPS-001 | Ops readiness | SLO §10 | Manual checklist | Manual | 7 | Checklist sign-off |
-| PR-001 | Prompt registry | Prompt §2 | prompts/ directory | test_prompt_registry.py | 5/6/7 | prompt.* events |
-| EH-001 | Eval harness | Eval §8 | CI pipeline | GDBS suites | 5/6/7 | Gate results |
-| SEC-001 | Encryption | Security §5 | Infra config | test_encryption.py | 0/7 | TLS certs |
-| SEC-002 | RBAC | Security §4 | AuthMiddleware | test_rbac.py | 2/7 | rbac.denied |
+| Req ID | Requirement | Source Doc | Enforcing Component | Test File | Phase | Impl Status | Evidence |
+|--------|-------------|------------|---------------------|-----------|-------|-------------|----------|
+| TI-001 | Tenant isolation | Security §6 | `openapi_validate.py` | test_api_tenancy_auth.py | 0/2/7 | ✅ Exists | AuditEvent.tenant_id |
+| AI-001 | Audit 100% coverage | Audit §2 | `audit.py` | test_api_audit_middleware.py | 2.3 | ✅ Exists | AuditEvent records |
+| AI-002 | Audit event validation | Audit §3 | `audit_event_validator.py` | test_audit_event_validator.py | 2.3.1 | ✅ Exists | Schema validation |
+| NFF-001 | No-Free-Facts | TDD §1.1 | `no_free_facts.py` (validator) | test_no_free_facts.py | 2/6 | ✅ Exists | muhasabah.rejected |
+| MUH-001 | Muḥāsabah gate | TDD §4.4 | `muhasabah.py` (validator) | test_muhasabah_validator.py | 5 | ✅ Exists | muhasabah.recorded |
+| SAN-001 | Sanad integrity | TDD §4.2 | `sanad/grader.py` | test_sanad_integrity.py | 3 | ⏳ Planned | Sanad records |
+| SAN-002 | Independence rules | TDD §5.2 | `sanad/independence.py` | test_independence_rules.py | 3 | ⏳ Planned | corroboration_status |
+| DEF-001 | Defect handling | TDD §4.3 | `defects/service.py` | test_defect_severity.py | 3 | ⏳ Planned | Defect records |
+| DN-001 | Calc reproducibility | TDD §1.1 | `calc/engine.py` | test_calc_reproducibility.py | 4 | ⏳ Planned | CalcSanad record |
+| FC-001 | Fail-closed | TDD §10 | All validators | test_fail_closed.py | 0+ | ⏳ Planned | Rejection events |
+| API-001 | Idempotency | API §4.1 | `idempotency.py` | test_api_idempotency_middleware.py | 2.5 | ✅ Exists | request_id |
+| API-002 | Error model | API §8 | `errors.py` | test_error_model.py | 2.6 | ⏳ Planned | Error responses |
+| API-003 | Rate limiting | API §4.3 | `rate_limit.py` | test_rate_limiting.py | 2.7 | ⏳ Planned | 429 responses |
+| WH-001 | Webhook signing | API §6 | `webhooks/service.py` | test_webhook_signing.py | 2.8 | ⏳ Planned | delivery events |
+| DR-001 | Data residency | Residency §3 | `tenant.py` (data_region) | test_data_residency.py | 7 | ⏳ Planned | Region metadata |
+| BYOL-001 | BYOL isolation | Residency §7 | `enrichment/service.py` | test_byol_isolation.py | 7 | ⏳ Planned | EnrichmentRecord |
+| OPS-001 | Ops readiness | SLO §10 | Manual checklist | Manual | 7 | ⏳ Planned | Checklist sign-off |
+| PR-001 | Prompt registry | Prompt §2 | `prompts/` directory | test_prompt_registry.py | 5/6/7 | ⏳ Planned | prompt.* events |
+| EH-001 | Eval harness | Eval §8 | CI pipeline | GDBS suites | 5/6/7 | ⏳ Planned | Gate results |
+| SEC-001 | Encryption | Security §5 | Infra config | test_encryption.py | 0/7 | ⏳ Planned | TLS certs |
+| SEC-002 | RBAC | Security §4 | `auth.py` | test_rbac.py | 2/7 | ⏳ Planned | rbac.denied |
+
+**Implementation Status Legend:**
+- ✅ Exists — Code and tests implemented in repo
+- ⏳ Planned — Scheduled for indicated phase gate
 
 ---
 
 ## 9) Test Coverage Matrix
 
-### 9.1 Existing Tests (Phase 0 / 2.3)
+### 9.1 Existing Tests (Implemented)
 
-| Test File | Tests | Status |
-|-----------|-------|--------|
-| `tests/test_api_health.py` | test_health_endpoint | ✅ Passing |
-| `tests/test_api_openapi_validation.py` | test_openapi_loads | ✅ Passing |
-| `tests/test_api_tenancy_auth.py` | test_tenant_isolation | ✅ Passing |
+| Test File | Description | Phase | Status |
+|-----------|-------------|-------|--------|
+| `tests/test_api_health.py` | Health endpoint tests | 0 | ✅ Passing |
+| `tests/test_api_openapi_validation.py` | OpenAPI spec validation | 0 | ✅ Passing |
+| `tests/test_api_tenancy_auth.py` | Tenant authentication + isolation | 0/2 | ✅ Passing |
+| `tests/test_api_audit_middleware.py` | Audit middleware integration | 2.3 | ✅ Passing |
+| `tests/test_audit_event_validator.py` | Audit event schema validation | 2.3.1 | ✅ Passing |
+| `tests/test_api_idempotency_middleware.py` | Idempotency replay/collision/isolation | 2.5 | ✅ Passing |
+| `tests/test_no_free_facts.py` | No-Free-Facts validator | 2 | ✅ Passing |
+| `tests/test_muhasabah.py` | Muḥāsabah core tests | 5 | ✅ Passing |
+| `tests/test_muhasabah_validator.py` | Muḥāsabah validator | 5 | ✅ Passing |
+| `tests/test_sanad_integrity.py` | Sanad integrity tests | 3 | ✅ Passing |
+| `tests/test_schema_validator.py` | Schema validation utilities | 0 | ✅ Passing |
+| `tests/test_schema_registry.py` | Schema registry tests | 0 | ✅ Passing |
+| `tests/test_openapi_loader.py` | OpenAPI loader tests | 0 | ✅ Passing |
+| `tests/test_cli_validate.py` | CLI validation commands | 0 | ✅ Passing |
+| `tests/test_health.py` | Health module tests | 0 | ✅ Passing |
 
-### 9.2 Required Tests (Pending)
+### 9.2 Planned Tests (By Phase Gate)
 
-| Test File | Tests | Phase |
-|-----------|-------|-------|
-| `tests/test_no_free_facts.py` | test_rejects_unlinked_fact, test_accepts_linked_fact | 2 |
-| `tests/test_muhasabah_validator.py` | test_rejects_empty_claim_ids, test_rejects_overconfident | 5 |
-| `tests/test_sanad_grade_algorithm.py` | test_base_grade_min, test_fatal_defect_forces_d | 3 |
-| `tests/test_calc_reproducibility.py` | test_same_inputs_same_hash | 4 |
-| `tests/test_audit_coverage.py` | test_all_mutations_emit_audit | 2 |
-| `tests/test_idempotency.py` | test_replay_returns_stored, test_different_payload_409 | 2.5 |
-| `tests/test_rate_limiting.py` | test_user_limit_enforced, test_429_returned | 2.7 |
-| `tests/test_webhook_signing.py` | test_hmac_correct | 2.8 |
-| `tests/test_independence_rules.py` | test_same_origin_not_independent | 3 |
-| `tests/test_defect_severity.py` | test_fatal_types, test_major_types | 3 |
-| `tests/test_data_residency.py` | test_region_enforced | 7 |
-| `tests/test_rbac.py` | test_analyst_cannot_approve_override | 2/7 |
+| Test File | Description | Phase Gate | Module Dependency |
+|-----------|-------------|------------|-------------------|
+| `tests/test_audit_coverage.py` | All mutations emit audit events | 2.3+ | `audit.py` (exists) |
+| `tests/test_audit_immutability.py` | Audit logs are append-only | 2.3+ | `audit.py` (exists) |
+| `tests/test_error_model.py` | Error responses match schema | 2.6 | `errors.py` (exists) |
+| `tests/test_rate_limiting.py` | Rate limits enforced | 2.7 | `rate_limit.py` (planned) |
+| `tests/test_webhook_signing.py` | HMAC signature generation | 2.8 | `webhooks/service.py` (planned) |
+| `tests/test_webhook_retry.py` | Exponential backoff retry | 2.8 | `webhooks/service.py` (planned) |
+| `tests/test_sanad_grade_algorithm.py` | Normative grading algorithm | 3 | `sanad/grader.py` (planned) |
+| `tests/test_independence_rules.py` | Corroboration independence | 3 | `sanad/independence.py` (planned) |
+| `tests/test_defect_severity.py` | FATAL/MAJOR/MINOR rules | 3 | `defects/service.py` (planned) |
+| `tests/test_defect_cure_protocol.py` | Cure workflows | 3 | `defects/service.py` (planned) |
+| `tests/test_defect_waiver.py` | Defect waiver process | 3 | `defects/service.py` (planned) |
+| `tests/test_sanad_coverage.py` | Material claims have Sanad | 3 | `sanad/` (planned) |
+| `tests/test_calc_reproducibility.py` | Same inputs → same hash | 4 | `calc/engine.py` (planned) |
+| `tests/test_calc_sanad.py` | Calc provenance to claim_ids | 4 | `calc_sanad.py` (planned) |
+| `tests/test_extraction_gate.py` | Blocks low-confidence calcs | 4 | `extraction_gate.py` (planned) |
+| `tests/test_fail_closed.py` | Validators fail closed | 0+ | All validators |
+| `tests/test_tenant_rls.py` | Postgres RLS enforcement | 7 | Database config |
+| `tests/test_cache_tenant_keying.py` | Cache tenant isolation | 7 | Cache layer |
+| `tests/test_data_residency.py` | Region pinning enforced | 7 | `tenant.py` (planned) |
+| `tests/test_byol_isolation.py` | No cross-tenant enrichment | 7 | `enrichment/service.py` (planned) |
+| `tests/test_rbac.py` | Role-based access control | 2/7 | `auth.py` (partial) |
+| `tests/test_encryption.py` | TLS enforced | 0/7 | Infra config |
+| `tests/test_byok.py` | Customer keys used | 7 | KMS integration |
+| `tests/test_prompt_registry.py` | Prompt version loading | 5/6/7 | `prompts/` (planned) |
+
+### 9.3 Planned Code Modules (By Phase Gate)
+
+| Module | Description | Phase Gate | Status |
+|--------|-------------|------------|--------|
+| `src/idis/api/middleware/audit.py` | Audit middleware | 2.3 | ✅ Exists |
+| `src/idis/api/middleware/idempotency.py` | Idempotency middleware | 2.5 | ✅ Exists |
+| `src/idis/api/middleware/rate_limit.py` | Rate limiting middleware | 2.7 | ⏳ Planned |
+| `src/idis/api/middleware/tenant.py` | Tenant context middleware | 2.1 | ⏳ Planned (partial in openapi_validate) |
+| `src/idis/api/middleware/auth.py` | Auth middleware (JWT/API key) | 2.1 | ⏳ Planned (partial in auth.py) |
+| `src/idis/models/sanad.py` | Sanad + TransmissionNode | 3 | ⏳ Planned |
+| `src/idis/models/defect.py` | Defect model | 3 | ⏳ Planned |
+| `src/idis/models/calc_sanad.py` | CalcSanad model | 4 | ⏳ Planned |
+| `src/idis/models/tenant.py` | Tenant model with data_region | 7 | ⏳ Planned |
+| `src/idis/services/sanad/grader.py` | Sanad grading service | 3 | ⏳ Planned |
+| `src/idis/services/sanad/independence.py` | Independence checker | 3 | ⏳ Planned |
+| `src/idis/services/defects/service.py` | Defect service | 3 | ⏳ Planned |
+| `src/idis/services/webhooks/service.py` | Webhook service | 2.8 | ⏳ Planned |
+| `src/idis/services/enrichment/service.py` | Enrichment service | 7 | ⏳ Planned |
+| `src/idis/calc/engine.py` | Calculation engine | 4 | ⏳ Planned |
 
 ---
 
@@ -510,3 +563,4 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | Date | Version | Author | Changes |
 |------|---------|--------|---------|
 | 2026-01-07 | 1.0 | Cascade | Initial creation from v6.3 docs consolidation |
+| 2026-01-07 | 1.1 | Cascade | Added Implementation Status column; hard/soft gate classification; corrected test coverage matrix to reflect actual repo state; added planned tests/modules by phase gate |

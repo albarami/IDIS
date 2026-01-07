@@ -259,6 +259,22 @@ These invariants MUST hold system-wide at all times. Violation of any invariant 
 | `src/idis/models/audit_event.py` | AuditEvent model | ✅ Done |
 | `schemas/audit_event.schema.json` | Audit schema | ✅ Done |
 
+**Approving Commit:** `c49ba01` (Codex APPROVE)
+
+#### Phase 2.3.1 — Audit Remediation ✅ COMPLETED
+| Module/File | Description | Status |
+|-------------|-------------|--------|
+| `src/idis/validators/audit_event_validator.py` | Audit event schema validation | ✅ Done |
+| `tests/test_audit_event_validator.py` | Audit validator tests | ✅ Done |
+| `tests/test_api_audit_middleware.py` | Audit middleware integration tests | ✅ Done |
+
+**Deliverables:**
+- Audit event schema validation against `audit_event.schema.json`
+- Tenant isolation enforcement in audit queries
+- Audit event taxonomy alignment per `IDIS_Audit_Event_Taxonomy_v6_3.md`
+
+**Approving Commit:** `c49ba01` (Codex APPROVE)
+
 #### Phase 2.4 — Truth Dashboard v1
 | Module/File | Description | Status |
 |-------------|-------------|--------|
@@ -610,6 +626,28 @@ Based on OpenAPI spec and API Contracts, the following items are the immediate n
 
 **Source:** Evaluation Harness §3-8
 
+### 5.4 Release Gate Classification (Hard vs Soft)
+
+| Gate | Type | Failure Impact | Metrics | Mandatory Phase |
+|------|------|----------------|---------|-----------------|
+| **Gate 0** | HARD | Block merge to main | Schema valid, lint pass, type check pass, unit tests pass | Phase 0+ (all merges) |
+| **Gate 1** | HARD | Block staging deploy | No-Free-Facts = 0 violations, Muḥāsabah ≥ 98%, Audit coverage = 100%, Tenant isolation = 0 violations | Phase 2+ |
+| **Gate 2** | HARD | Block preprod deploy | Sanad coverage ≥ 95%, Defect recall ≥ 90%, Calc reproducibility ≥ 99.9% | Phase 4+ |
+| **Gate 3** | SOFT | Flag for review, deploy allowed with approval | GDBS-F pass rate ≥ 95%, Debate completion ≥ 98%, Utility score regression ≤ 5% | Phase 6+ |
+| **Gate 4** | SOFT | Flag for review, deploy allowed with approval | Human review sign-off on 10-deal sample, No critical defects in sample | Phase 7 (go-live) |
+
+**Hard Gate Behavior:**
+- Automated enforcement in CI/CD pipeline
+- No manual override without security team approval
+- Failure blocks deployment to target environment
+
+**Soft Gate Behavior:**
+- Automated check with results logged
+- Manual override allowed with documented justification
+- Engineering lead sign-off required for override
+
+**Source:** Evaluation Harness §8; Implementation Plan §4
+
 ---
 
 ## 6) Operational Readiness / Go-Live Checklist
@@ -839,3 +877,4 @@ Derived from SLO/Runbooks §10 and Security Threat Model §11.
 | Date | Version | Author | Changes |
 |------|---------|--------|---------|
 | 2026-01-07 | 1.0 | Cascade | Initial creation from v6.3 docs consolidation |
+| 2026-01-07 | 1.1 | Cascade | Added Phase 2.3.1 as explicit sub-gate; added hard/soft gate classification table (§5.4); linked approving commits to completed phases |

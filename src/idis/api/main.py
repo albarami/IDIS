@@ -29,11 +29,11 @@ def create_app(audit_sink: AuditSink | None = None) -> FastAPI:
     Middleware ordering (outermost to innermost):
     1. AuditMiddleware - outermost, captures all responses including early returns
     2. RequestIdMiddleware - ensures request_id is set before any validation
-    3. OpenAPIValidationMiddleware - innermost, handles auth, sets tenant_context, operation_id, body_sha256
+    3. OpenAPIValidationMiddleware - innermost, handles auth and sets context
 
     Note: Starlette middleware is added in reverse order (last added = outermost).
-    AuditMiddleware is added last so it wraps everything and can emit audit events
-    even when OpenAPIValidationMiddleware returns early (e.g., 400 INVALID_JSON).
+    AuditMiddleware is added last so it wraps everything and can emit audit
+    events even when OpenAPIValidationMiddleware returns early (400 INVALID_JSON).
     RequestIdMiddleware must run before OpenAPIValidationMiddleware so request_id
     is available even when validation fails.
 

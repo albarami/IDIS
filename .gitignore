@@ -49,3 +49,7 @@ Thumbs.db
 *.pem
 *.key
 secrets/
+
+# Runtime audit artifacts (never commit)
+audit_events.jsonl
+var/audit/

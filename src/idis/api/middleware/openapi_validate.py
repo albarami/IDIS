@@ -6,10 +6,15 @@ Implements fail-closed validation for /v1 requests:
 3. Schema validation: mismatch => 422 INVALID_REQUEST
 
 Security: Tenant isolation enforced via auth-first for all /v1 paths.
+
+Audit support (Phase 2.3):
+- Exposes operation_id, path_template, and body_sha256 on request.state
+  for downstream audit middleware consumption.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -36,24 +41,29 @@ class OperationIndex:
     """In-memory index of OpenAPI operations with JSON request body schemas.
 
     Built once at startup for deterministic request validation.
+    Also exposes operationId for audit middleware.
     """
 
     def __init__(self, spec: dict[str, Any]) -> None:
         self._spec = spec
-        self._operations: list[tuple[re.Pattern[str], str, str, dict[str, Any] | None]] = []
+        self._operations: list[
+            tuple[re.Pattern[str], str, str, str | None, dict[str, Any] | None]
+        ] = []
         self._build_index()
 
     def _build_index(self) -> None:
         """Build the operation index from the OpenAPI spec.
 
-        Index entries: (path_regex, method, original_path, dereferenced_schema)
+        Index entries: (path_regex, method, original_path, operation_id, dereferenced_schema)
         Sorted deterministically: fewer path params first, then longer template, then lexical.
         """
         paths = self._spec.get("paths", {})
         if not isinstance(paths, dict):
             return
 
-        entries: list[tuple[int, int, str, re.Pattern[str], str, dict[str, Any] | None]] = []
+        entries: list[
+            tuple[int, int, str, re.Pattern[str], str, str | None, dict[str, Any] | None]
+        ] = []
 
         for path_template, path_item in paths.items():
             if not isinstance(path_item, dict):
@@ -69,6 +79,7 @@ class OperationIndex:
                     continue
 
                 schema = self._extract_json_request_schema(operation)
+                operation_id = operation.get("operationId")
 
                 path_regex = self._compile_path_regex(path_template)
                 param_count = path_template.count("{")
@@ -80,6 +91,7 @@ class OperationIndex:
                         path_template,
                         path_regex,
                         method,
+                        operation_id,
                         schema,
                     )
                 )
@@ -87,8 +99,8 @@ class OperationIndex:
         entries.sort(key=lambda x: (x[0], x[1], x[2]))
 
         for entry in entries:
-            _, _, path_template, path_regex, method, schema = entry
-            self._operations.append((path_regex, method, path_template, schema))
+            _, _, path_template, path_regex, method, operation_id, schema = entry
+            self._operations.append((path_regex, method, path_template, operation_id, schema))
 
     def _compile_path_regex(self, path_template: str) -> re.Pattern[str]:
         """Convert OpenAPI path template to regex.
@@ -196,20 +208,21 @@ class OperationIndex:
 
         return current if isinstance(current, dict) else None
 
-    def match(self, path: str, method: str) -> tuple[str | None, dict[str, Any] | None]:
+    def match(self, path: str, method: str) -> tuple[str | None, str | None, dict[str, Any] | None]:
         """Match request path and method to an operation.
 
         Returns:
-            (original_path_template, schema) if matched, else (None, None).
+            (original_path_template, operation_id, schema) if matched,
+            else (None, None, None).
             schema may be None if the operation has no JSON request body.
         """
         method_upper = method.upper()
 
-        for path_regex, op_method, path_template, schema in self._operations:
+        for path_regex, op_method, path_template, operation_id, schema in self._operations:
             if op_method == method_upper and path_regex.match(path):
-                return (path_template, schema)
+                return (path_template, operation_id, schema)
 
-        return (None, None)
+        return (None, None, None)
 
 
 def _is_json_content_type(content_type: str | None) -> bool:
@@ -321,6 +334,11 @@ class OpenAPIValidationMiddleware(BaseHTTPMiddleware):
        - Parse JSON body (400 if invalid JSON)
        - Validate against schema (422 if schema mismatch)
     4. Pass through to next handler if all validations pass.
+
+    Audit support (Phase 2.3):
+    - Sets request.state.openapi_operation_id when matched
+    - Sets request.state.openapi_path_template when matched
+    - Sets request.state.request_body_sha256 when body is read (even for invalid JSON)
     """
 
     def __init__(self, app: ASGIApp, spec: dict[str, Any] | None = None) -> None:
@@ -348,7 +366,12 @@ class OpenAPIValidationMiddleware(BaseHTTPMiddleware):
                 auth_err.status_code, auth_err.code, auth_err.message, request_id
             )
 
-        matched_path, schema = self._index.match(path, method)
+        matched_path, operation_id, schema = self._index.match(path, method)
+
+        if matched_path is not None:
+            request.state.openapi_path_template = matched_path
+        if operation_id is not None:
+            request.state.openapi_operation_id = operation_id
 
         if schema is None:
             return await call_next(request)
@@ -368,6 +391,10 @@ class OpenAPIValidationMiddleware(BaseHTTPMiddleware):
             return _build_error_response(
                 400, "INVALID_JSON", "Failed to read request body", request_id
             )
+
+        if body_bytes:
+            body_hash = hashlib.sha256(body_bytes).hexdigest()
+            request.state.request_body_sha256 = f"sha256:{body_hash}"
 
         if not body_bytes:
             parsed_body: Any = None

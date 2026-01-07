@@ -54,9 +54,7 @@ def api_keys_config(
 
 
 @pytest.fixture
-def client_with_valid_key(
-    tmp_path: str, api_keys_config: dict[str, dict[str, str]]
-) -> TestClient:
+def client_with_valid_key(tmp_path: str, api_keys_config: dict[str, dict[str, str]]) -> TestClient:
     """Create test client with valid API key configured."""
     audit_log_path = os.path.join(tmp_path, "audit.jsonl")
     sink = JsonlFileAuditSink(file_path=audit_log_path)

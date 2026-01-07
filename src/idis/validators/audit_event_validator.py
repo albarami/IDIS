@@ -109,6 +109,17 @@ class AuditEventValidator:
 
         if isinstance(obj, dict):
             for key, value in obj.items():
+                # Guard against non-str keys (fail closed)
+                if not isinstance(key, str):
+                    errors.append(
+                        ValidationError(
+                            code="AUDIT_INVALID_PAYLOAD_KEY",
+                            message=f"Payload key must be a string, got: {type(key).__name__}",
+                            path=path,
+                        )
+                    )
+                    continue
+
                 key_lower = key.lower()
 
                 # Check if key matches blocklist
@@ -158,15 +169,17 @@ class AuditEventValidator:
         """Check if value is a valid ISO-8601 timestamp string."""
         if not isinstance(value, str):
             return False
+        is_valid = False
         try:
             # Try parsing with timezone
             if value.endswith("Z"):
                 datetime.fromisoformat(value.replace("Z", "+00:00"))
             else:
                 datetime.fromisoformat(value)
-            return True
+            is_valid = True
         except ValueError:
-            return False
+            pass
+        return is_valid
 
     def _is_valid_event_type(self, value: Any) -> bool:
         """Check if value is a valid event type (dotted lower-case pattern)."""
@@ -332,11 +345,20 @@ class AuditEventValidator:
                     )
 
         severity = data.get("severity")
-        if not severity:
+        if severity is None:
             errors.append(
                 ValidationError(
                     code="MISSING_SEVERITY",
                     message="severity is required",
+                    path="$.severity",
+                )
+            )
+        elif not isinstance(severity, str) or not severity:
+            # Guard against unhashable types (list, dict, etc.)
+            errors.append(
+                ValidationError(
+                    code="INVALID_SEVERITY",
+                    message=f"severity must be a string, got: {type(severity).__name__}",
                     path="$.severity",
                 )
             )
@@ -384,6 +406,15 @@ class AuditEventValidator:
                     ValidationError(
                         code="AUDIT_INVALID_ACTOR",
                         message="actor.actor_type is required",
+                        path="$.actor.actor_type",
+                    )
+                )
+            elif not isinstance(actor_type, str):
+                # Guard against unhashable types (list, dict, etc.)
+                errors.append(
+                    ValidationError(
+                        code="AUDIT_INVALID_ACTOR",
+                        message=f"actor_type must be a string, got: {type(actor_type).__name__}",
                         path="$.actor.actor_type",
                     )
                 )
@@ -435,14 +466,26 @@ class AuditEventValidator:
                 )
 
             method = request.get("method")
-            if method is not None and method not in VALID_HTTP_METHODS:
-                errors.append(
-                    ValidationError(
-                        code="AUDIT_INVALID_REQUEST",
-                        message=f"Invalid method: {method}. Must be one of: {VALID_HTTP_METHODS}",
-                        path="$.request.method",
+            if method is not None:
+                if not isinstance(method, str):
+                    # Guard against unhashable types (list, dict, etc.)
+                    errors.append(
+                        ValidationError(
+                            code="AUDIT_INVALID_REQUEST",
+                            message=f"method must be a string, got: {type(method).__name__}",
+                            path="$.request.method",
+                        )
                     )
-                )
+                elif method not in VALID_HTTP_METHODS:
+                    errors.append(
+                        ValidationError(
+                            code="AUDIT_INVALID_REQUEST",
+                            message=(
+                                f"Invalid method: {method}. Must be one of: {VALID_HTTP_METHODS}"
+                            ),
+                            path="$.request.method",
+                        )
+                    )
 
         # === Resource validation ===
 
@@ -465,11 +508,22 @@ class AuditEventValidator:
             )
         else:
             resource_type = resource.get("resource_type")
-            if not resource_type:
+            if resource_type is None:
                 errors.append(
                     ValidationError(
                         code="MISSING_RESOURCE_TYPE",
                         message="resource.resource_type is required",
+                        path="$.resource.resource_type",
+                    )
+                )
+            elif not isinstance(resource_type, str) or not resource_type:
+                # Guard against unhashable types (list, dict, etc.)
+                errors.append(
+                    ValidationError(
+                        code="INVALID_RESOURCE_TYPE",
+                        message=(
+                            f"resource_type must be a string, got: {type(resource_type).__name__}"
+                        ),
                         path="$.resource.resource_type",
                     )
                 )
@@ -499,9 +553,9 @@ class AuditEventValidator:
         payload = data.get("payload")
         if payload:
             redaction_errors = self._check_redaction(payload)
-            # Treat redaction violations as errors (fail closed)
+            # Treat redaction violations and invalid keys as errors (fail closed)
             for err in redaction_errors:
-                if err.code == "REDACTION_VIOLATION":
+                if err.code in ("REDACTION_VIOLATION", "AUDIT_INVALID_PAYLOAD_KEY"):
                     errors.append(err)
                 else:
                     warnings.append(err)

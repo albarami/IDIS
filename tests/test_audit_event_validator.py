@@ -321,3 +321,113 @@ class TestAuditEventSchemaValidation:
         result = validator.validate(event)
         assert not result.passed
         assert any(e.code == "AUDIT_SCHEMA_VIOLATION" for e in result.errors)
+
+
+class TestAuditEventUnhashableInputs:
+    """Regression tests for unhashable inputs - proves never raises TypeError."""
+
+    def test_severity_as_list_fails_without_exception(self) -> None:
+        """severity as list (unhashable) fails with INVALID_SEVERITY, no exception."""
+        validator = AuditEventValidator()
+        event = build_valid_audit_event(severity=[])
+
+        result = validator.validate(event)
+        assert not result.passed
+        assert any(e.code == "INVALID_SEVERITY" for e in result.errors)
+
+    def test_severity_as_dict_fails_without_exception(self) -> None:
+        """severity as dict (unhashable) fails with INVALID_SEVERITY, no exception."""
+        validator = AuditEventValidator()
+        event = build_valid_audit_event(severity={})
+
+        result = validator.validate(event)
+        assert not result.passed
+        assert any(e.code == "INVALID_SEVERITY" for e in result.errors)
+
+    def test_actor_type_as_list_fails_without_exception(self) -> None:
+        """actor.actor_type as list (unhashable) fails with AUDIT_INVALID_ACTOR, no exception."""
+        validator = AuditEventValidator()
+        event = build_valid_audit_event(actor={"actor_type": [], "actor_id": "user@example.com"})
+
+        result = validator.validate(event)
+        assert not result.passed
+        assert any(e.code == "AUDIT_INVALID_ACTOR" for e in result.errors)
+
+    def test_actor_type_as_dict_fails_without_exception(self) -> None:
+        """actor.actor_type as dict (unhashable) fails with AUDIT_INVALID_ACTOR, no exception."""
+        validator = AuditEventValidator()
+        event = build_valid_audit_event(actor={"actor_type": {}, "actor_id": "user@example.com"})
+
+        result = validator.validate(event)
+        assert not result.passed
+        assert any(e.code == "AUDIT_INVALID_ACTOR" for e in result.errors)
+
+    def test_request_method_as_list_fails_without_exception(self) -> None:
+        """request.method as list (unhashable) fails with AUDIT_INVALID_REQUEST, no exception."""
+        validator = AuditEventValidator()
+        event = build_valid_audit_event(
+            request={
+                "request_id": "req_123",
+                "method": [],
+                "path": "/v1/deals",
+                "status_code": 201,
+            }
+        )
+
+        result = validator.validate(event)
+        assert not result.passed
+        assert any(e.code == "AUDIT_INVALID_REQUEST" for e in result.errors)
+
+    def test_request_method_as_dict_fails_without_exception(self) -> None:
+        """request.method as dict (unhashable) fails with AUDIT_INVALID_REQUEST, no exception."""
+        validator = AuditEventValidator()
+        event = build_valid_audit_event(
+            request={
+                "request_id": "req_123",
+                "method": {},
+                "path": "/v1/deals",
+                "status_code": 201,
+            }
+        )
+
+        result = validator.validate(event)
+        assert not result.passed
+        assert any(e.code == "AUDIT_INVALID_REQUEST" for e in result.errors)
+
+    def test_resource_type_as_list_fails_without_exception(self) -> None:
+        """resource.resource_type as list fails with INVALID_RESOURCE_TYPE."""
+        validator = AuditEventValidator()
+        event = build_valid_audit_event(resource={"resource_type": [], "resource_id": "123"})
+
+        result = validator.validate(event)
+        assert not result.passed
+        assert any(e.code == "INVALID_RESOURCE_TYPE" for e in result.errors)
+
+    def test_resource_type_as_dict_fails_without_exception(self) -> None:
+        """resource.resource_type as dict fails with INVALID_RESOURCE_TYPE."""
+        validator = AuditEventValidator()
+        event = build_valid_audit_event(resource={"resource_type": {}, "resource_id": "123"})
+
+        result = validator.validate(event)
+        assert not result.passed
+        assert any(e.code == "INVALID_RESOURCE_TYPE" for e in result.errors)
+
+    def test_payload_non_str_key_fails_without_exception(self) -> None:
+        """payload with non-str key (int) fails with AUDIT_INVALID_PAYLOAD_KEY, no exception."""
+        validator = AuditEventValidator()
+        event = build_valid_audit_event()
+        event["payload"] = {1: "value"}  # Non-string key
+
+        result = validator.validate(event)
+        assert not result.passed
+        assert any(e.code == "AUDIT_INVALID_PAYLOAD_KEY" for e in result.errors)
+
+    def test_payload_nested_non_str_key_fails_without_exception(self) -> None:
+        """payload with nested non-str key fails with AUDIT_INVALID_PAYLOAD_KEY, no exception."""
+        validator = AuditEventValidator()
+        event = build_valid_audit_event()
+        event["payload"] = {"safe": {2: "nested value"}}  # Nested non-string key
+
+        result = validator.validate(event)
+        assert not result.passed
+        assert any(e.code == "AUDIT_INVALID_PAYLOAD_KEY" for e in result.errors)

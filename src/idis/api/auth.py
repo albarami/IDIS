@@ -26,15 +26,21 @@ class TenantContext(BaseModel):
     """Tenant context per OpenAPI TenantContext schema."""
 
     tenant_id: str
+    actor_id: str
     name: str
     timezone: str
     data_region: str
 
 
 class ApiKeyRecord(BaseModel):
-    """API key registry entry containing tenant context fields."""
+    """API key registry entry containing tenant context fields.
+
+    The actor_id is a stable, non-secret identifier for the API key holder.
+    It should be unique per API key and used for idempotency scoping.
+    """
 
     tenant_id: str
+    actor_id: str
     name: str
     timezone: str
     data_region: str
@@ -124,6 +130,7 @@ def _extract_tenant_from_api_key(request: Request) -> TenantContext:
 
     return TenantContext(
         tenant_id=record.tenant_id,
+        actor_id=record.actor_id,
         name=record.name,
         timezone=record.timezone,
         data_region=record.data_region,

@@ -23,11 +23,20 @@ def test_api_key() -> str:
 
 
 @pytest.fixture
-def api_keys_config(test_tenant_id: str, test_api_key: str) -> dict[str, dict[str, str]]:
+def test_actor_id() -> str:
+    """Generate a test actor UUID."""
+    return f"actor-{uuid.uuid4().hex[:8]}"
+
+
+@pytest.fixture
+def api_keys_config(
+    test_tenant_id: str, test_actor_id: str, test_api_key: str
+) -> dict[str, dict[str, str]]:
     """Create API keys configuration for testing."""
     return {
         test_api_key: {
             "tenant_id": test_tenant_id,
+            "actor_id": test_actor_id,
             "name": "Test Tenant",
             "timezone": "Asia/Qatar",
             "data_region": "me-south-1",

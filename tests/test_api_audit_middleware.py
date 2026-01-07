@@ -22,12 +22,17 @@ from idis.audit.sink import JsonlFileAuditSink
 from idis.validators.audit_event_validator import validate_audit_event
 
 
-def _make_api_keys_json(tenant_id: str, name: str = "Test Tenant") -> str:
+def _make_api_keys_json(
+    tenant_id: str, actor_id: str | None = None, name: str = "Test Tenant"
+) -> str:
     """Create a valid IDIS_API_KEYS_JSON value for testing."""
+    if actor_id is None:
+        actor_id = f"actor-{tenant_id[:8]}"
     return json.dumps(
         {
             "test-api-key-12345": {
                 "tenant_id": tenant_id,
+                "actor_id": actor_id,
                 "name": name,
                 "timezone": "UTC",
                 "data_region": "us-east-1",

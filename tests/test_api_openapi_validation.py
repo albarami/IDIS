@@ -120,8 +120,10 @@ def _substitute_path_params(path_template: str) -> str:
 def api_key_env() -> str:
     """Set up test API key in environment and return the key."""
     test_key = "test-api-key-phase2-validation"
+    tenant_id = str(uuid.uuid4())
     test_tenant = {
-        "tenant_id": str(uuid.uuid4()),
+        "tenant_id": tenant_id,
+        "actor_id": f"actor-{tenant_id[:8]}",
         "name": "Test Tenant",
         "timezone": "UTC",
         "data_region": "us-east-1",

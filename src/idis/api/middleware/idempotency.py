@@ -133,7 +133,7 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         if operation_id is None:
             return await call_next(request)
 
-        actor_id = tenant_ctx.name
+        actor_id = tenant_ctx.actor_id
 
         payload_sha256 = getattr(request.state, "request_body_sha256", None)
         if payload_sha256 is None:
@@ -226,10 +226,16 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
                 try:
                     store.put(scope_key, record)
                 except IdempotencyStoreError as e:
-                    logger.warning(
+                    logger.error(
                         "Failed to store idempotency record: %s",
                         str(e),
                         extra={"request_id": request_id},
+                    )
+                    return _build_error_response(
+                        500,
+                        "IDEMPOTENCY_STORE_FAILED",
+                        "Idempotency store is unavailable",
+                        request_id,
                     )
 
                 return Response(

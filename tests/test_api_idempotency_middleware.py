@@ -49,11 +49,26 @@ def api_key_b() -> str:
 
 
 @pytest.fixture
-def api_keys_config_single(tenant_a_id: str, api_key_a: str) -> dict[str, dict[str, str]]:
+def actor_a_id() -> str:
+    """Generate actor A UUID."""
+    return f"actor-a-{uuid.uuid4().hex[:8]}"
+
+
+@pytest.fixture
+def actor_b_id() -> str:
+    """Generate actor B UUID."""
+    return f"actor-b-{uuid.uuid4().hex[:8]}"
+
+
+@pytest.fixture
+def api_keys_config_single(
+    tenant_a_id: str, actor_a_id: str, api_key_a: str
+) -> dict[str, dict[str, str]]:
     """Create API keys configuration with single tenant."""
     return {
         api_key_a: {
             "tenant_id": tenant_a_id,
+            "actor_id": actor_a_id,
             "name": "Tenant A",
             "timezone": "Asia/Qatar",
             "data_region": "me-south-1",
@@ -63,18 +78,25 @@ def api_keys_config_single(tenant_a_id: str, api_key_a: str) -> dict[str, dict[s
 
 @pytest.fixture
 def api_keys_config_multi(
-    tenant_a_id: str, tenant_b_id: str, api_key_a: str, api_key_b: str
+    tenant_a_id: str,
+    tenant_b_id: str,
+    actor_a_id: str,
+    actor_b_id: str,
+    api_key_a: str,
+    api_key_b: str,
 ) -> dict[str, dict[str, str]]:
     """Create API keys configuration with two tenants."""
     return {
         api_key_a: {
             "tenant_id": tenant_a_id,
+            "actor_id": actor_a_id,
             "name": "Tenant A",
             "timezone": "Asia/Qatar",
             "data_region": "me-south-1",
         },
         api_key_b: {
             "tenant_id": tenant_b_id,
+            "actor_id": actor_b_id,
             "name": "Tenant B",
             "timezone": "America/New_York",
             "data_region": "us-east-1",
@@ -609,3 +631,194 @@ class TestIdempotencyEdgeCases:
 
         assert response1.status_code == 201
         assert response2.status_code == 201
+
+
+class TestActorIsolation:
+    """Test E: Actor isolation - same tenant, different actor does not replay."""
+
+    @pytest.fixture
+    def api_key_a2(self) -> str:
+        """Generate second API key for tenant A with different actor."""
+        return f"key-a2-{uuid.uuid4().hex[:16]}"
+
+    @pytest.fixture
+    def actor_a2_id(self) -> str:
+        """Generate second actor ID for tenant A."""
+        return f"actor-a2-{uuid.uuid4().hex[:8]}"
+
+    @pytest.fixture
+    def api_keys_config_same_tenant_different_actors(
+        self,
+        tenant_a_id: str,
+        actor_a_id: str,
+        actor_a2_id: str,
+        api_key_a: str,
+        api_key_a2: str,
+    ) -> dict[str, dict[str, str]]:
+        """Create API keys config with same tenant but different actors."""
+        return {
+            api_key_a: {
+                "tenant_id": tenant_a_id,
+                "actor_id": actor_a_id,
+                "name": "Actor A1",
+                "timezone": "Asia/Qatar",
+                "data_region": "me-south-1",
+            },
+            api_key_a2: {
+                "tenant_id": tenant_a_id,
+                "actor_id": actor_a2_id,
+                "name": "Actor A2",
+                "timezone": "Asia/Qatar",
+                "data_region": "me-south-1",
+            },
+        }
+
+    @pytest.fixture
+    def client_same_tenant_different_actors(
+        self,
+        api_keys_config_same_tenant_different_actors: dict[str, dict[str, str]],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> TestClient:
+        """Create test client with same tenant but different actors."""
+        clear_deals_store()
+
+        audit_path = tmp_path / "audit.jsonl"
+        idem_path = tmp_path / "idem.sqlite3"
+
+        monkeypatch.setenv(
+            IDIS_API_KEYS_ENV, json.dumps(api_keys_config_same_tenant_different_actors)
+        )
+        monkeypatch.setenv("IDIS_AUDIT_LOG_PATH", str(audit_path))
+        monkeypatch.setenv(IDIS_IDEMPOTENCY_DB_PATH_ENV, str(idem_path))
+
+        audit_sink = JsonlFileAuditSink(file_path=str(audit_path))
+        idem_store = SqliteIdempotencyStore(db_path=str(idem_path))
+
+        app = create_app(audit_sink=audit_sink, idempotency_store=idem_store)
+        return TestClient(app)
+
+    def test_same_tenant_different_actor_creates_separate_deals(
+        self,
+        client_same_tenant_different_actors: TestClient,
+        api_key_a: str,
+        api_key_a2: str,
+    ) -> None:
+        """Same tenant + different actor_id + same Idempotency-Key creates separate deals."""
+        idempotency_key = f"idem_{uuid.uuid4().hex[:8]}"
+        payload = {"name": "Deal Actor Test", "company_name": "Actor Corp"}
+
+        response_actor1 = client_same_tenant_different_actors.post(
+            "/v1/deals",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/json",
+                "Idempotency-Key": idempotency_key,
+            },
+            json=payload,
+        )
+
+        response_actor2 = client_same_tenant_different_actors.post(
+            "/v1/deals",
+            headers={
+                "X-IDIS-API-Key": api_key_a2,
+                "Content-Type": "application/json",
+                "Idempotency-Key": idempotency_key,
+            },
+            json=payload,
+        )
+
+        assert response_actor1.status_code == 201
+        assert response_actor2.status_code == 201
+
+        deal_id_1 = response_actor1.json()["deal_id"]
+        deal_id_2 = response_actor2.json()["deal_id"]
+
+        assert deal_id_1 != deal_id_2, "Different actors must create separate deals"
+
+    def test_same_tenant_different_actor_no_replay_header(
+        self,
+        client_same_tenant_different_actors: TestClient,
+        api_key_a: str,
+        api_key_a2: str,
+    ) -> None:
+        """Actor 2 request should not have replay header (new deal, not replayed)."""
+        idempotency_key = f"idem_{uuid.uuid4().hex[:8]}"
+        payload = {"name": "Deal No Replay", "company_name": "NoReplay Corp"}
+
+        response_actor1 = client_same_tenant_different_actors.post(
+            "/v1/deals",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/json",
+                "Idempotency-Key": idempotency_key,
+            },
+            json=payload,
+        )
+
+        response_actor2 = client_same_tenant_different_actors.post(
+            "/v1/deals",
+            headers={
+                "X-IDIS-API-Key": api_key_a2,
+                "Content-Type": "application/json",
+                "Idempotency-Key": idempotency_key,
+            },
+            json=payload,
+        )
+
+        assert response_actor1.headers.get("X-IDIS-Idempotency-Replay") is None
+        assert response_actor2.headers.get("X-IDIS-Idempotency-Replay") is None
+
+
+class TestStorePutFailure:
+    """Test F: store.put failure returns 500 IDEMPOTENCY_STORE_FAILED."""
+
+    @pytest.fixture
+    def client_with_readonly_store(
+        self,
+        api_keys_config_single: dict[str, dict[str, str]],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> TestClient:
+        """Create test client with store that will fail on put."""
+        import os
+
+        clear_deals_store()
+
+        audit_path = tmp_path / "audit.jsonl"
+        idem_path = tmp_path / "idem_readonly.sqlite3"
+
+        idem_store = SqliteIdempotencyStore(db_path=str(idem_path))
+        idem_store._get_connection()
+
+        os.chmod(str(idem_path), 0o444)
+
+        monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys_config_single))
+        monkeypatch.setenv("IDIS_AUDIT_LOG_PATH", str(audit_path))
+        monkeypatch.setenv(IDIS_IDEMPOTENCY_DB_PATH_ENV, str(idem_path))
+
+        audit_sink = JsonlFileAuditSink(file_path=str(audit_path))
+
+        app = create_app(audit_sink=audit_sink, idempotency_store=idem_store)
+
+        yield TestClient(app)
+
+        os.chmod(str(idem_path), 0o644)
+
+    def test_store_put_failure_returns_500(
+        self, client_with_readonly_store: TestClient, api_key_a: str
+    ) -> None:
+        """store.put failure returns 500 IDEMPOTENCY_STORE_FAILED."""
+        response = client_with_readonly_store.post(
+            "/v1/deals",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/json",
+                "Idempotency-Key": f"idem_{uuid.uuid4().hex[:8]}",
+            },
+            json={"name": "Deal Put Fail", "company_name": "PutFail Corp"},
+        )
+
+        assert response.status_code == 500
+        body = response.json()
+        assert body["code"] == "IDEMPOTENCY_STORE_FAILED"

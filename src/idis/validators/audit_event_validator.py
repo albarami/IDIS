@@ -2,13 +2,25 @@
 
 Audit events are append-only and must be emitted for every mutating operation.
 This validator ensures completeness and compliance with redaction rules.
+
+Fail-closed behavior: any missing/invalid required field => pass=False with explicit error codes.
 """
 
 from __future__ import annotations
 
+import re
+from datetime import datetime
 from typing import Any
 
-from idis.validators.schema_validator import ValidationError, ValidationResult
+from idis.validators.schema_validator import SchemaValidator, ValidationError, ValidationResult
+
+# UUID regex pattern (RFC 4122 compliant)
+_UUID_PATTERN = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+# Event type pattern: dotted lower-case (e.g., "deal.created", "claim.verdict.changed")
+_EVENT_TYPE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 
 # Valid event type prefixes from taxonomy
 VALID_EVENT_PREFIXES = {
@@ -74,16 +86,22 @@ class AuditEventValidator:
     """Validates audit events for completeness and redaction compliance.
 
     Rules:
-    1. All required fields must be present
-    2. Event type must match taxonomy
-    3. Severity must be valid
-    4. Payload must not contain sensitive fields (redaction policy)
-    5. Actor and request context must be complete
+    1. Schema validation against schemas/audit_event.schema.json
+    2. All required fields must be present
+    3. UUID fields must be valid UUID format
+    4. Timestamp fields must be valid ISO-8601
+    5. Event type must match taxonomy (dotted lower-case)
+    6. Severity must be valid
+    7. Payload must not contain sensitive fields (redaction policy)
+    8. Actor and request context must be complete
+
+    FAIL CLOSED: any missing/invalid required field => pass=False with explicit error codes.
     """
 
     def __init__(self) -> None:
         """Initialize the validator."""
-        pass
+        self._schema_validator = SchemaValidator()
+        self._schema_loaded: bool | None = None
 
     def _check_redaction(self, obj: Any, path: str = "$.payload") -> list[ValidationError]:
         """Check for sensitive fields that should be redacted."""
@@ -130,6 +148,32 @@ class AuditEventValidator:
 
         return errors
 
+    def _is_valid_uuid(self, value: Any) -> bool:
+        """Check if value is a valid UUID string."""
+        if not isinstance(value, str):
+            return False
+        return bool(_UUID_PATTERN.match(value))
+
+    def _is_valid_iso8601(self, value: Any) -> bool:
+        """Check if value is a valid ISO-8601 timestamp string."""
+        if not isinstance(value, str):
+            return False
+        try:
+            # Try parsing with timezone
+            if value.endswith("Z"):
+                datetime.fromisoformat(value.replace("Z", "+00:00"))
+            else:
+                datetime.fromisoformat(value)
+            return True
+        except ValueError:
+            return False
+
+    def _is_valid_event_type(self, value: Any) -> bool:
+        """Check if value is a valid event type (dotted lower-case pattern)."""
+        if not isinstance(value, str):
+            return False
+        return bool(_EVENT_TYPE_PATTERN.match(value))
+
     def validate(self, data: Any) -> ValidationResult:
         """Validate an audit event.
 
@@ -137,20 +181,65 @@ class AuditEventValidator:
             data: AuditEvent JSON data
 
         Returns:
-            ValidationResult - FAILS CLOSED on missing required fields
+            ValidationResult - FAILS CLOSED on missing required fields.
+            Never raises exceptions for malformed input.
         """
+        # Fail closed on non-dict input (including None)
         if data is None:
-            return ValidationResult.fail_closed("Data is None - cannot validate")
+            return ValidationResult.fail(
+                [
+                    ValidationError(
+                        code="FAIL_CLOSED",
+                        message="Data is None - cannot validate",
+                        path="$",
+                    )
+                ]
+            )
 
         if not isinstance(data, dict):
-            return ValidationResult.fail_closed("Data must be a dictionary")
+            return ValidationResult.fail(
+                [
+                    ValidationError(
+                        code="FAIL_CLOSED",
+                        message="Data must be a dictionary",
+                        path="$",
+                    )
+                ]
+            )
 
         errors: list[ValidationError] = []
         warnings: list[ValidationError] = []
 
-        # === Required top-level fields ===
+        # === Schema validation (fail closed if schema cannot be loaded) ===
+        schema_result = self._schema_validator.validate("audit_event", data)
+        if not schema_result.passed:
+            # Check if it's a schema load failure
+            for err in schema_result.errors:
+                if err.code == "FAIL_CLOSED" and "Cannot load" in err.message:
+                    return ValidationResult.fail(
+                        [
+                            ValidationError(
+                                code="AUDIT_SCHEMA_LOAD_FAILED",
+                                message="Cannot load audit_event schema - validation fails closed",
+                                path="$",
+                            )
+                        ]
+                    )
+            # Schema violations - collect and continue with additional checks
+            for err in schema_result.errors:
+                errors.append(
+                    ValidationError(
+                        code="AUDIT_SCHEMA_VIOLATION",
+                        message=err.message,
+                        path=err.path,
+                    )
+                )
 
-        if not data.get("event_id"):
+        # === Required top-level fields with specific validation ===
+
+        # event_id - must be UUID
+        event_id = data.get("event_id")
+        if not event_id:
             errors.append(
                 ValidationError(
                     code="MISSING_EVENT_ID",
@@ -158,8 +247,18 @@ class AuditEventValidator:
                     path="$.event_id",
                 )
             )
+        elif not self._is_valid_uuid(event_id):
+            errors.append(
+                ValidationError(
+                    code="AUDIT_INVALID_UUID",
+                    message=f"event_id must be a valid UUID, got: {event_id!r}",
+                    path="$.event_id",
+                )
+            )
 
-        if not data.get("occurred_at"):
+        # occurred_at - must be ISO-8601
+        occurred_at = data.get("occurred_at")
+        if not occurred_at:
             errors.append(
                 ValidationError(
                     code="MISSING_OCCURRED_AT",
@@ -167,12 +266,30 @@ class AuditEventValidator:
                     path="$.occurred_at",
                 )
             )
+        elif not self._is_valid_iso8601(occurred_at):
+            errors.append(
+                ValidationError(
+                    code="AUDIT_INVALID_TIMESTAMP",
+                    message=f"occurred_at must be a valid ISO-8601 timestamp, got: {occurred_at!r}",
+                    path="$.occurred_at",
+                )
+            )
 
-        if not data.get("tenant_id"):
+        # tenant_id - must be UUID
+        tenant_id = data.get("tenant_id")
+        if not tenant_id:
             errors.append(
                 ValidationError(
                     code="MISSING_TENANT_ID",
                     message="tenant_id is required for tenant isolation",
+                    path="$.tenant_id",
+                )
+            )
+        elif not self._is_valid_uuid(tenant_id):
+            errors.append(
+                ValidationError(
+                    code="AUDIT_INVALID_UUID",
+                    message=f"tenant_id must be a valid UUID, got: {tenant_id!r}",
                     path="$.tenant_id",
                 )
             )
@@ -187,19 +304,32 @@ class AuditEventValidator:
                 )
             )
         else:
-            # Validate event type matches taxonomy
-            valid_prefix = any(event_type.startswith(prefix) for prefix in VALID_EVENT_PREFIXES)
-            if not valid_prefix:
+            # Validate event type format (dotted lower-case)
+            if not self._is_valid_event_type(event_type):
                 errors.append(
                     ValidationError(
                         code="INVALID_EVENT_TYPE",
                         message=(
-                            f"Event type '{event_type}' does not match known taxonomy. "
-                            f"Must start with one of: {sorted(VALID_EVENT_PREFIXES)}"
+                            f"Event type '{event_type}' must be dotted lower-case format "
+                            f"(e.g., 'deal.created', 'claim.verdict.changed')"
                         ),
                         path="$.event_type",
                     )
                 )
+            else:
+                # Validate event type matches taxonomy prefix
+                valid_prefix = any(event_type.startswith(prefix) for prefix in VALID_EVENT_PREFIXES)
+                if not valid_prefix:
+                    errors.append(
+                        ValidationError(
+                            code="INVALID_EVENT_TYPE",
+                            message=(
+                                f"Event type '{event_type}' does not match known taxonomy. "
+                                f"Must start with one of: {sorted(VALID_EVENT_PREFIXES)}"
+                            ),
+                            path="$.event_type",
+                        )
+                    )
 
         severity = data.get("severity")
         if not severity:
@@ -234,7 +364,7 @@ class AuditEventValidator:
         if not actor:
             errors.append(
                 ValidationError(
-                    code="MISSING_ACTOR",
+                    code="AUDIT_INVALID_ACTOR",
                     message="actor is required",
                     path="$.actor",
                 )
@@ -242,7 +372,7 @@ class AuditEventValidator:
         elif not isinstance(actor, dict):
             errors.append(
                 ValidationError(
-                    code="INVALID_ACTOR",
+                    code="AUDIT_INVALID_ACTOR",
                     message="actor must be an object",
                     path="$.actor",
                 )
@@ -252,7 +382,7 @@ class AuditEventValidator:
             if not actor_type:
                 errors.append(
                     ValidationError(
-                        code="MISSING_ACTOR_TYPE",
+                        code="AUDIT_INVALID_ACTOR",
                         message="actor.actor_type is required",
                         path="$.actor.actor_type",
                     )
@@ -260,7 +390,7 @@ class AuditEventValidator:
             elif actor_type not in VALID_ACTOR_TYPES:
                 errors.append(
                     ValidationError(
-                        code="INVALID_ACTOR_TYPE",
+                        code="AUDIT_INVALID_ACTOR",
                         message=f"Invalid actor_type: {actor_type}. Must be HUMAN or SERVICE",
                         path="$.actor.actor_type",
                     )
@@ -269,8 +399,8 @@ class AuditEventValidator:
             if not actor.get("actor_id"):
                 errors.append(
                     ValidationError(
-                        code="MISSING_ACTOR_ID",
-                        message="actor.actor_id is required",
+                        code="AUDIT_INVALID_ACTOR",
+                        message="actor.actor_id is required and must be non-empty",
                         path="$.actor.actor_id",
                     )
                 )
@@ -281,7 +411,7 @@ class AuditEventValidator:
         if not request:
             errors.append(
                 ValidationError(
-                    code="MISSING_REQUEST",
+                    code="AUDIT_INVALID_REQUEST",
                     message="request context is required",
                     path="$.request",
                 )
@@ -289,7 +419,7 @@ class AuditEventValidator:
         elif not isinstance(request, dict):
             errors.append(
                 ValidationError(
-                    code="INVALID_REQUEST",
+                    code="AUDIT_INVALID_REQUEST",
                     message="request must be an object",
                     path="$.request",
                 )
@@ -298,54 +428,19 @@ class AuditEventValidator:
             if not request.get("request_id"):
                 errors.append(
                     ValidationError(
-                        code="MISSING_REQUEST_ID",
+                        code="AUDIT_INVALID_REQUEST",
                         message="request.request_id is required for correlation",
                         path="$.request.request_id",
                     )
                 )
 
             method = request.get("method")
-            if not method:
+            if method is not None and method not in VALID_HTTP_METHODS:
                 errors.append(
                     ValidationError(
-                        code="MISSING_METHOD",
-                        message="request.method is required",
-                        path="$.request.method",
-                    )
-                )
-            elif method not in VALID_HTTP_METHODS:
-                errors.append(
-                    ValidationError(
-                        code="INVALID_METHOD",
+                        code="AUDIT_INVALID_REQUEST",
                         message=f"Invalid method: {method}. Must be one of: {VALID_HTTP_METHODS}",
                         path="$.request.method",
-                    )
-                )
-
-            if not request.get("path"):
-                errors.append(
-                    ValidationError(
-                        code="MISSING_PATH",
-                        message="request.path is required",
-                        path="$.request.path",
-                    )
-                )
-
-            status_code = request.get("status_code")
-            if status_code is None:
-                errors.append(
-                    ValidationError(
-                        code="MISSING_STATUS_CODE",
-                        message="request.status_code is required",
-                        path="$.request.status_code",
-                    )
-                )
-            elif not isinstance(status_code, int) or status_code < 100 or status_code > 599:
-                errors.append(
-                    ValidationError(
-                        code="INVALID_STATUS_CODE",
-                        message=f"Invalid status_code: {status_code}. Must be 100-599",
-                        path="$.request.status_code",
                     )
                 )
 
@@ -415,3 +510,33 @@ class AuditEventValidator:
             return ValidationResult.fail(errors)
 
         return ValidationResult.success(warnings if warnings else None)
+
+
+# === Public function API ===
+
+
+def validate_audit_event(event: dict) -> ValidationResult:
+    """Validate an audit event dict against the v6.3 audit logging contract.
+
+    This is the public entry point for audit event validation.
+
+    Args:
+        event: AuditEvent dict to validate
+
+    Returns:
+        ValidationResult - FAILS CLOSED on missing/invalid required fields.
+        Never raises exceptions for malformed input.
+
+    Error codes returned on failure:
+        - FAIL_CLOSED: Non-dict input (including None)
+        - AUDIT_SCHEMA_LOAD_FAILED: Cannot load audit_event schema
+        - AUDIT_SCHEMA_VIOLATION: Schema validation failed
+        - AUDIT_INVALID_UUID: Invalid UUID format for event_id/tenant_id
+        - AUDIT_INVALID_TIMESTAMP: Invalid ISO-8601 timestamp
+        - INVALID_EVENT_TYPE: Invalid event type format or taxonomy
+        - AUDIT_INVALID_ACTOR: Missing/invalid actor fields
+        - AUDIT_INVALID_REQUEST: Missing/invalid request fields
+        - REDACTION_VIOLATION: Sensitive data in payload
+    """
+    validator = AuditEventValidator()
+    return validator.validate(event)

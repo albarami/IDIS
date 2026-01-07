@@ -171,3 +171,23 @@ async def require_tenant_context(request: Request) -> TenantContext:
 
 
 RequireTenantContext = Annotated[TenantContext, Depends(require_tenant_context)]
+
+
+def authenticate_request(request: Request) -> TenantContext:
+    """Synchronous auth check for middleware use.
+
+    This is a non-async version of require_tenant_context for use in middleware
+    where we need to check auth before proceeding with request validation.
+
+    Auth flow (fail closed):
+    1. If Authorization: Bearer is present but no verifier configured => raises IdisHttpError 401.
+    2. Extract tenant from X-IDIS-API-Key => raises IdisHttpError 401 on missing/invalid.
+
+    Returns:
+        TenantContext extracted from valid credentials.
+
+    Raises:
+        IdisHttpError: 401 on any auth failure.
+    """
+    _check_bearer_token(request)
+    return _extract_tenant_from_api_key(request)

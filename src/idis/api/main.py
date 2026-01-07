@@ -6,6 +6,7 @@ This module provides the create_app() factory for bootstrapping the IDIS API.
 from fastapi import FastAPI
 
 from idis.api.errors import IdisHttpError, idis_http_error_handler
+from idis.api.middleware.openapi_validate import OpenAPIValidationMiddleware
 from idis.api.middleware.request_id import RequestIdMiddleware
 from idis.api.routes.health import router as health_router
 from idis.api.routes.tenancy import router as tenancy_router
@@ -32,6 +33,7 @@ def create_app() -> FastAPI:
         version=IDIS_VERSION,
     )
 
+    app.add_middleware(OpenAPIValidationMiddleware)
     app.add_middleware(RequestIdMiddleware)
 
     app.add_exception_handler(IdisHttpError, idis_http_error_handler)

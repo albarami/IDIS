@@ -141,23 +141,14 @@ class TestCliValidateInvalidJson:
 
 
 class TestCliValidateInvalidValidator:
-    """Test cases for unknown validator handling."""
+    """Test cases for unknown validator handling via real CLI path."""
 
-    def test_validate_unknown_validator_via_direct_call(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """FAIL: calling cmd_validate with unknown validator returns INVALID_VALIDATOR.
+    def test_validate_unknown_validator_via_cli(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """FAIL: unknown validator via CLI returns JSON with INVALID_VALIDATOR.
 
-        Note: argparse normally blocks invalid --validator choices, but we test
-        the internal logic by creating a mock args object.
+        Tests the actual CLI entrypoint with an invalid validator name.
+        Must return deterministic JSON (not argparse usage text) and exit code 2.
         """
-        import argparse
-
-        from idis.cli import cmd_validate
-
-        args = argparse.Namespace(validator="unknown_validator", input=None)
-
-        # We need to provide stdin, so use a temp file instead
         valid_json = {"test": "data"}
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".json", delete=False, encoding="utf-8"
@@ -166,8 +157,28 @@ class TestCliValidateInvalidValidator:
             temp_path = f.name
 
         try:
-            args.input = temp_path
-            exit_code = cmd_validate(args)
+            exit_code = main(["validate", "--validator", "nope", "--input", temp_path])
+            captured = capsys.readouterr()
+            output = json.loads(captured.out)
+
+            assert exit_code == 2
+            assert output["pass"] is False
+            assert len(output["errors"]) == 1
+            assert output["errors"][0]["code"] == "INVALID_VALIDATOR"
+        finally:
+            Path(temp_path).unlink(missing_ok=True)
+
+    def test_validate_unknown_validator_typo(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """FAIL: typo in validator name returns JSON with INVALID_VALIDATOR."""
+        valid_json = {"sections": []}
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False, encoding="utf-8"
+        ) as f:
+            json.dump(valid_json, f)
+            temp_path = f.name
+
+        try:
+            exit_code = main(["validate", "--validator", "no-free-facts", "--input", temp_path])
             captured = capsys.readouterr()
             output = json.loads(captured.out)
 

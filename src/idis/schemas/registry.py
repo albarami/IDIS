@@ -91,14 +91,11 @@ class SchemaRegistry:
     def _looks_like_schema_dir(self, path: Path) -> bool:
         """Check if a directory looks like the schema directory.
 
-        Returns True if it contains at least one .schema.json file.
+        Returns a boolean indicating if it contains at least one .schema.json file.
         """
         if not path.is_dir():
             return False
-        for f in path.iterdir():
-            if f.is_file() and f.name.endswith(".schema.json"):
-                return True
-        return False
+        return any(f.is_file() and f.name.endswith(".schema.json") for f in path.iterdir())
 
     @property
     def schema_dir(self) -> Path | None:

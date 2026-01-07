@@ -182,8 +182,7 @@ def create_parser() -> argparse.ArgumentParser:
     validate_parser.add_argument(
         "--validator",
         required=True,
-        choices=sorted(VALID_VALIDATORS),
-        help="Validator to use",
+        help="Validator to use (no_free_facts, muhasabah, sanad_integrity, audit_event)",
     )
     validate_parser.add_argument(
         "--input",

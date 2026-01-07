@@ -26,6 +26,7 @@ This folder contains the enterprise-grade documentation set required to build ID
 - `IDIS_Prompt_Registry_and_Model_Policy_v6_3.md`
 
 6) **Execution & Traceability**
+- `12_IDIS_End_to_End_Implementation_Roadmap_v6_3.md` — **Task-level** WBS with acceptance criteria, controls, and go-live checklist
 - `IDIS_Master_Execution_Plan_v6_3.md` — **Authoritative** phase roadmap (Phase 0→7), invariants, Go-Live checklist
 - `IDIS_v6_3_Traceability_Matrix.md` — **Authoritative** Requirements → Code → Tests → Phase gates mapping
 - `10_IDIS_GoLive_Execution_Plan_v6_3.md` — Extended execution plan (supplemental)

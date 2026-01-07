@@ -25,6 +25,10 @@ This folder contains the enterprise-grade documentation set required to build ID
 - `IDIS_Evaluation_Harness_and_Release_Gates_v6_3.md`
 - `IDIS_Prompt_Registry_and_Model_Policy_v6_3.md`
 
+6) **Execution & Traceability**
+- `10_IDIS_GoLive_Execution_Plan_v6_3.md` — Authoritative phase roadmap with deliverables, gates, and go-live checklist
+- `11_IDIS_Traceability_Matrix_v6_3.md` — Requirements → Docs → Code → Tests → Evidence mapping
+
 ## Suggested Repo Layout (when you start coding)
 
 - `/docs/` → all documentation

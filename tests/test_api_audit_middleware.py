@@ -36,6 +36,7 @@ def _make_api_keys_json(
                 "name": name,
                 "timezone": "UTC",
                 "data_region": "us-east-1",
+                "roles": ["ANALYST"],
             }
         }
     )

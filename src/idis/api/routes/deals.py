@@ -84,6 +84,46 @@ def create_deal(
     )
 
 
+class PaginatedDealList(BaseModel):
+    """Paginated list of deals per OpenAPI spec."""
+
+    items: list[Deal]
+    next_cursor: str | None = None
+
+
+@router.get("/deals", response_model=PaginatedDealList)
+def list_deals(
+    tenant_ctx: RequireTenantContext,
+    limit: int = 50,
+    cursor: str | None = None,
+) -> PaginatedDealList:
+    """List deals for the current tenant.
+
+    Args:
+        tenant_ctx: Injected tenant context from auth dependency.
+        limit: Maximum number of deals to return.
+        cursor: Pagination cursor (not implemented yet).
+
+    Returns:
+        Paginated list of deals belonging to the tenant.
+    """
+    tenant_deals = [
+        Deal(
+            deal_id=d["deal_id"],
+            name=d["name"],
+            company_name=d["company_name"],
+            status=d["status"],
+            stage=d.get("stage"),
+            tags=d.get("tags"),
+            created_at=d["created_at"],
+            updated_at=d.get("updated_at"),
+        )
+        for d in _deals_store.values()
+        if d.get("tenant_id") == tenant_ctx.tenant_id
+    ]
+    return PaginatedDealList(items=tenant_deals[:limit], next_cursor=None)
+
+
 @router.get("/deals/{deal_id}", response_model=Deal)
 def get_deal(
     deal_id: str,

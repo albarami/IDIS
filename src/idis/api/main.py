@@ -16,6 +16,7 @@ from idis.api.errors import (
 from idis.api.middleware.audit import AuditMiddleware
 from idis.api.middleware.idempotency import IdempotencyMiddleware
 from idis.api.middleware.openapi_validate import OpenAPIValidationMiddleware
+from idis.api.middleware.rbac import RBACMiddleware
 from idis.api.middleware.request_id import RequestIdMiddleware
 from idis.api.routes.deals import router as deals_router
 from idis.api.routes.health import router as health_router
@@ -42,12 +43,14 @@ def create_app(
     Middleware ordering (outermost to innermost):
     1. RequestIdMiddleware - outermost, ensures request_id available everywhere
     2. AuditMiddleware - captures all responses including early returns
-    3. OpenAPIValidationMiddleware - handles auth and sets tenant context
-    4. IdempotencyMiddleware - innermost, uses tenant context and operation_id
+    3. OpenAPIValidationMiddleware - handles auth and sets tenant context + operation_id
+    4. RBACMiddleware - enforces deny-by-default authorization
+    5. IdempotencyMiddleware - innermost, uses tenant context and operation_id
 
     Note: Starlette middleware is added in reverse order (last added = outermost).
     RequestIdMiddleware is added last so it runs first and sets request_id.
     AuditMiddleware wraps OpenAPIValidation to capture even 400 INVALID_JSON.
+    RBACMiddleware requires tenant_context and operation_id from OpenAPIValidationMiddleware.
     IdempotencyMiddleware is innermost so it has access to tenant_context and
     openapi_operation_id set by OpenAPIValidationMiddleware.
 
@@ -65,6 +68,7 @@ def create_app(
     )
 
     app.add_middleware(IdempotencyMiddleware, store=idempotency_store)
+    app.add_middleware(RBACMiddleware)
     app.add_middleware(OpenAPIValidationMiddleware)
     app.add_middleware(AuditMiddleware, sink=audit_sink)
     app.add_middleware(RequestIdMiddleware)

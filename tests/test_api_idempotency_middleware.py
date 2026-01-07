@@ -63,7 +63,7 @@ def actor_b_id() -> str:
 @pytest.fixture
 def api_keys_config_single(
     tenant_a_id: str, actor_a_id: str, api_key_a: str
-) -> dict[str, dict[str, str]]:
+) -> dict[str, dict[str, str | list[str]]]:
     """Create API keys configuration with single tenant."""
     return {
         api_key_a: {
@@ -72,6 +72,7 @@ def api_keys_config_single(
             "name": "Tenant A",
             "timezone": "Asia/Qatar",
             "data_region": "me-south-1",
+            "roles": ["ANALYST"],
         }
     }
 
@@ -84,7 +85,7 @@ def api_keys_config_multi(
     actor_b_id: str,
     api_key_a: str,
     api_key_b: str,
-) -> dict[str, dict[str, str]]:
+) -> dict[str, dict[str, str | list[str]]]:
     """Create API keys configuration with two tenants."""
     return {
         api_key_a: {
@@ -93,6 +94,7 @@ def api_keys_config_multi(
             "name": "Tenant A",
             "timezone": "Asia/Qatar",
             "data_region": "me-south-1",
+            "roles": ["ANALYST"],
         },
         api_key_b: {
             "tenant_id": tenant_b_id,
@@ -100,6 +102,7 @@ def api_keys_config_multi(
             "name": "Tenant B",
             "timezone": "America/New_York",
             "data_region": "us-east-1",
+            "roles": ["ANALYST"],
         },
     }
 
@@ -654,7 +657,7 @@ class TestActorIsolation:
         actor_a2_id: str,
         api_key_a: str,
         api_key_a2: str,
-    ) -> dict[str, dict[str, str]]:
+    ) -> dict[str, dict[str, str | list[str]]]:
         """Create API keys config with same tenant but different actors."""
         return {
             api_key_a: {
@@ -663,6 +666,7 @@ class TestActorIsolation:
                 "name": "Actor A1",
                 "timezone": "Asia/Qatar",
                 "data_region": "me-south-1",
+                "roles": ["ANALYST"],
             },
             api_key_a2: {
                 "tenant_id": tenant_a_id,
@@ -670,6 +674,7 @@ class TestActorIsolation:
                 "name": "Actor A2",
                 "timezone": "Asia/Qatar",
                 "data_region": "me-south-1",
+                "roles": ["ANALYST"],
             },
         }
 

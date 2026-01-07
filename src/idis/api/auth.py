@@ -23,20 +23,9 @@ IDIS_API_KEYS_ENV = "IDIS_API_KEYS_JSON"
 
 
 class TenantContext(BaseModel):
-    """Tenant context per OpenAPI TenantContext schema."""
+    """Tenant context per OpenAPI TenantContext schema.
 
-    tenant_id: str
-    actor_id: str
-    name: str
-    timezone: str
-    data_region: str
-
-
-class ApiKeyRecord(BaseModel):
-    """API key registry entry containing tenant context fields.
-
-    The actor_id is a stable, non-secret identifier for the API key holder.
-    It should be unique per API key and used for idempotency scoping.
+    Includes actor roles for RBAC enforcement per v6.3 security model.
     """
 
     tenant_id: str
@@ -44,6 +33,23 @@ class ApiKeyRecord(BaseModel):
     name: str
     timezone: str
     data_region: str
+    roles: frozenset[str] = frozenset()
+
+
+class ApiKeyRecord(BaseModel):
+    """API key registry entry containing tenant context fields.
+
+    The actor_id is a stable, non-secret identifier for the API key holder.
+    It should be unique per API key and used for idempotency scoping.
+    Roles define RBAC permissions per v6.3 security model.
+    """
+
+    tenant_id: str
+    actor_id: str
+    name: str
+    timezone: str
+    data_region: str
+    roles: list[str] = []
 
 
 def _load_api_key_registry() -> dict[str, ApiKeyRecord]:
@@ -134,6 +140,7 @@ def _extract_tenant_from_api_key(request: Request) -> TenantContext:
         name=record.name,
         timezone=record.timezone,
         data_region=record.data_region,
+        roles=frozenset(record.roles),
     )
 
 

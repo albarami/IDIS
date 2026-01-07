@@ -40,7 +40,7 @@ def test_api_key() -> str:
 @pytest.fixture
 def api_keys_config(
     test_tenant_id: str, test_actor_id: str, test_api_key: str
-) -> dict[str, dict[str, str]]:
+) -> dict[str, dict[str, str | list[str]]]:
     """Create API keys configuration for testing."""
     return {
         test_api_key: {
@@ -49,6 +49,7 @@ def api_keys_config(
             "name": "Test Tenant",
             "timezone": "UTC",
             "data_region": "us-east-1",
+            "roles": ["ANALYST"],
         }
     }
 

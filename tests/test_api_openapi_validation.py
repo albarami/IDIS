@@ -127,6 +127,7 @@ def api_key_env() -> str:
         "name": "Test Tenant",
         "timezone": "UTC",
         "data_region": "us-east-1",
+        "roles": ["ANALYST"],
     }
     keys_json = json.dumps({test_key: test_tenant})
     os.environ["IDIS_API_KEYS_JSON"] = keys_json

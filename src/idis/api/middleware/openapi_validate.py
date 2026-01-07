@@ -34,15 +34,17 @@ from idis.api.openapi_loader import load_openapi_spec
 logger = logging.getLogger(__name__)
 
 METHODS_WITH_JSON_BODY = {"POST", "PUT", "PATCH", "DELETE"}
+ALL_HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
 JSON_CONTENT_TYPES = {"application/json"}
 MAX_REF_DEPTH = 50
 
 
 class OperationIndex:
-    """In-memory index of OpenAPI operations with JSON request body schemas.
+    """In-memory index of OpenAPI operations.
 
-    Built once at startup for deterministic request validation.
-    Also exposes operationId for audit middleware.
+    Built once at startup for:
+    - Request body validation (POST/PUT/PATCH/DELETE with JSON schemas)
+    - Operation ID exposure for audit and RBAC middleware (all methods)
     """
 
     def __init__(self, spec: dict[str, Any]) -> None:
@@ -70,7 +72,7 @@ class OperationIndex:
             if not isinstance(path_item, dict):
                 continue
 
-            for method in METHODS_WITH_JSON_BODY:
+            for method in ALL_HTTP_METHODS:
                 method_lower = method.lower()
                 if method_lower not in path_item:
                     continue
@@ -79,7 +81,9 @@ class OperationIndex:
                 if not isinstance(operation, dict):
                     continue
 
-                schema = self._extract_json_request_schema(operation)
+                schema = None
+                if method in METHODS_WITH_JSON_BODY:
+                    schema = self._extract_json_request_schema(operation)
                 operation_id = operation.get("operationId")
 
                 path_regex = self._compile_path_regex(path_template)

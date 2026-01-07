@@ -31,6 +31,12 @@ This folder contains the enterprise-grade documentation set required to build ID
 - `10_IDIS_GoLive_Execution_Plan_v6_3.md` — Extended execution plan (supplemental)
 - `11_IDIS_Traceability_Matrix_v6_3.md` — Extended traceability (supplemental)
 
+## Current Progress
+
+**Approved Phase:** 2.5 (Actor identity + fail-closed idempotency)  
+**Last Approved Commit:** `257d1fd`  
+**Next Task:** Phase 3.1 — Ingestion Gate (storage primitives, Document/Span models)
+
 ## Suggested Repo Layout (when you start coding)
 
 - `/docs/` → all documentation

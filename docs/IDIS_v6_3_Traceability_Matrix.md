@@ -21,15 +21,15 @@ Ensures deterministic, phase-disciplined delivery aligned to v6.3 spec.
 | **INV-04** | Sanad Integrity Validator | TDD §4.2-4.3, §5 | `validators/sanad_integrity.py` | `test_sanad_integrity.py` | DONE | 0 | Validator; services=Phase 3 |
 | **INV-05** | Sanad Defect Rules | TDD §4.3, Data Model §3.4 | `validators/sanad_integrity.py` | `test_sanad_integrity.py` | DONE | 0 | FATAL/MAJOR/MINOR rules |
 | **INV-06** | Muḥāsabah Gate | TDD §4.4, Eval §2.1 | `validators/muhasabah.py` | `test_muhasabah.py`, `test_muhasabah_validator.py` | DONE | 0 | Validator complete |
-| **INV-07** | Calc-Sanad Determinism | TDD §1.1, §6 | `schemas/calc_sanad.schema.json` | — | PLANNED | 4 | Schema only; engine=Phase 4 |
+| **INV-07** | Calc-Sanad Determinism | TDD §1.1, §6 | `calc/engine.py`, `models/calc_sanad.py` | `test_calc_reproducibility.py`, `test_calc_sanad.py` | PLANNED | 4 | Exit: Gate 2 (repro≥99.9%) |
 | **INV-08** | Request ID Propagation | API §4 | `middleware/request_id.py` | `test_api_openapi_validation.py` | DONE | 2.1 | |
 | **INV-09** | OpenAPI Validation | API §5 | `middleware/openapi_validate.py` | `test_api_openapi_validation.py` | DONE | 2.2 | |
 | **INV-10** | Idempotency-Key | API §4.3 | `middleware/idempotency.py`, `idempotency/store.py` | `test_api_idempotency_middleware.py` | DONE | 2.4-2.5 | Tenant+actor scoped |
 | **INV-11** | Fail-Closed (store.put) | API §4.3 | `middleware/idempotency.py` | `test_api_idempotency_middleware.py::TestStorePutFailure` | DONE | 2.5 | Returns 500 |
-| **INV-12** | Prompt Registry + Rollback | Prompt Registry §4 | — | — | PLANNED | 7 | |
-| **INV-13** | Evaluation Harness | Eval Harness §3-7 | — | — | PLANNED | 7 | GDBS benchmarks |
+| **INV-12** | Prompt Registry + Rollback | Prompt Registry §4 | `services/prompts/registry.py`, `services/prompts/versioning.py` | `test_prompt_registry.py`, `test_prompt_rollback.py` | PLANNED | 7 | Exit: Gate 4; audit events required |
+| **INV-13** | Evaluation Harness | Eval Harness §3-7 | `evaluation/harness.py`, `evaluation/benchmarks/` | `test_evaluation_harness.py`, `test_gdbs_runner.py` | PLANNED | 7 | Exit: Gate 4; GDBS-S/F/A |
 | **INV-14** | Frontend Evidence-First UI | Frontend §2-3 | — | — | PLANNED | 6 | Backend deps only |
-| **INV-15** | SLO/SLA Compliance | SLO/SLA §3 | — | — | PLANNED | 7 | Dashboards + alerts |
+| **INV-15** | SLO/SLA Compliance | SLO/SLA §3 | `monitoring/slo_dashboard.py`, `monitoring/alerts.py` | `test_slo_metrics.py`, `test_alert_rules.py` | PLANNED | 7 | Exit: Gate 4; SLO dashboards |
 
 ---
 
@@ -83,9 +83,10 @@ Ensures deterministic, phase-disciplined delivery aligned to v6.3 spec.
 
 | Aspect | Requirement | Implementation | Test |
 |--------|-------------|----------------|------|
-| Reproducibility | Same input → same hash | Planned (Phase 4) | Planned |
-| Formula hash | Tracked in Calc-Sanad | Schema defined | Planned |
-| Input tracing | Links to claim_ids | Schema defined | Planned |
+| Reproducibility | Same input → same hash | `calc/engine.py` | `test_calc_reproducibility.py` |
+| Formula hash | Tracked in Calc-Sanad | `models/calc_sanad.py` | `test_calc_sanad.py` |
+| Input tracing | Links to claim_ids | `models/calc_sanad.py` | `test_calc_sanad.py` |
+| **Exit Gate** | Gate 2: repro≥99.9% | Eval Harness integration | `test_evaluation_harness.py` |
 
 ---
 
@@ -139,3 +140,4 @@ Ensures deterministic, phase-disciplined delivery aligned to v6.3 spec.
 | Date | Version | Changes |
 |------|---------|---------|
 | 2026-01-07 | 1.0 | Initial creation |
+| 2026-01-07 | 1.1 | Added planned modules/tests for INV-07, INV-12, INV-13, INV-15; added gate references |

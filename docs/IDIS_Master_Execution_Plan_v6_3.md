@@ -21,12 +21,18 @@ Every material claim carries Sanad Grade (A/B/C/D) + defects.
 - **Validator:** `src/idis/validators/sanad_integrity.py`
 - **Test:** `tests/test_sanad_integrity.py`
 
-### 1.3 Muḥāsabah Gate
-**Source:** TDD §4.4
+### 1.3 Muḥāsabah Gate (HARD GATE, FAIL-CLOSED)
+**Source:** TDD §4.4; Evaluation Harness §2.1
 
 Agent outputs require valid MuḥāsabahRecord with claim/calc refs.
+- **Behavior:** FAIL-CLOSED — missing or invalid MuḥāsabahRecord = output REJECTED (not passed through)
+- **Reject Rules:**
+  - Missing MuḥāsabahRecord → REJECT
+  - Empty `supported_claim_ids` for factual output → REJECT
+  - Confidence > threshold without evidence → REJECT
 - **Validator:** `src/idis/validators/muhasabah.py`
 - **Test:** `tests/test_muhasabah_validator.py`
+- **Gate:** Gate 1 (≥98% pass rate required)
 
 ### 1.4 Deterministic Numerics
 **Source:** TDD §1.1
@@ -80,41 +86,81 @@ Zero cross-tenant leakage. Scoped caches/idempotency.
 ## 3) Phase Plan
 
 ### Phase 0 ✅ DONE
-Repo, CI/CD, pre-commit, FastAPI
+**Backlog:** M0 Foundations  
+**Deliverables:** Repo, CI/CD, pre-commit, FastAPI  
+**Exit Gate:** Gate 0 (schema, lint, type, unit tests)  
+**Acceptance:** CI passes, `/health` returns version
 
 ### Phase 1 — Ingestion (Weeks 2-4) ⏳
+**Backlog:** Epic 1 (Ingestion & Deal Object Store)  
+**Deliverables:**
 - **1.1** Storage primitives, Document/Span models
-- **1.2** PDF/XLSX parsers
-- **Exit:** 95% parse success, SHA256 tracking
+- **1.2** PDF/XLSX parsers  
+**Exit Gate:** Gate 0 + audit events for ingestion  
+**Acceptance:** 95% parse success, SHA256 tracking, `document.created` events emitted  
+**Go-Live Blocker:** Cannot proceed to Phase 3 without ingestion working
 
 ### Phase 2 — API Gate (Weeks 5-8) ✅ MOSTLY DONE
-- **2.1-2.5** ✅ Complete
+**Backlog:** M0 Foundations (auth, logging)  
+**Deliverables:**
+- **2.1-2.5** ✅ Complete (auth, OpenAPI, audit, idempotency)
 - **2.6** Error model standardization ⏳
 - **2.7** Rate limiting ⏳
-- **2.8** Webhooks ⏳
+- **2.8** Webhooks ⏳  
+**Exit Gate:** Gate 0 + Gate 1 (audit=100%)  
+**Acceptance:** All /v1 mutations audited, tenant isolation enforced  
+**Go-Live Blocker:** API infra required for all subsequent phases
 
 ### Phase 3 — Sanad Framework (Weeks 9-12) ⏳
+**Backlog:** Epic 3 (Sanad Trust Framework)  
+**Deliverables:**
 - **3.1** Sanad/Defect models
-- **3.2** Grader, independence checker
-- **Exit:** 100% claims have Sanad, grade algo tested
+- **3.2** Grader, independence checker  
+**Exit Gate:** Gate 2 (Sanad≥95%, defect recall≥90%)  
+**Acceptance:** 100% claims have Sanad, grade algo unit-tested with worked examples  
+**Go-Live Blocker:** No IC-ready outputs without Sanad coverage
 
 ### Phase 4 — Calc-Sanad (Weeks 13-16) ⏳
-- Calc engine, Calc-Sanad model
-- Extraction confidence gate
-- **Exit:** ≥99.9% reproducibility
+**Backlog:** Epic 5 (Deterministic Engines)  
+**Deliverables:**
+- Calc engine framework (`src/idis/calc/engine.py`)
+- Calc-Sanad model (`src/idis/models/calc_sanad.py`)
+- Extraction confidence gate  
+**Required Tests:**
+- `tests/test_calc_reproducibility.py` — same inputs → same hash
+- `tests/test_calc_sanad.py` — inputs traced to claim_ids  
+**Exit Gate:** Gate 2 (calc repro≥99.9%)  
+**Acceptance:** Calc outputs reproducible, no LLM arithmetic in deliverables  
+**Go-Live Blocker:** Numbers in IC outputs must have Calc-Sanad
 
 ### Phase 5 — Debate + Muḥāsabah (Weeks 17-22) ⏳
+**Backlog:** M3 (Multi-Agent Debate)  
+**Deliverables:**
 - LangGraph orchestration
 - Agent roles, stop conditions
-- Muḥāsabah integration
+- Muḥāsabah integration (fail-closed)  
+**Exit Gate:** Gate 3 (debate completion≥98%, Muḥāsabah≥98%)  
+**Acceptance:** Outputs blocked if Muḥāsabah missing or No-Free-Facts violated  
+**Go-Live Blocker:** Debate required for IC memo generation
 
 ### Phase 6 — Deliverables (Weeks 23-28) ⏳
+**Backlog:** M3 (Deliverables Generator)  
+**Deliverables:**
 - Screening Snapshot, IC Memo
-- Frontend Truth Dashboard
+- Frontend Truth Dashboard  
+**Exit Gate:** Gate 3 (GDBS-F pass≥95%)  
+**Acceptance:** Every fact in memo has claim_id/calc_id reference  
+**Go-Live Blocker:** Deliverables generator required for production
 
 ### Phase 7 — Enterprise Hardening (Weeks 29-40) ⏳
+**Backlog:** M4 (Integrations + Governance + Security)  
+**Deliverables:**
 - SSO, BYOK, data residency
 - SOC2 readiness
+- Prompt registry with audited promotion/rollback  
+**Exit Gate:** Gate 4 (human review 10-deal sample)  
+**Acceptance:** Security review passed, pilot fund onboarded  
+**Go-Live Blocker:** All Gate 0-4 passed
 
 ---
 
@@ -132,9 +178,14 @@ Repo, CI/CD, pre-commit, FastAPI
 - [ ] Incident playbooks published
 - [ ] On-call rotation established
 
-### 4.4 Prompt Registry
+### 4.4 Prompt Registry (Audited Promotion/Rollback)
 - [ ] Version pinning, rollback mechanism
-- [ ] CI gates by risk class
+- [ ] CI gates by risk class (A/B/C per Prompt Registry §4)
+- [ ] **Audit Events Required:**
+  - `prompt.version.promoted` — records version, risk_class, approver, gate_results
+  - `prompt.version.rolledback` — records version, reason, actor, rollback_target
+  - `prompt.version.retired` — records version, reason, actor
+- [ ] **Evidence Artifacts:** promotion gate results stored in object store with SHA256
 
 ### 4.5 Evaluation Harness
 - [ ] GDBS-S/F/A benchmarks
@@ -145,7 +196,24 @@ Repo, CI/CD, pre-commit, FastAPI
 
 ---
 
-## 5) Next Up (Immediate Queue)
+## 5) Backlog → Phase → Acceptance Mapping
+
+**Source:** `04_IDIS_Requirements_Backlog_v6_3.md`, `06_IDIS_Implementation_Plan_v6_3.md`
+
+| Backlog Epic/Milestone | Phase | Acceptance Criteria | Go-Live Blocker |
+|------------------------|-------|---------------------|----------------|
+| M0 Foundations | 0, 2 | CI passes, auth enforced, audit 100% | API infra required |
+| Epic 1: Ingestion | 1 | 95% parse, SHA256, audit events | Cannot claim without docs |
+| Epic 2: Claim Registry | 2-3 | Claims have claim_id + span refs | No facts without claims |
+| Epic 3: Sanad Framework | 3 | 100% Sanad coverage, grade algo tested | No IC outputs without Sanad |
+| Epic 4: Truth Dashboard | 3-4 | Verdicts linked to claim_id + evidence | Analyst review requires dashboard |
+| Epic 5: Calc Engines | 4 | ≥99.9% reproducibility, Calc-Sanad | Numbers require deterministic provenance |
+| M3: Debate + Deliverables | 5-6 | Debate completion ≥98%, Muḥāsabah ≥98% | IC memo requires debate |
+| M4: Hardening | 7 | Security review passed, Gate 4 passed | Production launch blocked |
+
+---
+
+## 6) Next Up (Immediate Queue)
 
 After Codex approval of this doc:
 
@@ -156,7 +224,7 @@ After Codex approval of this doc:
 
 ---
 
-## 6) Release Gates (Hard vs Soft)
+## 7) Release Gates (Hard vs Soft)
 
 | Gate | Type | Metrics |
 |------|------|---------|
@@ -168,8 +236,9 @@ After Codex approval of this doc:
 
 ---
 
-## 7) Revision History
+## 8) Revision History
 
 | Date | Version | Changes |
 |------|---------|---------|
 | 2026-01-07 | 1.0 | Initial creation |
+| 2026-01-07 | 1.1 | Added backlog mapping, per-phase exit gates, audited prompt registry, Muḥāsabah fail-closed, Calc-Sanad tests |

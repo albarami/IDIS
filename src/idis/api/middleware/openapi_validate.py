@@ -27,6 +27,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
 from idis.api.auth import authenticate_request
+from idis.api.error_model import make_error_response_no_request
 from idis.api.errors import IdisHttpError
 from idis.api.openapi_loader import load_openapi_spec
 
@@ -313,14 +314,14 @@ def _build_error_response(
     request_id: str | None,
     details: dict[str, Any] | None = None,
 ) -> JSONResponse:
-    """Build a structured error JSON response."""
-    body: dict[str, Any] = {"code": code, "message": message}
-    if details:
-        body["details"] = details
-    if request_id:
-        body["request_id"] = request_id
-
-    return JSONResponse(status_code=status_code, content=body)
+    """Build a structured error JSON response using shared error model."""
+    return make_error_response_no_request(
+        code=code,
+        message=message,
+        http_status=status_code,
+        request_id=request_id,
+        details=details,
+    )
 
 
 class OpenAPIValidationMiddleware(BaseHTTPMiddleware):

@@ -25,6 +25,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
+from idis.api.error_model import make_error_response_no_request
 from idis.audit.sink import AuditSink, AuditSinkError, JsonlFileAuditSink
 from idis.validators.audit_event_validator import validate_audit_event
 
@@ -54,11 +55,14 @@ def _build_error_response(
     message: str,
     request_id: str | None,
 ) -> JSONResponse:
-    """Build a 500 error JSON response for audit failures."""
-    body: dict[str, Any] = {"code": code, "message": message}
-    if request_id:
-        body["request_id"] = request_id
-    return JSONResponse(status_code=500, content=body)
+    """Build a 500 error JSON response for audit failures using shared error model."""
+    return make_error_response_no_request(
+        code=code,
+        message=message,
+        http_status=500,
+        request_id=request_id,
+        details=None,
+    )
 
 
 def _build_audit_event(

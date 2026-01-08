@@ -235,39 +235,32 @@ class TestRLSTenantIsolation:
     def test_rls_blocks_insert_without_tenant_context(
         self, app_engine: Engine, clean_tables: None
     ) -> None:
-        """Insert without SET LOCAL should fail or insert nothing visible."""
+        """Insert without SET LOCAL should be blocked by RLS WITH CHECK."""
         deal_id = str(uuid.uuid4())
         now = datetime.now(UTC)
 
-        with app_engine.begin() as conn:
-            try:
-                conn.execute(
-                    text(
-                        """
-                        INSERT INTO deals (deal_id, tenant_id, name, created_at)
-                        VALUES (:deal_id, :tenant_id, :name, :created_at)
-                        """
-                    ),
-                    {
-                        "deal_id": deal_id,
-                        "tenant_id": TENANT_A_ID,
-                        "name": "Should Fail",
-                        "created_at": now,
-                    },
-                )
-                insert_succeeded = True
-            except ProgrammingError:
-                insert_succeeded = False
+        with pytest.raises(DBAPIError) as exc_info, app_engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO deals (deal_id, tenant_id, name, created_at)
+                    VALUES (:deal_id, :tenant_id, :name, :created_at)
+                    """
+                ),
+                {
+                    "deal_id": deal_id,
+                    "tenant_id": TENANT_A_ID,
+                    "name": "Should Fail",
+                    "created_at": now,
+                },
+            )
 
-        if insert_succeeded:
-            with app_engine.begin() as conn:
-                conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
-                result = conn.execute(
-                    text("SELECT deal_id FROM deals WHERE deal_id = :deal_id"),
-                    {"deal_id": deal_id},
-                )
-                rows = result.fetchall()
-                assert len(rows) == 0, "Insert without tenant context should be blocked by RLS"
+        error_msg = str(exc_info.value).lower()
+        assert (
+            "row-level security" in error_msg
+            or "policy" in error_msg
+            or "permission denied" in error_msg
+        ), f"INSERT without tenant context should be blocked by RLS, got: {exc_info.value}"
 
     def test_rls_blocks_cross_tenant_insert_mismatch(
         self, app_engine: Engine, clean_tables: None

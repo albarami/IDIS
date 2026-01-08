@@ -43,19 +43,24 @@ jobs:
           --health-timeout 5s
           --health-retries 5
         ports:
-          - 5432:5432
-
-    env:
-      IDIS_REQUIRE_POSTGRES: "1"
-      IDIS_PG_APP_USER: idis_app
-      IDIS_PG_APP_PASSWORD: idis_app_pw
-      IDIS_PG_DB_NAME: idis_test
-      IDIS_DATABASE_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
-      IDIS_DATABASE_URL: postgresql://idis_app:idis_app_pw@127.0.0.1:5432/idis_test
+          - 5432/tcp
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Export Postgres connection env (no secrets in stdout)
+        run: |
+          PG_PORT="${{ job.services.postgres.ports['5432'] }}"
+          echo "IDIS_PG_HOST=127.0.0.1" >> $GITHUB_ENV
+          echo "IDIS_PG_PORT=${PG_PORT}" >> $GITHUB_ENV
+          echo "IDIS_REQUIRE_POSTGRES=1" >> $GITHUB_ENV
+          echo "IDIS_PG_APP_USER=idis_app" >> $GITHUB_ENV
+          echo "IDIS_PG_APP_PASSWORD=idis_app_pw" >> $GITHUB_ENV
+          echo "IDIS_PG_DB_NAME=idis_test" >> $GITHUB_ENV
+          echo "IDIS_DATABASE_ADMIN_URL=postgresql://postgres:postgres@127.0.0.1:${PG_PORT}/postgres" >> $GITHUB_ENV
+          echo "IDIS_DATABASE_URL=postgresql://idis_app:idis_app_pw@127.0.0.1:${PG_PORT}/idis_test" >> $GITHUB_ENV
+          echo "Postgres service available at 127.0.0.1:${PG_PORT}"
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -74,4 +79,22 @@ jobs:
         run: python scripts/pg_bootstrap_ci.py --verify-only
 
       - name: Run PostgreSQL integration tests
-        run: pytest tests/test_postgres_rls_and_audit_immutability.py -v
+        run: |
+          pytest tests/test_postgres_rls_and_audit_immutability.py -v 2>&1 | tee postgres_integration_pytest.log
+          exit ${PIPESTATUS[0]}
+
+      - name: Upload pytest log artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-integration-pytest-log
+          path: postgres_integration_pytest.log
+          retention-days: 7
+
+      - name: Write pytest summary to job summary
+        if: always()
+        run: |
+          echo "## PostgreSQL Integration Test Results" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          tail -50 postgres_integration_pytest.log >> $GITHUB_STEP_SUMMARY || echo "No log file found" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

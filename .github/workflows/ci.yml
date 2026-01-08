@@ -34,9 +34,9 @@ jobs:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_USER: idis_admin
-          POSTGRES_PASSWORD: idis_admin_password
-          POSTGRES_DB: idis_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -44,6 +44,14 @@ jobs:
           --health-retries 5
         ports:
           - 5432:5432
+
+    env:
+      IDIS_REQUIRE_POSTGRES: "1"
+      IDIS_PG_APP_USER: idis_app
+      IDIS_PG_APP_PASSWORD: idis_app_pw
+      IDIS_PG_DB_NAME: idis_test
+      IDIS_DATABASE_ADMIN_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/postgres
+      IDIS_DATABASE_URL: postgresql+psycopg2://idis_app:idis_app_pw@localhost:5432/idis_test
 
     steps:
       - name: Checkout code
@@ -59,18 +67,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: Create app role and grant permissions
-        env:
-          PGPASSWORD: idis_admin_password
-        run: |
-          psql -h localhost -U idis_admin -d idis_test -c "CREATE ROLE idis_app WITH LOGIN PASSWORD 'idis_app_password';"
-          psql -h localhost -U idis_admin -d idis_test -c "GRANT ALL PRIVILEGES ON DATABASE idis_test TO idis_app;"
-          psql -h localhost -U idis_admin -d idis_test -c "GRANT ALL PRIVILEGES ON SCHEMA public TO idis_app;"
-          psql -h localhost -U idis_admin -d idis_test -c "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON TABLES TO idis_app;"
+      - name: Bootstrap PostgreSQL (create app role and database)
+        run: python scripts/pg_bootstrap_ci.py
 
       - name: Run PostgreSQL integration tests
-        env:
-          IDIS_DATABASE_ADMIN_URL: postgresql://idis_admin:idis_admin_password@localhost:5432/idis_test
-          IDIS_DATABASE_URL: postgresql://idis_app:idis_app_password@localhost:5432/idis_test
-        run: |
-          pytest -q tests/test_postgres_rls_and_audit_immutability.py -v
+        run: pytest tests/test_postgres_rls_and_audit_immutability.py -v

@@ -30,23 +30,34 @@ if TYPE_CHECKING:
 
 ADMIN_URL_ENV = "IDIS_DATABASE_ADMIN_URL"
 APP_URL_ENV = "IDIS_DATABASE_URL"
+REQUIRE_POSTGRES_ENV = "IDIS_REQUIRE_POSTGRES"
 
 TENANT_A_ID = "11111111-1111-1111-1111-111111111111"
 TENANT_B_ID = "22222222-2222-2222-2222-222222222222"
 
 
-def _skip_if_no_postgres() -> None:
-    """Skip test if PostgreSQL is not configured."""
-    if not os.environ.get(ADMIN_URL_ENV) or not os.environ.get(APP_URL_ENV):
-        pytest.skip(
-            f"PostgreSQL integration tests require {ADMIN_URL_ENV} and {APP_URL_ENV} env vars"
-        )
+def _skip_or_fail_if_no_postgres() -> None:
+    """Skip or fail test if PostgreSQL is not configured.
+
+    If IDIS_REQUIRE_POSTGRES=1, fails the test (for CI).
+    Otherwise, skips the test (for local dev without Postgres).
+    """
+    admin_url = os.environ.get(ADMIN_URL_ENV)
+    app_url = os.environ.get(APP_URL_ENV)
+    require_postgres = os.environ.get(REQUIRE_POSTGRES_ENV, "0") == "1"
+
+    if not admin_url or not app_url:
+        msg = f"PostgreSQL integration tests require {ADMIN_URL_ENV} and {APP_URL_ENV} env vars"
+        if require_postgres:
+            pytest.fail(f"REQUIRED: {msg} (IDIS_REQUIRE_POSTGRES=1)")
+        else:
+            pytest.skip(msg)
 
 
 @pytest.fixture(scope="module")
 def admin_engine() -> Generator[Engine, None, None]:
     """Create admin engine for migrations and test setup."""
-    _skip_if_no_postgres()
+    _skip_or_fail_if_no_postgres()
 
     from idis.persistence.db import get_admin_engine, reset_engines
 
@@ -58,7 +69,7 @@ def admin_engine() -> Generator[Engine, None, None]:
 @pytest.fixture(scope="module")
 def app_engine() -> Generator[Engine, None, None]:
     """Create app engine for non-superuser operations."""
-    _skip_if_no_postgres()
+    _skip_or_fail_if_no_postgres()
 
     from idis.persistence.db import get_app_engine, reset_engines
 
@@ -116,7 +127,7 @@ class TestAppRoleSecurity:
         """Verify app role is NOT a superuser (required for RLS to be enforced)."""
         with app_engine.connect() as conn:
             result = conn.execute(
-                text("SELECT rolsuper FROM pg_roles WHERE rolname = current_user")
+                text("SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user")
             )
             row = result.fetchone()
 
@@ -124,6 +135,7 @@ class TestAppRoleSecurity:
         assert row.rolsuper is False, (
             "App role MUST NOT be superuser - RLS is bypassed for superusers"
         )
+        assert row.rolbypassrls is False, "App role MUST NOT have BYPASSRLS - RLS would be bypassed"
 
 
 class TestRLSTenantIsolation:

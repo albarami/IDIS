@@ -328,7 +328,7 @@ def verify_tables_exist(db_url: str) -> None:
     print("Verifying required tables exist...")
     url = _normalize_url_for_psycopg2(db_url)
 
-    required_tables = ["deals", "audit_events", "idempotency_records"]
+    required_tables = ["deals", "audit_events", "idempotency_records", "alembic_version"]
 
     conn = psycopg2.connect(url)
     cur = conn.cursor()
@@ -431,6 +431,16 @@ def main() -> None:
 
     # Build URL for idis_test database (admin credentials)
     db_admin_url = f"postgresql://{admin_user}:{admin_password}@{host}:{port}/{db_name}"
+    # Build app URL for idis_test database
+    db_app_url = f"postgresql://{app_user}:{app_password}@{host}:{port}/{db_name}"
+
+    # Set env vars IN-PROCESS before migrations (required by idis.persistence.db)
+    os.environ["IDIS_DATABASE_ADMIN_URL"] = db_admin_url
+    os.environ["IDIS_DATABASE_URL"] = db_app_url
+    os.environ["IDIS_REQUIRE_POSTGRES"] = "1"
+    print(f"Set in-process env: IDIS_DATABASE_ADMIN_URL -> {db_name} (admin)")
+    print(f"Set in-process env: IDIS_DATABASE_URL -> {db_name} (app)")
+    print("Set in-process env: IDIS_REQUIRE_POSTGRES=1")
 
     # Run migrations on idis_test
     run_migrations(db_admin_url)

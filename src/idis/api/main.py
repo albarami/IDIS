@@ -23,6 +23,7 @@ from idis.api.middleware.request_id import RequestIdMiddleware
 from idis.api.routes.deals import router as deals_router
 from idis.api.routes.health import router as health_router
 from idis.api.routes.tenancy import router as tenancy_router
+from idis.api.routes.webhooks import router as webhooks_router
 from idis.audit.sink import AuditSink
 from idis.idempotency.store import SqliteIdempotencyStore
 from idis.rate_limit.limiter import TenantRateLimiter
@@ -110,5 +111,6 @@ def create_app(
     app.include_router(health_router)
     app.include_router(tenancy_router)
     app.include_router(deals_router)
+    app.include_router(webhooks_router)
 
     return app

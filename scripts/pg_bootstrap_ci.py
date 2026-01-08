@@ -290,22 +290,31 @@ def verify_connectivity(admin_url: str, app_url: str) -> None:
 
 
 def run_migrations(db_url: str) -> None:
-    """Run Alembic migrations on the target database."""
+    """Run Alembic migrations on the target database using programmatic API."""
     print("Running database migrations...")
     url = _normalize_url_for_psycopg2(db_url)
 
     try:
-        from sqlalchemy import create_engine
+        import os
 
-        from idis.persistence.migrations.env import run_upgrade
+        from alembic import command
+        from alembic.config import Config
 
-        # Create engine for the target database
-        engine = create_engine(url)
-        run_upgrade(engine)
-        engine.dispose()
+        # Find migrations directory relative to idis package
+        import idis.persistence.migrations
+
+        migrations_dir = os.path.dirname(idis.persistence.migrations.__file__)
+
+        # Create Alembic config programmatically
+        config = Config()
+        config.set_main_option("script_location", migrations_dir)
+        config.set_main_option("sqlalchemy.url", url)
+
+        # Run upgrade to head
+        command.upgrade(config, "head")
         print("  Migrations completed successfully")
     except ImportError as e:
-        print(f"ERROR: Could not import migration module: {e}", file=sys.stderr)
+        print(f"ERROR: Could not import alembic: {e}", file=sys.stderr)
         sys.exit(1)
     except Exception as e:
         print(f"ERROR: Migration failed: {e}", file=sys.stderr)
@@ -344,17 +353,67 @@ def verify_tables_exist(db_url: str) -> None:
         conn.close()
 
 
+def export_github_env(
+    host: str,
+    port: str,
+    db_name: str,
+    admin_user: str,
+    admin_password: str,
+    app_user: str,
+    app_password: str,
+) -> None:
+    """Write environment variables to GITHUB_ENV file (no secrets in stdout)."""
+    github_env_path = os.environ.get("GITHUB_ENV")
+    if not github_env_path:
+        print("ERROR: GITHUB_ENV not set (not running in GitHub Actions?)", file=sys.stderr)
+        sys.exit(1)
+
+    # Build URLs pointing to idis_test (not postgres)
+    admin_url = f"postgresql://{admin_user}:{admin_password}@{host}:{port}/{db_name}"
+    app_url = f"postgresql://{app_user}:{app_password}@{host}:{port}/{db_name}"
+
+    with open(github_env_path, "a") as f:
+        f.write(f"IDIS_PG_HOST={host}\n")
+        f.write(f"IDIS_PG_PORT={port}\n")
+        f.write("IDIS_REQUIRE_POSTGRES=1\n")
+        f.write(f"IDIS_DATABASE_ADMIN_URL={admin_url}\n")
+        f.write(f"IDIS_DATABASE_URL={app_url}\n")
+
+    # Log only safe info (no passwords)
+    print("Exported to GITHUB_ENV:")
+    print(f"  IDIS_PG_HOST={host}")
+    print(f"  IDIS_PG_PORT={port}")
+    print("  IDIS_REQUIRE_POSTGRES=1")
+    print(f"  IDIS_DATABASE_ADMIN_URL=postgresql://{admin_user}:***@{host}:{port}/{db_name}")
+    print(f"  IDIS_DATABASE_URL=postgresql://{app_user}:***@{host}:{port}/{db_name}")
+
+
 def main() -> None:
     """Main bootstrap entry point."""
     verify_only = "--verify-only" in sys.argv
+    export_env = "--export-github-env" in sys.argv
 
-    admin_url = get_env_required("IDIS_DATABASE_ADMIN_URL")
-    app_url = os.environ.get("IDIS_DATABASE_URL", "")
+    # Get common config
+    host = get_env_optional("IDIS_PG_HOST", "127.0.0.1")
+    port = get_env_optional("IDIS_PG_PORT", "5432")
+    db_name = get_env_optional("IDIS_PG_DB_NAME", "idis_test")
+    admin_user = get_env_optional("PG_ADMIN_USER", "postgres")
+    admin_password = get_env_optional("PG_ADMIN_PASSWORD", "postgres")
+    app_user = get_env_optional("IDIS_PG_APP_USER", "idis_app")
+    app_password = get_env_optional("IDIS_PG_APP_PASSWORD", "idis_app_pw")
+
+    # Build cluster admin URL (points to /postgres for initial bootstrap)
+    cluster_admin_url = f"postgresql://{admin_user}:{admin_password}@{host}:{port}/postgres"
 
     if verify_only:
-        # Verification mode: just check connectivity and security
-        if not app_url:
-            print("ERROR: IDIS_DATABASE_URL required for --verify-only", file=sys.stderr)
+        # Verification mode: check connectivity using env vars
+        admin_url = os.environ.get("IDIS_DATABASE_ADMIN_URL", "")
+        app_url = os.environ.get("IDIS_DATABASE_URL", "")
+        if not admin_url or not app_url:
+            print(
+                "ERROR: IDIS_DATABASE_ADMIN_URL and IDIS_DATABASE_URL required for --verify-only",
+                file=sys.stderr,
+            )
             sys.exit(1)
         verify_connectivity(admin_url, app_url)
         return
@@ -364,18 +423,14 @@ def main() -> None:
     print("IDIS PostgreSQL CI Bootstrap")
     print("=" * 60)
 
-    app_user = get_env_optional("IDIS_PG_APP_USER", "idis_app")
-    app_password = get_env_optional("IDIS_PG_APP_PASSWORD", "idis_app_pw")
-    db_name = get_env_optional("IDIS_PG_DB_NAME", "idis_test")
+    wait_for_postgres(cluster_admin_url)
 
-    wait_for_postgres(admin_url)
+    create_app_role(cluster_admin_url, app_user, app_password)
 
-    create_app_role(admin_url, app_user, app_password)
-
-    create_database(admin_url, db_name, app_user)
+    create_database(cluster_admin_url, db_name, app_user)
 
     # Build URL for idis_test database (admin credentials)
-    db_admin_url = admin_url.rsplit("/", 1)[0] + f"/{db_name}"
+    db_admin_url = f"postgresql://{admin_user}:{admin_password}@{host}:{port}/{db_name}"
 
     # Run migrations on idis_test
     run_migrations(db_admin_url)
@@ -387,6 +442,19 @@ def main() -> None:
     verify_tables_exist(db_admin_url)
 
     verify_app_role_security(db_admin_url, app_user)
+
+    # Export env vars to GITHUB_ENV if requested
+    if export_env:
+        print("\n" + "-" * 60)
+        export_github_env(
+            host=host,
+            port=port,
+            db_name=db_name,
+            admin_user=admin_user,
+            admin_password=admin_password,
+            app_user=app_user,
+            app_password=app_password,
+        )
 
     print("=" * 60)
     print("Bootstrap complete")

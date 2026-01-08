@@ -56,25 +56,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Export Postgres connection env (secrets masked)
+      - name: Mask secrets
         run: |
-          # Mask secrets to prevent leakage in logs
           echo "::add-mask::${PG_ADMIN_PASSWORD}"
           echo "::add-mask::${IDIS_PG_APP_PASSWORD}"
 
-          PG_PORT="${{ job.services.postgres.ports['5432'] }}"
-          PG_HOST="127.0.0.1"
-
-          # Write to GITHUB_ENV without echoing secrets
-          {
-            echo "IDIS_PG_HOST=${PG_HOST}"
-            echo "IDIS_PG_PORT=${PG_PORT}"
-            echo "IDIS_REQUIRE_POSTGRES=1"
-            echo "IDIS_DATABASE_ADMIN_URL=postgresql://${PG_ADMIN_USER}:${PG_ADMIN_PASSWORD}@${PG_HOST}:${PG_PORT}/postgres"
-            echo "IDIS_DATABASE_URL=postgresql://${IDIS_PG_APP_USER}:${IDIS_PG_APP_PASSWORD}@${PG_HOST}:${PG_PORT}/${IDIS_PG_DB_NAME}"
-          } >> "$GITHUB_ENV"
-
-          echo "Postgres service available at ${PG_HOST}:${PG_PORT}"
+      - name: Set Postgres host and port
+        run: |
+          echo "IDIS_PG_HOST=127.0.0.1" >> "$GITHUB_ENV"
+          echo "IDIS_PG_PORT=${{ job.services.postgres.ports['5432'] }}" >> "$GITHUB_ENV"
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -86,8 +76,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: Bootstrap PostgreSQL (create app role and database)
-        run: python scripts/pg_bootstrap_ci.py
+      - name: Bootstrap PostgreSQL and export env
+        run: |
+          python scripts/pg_bootstrap_ci.py --export-github-env 2>&1 | tee postgres_bootstrap.log
+          exit ${PIPESTATUS[0]}
 
       - name: Verify app role connectivity and security
         run: python scripts/pg_bootstrap_ci.py --verify-only
@@ -97,6 +89,14 @@ jobs:
           pytest tests/test_postgres_rls_and_audit_immutability.py -v 2>&1 | tee postgres_integration_pytest.log
           exit ${PIPESTATUS[0]}
 
+      - name: Upload bootstrap log artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-bootstrap-log
+          path: postgres_bootstrap.log
+          retention-days: 7
+
       - name: Upload pytest log artifact
         if: always()
         uses: actions/upload-artifact@v4
@@ -105,10 +105,15 @@ jobs:
           path: postgres_integration_pytest.log
           retention-days: 7
 
-      - name: Write pytest summary to job summary
+      - name: Write logs summary to job summary
         if: always()
         run: |
-          echo "## PostgreSQL Integration Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "## PostgreSQL Bootstrap Log (last 30 lines)" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          tail -50 postgres_integration_pytest.log >> $GITHUB_STEP_SUMMARY || echo "No log file found" >> $GITHUB_STEP_SUMMARY
+          tail -30 postgres_bootstrap.log >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "No bootstrap log found" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## PostgreSQL Integration Test Results (last 50 lines)" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          tail -50 postgres_integration_pytest.log >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "No pytest log found" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY

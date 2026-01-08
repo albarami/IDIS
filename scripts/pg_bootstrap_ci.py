@@ -35,15 +35,28 @@ def get_env_optional(name: str, default: str) -> str:
     return os.environ.get(name, default)
 
 
+def _normalize_url_for_psycopg2(url: str) -> str:
+    """Convert SQLAlchemy URL to psycopg2-compatible URL.
+
+    SQLAlchemy uses postgresql+psycopg2:// but raw psycopg2 needs postgresql://.
+    """
+    if url.startswith("postgresql+psycopg2://"):
+        return url.replace("postgresql+psycopg2://", "postgresql://", 1)
+    if url.startswith("postgresql+psycopg://"):
+        return url.replace("postgresql+psycopg://", "postgresql://", 1)
+    return url
+
+
 def wait_for_postgres(admin_url: str, max_retries: int = 10, delay: float = 2.0) -> None:
     """Wait for PostgreSQL to be ready."""
     import psycopg2
 
     print("Waiting for PostgreSQL to be ready...")
+    url = _normalize_url_for_psycopg2(admin_url)
 
     for attempt in range(max_retries):
         try:
-            conn = psycopg2.connect(admin_url)
+            conn = psycopg2.connect(url)
             conn.close()
             print("PostgreSQL is ready")
             return
@@ -62,8 +75,9 @@ def create_app_role(admin_url: str, app_user: str, app_password: str) -> None:
     import psycopg2
 
     print(f"Creating app role '{app_user}' (if not exists)...")
+    url = _normalize_url_for_psycopg2(admin_url)
 
-    conn = psycopg2.connect(admin_url)
+    conn = psycopg2.connect(url)
     conn.autocommit = True
     cur = conn.cursor()
 
@@ -96,8 +110,9 @@ def create_database(admin_url: str, db_name: str, app_user: str) -> None:
     import psycopg2
 
     print(f"Creating database '{db_name}' (if not exists)...")
+    url = _normalize_url_for_psycopg2(admin_url)
 
-    conn = psycopg2.connect(admin_url)
+    conn = psycopg2.connect(url)
     conn.autocommit = True
     cur = conn.cursor()
 
@@ -121,8 +136,9 @@ def grant_schema_permissions(db_url: str, app_user: str) -> None:
     import psycopg2
 
     print(f"Granting schema permissions to '{app_user}'...")
+    url = _normalize_url_for_psycopg2(db_url)
 
-    conn = psycopg2.connect(db_url)
+    conn = psycopg2.connect(url)
     conn.autocommit = True
     cur = conn.cursor()
 
@@ -151,8 +167,9 @@ def verify_app_role_security(db_url: str, app_user: str) -> None:
     import psycopg2
 
     print(f"Verifying app role '{app_user}' security settings...")
+    url = _normalize_url_for_psycopg2(db_url)
 
-    conn = psycopg2.connect(db_url)
+    conn = psycopg2.connect(url)
     cur = conn.cursor()
 
     try:

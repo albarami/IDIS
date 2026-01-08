@@ -45,22 +45,36 @@ jobs:
         ports:
           - 5432/tcp
 
+    env:
+      PG_ADMIN_USER: postgres
+      PG_ADMIN_PASSWORD: postgres
+      IDIS_PG_APP_USER: idis_app
+      IDIS_PG_APP_PASSWORD: idis_app_pw
+      IDIS_PG_DB_NAME: idis_test
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Export Postgres connection env (no secrets in stdout)
+      - name: Export Postgres connection env (secrets masked)
         run: |
+          # Mask secrets to prevent leakage in logs
+          echo "::add-mask::${PG_ADMIN_PASSWORD}"
+          echo "::add-mask::${IDIS_PG_APP_PASSWORD}"
+
           PG_PORT="${{ job.services.postgres.ports['5432'] }}"
-          echo "IDIS_PG_HOST=127.0.0.1" >> $GITHUB_ENV
-          echo "IDIS_PG_PORT=${PG_PORT}" >> $GITHUB_ENV
-          echo "IDIS_REQUIRE_POSTGRES=1" >> $GITHUB_ENV
-          echo "IDIS_PG_APP_USER=idis_app" >> $GITHUB_ENV
-          echo "IDIS_PG_APP_PASSWORD=idis_app_pw" >> $GITHUB_ENV
-          echo "IDIS_PG_DB_NAME=idis_test" >> $GITHUB_ENV
-          echo "IDIS_DATABASE_ADMIN_URL=postgresql://postgres:postgres@127.0.0.1:${PG_PORT}/postgres" >> $GITHUB_ENV
-          echo "IDIS_DATABASE_URL=postgresql://idis_app:idis_app_pw@127.0.0.1:${PG_PORT}/idis_test" >> $GITHUB_ENV
-          echo "Postgres service available at 127.0.0.1:${PG_PORT}"
+          PG_HOST="127.0.0.1"
+
+          # Write to GITHUB_ENV without echoing secrets
+          {
+            echo "IDIS_PG_HOST=${PG_HOST}"
+            echo "IDIS_PG_PORT=${PG_PORT}"
+            echo "IDIS_REQUIRE_POSTGRES=1"
+            echo "IDIS_DATABASE_ADMIN_URL=postgresql://${PG_ADMIN_USER}:${PG_ADMIN_PASSWORD}@${PG_HOST}:${PG_PORT}/postgres"
+            echo "IDIS_DATABASE_URL=postgresql://${IDIS_PG_APP_USER}:${IDIS_PG_APP_PASSWORD}@${PG_HOST}:${PG_PORT}/${IDIS_PG_DB_NAME}"
+          } >> "$GITHUB_ENV"
+
+          echo "Postgres service available at ${PG_HOST}:${PG_PORT}"
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5

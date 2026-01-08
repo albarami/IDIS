@@ -289,6 +289,61 @@ def verify_connectivity(admin_url: str, app_url: str) -> None:
     print("=" * 60)
 
 
+def run_migrations(db_url: str) -> None:
+    """Run Alembic migrations on the target database."""
+    print("Running database migrations...")
+    url = _normalize_url_for_psycopg2(db_url)
+
+    try:
+        from sqlalchemy import create_engine
+
+        from idis.persistence.migrations.env import run_upgrade
+
+        # Create engine for the target database
+        engine = create_engine(url)
+        run_upgrade(engine)
+        engine.dispose()
+        print("  Migrations completed successfully")
+    except ImportError as e:
+        print(f"ERROR: Could not import migration module: {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"ERROR: Migration failed: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def verify_tables_exist(db_url: str) -> None:
+    """Verify that required tables exist in the database."""
+    import psycopg2
+
+    print("Verifying required tables exist...")
+    url = _normalize_url_for_psycopg2(db_url)
+
+    required_tables = ["deals", "audit_events", "idempotency_records"]
+
+    conn = psycopg2.connect(url)
+    cur = conn.cursor()
+
+    try:
+        cur.execute(
+            """
+            SELECT table_name FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+            """
+        )
+        existing_tables = {row[0] for row in cur.fetchall()}
+
+        missing = [t for t in required_tables if t not in existing_tables]
+        if missing:
+            print(f"ERROR: Missing tables: {missing}", file=sys.stderr)
+            sys.exit(1)
+
+        print(f"  Found tables: {sorted(existing_tables & set(required_tables))}")
+    finally:
+        cur.close()
+        conn.close()
+
+
 def main() -> None:
     """Main bootstrap entry point."""
     verify_only = "--verify-only" in sys.argv
@@ -319,10 +374,19 @@ def main() -> None:
 
     create_database(admin_url, db_name, app_user)
 
-    db_url = admin_url.rsplit("/", 1)[0] + f"/{db_name}"
-    grant_schema_permissions(db_url, app_user)
+    # Build URL for idis_test database (admin credentials)
+    db_admin_url = admin_url.rsplit("/", 1)[0] + f"/{db_name}"
 
-    verify_app_role_security(db_url, app_user)
+    # Run migrations on idis_test
+    run_migrations(db_admin_url)
+
+    # Grant permissions after tables exist
+    grant_schema_permissions(db_admin_url, app_user)
+
+    # Verify tables exist
+    verify_tables_exist(db_admin_url)
+
+    verify_app_role_security(db_admin_url, app_user)
 
     print("=" * 60)
     print("Bootstrap complete")

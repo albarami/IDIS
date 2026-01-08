@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import DBAPIError, ProgrammingError
 
 if TYPE_CHECKING:
     from sqlalchemy import Engine
@@ -106,18 +106,14 @@ def migrated_db(admin_engine: Engine) -> Generator[None, None, None]:
 
 @pytest.fixture
 def clean_tables(admin_engine: Engine, migrated_db: None) -> Generator[None, None, None]:
-    """Clean tables before each test."""
+    """Clean tables before each test using TRUNCATE (bypasses immutability trigger)."""
     with admin_engine.begin() as conn:
-        conn.execute(text("DELETE FROM deals"))
-        conn.execute(text("DELETE FROM idempotency_records"))
-        conn.execute(text("DELETE FROM audit_events"))
+        conn.execute(text("TRUNCATE deals, idempotency_records, audit_events"))
 
     yield
 
     with admin_engine.begin() as conn:
-        conn.execute(text("DELETE FROM deals"))
-        conn.execute(text("DELETE FROM idempotency_records"))
-        conn.execute(text("DELETE FROM audit_events"))
+        conn.execute(text("TRUNCATE deals, idempotency_records, audit_events"))
 
 
 class TestAppRoleSecurity:
@@ -331,23 +327,22 @@ class TestAuditImmutability:
                 },
             )
 
-        with pytest.raises(ProgrammingError) as exc_info, app_engine.begin() as conn:
+        with pytest.raises(DBAPIError) as exc_info, app_engine.begin() as conn:
             conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
             conn.execute(
                 text(
                     """
-                        UPDATE audit_events
-                        SET event_type = 'modified.event'
-                        WHERE event_id = :event_id
-                        """
+                    UPDATE audit_events
+                    SET event_type = 'modified.event'
+                    WHERE event_id = :event_id
+                    """
                 ),
                 {"event_id": event_id},
             )
 
-        assert (
-            "immutable" in str(exc_info.value).lower()
-            or "not allowed" in str(exc_info.value).lower()
-        ), "UPDATE should be blocked by immutability trigger"
+        assert "Audit events are immutable" in str(exc_info.value), (
+            f"UPDATE should be blocked by immutability trigger, got: {exc_info.value}"
+        )
 
     def test_audit_delete_blocked_by_trigger(self, app_engine: Engine, clean_tables: None) -> None:
         """DELETE on audit_events should be blocked by trigger."""
@@ -379,17 +374,16 @@ class TestAuditImmutability:
                 },
             )
 
-        with pytest.raises(ProgrammingError) as exc_info, app_engine.begin() as conn:
+        with pytest.raises(DBAPIError) as exc_info, app_engine.begin() as conn:
             conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
             conn.execute(
                 text("DELETE FROM audit_events WHERE event_id = :event_id"),
                 {"event_id": event_id},
             )
 
-        assert (
-            "immutable" in str(exc_info.value).lower()
-            or "not allowed" in str(exc_info.value).lower()
-        ), "DELETE should be blocked by immutability trigger"
+        assert "Audit events are immutable" in str(exc_info.value), (
+            f"DELETE should be blocked by immutability trigger, got: {exc_info.value}"
+        )
 
     def test_audit_insert_allowed(self, app_engine: Engine, clean_tables: None) -> None:
         """INSERT on audit_events should be allowed (append-only)."""

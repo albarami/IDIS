@@ -761,9 +761,7 @@ class TestWebhooksRLS:
 class TestWebhookDeliveryAttemptsRLS:
     """Tests for webhook_delivery_attempts table RLS tenant isolation."""
 
-    def _create_webhook(
-        self, conn: object, tenant_id: str, webhook_id: str
-    ) -> None:
+    def _create_webhook(self, conn: object, tenant_id: str, webhook_id: str) -> None:
         """Helper to create a webhook for FK constraint."""
 
         now = datetime.now(UTC)
@@ -989,3 +987,74 @@ class TestWebhookDeliveryAttemptsRLS:
             or "policy" in error_msg
             or "permission denied" in error_msg
         ), f"INSERT without tenant context should be blocked by RLS, got: {exc_info.value}"
+
+    def test_delivery_attempts_rls_blocks_mismatched_tenant_insert(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        """INSERT with tenant context A but tenant_id=B must be blocked by WITH CHECK."""
+        webhook_id = str(uuid.uuid4())
+        attempt_id = str(uuid.uuid4())
+        event_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        # Create webhook under Tenant A context
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO webhooks
+                    (webhook_id, tenant_id, url, events, active, created_at, updated_at)
+                    VALUES (:webhook_id, :tenant_id, :url, :events,
+                            :active, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "webhook_id": webhook_id,
+                    "tenant_id": TENANT_A_ID,
+                    "url": "https://example.com/webhook",
+                    "events": ["deal.created"],
+                    "active": True,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        # Attempt to insert delivery_attempt with tenant context A but tenant_id = B
+        # This must be blocked by RLS WITH CHECK
+        with pytest.raises(DBAPIError) as exc_info, app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO webhook_delivery_attempts
+                    (attempt_id, webhook_id, tenant_id, event_id, event_type, payload,
+                     attempt_count, status, created_at, updated_at)
+                    VALUES (:attempt_id, :webhook_id, :tenant_id, :event_id, :event_type,
+                            :payload, :attempt_count, :status, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "attempt_id": attempt_id,
+                    "webhook_id": webhook_id,
+                    "tenant_id": TENANT_B_ID,  # Mismatched: context=A, value=B
+                    "event_id": event_id,
+                    "event_type": "deal.created",
+                    "payload": json.dumps({"deal_id": "test"}),
+                    "attempt_count": 1,
+                    "status": "pending",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        error_msg = str(exc_info.value).lower()
+        # Must be RLS violation, not a UUID cast error
+        assert "uuid" not in error_msg or "row-level" in error_msg, (
+            f"Error should be RLS violation, not UUID cast error: {exc_info.value}"
+        )
+        assert (
+            "row-level security" in error_msg
+            or "policy" in error_msg
+            or "permission denied" in error_msg
+        ), f"Mismatched tenant INSERT should be blocked by RLS WITH CHECK: {exc_info.value}"

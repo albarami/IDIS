@@ -86,7 +86,7 @@ jobs:
 
       - name: Run PostgreSQL integration tests
         run: |
-          pytest tests/test_postgres_rls_and_audit_immutability.py -v 2>&1 | tee postgres_integration_pytest.log
+          pytest tests/test_postgres_rls_and_audit_immutability.py -v --junitxml=postgres_integration_pytest.xml 2>&1 | tee postgres_integration_pytest.log
           exit ${PIPESTATUS[0]}
 
       - name: Upload bootstrap log artifact
@@ -104,6 +104,47 @@ jobs:
           name: postgres-integration-pytest-log
           path: postgres_integration_pytest.log
           retention-days: 7
+
+      - name: Upload pytest JUnit XML artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-integration-pytest-xml
+          path: postgres_integration_pytest.xml
+          retention-days: 7
+
+      - name: Write explicit pytest summary to job summary
+        if: always()
+        run: |
+          python3 << 'EOF'
+          import xml.etree.ElementTree as ET
+          import os
+
+          summary_file = os.environ.get("GITHUB_STEP_SUMMARY", "/dev/stdout")
+
+          try:
+              tree = ET.parse("postgres_integration_pytest.xml")
+              root = tree.getroot()
+              testsuite = root.find("testsuite") if root.tag != "testsuite" else root
+              if testsuite is None:
+                  testsuite = root
+
+              tests = int(testsuite.get("tests", 0))
+              failures = int(testsuite.get("failures", 0))
+              errors = int(testsuite.get("errors", 0))
+              skipped = int(testsuite.get("skipped", 0))
+              passed = tests - failures - errors - skipped
+
+              with open(summary_file, "a") as f:
+                  f.write("## Postgres Integration Pytest Results\n\n")
+                  f.write(f"**Postgres integration pytest: {passed} passed, {skipped} skipped**\n\n")
+                  if failures > 0 or errors > 0:
+                      f.write(f"⚠️ Failures: {failures}, Errors: {errors}\n\n")
+          except Exception as e:
+              with open(summary_file, "a") as f:
+                  f.write(f"## Postgres Integration Pytest Results\n\n")
+                  f.write(f"⚠️ Could not parse JUnit XML: {e}\n\n")
+          EOF
 
       - name: Write logs summary to job summary
         if: always()

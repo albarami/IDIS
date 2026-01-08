@@ -1,0 +1,579 @@
+"""PostgreSQL RLS and Audit Immutability Integration Tests.
+
+Tests for:
+- Row-Level Security (RLS) tenant isolation
+- Audit table immutability (UPDATE/DELETE blocked by trigger)
+- Cross-tenant read/write blocking
+
+These tests require a real PostgreSQL instance and use:
+- IDIS_DATABASE_ADMIN_URL for migrations and admin operations
+- IDIS_DATABASE_URL for app-role operations
+
+Run with: pytest -q tests/test_postgres_rls_and_audit_immutability.py
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import uuid
+from collections.abc import Generator
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
+
+import pytest
+from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
+
+if TYPE_CHECKING:
+    from sqlalchemy import Engine
+
+ADMIN_URL_ENV = "IDIS_DATABASE_ADMIN_URL"
+APP_URL_ENV = "IDIS_DATABASE_URL"
+
+TENANT_A_ID = "11111111-1111-1111-1111-111111111111"
+TENANT_B_ID = "22222222-2222-2222-2222-222222222222"
+
+
+def _skip_if_no_postgres() -> None:
+    """Skip test if PostgreSQL is not configured."""
+    if not os.environ.get(ADMIN_URL_ENV) or not os.environ.get(APP_URL_ENV):
+        pytest.skip(
+            f"PostgreSQL integration tests require {ADMIN_URL_ENV} and {APP_URL_ENV} env vars"
+        )
+
+
+@pytest.fixture(scope="module")
+def admin_engine() -> Generator[Engine, None, None]:
+    """Create admin engine for migrations and test setup."""
+    _skip_if_no_postgres()
+
+    from idis.persistence.db import get_admin_engine, reset_engines
+
+    engine = get_admin_engine()
+    yield engine
+    reset_engines()
+
+
+@pytest.fixture(scope="module")
+def app_engine() -> Generator[Engine, None, None]:
+    """Create app engine for non-superuser operations."""
+    _skip_if_no_postgres()
+
+    from idis.persistence.db import get_app_engine, reset_engines
+
+    engine = get_app_engine()
+    yield engine
+    reset_engines()
+
+
+@pytest.fixture(scope="module")
+def migrated_db(admin_engine: Engine) -> Generator[None, None, None]:
+    """Run migrations to set up schema before tests."""
+    import os
+
+    from alembic import command
+    from alembic.config import Config
+
+    import idis.persistence.migrations as migrations_pkg
+
+    migrations_dir = os.path.dirname(migrations_pkg.__file__)
+
+    config = Config()
+    config.set_main_option("script_location", migrations_dir)
+
+    with admin_engine.begin() as conn:
+        config.attributes["connection"] = conn
+        command.upgrade(config, "head")
+
+    yield
+
+    with admin_engine.begin() as conn:
+        config.attributes["connection"] = conn
+        command.downgrade(config, "base")
+
+
+@pytest.fixture
+def clean_tables(admin_engine: Engine, migrated_db: None) -> Generator[None, None, None]:
+    """Clean tables before each test."""
+    with admin_engine.begin() as conn:
+        conn.execute(text("DELETE FROM deals"))
+        conn.execute(text("DELETE FROM idempotency_records"))
+        conn.execute(text("DELETE FROM audit_events"))
+
+    yield
+
+    with admin_engine.begin() as conn:
+        conn.execute(text("DELETE FROM deals"))
+        conn.execute(text("DELETE FROM idempotency_records"))
+        conn.execute(text("DELETE FROM audit_events"))
+
+
+class TestRLSTenantIsolation:
+    """Tests for Row-Level Security tenant isolation."""
+
+    def test_rls_blocks_cross_tenant_reads(self, app_engine: Engine, clean_tables: None) -> None:
+        """Insert under tenant A, read under tenant B => 0 rows."""
+        deal_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO deals (deal_id, tenant_id, name, created_at)
+                    VALUES (:deal_id, :tenant_id, :name, :created_at)
+                    """
+                ),
+                {
+                    "deal_id": deal_id,
+                    "tenant_id": TENANT_A_ID,
+                    "name": "Tenant A Deal",
+                    "created_at": now,
+                },
+            )
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_B_ID}'"))
+            result = conn.execute(
+                text("SELECT deal_id, name FROM deals WHERE deal_id = :deal_id"),
+                {"deal_id": deal_id},
+            )
+            rows = result.fetchall()
+
+        assert len(rows) == 0, "RLS should block cross-tenant reads"
+
+    def test_rls_allows_same_tenant_reads(self, app_engine: Engine, clean_tables: None) -> None:
+        """Insert under tenant A, read under tenant A => 1 row."""
+        deal_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO deals (deal_id, tenant_id, name, created_at)
+                    VALUES (:deal_id, :tenant_id, :name, :created_at)
+                    """
+                ),
+                {
+                    "deal_id": deal_id,
+                    "tenant_id": TENANT_A_ID,
+                    "name": "Tenant A Deal",
+                    "created_at": now,
+                },
+            )
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            result = conn.execute(
+                text("SELECT deal_id, name FROM deals WHERE deal_id = :deal_id"),
+                {"deal_id": deal_id},
+            )
+            rows = result.fetchall()
+
+        assert len(rows) == 1, "RLS should allow same-tenant reads"
+        assert rows[0].name == "Tenant A Deal"
+
+    def test_rls_fails_closed_without_tenant_context(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        """No SET LOCAL => select returns 0 rows (fail closed)."""
+        deal_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO deals (deal_id, tenant_id, name, created_at)
+                    VALUES (:deal_id, :tenant_id, :name, :created_at)
+                    """
+                ),
+                {
+                    "deal_id": deal_id,
+                    "tenant_id": TENANT_A_ID,
+                    "name": "Tenant A Deal",
+                    "created_at": now,
+                },
+            )
+
+        with app_engine.begin() as conn:
+            result = conn.execute(text("SELECT deal_id, name FROM deals"))
+            rows = result.fetchall()
+
+        assert len(rows) == 0, "RLS should return 0 rows without tenant context"
+
+    def test_rls_blocks_insert_without_tenant_context(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        """Insert without SET LOCAL should fail or insert nothing visible."""
+        deal_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        with app_engine.begin() as conn:
+            try:
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO deals (deal_id, tenant_id, name, created_at)
+                        VALUES (:deal_id, :tenant_id, :name, :created_at)
+                        """
+                    ),
+                    {
+                        "deal_id": deal_id,
+                        "tenant_id": TENANT_A_ID,
+                        "name": "Should Fail",
+                        "created_at": now,
+                    },
+                )
+                insert_succeeded = True
+            except ProgrammingError:
+                insert_succeeded = False
+
+        if insert_succeeded:
+            with app_engine.begin() as conn:
+                conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+                result = conn.execute(
+                    text("SELECT deal_id FROM deals WHERE deal_id = :deal_id"),
+                    {"deal_id": deal_id},
+                )
+                rows = result.fetchall()
+                assert len(rows) == 0, "Insert without tenant context should be blocked by RLS"
+
+    def test_rls_blocks_cross_tenant_insert_mismatch(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        """Setting tenant A but inserting tenant B data should fail."""
+        deal_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        with pytest.raises(ProgrammingError), app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            conn.execute(
+                text(
+                    """
+                        INSERT INTO deals (deal_id, tenant_id, name, created_at)
+                        VALUES (:deal_id, :tenant_id, :name, :created_at)
+                        """
+                ),
+                {
+                    "deal_id": deal_id,
+                    "tenant_id": TENANT_B_ID,
+                    "name": "Mismatched Tenant",
+                    "created_at": now,
+                },
+            )
+
+
+class TestAuditImmutability:
+    """Tests for audit table immutability (UPDATE/DELETE blocked)."""
+
+    def test_audit_update_blocked_by_trigger(self, app_engine: Engine, clean_tables: None) -> None:
+        """UPDATE on audit_events should be blocked by trigger."""
+        event_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+        event_data = {
+            "event_id": event_id,
+            "tenant_id": TENANT_A_ID,
+            "event_type": "test.event",
+            "occurred_at": now.isoformat(),
+        }
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO audit_events
+                    (event_id, tenant_id, occurred_at, event_type, event)
+                    VALUES (:event_id, :tenant_id, :occurred_at, :event_type, :event)
+                    """
+                ),
+                {
+                    "event_id": event_id,
+                    "tenant_id": TENANT_A_ID,
+                    "occurred_at": now,
+                    "event_type": "test.event",
+                    "event": json.dumps(event_data),
+                },
+            )
+
+        with pytest.raises(ProgrammingError) as exc_info, app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            conn.execute(
+                text(
+                    """
+                        UPDATE audit_events
+                        SET event_type = 'modified.event'
+                        WHERE event_id = :event_id
+                        """
+                ),
+                {"event_id": event_id},
+            )
+
+        assert (
+            "immutable" in str(exc_info.value).lower()
+            or "not allowed" in str(exc_info.value).lower()
+        ), "UPDATE should be blocked by immutability trigger"
+
+    def test_audit_delete_blocked_by_trigger(self, app_engine: Engine, clean_tables: None) -> None:
+        """DELETE on audit_events should be blocked by trigger."""
+        event_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+        event_data = {
+            "event_id": event_id,
+            "tenant_id": TENANT_A_ID,
+            "event_type": "test.event",
+            "occurred_at": now.isoformat(),
+        }
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO audit_events
+                    (event_id, tenant_id, occurred_at, event_type, event)
+                    VALUES (:event_id, :tenant_id, :occurred_at, :event_type, :event)
+                    """
+                ),
+                {
+                    "event_id": event_id,
+                    "tenant_id": TENANT_A_ID,
+                    "occurred_at": now,
+                    "event_type": "test.event",
+                    "event": json.dumps(event_data),
+                },
+            )
+
+        with pytest.raises(ProgrammingError) as exc_info, app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            conn.execute(
+                text("DELETE FROM audit_events WHERE event_id = :event_id"),
+                {"event_id": event_id},
+            )
+
+        assert (
+            "immutable" in str(exc_info.value).lower()
+            or "not allowed" in str(exc_info.value).lower()
+        ), "DELETE should be blocked by immutability trigger"
+
+    def test_audit_insert_allowed(self, app_engine: Engine, clean_tables: None) -> None:
+        """INSERT on audit_events should be allowed (append-only)."""
+        event_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+        event_data = {
+            "event_id": event_id,
+            "tenant_id": TENANT_A_ID,
+            "event_type": "test.event",
+            "occurred_at": now.isoformat(),
+        }
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO audit_events
+                    (event_id, tenant_id, occurred_at, event_type, event)
+                    VALUES (:event_id, :tenant_id, :occurred_at, :event_type, :event)
+                    """
+                ),
+                {
+                    "event_id": event_id,
+                    "tenant_id": TENANT_A_ID,
+                    "occurred_at": now,
+                    "event_type": "test.event",
+                    "event": json.dumps(event_data),
+                },
+            )
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            result = conn.execute(
+                text("SELECT event_id, event_type FROM audit_events WHERE event_id = :event_id"),
+                {"event_id": event_id},
+            )
+            rows = result.fetchall()
+
+        assert len(rows) == 1, "INSERT should be allowed"
+        assert rows[0].event_type == "test.event"
+
+
+class TestIdempotencyRecordsRLS:
+    """Tests for idempotency_records table RLS."""
+
+    def test_idempotency_rls_blocks_cross_tenant(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        """Insert idempotency record under tenant A, read under tenant B => 0 rows."""
+        now = datetime.now(UTC)
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO idempotency_records
+                    (tenant_id, actor_id, method, operation_id, idempotency_key,
+                     payload_sha256, status_code, media_type, body_bytes, created_at)
+                    VALUES
+                    (:tenant_id, :actor_id, :method, :operation_id, :idempotency_key,
+                     :payload_sha256, :status_code, :media_type, :body_bytes, :created_at)
+                    """
+                ),
+                {
+                    "tenant_id": TENANT_A_ID,
+                    "actor_id": "test-actor",
+                    "method": "POST",
+                    "operation_id": "createDeal",
+                    "idempotency_key": "test-key-123",
+                    "payload_sha256": "sha256:abc123",
+                    "status_code": 201,
+                    "media_type": "application/json",
+                    "body_bytes": b'{"id": "test"}',
+                    "created_at": now,
+                },
+            )
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_B_ID}'"))
+            result = conn.execute(
+                text(
+                    """
+                    SELECT idempotency_key FROM idempotency_records
+                    WHERE idempotency_key = 'test-key-123'
+                    """
+                )
+            )
+            rows = result.fetchall()
+
+        assert len(rows) == 0, "RLS should block cross-tenant idempotency reads"
+
+
+class TestPostgresAuditSink:
+    """Tests for PostgresAuditSink functionality."""
+
+    def test_postgres_audit_sink_emit_in_tx(self, app_engine: Engine, clean_tables: None) -> None:
+        """Test PostgresAuditSink.emit_in_tx stores event correctly."""
+        from idis.audit.postgres_sink import PostgresAuditSink
+        from idis.persistence.db import set_tenant_local
+
+        sink = PostgresAuditSink()
+        event_id = str(uuid.uuid4())
+        now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+        event = {
+            "event_id": event_id,
+            "tenant_id": TENANT_A_ID,
+            "occurred_at": now,
+            "event_type": "test.sink.event",
+            "actor": {"actor_type": "SERVICE", "actor_id": "test"},
+            "request": {"request_id": "req-123", "method": "POST", "path": "/test"},
+            "resource": {"resource_type": "test", "resource_id": str(uuid.uuid4())},
+            "severity": "LOW",
+            "summary": "Test event",
+            "payload": {"refs": []},
+        }
+
+        with app_engine.begin() as conn:
+            set_tenant_local(conn, TENANT_A_ID)
+            sink.emit_in_tx(conn, event)
+
+        with app_engine.begin() as conn:
+            set_tenant_local(conn, TENANT_A_ID)
+            result = conn.execute(
+                text("SELECT event_id, event_type FROM audit_events WHERE event_id = :event_id"),
+                {"event_id": event_id},
+            )
+            rows = result.fetchall()
+
+        assert len(rows) == 1
+        assert rows[0].event_type == "test.sink.event"
+
+
+class TestPostgresIdempotencyStore:
+    """Tests for PostgresIdempotencyStore functionality."""
+
+    def test_postgres_idempotency_store_get_put(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        """Test PostgresIdempotencyStore get/put operations."""
+        from idis.idempotency.postgres_store import PostgresIdempotencyStore
+        from idis.idempotency.store import IdempotencyRecord, ScopeKey
+        from idis.persistence.db import set_tenant_local
+
+        store = PostgresIdempotencyStore()
+        scope_key = ScopeKey(
+            tenant_id=TENANT_A_ID,
+            actor_id="test-actor",
+            method="POST",
+            operation_id="createDeal",
+            idempotency_key="unique-key-456",
+        )
+        record = IdempotencyRecord(
+            payload_sha256="sha256:def456",
+            status_code=201,
+            media_type="application/json",
+            body_bytes=b'{"result": "success"}',
+            created_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        )
+
+        with app_engine.begin() as conn:
+            set_tenant_local(conn, TENANT_A_ID)
+            store.put(scope_key, record, conn=conn)
+
+        with app_engine.begin() as conn:
+            set_tenant_local(conn, TENANT_A_ID)
+            retrieved = store.get(scope_key, conn=conn)
+
+        assert retrieved is not None
+        assert retrieved.payload_sha256 == "sha256:def456"
+        assert retrieved.status_code == 201
+        assert retrieved.body_bytes == b'{"result": "success"}'
+
+    def test_postgres_idempotency_store_cross_tenant_blocked(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        """Test that cross-tenant idempotency lookups return None."""
+        from idis.idempotency.postgres_store import PostgresIdempotencyStore
+        from idis.idempotency.store import IdempotencyRecord, ScopeKey
+        from idis.persistence.db import set_tenant_local
+
+        store = PostgresIdempotencyStore()
+        scope_key_a = ScopeKey(
+            tenant_id=TENANT_A_ID,
+            actor_id="test-actor",
+            method="POST",
+            operation_id="createDeal",
+            idempotency_key="cross-tenant-key",
+        )
+        record = IdempotencyRecord(
+            payload_sha256="sha256:cross123",
+            status_code=201,
+            media_type="application/json",
+            body_bytes=b'{"tenant": "A"}',
+            created_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        )
+
+        with app_engine.begin() as conn:
+            set_tenant_local(conn, TENANT_A_ID)
+            store.put(scope_key_a, record, conn=conn)
+
+        scope_key_b = ScopeKey(
+            tenant_id=TENANT_B_ID,
+            actor_id="test-actor",
+            method="POST",
+            operation_id="createDeal",
+            idempotency_key="cross-tenant-key",
+        )
+
+        with app_engine.begin() as conn:
+            set_tenant_local(conn, TENANT_B_ID)
+            retrieved = store.get(scope_key_b, conn=conn)
+
+        assert retrieved is None, "Cross-tenant lookup should return None due to RLS"

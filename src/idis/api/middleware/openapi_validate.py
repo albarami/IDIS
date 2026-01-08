@@ -371,6 +371,25 @@ class OpenAPIValidationMiddleware(BaseHTTPMiddleware):
                 auth_err.status_code, auth_err.code, auth_err.message, request_id
             )
 
+        db_conn = getattr(request.state, "db_conn", None)
+        if db_conn is not None:
+            try:
+                from idis.persistence.db import set_tenant_local
+
+                set_tenant_local(db_conn, tenant_ctx.tenant_id)
+            except Exception as e:
+                logger.error(
+                    "Failed to set tenant context on DB connection: %s",
+                    e,
+                    extra={"request_id": request_id},
+                )
+                return _build_error_response(
+                    500,
+                    "DATABASE_TENANT_CONTEXT_FAILED",
+                    "Failed to set database tenant context",
+                    request_id,
+                )
+
         matched_path, operation_id, schema = self._index.match(path, method)
 
         if matched_path is not None:

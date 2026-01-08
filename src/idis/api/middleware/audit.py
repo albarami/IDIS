@@ -29,6 +29,11 @@ from idis.api.error_model import make_error_response_no_request
 from idis.audit.sink import AuditSink, AuditSinkError, JsonlFileAuditSink
 from idis.validators.audit_event_validator import validate_audit_event
 
+try:
+    from idis.audit.postgres_sink import PostgresAuditSink
+except ImportError:
+    PostgresAuditSink = None  # type: ignore[misc,assignment]
+
 logger = logging.getLogger(__name__)
 
 MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
@@ -154,23 +159,33 @@ class AuditMiddleware(BaseHTTPMiddleware):
     - Skips audit if no tenant context (unauthorized requests)
     - Builds v6.3-compliant AuditEvent
     - Validates event via validate_audit_event
-    - Emits to configured AuditSink
+    - Emits to configured AuditSink (Postgres when db_conn available, else JSONL)
     - Fails closed: returns 500 AUDIT_EMIT_FAILED on validation/emission failure
 
     Ordering:
     - Must run after RequestIdMiddleware (needs request_id)
-    - Must run after OpenAPIValidationMiddleware (needs tenant_context, operation_id, body_sha256)
+    - Must run after DBTransactionMiddleware (needs db_conn for Postgres sink)
+    - Must run before OpenAPIValidationMiddleware (audit wraps validation)
     """
 
-    def __init__(self, app: ASGIApp, sink: AuditSink | None = None) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        sink: AuditSink | None = None,
+        postgres_sink: PostgresAuditSink | None = None,
+    ) -> None:
         """Initialize the audit middleware.
 
         Args:
             app: The ASGI application
-            sink: Optional AuditSink instance. If None, uses JsonlFileAuditSink.
+            sink: Optional AuditSink instance for non-Postgres emission.
+                  If None, uses JsonlFileAuditSink.
+            postgres_sink: Optional PostgresAuditSink for in-transaction emission.
+                          If None and Postgres is configured, creates one lazily.
         """
         super().__init__(app)
         self._sink = sink if sink is not None else JsonlFileAuditSink()
+        self._postgres_sink = postgres_sink
 
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
@@ -222,8 +237,15 @@ class AuditMiddleware(BaseHTTPMiddleware):
                 request_id,
             )
 
+        db_conn = getattr(request.state, "db_conn", None)
+
         try:
-            self._sink.emit(audit_event)
+            if db_conn is not None and PostgresAuditSink is not None:
+                if self._postgres_sink is None:
+                    self._postgres_sink = PostgresAuditSink()
+                self._postgres_sink.emit_in_tx(db_conn, audit_event)
+            else:
+                self._sink.emit(audit_event)
         except AuditSinkError as e:
             logger.error(
                 "Audit sink emission failed: %s",

@@ -14,6 +14,7 @@ from idis.api.errors import (
     request_validation_error_handler,
 )
 from idis.api.middleware.audit import AuditMiddleware
+from idis.api.middleware.db_tx import DBTransactionMiddleware
 from idis.api.middleware.idempotency import IdempotencyMiddleware
 from idis.api.middleware.openapi_validate import OpenAPIValidationMiddleware
 from idis.api.middleware.rate_limit import RateLimitMiddleware
@@ -26,6 +27,16 @@ from idis.audit.sink import AuditSink
 from idis.idempotency.store import SqliteIdempotencyStore
 from idis.rate_limit.limiter import TenantRateLimiter
 
+try:
+    from idis.audit.postgres_sink import PostgresAuditSink
+except ImportError:
+    PostgresAuditSink = None  # type: ignore[misc,assignment]
+
+try:
+    from idis.idempotency.postgres_store import PostgresIdempotencyStore
+except ImportError:
+    PostgresIdempotencyStore = None  # type: ignore[misc,assignment]
+
 IDIS_VERSION = "6.3"
 
 
@@ -33,6 +44,8 @@ def create_app(
     audit_sink: AuditSink | None = None,
     idempotency_store: SqliteIdempotencyStore | None = None,
     rate_limiter: TenantRateLimiter | None = None,
+    postgres_audit_sink: PostgresAuditSink | None = None,
+    postgres_idempotency_store: PostgresIdempotencyStore | None = None,
 ) -> FastAPI:
     """Create and configure the IDIS FastAPI application.
 
@@ -45,14 +58,16 @@ def create_app(
 
     Middleware ordering (outermost to innermost):
     1. RequestIdMiddleware - outermost, ensures request_id available everywhere
-    2. AuditMiddleware - captures all responses including early returns
-    3. OpenAPIValidationMiddleware - handles auth and sets tenant context + operation_id
-    4. RateLimitMiddleware - tenant-scoped rate limiting (sees tenant + roles)
-    5. RBACMiddleware - enforces deny-by-default authorization
-    6. IdempotencyMiddleware - innermost, uses tenant context and operation_id
+    2. DBTransactionMiddleware - opens DB connection when Postgres configured
+    3. AuditMiddleware - captures all responses including early returns
+    4. OpenAPIValidationMiddleware - handles auth, sets tenant context + DB tenant
+    5. RateLimitMiddleware - tenant-scoped rate limiting (sees tenant + roles)
+    6. RBACMiddleware - enforces deny-by-default authorization
+    7. IdempotencyMiddleware - innermost, uses tenant context and operation_id
 
     Note: Starlette middleware is added in reverse order (last added = outermost).
     RequestIdMiddleware is added last so it runs first and sets request_id.
+    DBTransactionMiddleware runs early to provide db_conn for downstream middleware.
     AuditMiddleware wraps OpenAPIValidation to capture even 400 INVALID_JSON.
     RateLimitMiddleware runs after auth to have tenant context for rate limiting.
     RBACMiddleware requires tenant_context and operation_id from OpenAPIValidationMiddleware.
@@ -61,8 +76,10 @@ def create_app(
 
     Args:
         audit_sink: Optional AuditSink instance for testing. If None, uses default.
-        idempotency_store: Optional idempotency store for testing. If None, uses default.
+        idempotency_store: Optional SQLite idempotency store for testing.
         rate_limiter: Optional TenantRateLimiter for testing. If None, uses default.
+        postgres_audit_sink: Optional PostgresAuditSink for in-transaction audit.
+        postgres_idempotency_store: Optional PostgresIdempotencyStore for in-tx idempotency.
 
     Returns:
         Configured FastAPI application instance.
@@ -73,11 +90,16 @@ def create_app(
         version=IDIS_VERSION,
     )
 
-    app.add_middleware(IdempotencyMiddleware, store=idempotency_store)
+    app.add_middleware(
+        IdempotencyMiddleware,
+        store=idempotency_store,
+        postgres_store=postgres_idempotency_store,
+    )
     app.add_middleware(RBACMiddleware)
     app.add_middleware(RateLimitMiddleware, limiter=rate_limiter)
     app.add_middleware(OpenAPIValidationMiddleware)
-    app.add_middleware(AuditMiddleware, sink=audit_sink)
+    app.add_middleware(AuditMiddleware, sink=audit_sink, postgres_sink=postgres_audit_sink)
+    app.add_middleware(DBTransactionMiddleware)
     app.add_middleware(RequestIdMiddleware)
 
     app.add_exception_handler(IdisHttpError, idis_http_error_handler)

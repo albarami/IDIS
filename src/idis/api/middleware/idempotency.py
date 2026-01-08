@@ -33,6 +33,13 @@ from idis.idempotency.store import (
     get_current_timestamp,
 )
 
+try:
+    from idis.idempotency.postgres_store import PostgresIdempotencyStore
+except ImportError:
+    PostgresIdempotencyStore = None  # type: ignore[misc,assignment]
+
+IdempotencyStore = SqliteIdempotencyStore | PostgresIdempotencyStore | None
+
 logger = logging.getLogger(__name__)
 
 IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
@@ -81,24 +88,32 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
     - Returns 409 if key matches but payload hash differs
     - Returns 500 if store is unavailable (fail closed)
     - Only stores 2xx responses
+    - Uses Postgres store when db_conn is available, else SQLite
 
     Ordering:
     - Must run after OpenAPIValidationMiddleware (needs tenant_context, operation_id, body_sha256)
     - Must run before route handlers
     """
 
-    def __init__(self, app: ASGIApp, store: SqliteIdempotencyStore | None = None) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        store: SqliteIdempotencyStore | None = None,
+        postgres_store: PostgresIdempotencyStore | None = None,
+    ) -> None:
         """Initialize the idempotency middleware.
 
         Args:
             app: The ASGI application
-            store: Optional idempotency store. If None, creates default store.
+            store: Optional SQLite idempotency store. If None, creates default store.
+            postgres_store: Optional Postgres idempotency store for in-transaction ops.
         """
         super().__init__(app)
         self._store = store
+        self._postgres_store = postgres_store
 
     def _get_store(self) -> SqliteIdempotencyStore:
-        """Get or lazily create the idempotency store.
+        """Get or lazily create the SQLite idempotency store.
 
         Returns:
             Idempotency store instance.
@@ -109,6 +124,18 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         if self._store is None:
             self._store = SqliteIdempotencyStore()
         return self._store
+
+    def _get_postgres_store(self) -> PostgresIdempotencyStore | None:
+        """Get or lazily create the Postgres idempotency store.
+
+        Returns:
+            PostgresIdempotencyStore instance or None if not available.
+        """
+        if PostgresIdempotencyStore is None:
+            return None
+        if self._postgres_store is None:
+            self._postgres_store = PostgresIdempotencyStore()
+        return self._postgres_store
 
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
@@ -154,23 +181,35 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             idempotency_key=idempotency_key,
         )
 
-        try:
-            store = self._get_store()
-        except IdempotencyStoreError as e:
-            logger.error(
-                "Idempotency store initialization failed: %s",
-                str(e),
-                extra={"request_id": request_id},
-            )
-            return _build_error_response(
-                500,
-                "IDEMPOTENCY_STORE_FAILED",
-                "Idempotency store is unavailable",
-                request_id,
-            )
+        db_conn = getattr(request.state, "db_conn", None)
+        use_postgres = db_conn is not None and PostgresIdempotencyStore is not None
+
+        if use_postgres:
+            postgres_store = self._get_postgres_store()
+            if postgres_store is None:
+                use_postgres = False
+
+        if not use_postgres:
+            try:
+                store = self._get_store()
+            except IdempotencyStoreError as e:
+                logger.error(
+                    "Idempotency store initialization failed: %s",
+                    str(e),
+                    extra={"request_id": request_id},
+                )
+                return _build_error_response(
+                    500,
+                    "IDEMPOTENCY_STORE_FAILED",
+                    "Idempotency store is unavailable",
+                    request_id,
+                )
 
         try:
-            existing_record = store.get(scope_key)
+            if use_postgres and postgres_store is not None:
+                existing_record = postgres_store.get(scope_key, conn=db_conn)
+            else:
+                existing_record = store.get(scope_key)
         except IdempotencyStoreError as e:
             logger.error(
                 "Idempotency store lookup failed: %s",
@@ -227,7 +266,10 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
                 )
 
                 try:
-                    store.put(scope_key, record)
+                    if use_postgres and postgres_store is not None:
+                        postgres_store.put(scope_key, record, conn=db_conn)
+                    else:
+                        store.put(scope_key, record)
                 except IdempotencyStoreError as e:
                     logger.error(
                         "Failed to store idempotency record: %s",

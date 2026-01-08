@@ -12,6 +12,9 @@ dependencies = [
     "pydantic>=2.5.0",
     "jsonschema>=4.21.0",
     "pyyaml>=6.0.1",
+    "sqlalchemy>=2.0.0",
+    "alembic>=1.13.0",
+    "psycopg[binary]>=3.1.0",
 ]
 
 [project.optional-dependencies]
@@ -78,6 +81,18 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["yaml.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["sqlalchemy.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["alembic.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["psycopg.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

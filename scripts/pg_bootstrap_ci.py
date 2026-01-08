@@ -6,12 +6,14 @@ It is idempotent and safe to run repeatedly.
 
 Environment variables required:
     IDIS_DATABASE_ADMIN_URL: Admin connection URL (postgres superuser)
+    IDIS_DATABASE_URL: App connection URL (for verification)
     IDIS_PG_APP_USER: App role username to create (default: idis_app)
     IDIS_PG_APP_PASSWORD: App role password (default: idis_app_pw)
     IDIS_PG_DB_NAME: Test database name (default: idis_test)
 
 Usage:
-    python scripts/pg_bootstrap_ci.py
+    python scripts/pg_bootstrap_ci.py           # Full bootstrap
+    python scripts/pg_bootstrap_ci.py --verify-only  # Verify connectivity only
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+from urllib.parse import urlparse
 
 
 def get_env_required(name: str) -> str:
@@ -187,13 +190,13 @@ def verify_app_role_security(db_url: str, app_user: str) -> None:
 
         if rolsuper:
             print(f"ERROR: Role '{app_user}' is SUPERUSER - RLS will be bypassed!", file=sys.stderr)
-            sys.exit(1)
+            sys.exit(2)
 
         if rolbypassrls:
             print(
                 f"ERROR: Role '{app_user}' has BYPASSRLS - RLS will be bypassed!", file=sys.stderr
             )
-            sys.exit(1)
+            sys.exit(2)
 
         print(f"  Role '{app_user}' is secure: NOSUPERUSER, NOBYPASSRLS")
     finally:
@@ -201,13 +204,111 @@ def verify_app_role_security(db_url: str, app_user: str) -> None:
         conn.close()
 
 
+def _safe_url_info(url: str) -> str:
+    """Extract safe (no password) info from URL for logging."""
+    try:
+        parsed = urlparse(url)
+        db = parsed.path.lstrip("/")
+        return f"host={parsed.hostname}, port={parsed.port}, db={db}, user={parsed.username}"
+    except Exception:
+        return "(could not parse URL)"
+
+
+def verify_connectivity(admin_url: str, app_url: str) -> None:
+    """Verify connectivity for both admin and app roles with diagnostics."""
+    import psycopg2
+
+    print("=" * 60)
+    print("Verifying PostgreSQL Connectivity")
+    print("=" * 60)
+
+    # Check env vars are set (no values printed)
+    print("Environment check:")
+    print(f"  IDIS_DATABASE_ADMIN_URL set: {bool(admin_url)}")
+    print(f"  IDIS_DATABASE_URL set: {bool(app_url)}")
+
+    # Admin connection check
+    print("\nAdmin connection:")
+    print(f"  Target: {_safe_url_info(admin_url)}")
+    admin_normalized = _normalize_url_for_psycopg2(admin_url)
+
+    try:
+        conn = psycopg2.connect(admin_normalized)
+        cur = conn.cursor()
+        cur.execute("SELECT current_user")
+        admin_user = cur.fetchone()[0]
+        cur.execute("SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user")
+        row = cur.fetchone()
+        print(f"  Connected as: {admin_user}")
+        print(f"  rolsuper={row[0]}, rolbypassrls={row[1]}")
+        cur.close()
+        conn.close()
+        print("  Status: OK")
+    except psycopg2.Error as e:
+        print("  Status: FAILED")
+        print(f"  Error: {type(e).__name__}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # App connection check
+    print("\nApp connection:")
+    print(f"  Target: {_safe_url_info(app_url)}")
+    app_normalized = _normalize_url_for_psycopg2(app_url)
+
+    try:
+        conn = psycopg2.connect(app_normalized)
+        cur = conn.cursor()
+        cur.execute("SELECT current_user")
+        app_user = cur.fetchone()[0]
+        cur.execute("SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user")
+        row = cur.fetchone()
+        print(f"  Connected as: {app_user}")
+        print(f"  rolsuper={row[0]}, rolbypassrls={row[1]}")
+
+        # Hard gate: app role must NOT be superuser or bypassrls
+        if row[0]:
+            print("  FATAL: App role is SUPERUSER - RLS bypassed!", file=sys.stderr)
+            cur.close()
+            conn.close()
+            sys.exit(2)
+        if row[1]:
+            print("  FATAL: App role has BYPASSRLS - RLS bypassed!", file=sys.stderr)
+            cur.close()
+            conn.close()
+            sys.exit(2)
+
+        cur.close()
+        conn.close()
+        print("  Status: OK (non-superuser, no bypassrls)")
+    except psycopg2.Error as e:
+        print("  Status: FAILED")
+        print(f"  Error: {type(e).__name__}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    print("\n" + "=" * 60)
+    print("Connectivity verification PASSED")
+    print("=" * 60)
+
+
 def main() -> None:
     """Main bootstrap entry point."""
+    verify_only = "--verify-only" in sys.argv
+
+    admin_url = get_env_required("IDIS_DATABASE_ADMIN_URL")
+    app_url = os.environ.get("IDIS_DATABASE_URL", "")
+
+    if verify_only:
+        # Verification mode: just check connectivity and security
+        if not app_url:
+            print("ERROR: IDIS_DATABASE_URL required for --verify-only", file=sys.stderr)
+            sys.exit(1)
+        verify_connectivity(admin_url, app_url)
+        return
+
+    # Full bootstrap mode
     print("=" * 60)
     print("IDIS PostgreSQL CI Bootstrap")
     print("=" * 60)
 
-    admin_url = get_env_required("IDIS_DATABASE_ADMIN_URL")
     app_user = get_env_optional("IDIS_PG_APP_USER", "idis_app")
     app_password = get_env_optional("IDIS_PG_APP_PASSWORD", "idis_app_pw")
     db_name = get_env_optional("IDIS_PG_DB_NAME", "idis_test")

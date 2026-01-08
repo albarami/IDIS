@@ -55,6 +55,23 @@ def is_postgres_configured() -> bool:
     return bool(os.environ.get(IDIS_DATABASE_URL_ENV))
 
 
+def _ensure_psycopg_driver(url: str) -> str:
+    """Ensure the database URL uses psycopg2 driver.
+
+    SQLAlchemy defaults to psycopg2 for postgresql:// URLs.
+    We explicitly use psycopg2 for better compatibility.
+
+    Args:
+        url: Original database URL.
+
+    Returns:
+        URL with correct driver specification.
+    """
+    if url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql://", 1)
+    return url
+
+
 def get_database_url(admin: bool = False) -> str:
     """Get the database URL from environment.
 
@@ -75,7 +92,7 @@ def get_database_url(admin: bool = False) -> str:
             f"Database URL not configured. Set {env_var} environment variable."
         )
 
-    return url
+    return _ensure_psycopg_driver(url)
 
 
 def get_app_engine() -> Engine:

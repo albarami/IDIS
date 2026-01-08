@@ -109,6 +109,23 @@ def clean_tables(admin_engine: Engine, migrated_db: None) -> Generator[None, Non
         conn.execute(text("DELETE FROM audit_events"))
 
 
+class TestAppRoleSecurity:
+    """Tests for app role security constraints."""
+
+    def test_app_role_is_not_superuser(self, app_engine: Engine, migrated_db: None) -> None:
+        """Verify app role is NOT a superuser (required for RLS to be enforced)."""
+        with app_engine.connect() as conn:
+            result = conn.execute(
+                text("SELECT rolsuper FROM pg_roles WHERE rolname = current_user")
+            )
+            row = result.fetchone()
+
+        assert row is not None, "App role should exist in pg_roles"
+        assert row.rolsuper is False, (
+            "App role MUST NOT be superuser - RLS is bypassed for superusers"
+        )
+
+
 class TestRLSTenantIsolation:
     """Tests for Row-Level Security tenant isolation."""
 

@@ -1,4 +1,4 @@
-.PHONY: format lint typecheck test check install dev clean
+.PHONY: format lint typecheck test forbidden-scan check install dev clean
 
 format:
 	ruff format .
@@ -12,7 +12,10 @@ typecheck:
 test:
 	pytest -q
 
-check: format lint typecheck test
+forbidden-scan:
+	python scripts/forbidden_scan.py
+
+check: format lint typecheck test forbidden-scan
 	@echo "All checks passed."
 
 install:

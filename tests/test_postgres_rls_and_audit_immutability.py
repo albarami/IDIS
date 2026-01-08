@@ -108,12 +108,22 @@ def migrated_db(admin_engine: Engine) -> Generator[None, None, None]:
 def clean_tables(admin_engine: Engine, migrated_db: None) -> Generator[None, None, None]:
     """Clean tables before each test using TRUNCATE (bypasses immutability trigger)."""
     with admin_engine.begin() as conn:
-        conn.execute(text("TRUNCATE deals, idempotency_records, audit_events"))
+        conn.execute(
+            text(
+                "TRUNCATE deals, idempotency_records, audit_events, "
+                "webhook_delivery_attempts, webhooks CASCADE"
+            )
+        )
 
     yield
 
     with admin_engine.begin() as conn:
-        conn.execute(text("TRUNCATE deals, idempotency_records, audit_events"))
+        conn.execute(
+            text(
+                "TRUNCATE deals, idempotency_records, audit_events, "
+                "webhook_delivery_attempts, webhooks CASCADE"
+            )
+        )
 
 
 class TestAppRoleSecurity:
@@ -593,3 +603,389 @@ class TestPostgresIdempotencyStore:
             retrieved = store.get(scope_key_b, conn=conn)
 
         assert retrieved is None, "Cross-tenant lookup should return None due to RLS"
+
+
+class TestWebhooksRLS:
+    """Tests for webhooks table RLS tenant isolation."""
+
+    def test_webhooks_same_tenant_read_allowed(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        """Insert webhook under tenant A, read under tenant A => 1 row."""
+        webhook_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO webhooks
+                    (webhook_id, tenant_id, url, events, active, created_at, updated_at)
+                    VALUES (:webhook_id, :tenant_id, :url, :events,
+                            :active, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "webhook_id": webhook_id,
+                    "tenant_id": TENANT_A_ID,
+                    "url": "https://example.com/webhook",
+                    "events": ["deal.created", "deal.updated"],
+                    "active": True,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            result = conn.execute(
+                text("SELECT webhook_id, url FROM webhooks WHERE webhook_id = :webhook_id"),
+                {"webhook_id": webhook_id},
+            )
+            rows = result.fetchall()
+
+        assert len(rows) == 1, "RLS should allow same-tenant webhook reads"
+        assert rows[0].url == "https://example.com/webhook"
+
+    def test_webhooks_cross_tenant_read_blocked(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        """Insert webhook under tenant A, read under tenant B => 0 rows."""
+        webhook_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO webhooks
+                    (webhook_id, tenant_id, url, events, active, created_at, updated_at)
+                    VALUES (:webhook_id, :tenant_id, :url, :events,
+                            :active, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "webhook_id": webhook_id,
+                    "tenant_id": TENANT_A_ID,
+                    "url": "https://example.com/webhook",
+                    "events": ["deal.created"],
+                    "active": True,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_B_ID}'"))
+            result = conn.execute(
+                text("SELECT webhook_id FROM webhooks WHERE webhook_id = :webhook_id"),
+                {"webhook_id": webhook_id},
+            )
+            rows = result.fetchall()
+
+        assert len(rows) == 0, "RLS should block cross-tenant webhook reads"
+
+    def test_webhooks_fail_closed_without_tenant_context(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        """No SET LOCAL => SELECT returns 0 rows (fail closed)."""
+        webhook_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO webhooks
+                    (webhook_id, tenant_id, url, events, active, created_at, updated_at)
+                    VALUES (:webhook_id, :tenant_id, :url, :events,
+                            :active, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "webhook_id": webhook_id,
+                    "tenant_id": TENANT_A_ID,
+                    "url": "https://example.com/webhook",
+                    "events": ["deal.created"],
+                    "active": True,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        with app_engine.begin() as conn:
+            result = conn.execute(text("SELECT webhook_id FROM webhooks"))
+            rows = result.fetchall()
+
+        assert len(rows) == 0, "RLS should return 0 rows without tenant context"
+
+    def test_webhooks_insert_blocked_without_tenant_context(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        """INSERT without SET LOCAL should be blocked by RLS WITH CHECK."""
+        webhook_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        with pytest.raises(DBAPIError) as exc_info, app_engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO webhooks
+                    (webhook_id, tenant_id, url, events, active, created_at, updated_at)
+                    VALUES (:webhook_id, :tenant_id, :url, :events,
+                            :active, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "webhook_id": webhook_id,
+                    "tenant_id": TENANT_A_ID,
+                    "url": "https://example.com/webhook",
+                    "events": ["deal.created"],
+                    "active": True,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        error_msg = str(exc_info.value).lower()
+        assert (
+            "row-level security" in error_msg
+            or "policy" in error_msg
+            or "permission denied" in error_msg
+        ), f"INSERT without tenant context should be blocked by RLS, got: {exc_info.value}"
+
+
+class TestWebhookDeliveryAttemptsRLS:
+    """Tests for webhook_delivery_attempts table RLS tenant isolation."""
+
+    def _create_webhook(
+        self, conn: object, tenant_id: str, webhook_id: str
+    ) -> None:
+        """Helper to create a webhook for FK constraint."""
+
+        now = datetime.now(UTC)
+        conn.execute(
+            text(
+                """
+                INSERT INTO webhooks
+                (webhook_id, tenant_id, url, events, active, created_at, updated_at)
+                VALUES (:webhook_id, :tenant_id, :url, :events,
+                        :active, :created_at, :updated_at)
+                """
+            ),
+            {
+                "webhook_id": webhook_id,
+                "tenant_id": tenant_id,
+                "url": "https://example.com/webhook",
+                "events": ["deal.created"],
+                "active": True,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+
+    def test_delivery_attempts_same_tenant_read_allowed(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        """Insert attempt under tenant A, read under tenant A => 1 row."""
+        webhook_id = str(uuid.uuid4())
+        attempt_id = str(uuid.uuid4())
+        event_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            self._create_webhook(conn, TENANT_A_ID, webhook_id)
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO webhook_delivery_attempts
+                    (attempt_id, webhook_id, tenant_id, event_id, event_type, payload,
+                     attempt_count, status, created_at, updated_at)
+                    VALUES (:attempt_id, :webhook_id, :tenant_id, :event_id, :event_type, :payload,
+                            :attempt_count, :status, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "attempt_id": attempt_id,
+                    "webhook_id": webhook_id,
+                    "tenant_id": TENANT_A_ID,
+                    "event_id": event_id,
+                    "event_type": "deal.created",
+                    "payload": json.dumps({"deal_id": "test"}),
+                    "attempt_count": 1,
+                    "status": "pending",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            result = conn.execute(
+                text(
+                    "SELECT attempt_id, event_type FROM webhook_delivery_attempts "
+                    "WHERE attempt_id = :attempt_id"
+                ),
+                {"attempt_id": attempt_id},
+            )
+            rows = result.fetchall()
+
+        assert len(rows) == 1, "RLS should allow same-tenant delivery attempt reads"
+        assert rows[0].event_type == "deal.created"
+
+    def test_delivery_attempts_cross_tenant_read_blocked(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        """Insert attempt under tenant A, read under tenant B => 0 rows."""
+        webhook_id = str(uuid.uuid4())
+        attempt_id = str(uuid.uuid4())
+        event_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            self._create_webhook(conn, TENANT_A_ID, webhook_id)
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO webhook_delivery_attempts
+                    (attempt_id, webhook_id, tenant_id, event_id, event_type, payload,
+                     attempt_count, status, created_at, updated_at)
+                    VALUES (:attempt_id, :webhook_id, :tenant_id, :event_id, :event_type, :payload,
+                            :attempt_count, :status, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "attempt_id": attempt_id,
+                    "webhook_id": webhook_id,
+                    "tenant_id": TENANT_A_ID,
+                    "event_id": event_id,
+                    "event_type": "deal.created",
+                    "payload": json.dumps({"deal_id": "test"}),
+                    "attempt_count": 1,
+                    "status": "pending",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_B_ID}'"))
+            result = conn.execute(
+                text(
+                    "SELECT attempt_id FROM webhook_delivery_attempts "
+                    "WHERE attempt_id = :attempt_id"
+                ),
+                {"attempt_id": attempt_id},
+            )
+            rows = result.fetchall()
+
+        assert len(rows) == 0, "RLS should block cross-tenant delivery attempt reads"
+
+    def test_delivery_attempts_fail_closed_without_tenant_context(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        """No SET LOCAL => SELECT returns 0 rows (fail closed)."""
+        webhook_id = str(uuid.uuid4())
+        attempt_id = str(uuid.uuid4())
+        event_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            self._create_webhook(conn, TENANT_A_ID, webhook_id)
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO webhook_delivery_attempts
+                    (attempt_id, webhook_id, tenant_id, event_id, event_type, payload,
+                     attempt_count, status, created_at, updated_at)
+                    VALUES (:attempt_id, :webhook_id, :tenant_id, :event_id, :event_type, :payload,
+                            :attempt_count, :status, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "attempt_id": attempt_id,
+                    "webhook_id": webhook_id,
+                    "tenant_id": TENANT_A_ID,
+                    "event_id": event_id,
+                    "event_type": "deal.created",
+                    "payload": json.dumps({"deal_id": "test"}),
+                    "attempt_count": 1,
+                    "status": "pending",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        with app_engine.begin() as conn:
+            result = conn.execute(text("SELECT attempt_id FROM webhook_delivery_attempts"))
+            rows = result.fetchall()
+
+        assert len(rows) == 0, "RLS should return 0 rows without tenant context"
+
+    def test_delivery_attempts_insert_blocked_without_tenant_context(
+        self, app_engine: Engine, admin_engine: Engine, clean_tables: None
+    ) -> None:
+        """INSERT without SET LOCAL should be blocked by RLS WITH CHECK."""
+        webhook_id = str(uuid.uuid4())
+        attempt_id = str(uuid.uuid4())
+        event_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        with admin_engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO webhooks
+                    (webhook_id, tenant_id, url, events, active, created_at, updated_at)
+                    VALUES (:webhook_id, :tenant_id, :url, :events,
+                            :active, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "webhook_id": webhook_id,
+                    "tenant_id": TENANT_A_ID,
+                    "url": "https://example.com/webhook",
+                    "events": ["deal.created"],
+                    "active": True,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        with pytest.raises(DBAPIError) as exc_info, app_engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO webhook_delivery_attempts
+                    (attempt_id, webhook_id, tenant_id, event_id, event_type, payload,
+                     attempt_count, status, created_at, updated_at)
+                    VALUES (:attempt_id, :webhook_id, :tenant_id, :event_id, :event_type, :payload,
+                            :attempt_count, :status, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "attempt_id": attempt_id,
+                    "webhook_id": webhook_id,
+                    "tenant_id": TENANT_A_ID,
+                    "event_id": event_id,
+                    "event_type": "deal.created",
+                    "payload": json.dumps({"deal_id": "test"}),
+                    "attempt_count": 1,
+                    "status": "pending",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        error_msg = str(exc_info.value).lower()
+        assert (
+            "row-level security" in error_msg
+            or "policy" in error_msg
+            or "permission denied" in error_msg
+        ), f"INSERT without tenant context should be blocked by RLS, got: {exc_info.value}"

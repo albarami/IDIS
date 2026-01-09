@@ -110,7 +110,7 @@ def clean_tables(admin_engine: Engine, migrated_db: None) -> Generator[None, Non
     with admin_engine.begin() as conn:
         conn.execute(
             text(
-                "TRUNCATE document_spans, documents, deal_artifacts, deals, "
+                "TRUNCATE document_spans, documents, document_artifacts, deals, "
                 "idempotency_records, audit_events, "
                 "webhook_delivery_attempts, webhooks CASCADE"
             )
@@ -121,7 +121,7 @@ def clean_tables(admin_engine: Engine, migrated_db: None) -> Generator[None, Non
     with admin_engine.begin() as conn:
         conn.execute(
             text(
-                "TRUNCATE document_spans, documents, deal_artifacts, deals, "
+                "TRUNCATE document_spans, documents, document_artifacts, deals, "
                 "idempotency_records, audit_events, "
                 "webhook_delivery_attempts, webhooks CASCADE"
             )
@@ -1062,8 +1062,8 @@ class TestWebhookDeliveryAttemptsRLS:
         ), f"Mismatched tenant INSERT should be blocked by RLS WITH CHECK: {exc_info.value}"
 
 
-class TestDealArtifactsRLS:
-    """Tests for deal_artifacts table RLS tenant isolation (Phase 3.1)."""
+class TestDocumentArtifactsRLS:
+    """Tests for document_artifacts table RLS tenant isolation (Phase 3.1)."""
 
     def _create_deal(self, conn: object, tenant_id: str, deal_id: str) -> None:
         """Helper to create a deal for FK constraint."""
@@ -1083,12 +1083,12 @@ class TestDealArtifactsRLS:
             },
         )
 
-    def test_deal_artifacts_same_tenant_read_allowed(
+    def test_document_artifacts_same_tenant_read_allowed(
         self, app_engine: Engine, clean_tables: None
     ) -> None:
         """Insert artifact under tenant A, read under tenant A => 1 row."""
         deal_id = str(uuid.uuid4())
-        artifact_id = str(uuid.uuid4())
+        doc_id = str(uuid.uuid4())
         now = datetime.now(UTC)
 
         with app_engine.begin() as conn:
@@ -1097,20 +1097,21 @@ class TestDealArtifactsRLS:
             conn.execute(
                 text(
                     """
-                    INSERT INTO deal_artifacts
-                    (artifact_id, tenant_id, deal_id, artifact_type, storage_uri,
-                     sha256, created_at, updated_at)
-                    VALUES (:artifact_id, :tenant_id, :deal_id, :artifact_type, :storage_uri,
-                            :sha256, :created_at, :updated_at)
+                    INSERT INTO document_artifacts
+                    (doc_id, tenant_id, deal_id, doc_type, title, source_system,
+                     version_id, created_at, updated_at)
+                    VALUES (:doc_id, :tenant_id, :deal_id, :doc_type, :title, :source_system,
+                            :version_id, :created_at, :updated_at)
                     """
                 ),
                 {
-                    "artifact_id": artifact_id,
+                    "doc_id": doc_id,
                     "tenant_id": TENANT_A_ID,
                     "deal_id": deal_id,
-                    "artifact_type": "PITCH_DECK",
-                    "storage_uri": "s3://bucket/test.pdf",
-                    "sha256": "a" * 64,
+                    "doc_type": "PITCH_DECK",
+                    "title": "Test Document",
+                    "source_system": "DocSend",
+                    "version_id": "v1",
                     "created_at": now,
                     "updated_at": now,
                 },
@@ -1119,23 +1120,20 @@ class TestDealArtifactsRLS:
         with app_engine.begin() as conn:
             conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
             result = conn.execute(
-                text(
-                    "SELECT artifact_id, artifact_type FROM deal_artifacts "
-                    "WHERE artifact_id = :artifact_id"
-                ),
-                {"artifact_id": artifact_id},
+                text("SELECT doc_id, doc_type FROM document_artifacts WHERE doc_id = :doc_id"),
+                {"doc_id": doc_id},
             )
             rows = result.fetchall()
 
         assert len(rows) == 1, "RLS should allow same-tenant artifact reads"
-        assert rows[0].artifact_type == "PITCH_DECK"
+        assert rows[0].doc_type == "PITCH_DECK"
 
-    def test_deal_artifacts_cross_tenant_read_blocked(
+    def test_document_artifacts_cross_tenant_read_blocked(
         self, app_engine: Engine, clean_tables: None
     ) -> None:
         """Insert artifact under tenant A, read under tenant B => 0 rows."""
         deal_id = str(uuid.uuid4())
-        artifact_id = str(uuid.uuid4())
+        doc_id = str(uuid.uuid4())
         now = datetime.now(UTC)
 
         with app_engine.begin() as conn:
@@ -1144,20 +1142,21 @@ class TestDealArtifactsRLS:
             conn.execute(
                 text(
                     """
-                    INSERT INTO deal_artifacts
-                    (artifact_id, tenant_id, deal_id, artifact_type, storage_uri,
-                     sha256, created_at, updated_at)
-                    VALUES (:artifact_id, :tenant_id, :deal_id, :artifact_type, :storage_uri,
-                            :sha256, :created_at, :updated_at)
+                    INSERT INTO document_artifacts
+                    (doc_id, tenant_id, deal_id, doc_type, title, source_system,
+                     version_id, created_at, updated_at)
+                    VALUES (:doc_id, :tenant_id, :deal_id, :doc_type, :title, :source_system,
+                            :version_id, :created_at, :updated_at)
                     """
                 ),
                 {
-                    "artifact_id": artifact_id,
+                    "doc_id": doc_id,
                     "tenant_id": TENANT_A_ID,
                     "deal_id": deal_id,
-                    "artifact_type": "PITCH_DECK",
-                    "storage_uri": "s3://bucket/test.pdf",
-                    "sha256": "a" * 64,
+                    "doc_type": "PITCH_DECK",
+                    "title": "Test Document",
+                    "source_system": "DocSend",
+                    "version_id": "v1",
                     "created_at": now,
                     "updated_at": now,
                 },
@@ -1166,19 +1165,19 @@ class TestDealArtifactsRLS:
         with app_engine.begin() as conn:
             conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_B_ID}'"))
             result = conn.execute(
-                text("SELECT artifact_id FROM deal_artifacts WHERE artifact_id = :artifact_id"),
-                {"artifact_id": artifact_id},
+                text("SELECT doc_id FROM document_artifacts WHERE doc_id = :doc_id"),
+                {"doc_id": doc_id},
             )
             rows = result.fetchall()
 
         assert len(rows) == 0, "RLS should block cross-tenant artifact reads"
 
-    def test_deal_artifacts_fail_closed_without_tenant_context(
+    def test_document_artifacts_fail_closed_without_tenant_context(
         self, app_engine: Engine, clean_tables: None
     ) -> None:
         """No SET LOCAL => SELECT returns 0 rows (fail closed)."""
         deal_id = str(uuid.uuid4())
-        artifact_id = str(uuid.uuid4())
+        doc_id = str(uuid.uuid4())
         now = datetime.now(UTC)
 
         with app_engine.begin() as conn:
@@ -1187,37 +1186,38 @@ class TestDealArtifactsRLS:
             conn.execute(
                 text(
                     """
-                    INSERT INTO deal_artifacts
-                    (artifact_id, tenant_id, deal_id, artifact_type, storage_uri,
-                     sha256, created_at, updated_at)
-                    VALUES (:artifact_id, :tenant_id, :deal_id, :artifact_type, :storage_uri,
-                            :sha256, :created_at, :updated_at)
+                    INSERT INTO document_artifacts
+                    (doc_id, tenant_id, deal_id, doc_type, title, source_system,
+                     version_id, created_at, updated_at)
+                    VALUES (:doc_id, :tenant_id, :deal_id, :doc_type, :title, :source_system,
+                            :version_id, :created_at, :updated_at)
                     """
                 ),
                 {
-                    "artifact_id": artifact_id,
+                    "doc_id": doc_id,
                     "tenant_id": TENANT_A_ID,
                     "deal_id": deal_id,
-                    "artifact_type": "PITCH_DECK",
-                    "storage_uri": "s3://bucket/test.pdf",
-                    "sha256": "a" * 64,
+                    "doc_type": "PITCH_DECK",
+                    "title": "Test Document",
+                    "source_system": "DocSend",
+                    "version_id": "v1",
                     "created_at": now,
                     "updated_at": now,
                 },
             )
 
         with app_engine.begin() as conn:
-            result = conn.execute(text("SELECT artifact_id FROM deal_artifacts"))
+            result = conn.execute(text("SELECT doc_id FROM document_artifacts"))
             rows = result.fetchall()
 
         assert len(rows) == 0, "RLS should return 0 rows without tenant context"
 
-    def test_deal_artifacts_insert_blocked_without_tenant_context(
+    def test_document_artifacts_insert_blocked_without_tenant_context(
         self, app_engine: Engine, admin_engine: Engine, clean_tables: None
     ) -> None:
         """INSERT without SET LOCAL should be blocked by RLS WITH CHECK."""
         deal_id = str(uuid.uuid4())
-        artifact_id = str(uuid.uuid4())
+        doc_id = str(uuid.uuid4())
         now = datetime.now(UTC)
 
         with admin_engine.begin() as conn:
@@ -1240,20 +1240,21 @@ class TestDealArtifactsRLS:
             conn.execute(
                 text(
                     """
-                    INSERT INTO deal_artifacts
-                    (artifact_id, tenant_id, deal_id, artifact_type, storage_uri,
-                     sha256, created_at, updated_at)
-                    VALUES (:artifact_id, :tenant_id, :deal_id, :artifact_type, :storage_uri,
-                            :sha256, :created_at, :updated_at)
+                    INSERT INTO document_artifacts
+                    (doc_id, tenant_id, deal_id, doc_type, title, source_system,
+                     version_id, created_at, updated_at)
+                    VALUES (:doc_id, :tenant_id, :deal_id, :doc_type, :title, :source_system,
+                            :version_id, :created_at, :updated_at)
                     """
                 ),
                 {
-                    "artifact_id": artifact_id,
+                    "doc_id": doc_id,
                     "tenant_id": TENANT_A_ID,
                     "deal_id": deal_id,
-                    "artifact_type": "PITCH_DECK",
-                    "storage_uri": "s3://bucket/test.pdf",
-                    "sha256": "a" * 64,
+                    "doc_type": "PITCH_DECK",
+                    "title": "Test Document",
+                    "source_system": "DocSend",
+                    "version_id": "v1",
                     "created_at": now,
                     "updated_at": now,
                 },
@@ -1266,12 +1267,12 @@ class TestDealArtifactsRLS:
             or "permission denied" in error_msg
         ), f"INSERT without tenant context should be blocked by RLS, got: {exc_info.value}"
 
-    def test_deal_artifacts_rls_blocks_mismatched_tenant_insert(
+    def test_document_artifacts_rls_blocks_mismatched_tenant_insert(
         self, app_engine: Engine, clean_tables: None
     ) -> None:
         """INSERT with tenant context A but tenant_id=B must be blocked by WITH CHECK."""
         deal_id = str(uuid.uuid4())
-        artifact_id = str(uuid.uuid4())
+        doc_id = str(uuid.uuid4())
         now = datetime.now(UTC)
 
         with app_engine.begin() as conn:
@@ -1283,20 +1284,21 @@ class TestDealArtifactsRLS:
             conn.execute(
                 text(
                     """
-                    INSERT INTO deal_artifacts
-                    (artifact_id, tenant_id, deal_id, artifact_type, storage_uri,
-                     sha256, created_at, updated_at)
-                    VALUES (:artifact_id, :tenant_id, :deal_id, :artifact_type, :storage_uri,
-                            :sha256, :created_at, :updated_at)
+                    INSERT INTO document_artifacts
+                    (doc_id, tenant_id, deal_id, doc_type, title, source_system,
+                     version_id, created_at, updated_at)
+                    VALUES (:doc_id, :tenant_id, :deal_id, :doc_type, :title, :source_system,
+                            :version_id, :created_at, :updated_at)
                     """
                 ),
                 {
-                    "artifact_id": artifact_id,
+                    "doc_id": doc_id,
                     "tenant_id": TENANT_B_ID,  # Mismatched: context=A, value=B
                     "deal_id": deal_id,
-                    "artifact_type": "PITCH_DECK",
-                    "storage_uri": "s3://bucket/test.pdf",
-                    "sha256": "a" * 64,
+                    "doc_type": "PITCH_DECK",
+                    "title": "Test Document",
+                    "source_system": "DocSend",
+                    "version_id": "v1",
                     "created_at": now,
                     "updated_at": now,
                 },
@@ -1314,9 +1316,9 @@ class TestDocumentsRLS:
     """Tests for documents table RLS tenant isolation (Phase 3.1)."""
 
     def _create_deal_and_artifact(
-        self, conn: object, tenant_id: str, deal_id: str, artifact_id: str
+        self, conn: object, tenant_id: str, deal_id: str, doc_id: str
     ) -> None:
-        """Helper to create deal and artifact for FK constraints."""
+        """Helper to create deal and document_artifact for FK constraints."""
         now = datetime.now(UTC)
         conn.execute(
             text(
@@ -1335,20 +1337,21 @@ class TestDocumentsRLS:
         conn.execute(
             text(
                 """
-                INSERT INTO deal_artifacts
-                (artifact_id, tenant_id, deal_id, artifact_type, storage_uri,
-                 sha256, created_at, updated_at)
-                VALUES (:artifact_id, :tenant_id, :deal_id, :artifact_type, :storage_uri,
-                        :sha256, :created_at, :updated_at)
+                INSERT INTO document_artifacts
+                (doc_id, tenant_id, deal_id, doc_type, title, source_system,
+                 version_id, created_at, updated_at)
+                VALUES (:doc_id, :tenant_id, :deal_id, :doc_type, :title, :source_system,
+                        :version_id, :created_at, :updated_at)
                 """
             ),
             {
-                "artifact_id": artifact_id,
+                "doc_id": doc_id,
                 "tenant_id": tenant_id,
                 "deal_id": deal_id,
-                "artifact_type": "PITCH_DECK",
-                "storage_uri": "s3://bucket/test.pdf",
-                "sha256": "a" * 64,
+                "doc_type": "PITCH_DECK",
+                "title": "Test Document",
+                "source_system": "DocSend",
+                "version_id": "v1",
                 "created_at": now,
                 "updated_at": now,
             },
@@ -1359,20 +1362,20 @@ class TestDocumentsRLS:
     ) -> None:
         """Insert document under tenant A, read under tenant A => 1 row."""
         deal_id = str(uuid.uuid4())
-        artifact_id = str(uuid.uuid4())
+        doc_id = str(uuid.uuid4())
         document_id = str(uuid.uuid4())
         now = datetime.now(UTC)
 
         with app_engine.begin() as conn:
             conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
-            self._create_deal_and_artifact(conn, TENANT_A_ID, deal_id, artifact_id)
+            self._create_deal_and_artifact(conn, TENANT_A_ID, deal_id, doc_id)
             conn.execute(
                 text(
                     """
                     INSERT INTO documents
-                    (document_id, tenant_id, deal_id, artifact_id, doc_type,
+                    (document_id, tenant_id, deal_id, doc_id, doc_type,
                      parse_status, created_at, updated_at)
-                    VALUES (:document_id, :tenant_id, :deal_id, :artifact_id, :doc_type,
+                    VALUES (:document_id, :tenant_id, :deal_id, :doc_id, :doc_type,
                             :parse_status, :created_at, :updated_at)
                     """
                 ),
@@ -1380,7 +1383,7 @@ class TestDocumentsRLS:
                     "document_id": document_id,
                     "tenant_id": TENANT_A_ID,
                     "deal_id": deal_id,
-                    "artifact_id": artifact_id,
+                    "doc_id": doc_id,
                     "doc_type": "PDF",
                     "parse_status": "PENDING",
                     "created_at": now,
@@ -1406,20 +1409,20 @@ class TestDocumentsRLS:
     ) -> None:
         """Insert document under tenant A, read under tenant B => 0 rows."""
         deal_id = str(uuid.uuid4())
-        artifact_id = str(uuid.uuid4())
+        doc_id = str(uuid.uuid4())
         document_id = str(uuid.uuid4())
         now = datetime.now(UTC)
 
         with app_engine.begin() as conn:
             conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
-            self._create_deal_and_artifact(conn, TENANT_A_ID, deal_id, artifact_id)
+            self._create_deal_and_artifact(conn, TENANT_A_ID, deal_id, doc_id)
             conn.execute(
                 text(
                     """
                     INSERT INTO documents
-                    (document_id, tenant_id, deal_id, artifact_id, doc_type,
+                    (document_id, tenant_id, deal_id, doc_id, doc_type,
                      parse_status, created_at, updated_at)
-                    VALUES (:document_id, :tenant_id, :deal_id, :artifact_id, :doc_type,
+                    VALUES (:document_id, :tenant_id, :deal_id, :doc_id, :doc_type,
                             :parse_status, :created_at, :updated_at)
                     """
                 ),
@@ -1427,7 +1430,7 @@ class TestDocumentsRLS:
                     "document_id": document_id,
                     "tenant_id": TENANT_A_ID,
                     "deal_id": deal_id,
-                    "artifact_id": artifact_id,
+                    "doc_id": doc_id,
                     "doc_type": "PDF",
                     "parse_status": "PENDING",
                     "created_at": now,
@@ -1450,20 +1453,20 @@ class TestDocumentsRLS:
     ) -> None:
         """No SET LOCAL => SELECT returns 0 rows (fail closed)."""
         deal_id = str(uuid.uuid4())
-        artifact_id = str(uuid.uuid4())
+        doc_id = str(uuid.uuid4())
         document_id = str(uuid.uuid4())
         now = datetime.now(UTC)
 
         with app_engine.begin() as conn:
             conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
-            self._create_deal_and_artifact(conn, TENANT_A_ID, deal_id, artifact_id)
+            self._create_deal_and_artifact(conn, TENANT_A_ID, deal_id, doc_id)
             conn.execute(
                 text(
                     """
                     INSERT INTO documents
-                    (document_id, tenant_id, deal_id, artifact_id, doc_type,
+                    (document_id, tenant_id, deal_id, doc_id, doc_type,
                      parse_status, created_at, updated_at)
-                    VALUES (:document_id, :tenant_id, :deal_id, :artifact_id, :doc_type,
+                    VALUES (:document_id, :tenant_id, :deal_id, :doc_id, :doc_type,
                             :parse_status, :created_at, :updated_at)
                     """
                 ),
@@ -1471,7 +1474,7 @@ class TestDocumentsRLS:
                     "document_id": document_id,
                     "tenant_id": TENANT_A_ID,
                     "deal_id": deal_id,
-                    "artifact_id": artifact_id,
+                    "doc_id": doc_id,
                     "doc_type": "PDF",
                     "parse_status": "PENDING",
                     "created_at": now,
@@ -1490,7 +1493,7 @@ class TestDocumentsRLS:
     ) -> None:
         """INSERT without SET LOCAL should be blocked by RLS WITH CHECK."""
         deal_id = str(uuid.uuid4())
-        artifact_id = str(uuid.uuid4())
+        doc_id = str(uuid.uuid4())
         document_id = str(uuid.uuid4())
         now = datetime.now(UTC)
 
@@ -1512,20 +1515,21 @@ class TestDocumentsRLS:
             conn.execute(
                 text(
                     """
-                    INSERT INTO deal_artifacts
-                    (artifact_id, tenant_id, deal_id, artifact_type, storage_uri,
-                     sha256, created_at, updated_at)
-                    VALUES (:artifact_id, :tenant_id, :deal_id, :artifact_type, :storage_uri,
-                            :sha256, :created_at, :updated_at)
+                    INSERT INTO document_artifacts
+                    (doc_id, tenant_id, deal_id, doc_type, title, source_system,
+                     version_id, created_at, updated_at)
+                    VALUES (:doc_id, :tenant_id, :deal_id, :doc_type, :title, :source_system,
+                            :version_id, :created_at, :updated_at)
                     """
                 ),
                 {
-                    "artifact_id": artifact_id,
+                    "doc_id": doc_id,
                     "tenant_id": TENANT_A_ID,
                     "deal_id": deal_id,
-                    "artifact_type": "PITCH_DECK",
-                    "storage_uri": "s3://bucket/test.pdf",
-                    "sha256": "a" * 64,
+                    "doc_type": "PITCH_DECK",
+                    "title": "Test Document",
+                    "source_system": "DocSend",
+                    "version_id": "v1",
                     "created_at": now,
                     "updated_at": now,
                 },
@@ -1536,9 +1540,9 @@ class TestDocumentsRLS:
                 text(
                     """
                     INSERT INTO documents
-                    (document_id, tenant_id, deal_id, artifact_id, doc_type,
+                    (document_id, tenant_id, deal_id, doc_id, doc_type,
                      parse_status, created_at, updated_at)
-                    VALUES (:document_id, :tenant_id, :deal_id, :artifact_id, :doc_type,
+                    VALUES (:document_id, :tenant_id, :deal_id, :doc_id, :doc_type,
                             :parse_status, :created_at, :updated_at)
                     """
                 ),
@@ -1546,7 +1550,7 @@ class TestDocumentsRLS:
                     "document_id": document_id,
                     "tenant_id": TENANT_A_ID,
                     "deal_id": deal_id,
-                    "artifact_id": artifact_id,
+                    "doc_id": doc_id,
                     "doc_type": "PDF",
                     "parse_status": "PENDING",
                     "created_at": now,
@@ -1566,13 +1570,13 @@ class TestDocumentsRLS:
     ) -> None:
         """INSERT with tenant context A but tenant_id=B must be blocked by WITH CHECK."""
         deal_id = str(uuid.uuid4())
-        artifact_id = str(uuid.uuid4())
+        doc_id = str(uuid.uuid4())
         document_id = str(uuid.uuid4())
         now = datetime.now(UTC)
 
         with app_engine.begin() as conn:
             conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
-            self._create_deal_and_artifact(conn, TENANT_A_ID, deal_id, artifact_id)
+            self._create_deal_and_artifact(conn, TENANT_A_ID, deal_id, doc_id)
 
         with pytest.raises(DBAPIError) as exc_info, app_engine.begin() as conn:
             conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
@@ -1580,9 +1584,9 @@ class TestDocumentsRLS:
                 text(
                     """
                     INSERT INTO documents
-                    (document_id, tenant_id, deal_id, artifact_id, doc_type,
+                    (document_id, tenant_id, deal_id, doc_id, doc_type,
                      parse_status, created_at, updated_at)
-                    VALUES (:document_id, :tenant_id, :deal_id, :artifact_id, :doc_type,
+                    VALUES (:document_id, :tenant_id, :deal_id, :doc_id, :doc_type,
                             :parse_status, :created_at, :updated_at)
                     """
                 ),
@@ -1590,7 +1594,7 @@ class TestDocumentsRLS:
                     "document_id": document_id,
                     "tenant_id": TENANT_B_ID,  # Mismatched: context=A, value=B
                     "deal_id": deal_id,
-                    "artifact_id": artifact_id,
+                    "doc_id": doc_id,
                     "doc_type": "PDF",
                     "parse_status": "PENDING",
                     "created_at": now,
@@ -1614,10 +1618,10 @@ class TestDocumentSpansRLS:
         conn: object,
         tenant_id: str,
         deal_id: str,
-        artifact_id: str,
+        doc_id: str,
         document_id: str,
     ) -> None:
-        """Helper to create deal, artifact, document for FK constraints."""
+        """Helper to create deal, document_artifact, document for FK constraints."""
         now = datetime.now(UTC)
         conn.execute(
             text(
@@ -1636,20 +1640,21 @@ class TestDocumentSpansRLS:
         conn.execute(
             text(
                 """
-                INSERT INTO deal_artifacts
-                (artifact_id, tenant_id, deal_id, artifact_type, storage_uri,
-                 sha256, created_at, updated_at)
-                VALUES (:artifact_id, :tenant_id, :deal_id, :artifact_type, :storage_uri,
-                        :sha256, :created_at, :updated_at)
+                INSERT INTO document_artifacts
+                (doc_id, tenant_id, deal_id, doc_type, title, source_system,
+                 version_id, created_at, updated_at)
+                VALUES (:doc_id, :tenant_id, :deal_id, :doc_type, :title, :source_system,
+                        :version_id, :created_at, :updated_at)
                 """
             ),
             {
-                "artifact_id": artifact_id,
+                "doc_id": doc_id,
                 "tenant_id": tenant_id,
                 "deal_id": deal_id,
-                "artifact_type": "PITCH_DECK",
-                "storage_uri": "s3://bucket/test.pdf",
-                "sha256": "a" * 64,
+                "doc_type": "PITCH_DECK",
+                "title": "Test Document",
+                "source_system": "DocSend",
+                "version_id": "v1",
                 "created_at": now,
                 "updated_at": now,
             },
@@ -1658,9 +1663,9 @@ class TestDocumentSpansRLS:
             text(
                 """
                 INSERT INTO documents
-                (document_id, tenant_id, deal_id, artifact_id, doc_type,
+                (document_id, tenant_id, deal_id, doc_id, doc_type,
                  parse_status, created_at, updated_at)
-                VALUES (:document_id, :tenant_id, :deal_id, :artifact_id, :doc_type,
+                VALUES (:document_id, :tenant_id, :deal_id, :doc_id, :doc_type,
                         :parse_status, :created_at, :updated_at)
                 """
             ),
@@ -1668,7 +1673,7 @@ class TestDocumentSpansRLS:
                 "document_id": document_id,
                 "tenant_id": tenant_id,
                 "deal_id": deal_id,
-                "artifact_id": artifact_id,
+                "doc_id": doc_id,
                 "doc_type": "PDF",
                 "parse_status": "PARSED",
                 "created_at": now,
@@ -1681,14 +1686,14 @@ class TestDocumentSpansRLS:
     ) -> None:
         """Insert span under tenant A, read under tenant A => 1 row."""
         deal_id = str(uuid.uuid4())
-        artifact_id = str(uuid.uuid4())
+        doc_id = str(uuid.uuid4())
         document_id = str(uuid.uuid4())
         span_id = str(uuid.uuid4())
         now = datetime.now(UTC)
 
         with app_engine.begin() as conn:
             conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
-            self._create_full_hierarchy(conn, TENANT_A_ID, deal_id, artifact_id, document_id)
+            self._create_full_hierarchy(conn, TENANT_A_ID, deal_id, doc_id, document_id)
             conn.execute(
                 text(
                     """
@@ -1727,14 +1732,14 @@ class TestDocumentSpansRLS:
     ) -> None:
         """Insert span under tenant A, read under tenant B => 0 rows."""
         deal_id = str(uuid.uuid4())
-        artifact_id = str(uuid.uuid4())
+        doc_id = str(uuid.uuid4())
         document_id = str(uuid.uuid4())
         span_id = str(uuid.uuid4())
         now = datetime.now(UTC)
 
         with app_engine.begin() as conn:
             conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
-            self._create_full_hierarchy(conn, TENANT_A_ID, deal_id, artifact_id, document_id)
+            self._create_full_hierarchy(conn, TENANT_A_ID, deal_id, doc_id, document_id)
             conn.execute(
                 text(
                     """
@@ -1772,14 +1777,14 @@ class TestDocumentSpansRLS:
     ) -> None:
         """No SET LOCAL => SELECT returns 0 rows (fail closed)."""
         deal_id = str(uuid.uuid4())
-        artifact_id = str(uuid.uuid4())
+        doc_id = str(uuid.uuid4())
         document_id = str(uuid.uuid4())
         span_id = str(uuid.uuid4())
         now = datetime.now(UTC)
 
         with app_engine.begin() as conn:
             conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
-            self._create_full_hierarchy(conn, TENANT_A_ID, deal_id, artifact_id, document_id)
+            self._create_full_hierarchy(conn, TENANT_A_ID, deal_id, doc_id, document_id)
             conn.execute(
                 text(
                     """
@@ -1813,7 +1818,7 @@ class TestDocumentSpansRLS:
     ) -> None:
         """INSERT without SET LOCAL should be blocked by RLS WITH CHECK."""
         deal_id = str(uuid.uuid4())
-        artifact_id = str(uuid.uuid4())
+        doc_id = str(uuid.uuid4())
         document_id = str(uuid.uuid4())
         span_id = str(uuid.uuid4())
         now = datetime.now(UTC)
@@ -1836,20 +1841,21 @@ class TestDocumentSpansRLS:
             conn.execute(
                 text(
                     """
-                    INSERT INTO deal_artifacts
-                    (artifact_id, tenant_id, deal_id, artifact_type, storage_uri,
-                     sha256, created_at, updated_at)
-                    VALUES (:artifact_id, :tenant_id, :deal_id, :artifact_type, :storage_uri,
-                            :sha256, :created_at, :updated_at)
+                    INSERT INTO document_artifacts
+                    (doc_id, tenant_id, deal_id, doc_type, title, source_system,
+                     version_id, created_at, updated_at)
+                    VALUES (:doc_id, :tenant_id, :deal_id, :doc_type, :title, :source_system,
+                            :version_id, :created_at, :updated_at)
                     """
                 ),
                 {
-                    "artifact_id": artifact_id,
+                    "doc_id": doc_id,
                     "tenant_id": TENANT_A_ID,
                     "deal_id": deal_id,
-                    "artifact_type": "PITCH_DECK",
-                    "storage_uri": "s3://bucket/test.pdf",
-                    "sha256": "a" * 64,
+                    "doc_type": "PITCH_DECK",
+                    "title": "Test Document",
+                    "source_system": "DocSend",
+                    "version_id": "v1",
                     "created_at": now,
                     "updated_at": now,
                 },
@@ -1858,9 +1864,9 @@ class TestDocumentSpansRLS:
                 text(
                     """
                     INSERT INTO documents
-                    (document_id, tenant_id, deal_id, artifact_id, doc_type,
+                    (document_id, tenant_id, deal_id, doc_id, doc_type,
                      parse_status, created_at, updated_at)
-                    VALUES (:document_id, :tenant_id, :deal_id, :artifact_id, :doc_type,
+                    VALUES (:document_id, :tenant_id, :deal_id, :doc_id, :doc_type,
                             :parse_status, :created_at, :updated_at)
                     """
                 ),
@@ -1868,7 +1874,7 @@ class TestDocumentSpansRLS:
                     "document_id": document_id,
                     "tenant_id": TENANT_A_ID,
                     "deal_id": deal_id,
-                    "artifact_id": artifact_id,
+                    "doc_id": doc_id,
                     "doc_type": "PDF",
                     "parse_status": "PARSED",
                     "created_at": now,
@@ -1911,14 +1917,14 @@ class TestDocumentSpansRLS:
     ) -> None:
         """INSERT with tenant context A but tenant_id=B must be blocked by WITH CHECK."""
         deal_id = str(uuid.uuid4())
-        artifact_id = str(uuid.uuid4())
+        doc_id = str(uuid.uuid4())
         document_id = str(uuid.uuid4())
         span_id = str(uuid.uuid4())
         now = datetime.now(UTC)
 
         with app_engine.begin() as conn:
             conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
-            self._create_full_hierarchy(conn, TENANT_A_ID, deal_id, artifact_id, document_id)
+            self._create_full_hierarchy(conn, TENANT_A_ID, deal_id, doc_id, document_id)
 
         with pytest.raises(DBAPIError) as exc_info, app_engine.begin() as conn:
             conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))

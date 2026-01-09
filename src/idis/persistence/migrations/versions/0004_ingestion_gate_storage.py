@@ -1,12 +1,12 @@
-"""Ingestion Gate storage: deal_artifacts, documents, document_spans tables with RLS.
+"""Ingestion Gate storage: document_artifacts, documents, document_spans tables with RLS.
 
 Revision ID: 0004
 Revises: 0003
 Create Date: 2026-01-09
 
 Phase 3.1 Task 1.1: Storage primitives for ingestion pipeline.
-Creates tenant-scoped tables per Data Model §3.2-3.3:
-- deal_artifacts: Raw artifact metadata (files/connectors)
+Creates tenant-scoped tables aligned to OpenAPI v6.3 DocumentArtifact schema:
+- document_artifacts: Document metadata (OpenAPI DocumentArtifact)
 - documents: Parsed representation state
 - document_spans: Evidence spans with stable locators
 
@@ -16,9 +16,9 @@ RLS:
 - Fail-closed: INSERT/UPDATE blocked by WITH CHECK
 
 Foreign Keys:
-- deal_artifacts.deal_id -> deals(deal_id)
+- document_artifacts.deal_id -> deals(deal_id)
 - documents.deal_id -> deals(deal_id)
-- documents.artifact_id -> deal_artifacts(artifact_id)
+- documents.doc_id -> document_artifacts(doc_id)
 - document_spans.document_id -> documents(document_id) ON DELETE CASCADE
 """
 
@@ -35,25 +35,23 @@ def upgrade() -> None:
 
     op.execute(
         """
-        CREATE TABLE IF NOT EXISTS deal_artifacts (
-            artifact_id UUID PRIMARY KEY,
+        CREATE TABLE IF NOT EXISTS document_artifacts (
+            doc_id UUID PRIMARY KEY,
             tenant_id UUID NOT NULL,
             deal_id UUID NOT NULL REFERENCES deals(deal_id),
-            artifact_type TEXT NOT NULL,
-            storage_uri TEXT NOT NULL,
-            connector_type TEXT,
-            connector_ref TEXT,
-            sha256 TEXT NOT NULL,
-            version_label TEXT,
+            doc_type TEXT NOT NULL,
+            title TEXT NOT NULL,
+            source_system TEXT NOT NULL,
+            version_id TEXT NOT NULL,
             ingested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            sha256 TEXT,
+            uri TEXT,
+            metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-            CONSTRAINT valid_artifact_type CHECK (
-                artifact_type IN ('PITCH_DECK', 'FIN_MODEL', 'DATA_ROOM', 'TRANSCRIPT', 'NOTE')
-            ),
-            CONSTRAINT valid_connector_type CHECK (
-                connector_type IS NULL OR
-                connector_type IN ('DocSend', 'Drive', 'Dropbox', 'SharePoint', 'Upload')
+            CONSTRAINT valid_doc_type CHECK (
+                doc_type IN ('PITCH_DECK', 'FINANCIAL_MODEL', 'DATA_ROOM_FILE',
+                             'TRANSCRIPT', 'TERM_SHEET', 'OTHER')
             )
         )
         """
@@ -61,15 +59,16 @@ def upgrade() -> None:
 
     op.execute(
         """
-        CREATE INDEX IF NOT EXISTS idx_deal_artifacts_tenant_deal
-        ON deal_artifacts (tenant_id, deal_id)
+        CREATE INDEX IF NOT EXISTS idx_document_artifacts_tenant_deal
+        ON document_artifacts (tenant_id, deal_id)
         """
     )
 
     op.execute(
         """
-        CREATE INDEX IF NOT EXISTS idx_deal_artifacts_sha256
-        ON deal_artifacts (sha256)
+        CREATE INDEX IF NOT EXISTS idx_document_artifacts_sha256
+        ON document_artifacts (sha256)
+        WHERE sha256 IS NOT NULL
         """
     )
 
@@ -79,13 +78,13 @@ def upgrade() -> None:
             document_id UUID PRIMARY KEY,
             tenant_id UUID NOT NULL,
             deal_id UUID NOT NULL REFERENCES deals(deal_id),
-            artifact_id UUID NOT NULL REFERENCES deal_artifacts(artifact_id),
+            doc_id UUID NOT NULL REFERENCES document_artifacts(doc_id),
             doc_type TEXT NOT NULL,
             parse_status TEXT NOT NULL DEFAULT 'PENDING',
             metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-            CONSTRAINT valid_doc_type CHECK (
+            CONSTRAINT valid_document_doc_type CHECK (
                 doc_type IN ('PDF', 'PPTX', 'XLSX', 'DOCX', 'AUDIO', 'VIDEO')
             ),
             CONSTRAINT valid_parse_status CHECK (
@@ -104,8 +103,8 @@ def upgrade() -> None:
 
     op.execute(
         """
-        CREATE INDEX IF NOT EXISTS idx_documents_artifact
-        ON documents (artifact_id)
+        CREATE INDEX IF NOT EXISTS idx_documents_doc_id
+        ON documents (doc_id)
         """
     )
 
@@ -142,8 +141,8 @@ def upgrade() -> None:
         """
     )
 
-    op.execute("ALTER TABLE deal_artifacts ENABLE ROW LEVEL SECURITY")
-    op.execute("ALTER TABLE deal_artifacts FORCE ROW LEVEL SECURITY")
+    op.execute("ALTER TABLE document_artifacts ENABLE ROW LEVEL SECURITY")
+    op.execute("ALTER TABLE document_artifacts FORCE ROW LEVEL SECURITY")
 
     op.execute("ALTER TABLE documents ENABLE ROW LEVEL SECURITY")
     op.execute("ALTER TABLE documents FORCE ROW LEVEL SECURITY")
@@ -153,7 +152,7 @@ def upgrade() -> None:
 
     op.execute(
         """
-        CREATE POLICY deal_artifacts_tenant_isolation ON deal_artifacts
+        CREATE POLICY document_artifacts_tenant_isolation ON document_artifacts
         USING (tenant_id = NULLIF(current_setting('idis.tenant_id', true), '')::uuid)
         WITH CHECK (tenant_id = NULLIF(current_setting('idis.tenant_id', true), '')::uuid)
         """
@@ -181,8 +180,8 @@ def downgrade() -> None:
 
     op.execute("DROP POLICY IF EXISTS document_spans_tenant_isolation ON document_spans")
     op.execute("DROP POLICY IF EXISTS documents_tenant_isolation ON documents")
-    op.execute("DROP POLICY IF EXISTS deal_artifacts_tenant_isolation ON deal_artifacts")
+    op.execute("DROP POLICY IF EXISTS document_artifacts_tenant_isolation ON document_artifacts")
 
     op.execute("DROP TABLE IF EXISTS document_spans")
     op.execute("DROP TABLE IF EXISTS documents")
-    op.execute("DROP TABLE IF EXISTS deal_artifacts")
+    op.execute("DROP TABLE IF EXISTS document_artifacts")

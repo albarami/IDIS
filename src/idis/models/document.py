@@ -2,7 +2,7 @@
 
 Aligned to Data Model §3.3 (documents table).
 
-A Document represents the parsed state of a DealArtifact.
+A Document represents the parsed state of a DocumentArtifact.
 One artifact may produce one document (e.g., PDF) or multiple
 documents (e.g., ZIP archive extraction).
 """
@@ -45,14 +45,14 @@ class ParseStatus(str, Enum):
 class Document(BaseModel):
     """Parsed document representation metadata.
 
-    Represents the result of parsing a DealArtifact.
+    Represents the result of parsing a DocumentArtifact.
     Tracks parsing status and document-level metadata.
 
     Attributes:
         document_id: Unique identifier (UUID).
         tenant_id: Tenant scope (required for RLS).
         deal_id: Parent deal reference.
-        artifact_id: Source artifact reference.
+        doc_id: Source DocumentArtifact reference.
         doc_type: Document format (PDF, PPTX, etc.).
         parse_status: Current parsing state.
         metadata: Flexible document metadata (page count, dimensions, etc.).
@@ -69,7 +69,7 @@ class Document(BaseModel):
     document_id: Annotated[UUID, Field(description="Unique document identifier")]
     tenant_id: Annotated[UUID, Field(description="Tenant scope for RLS isolation")]
     deal_id: Annotated[UUID, Field(description="Parent deal reference")]
-    artifact_id: Annotated[UUID, Field(description="Source artifact reference")]
+    doc_id: Annotated[UUID, Field(description="Source DocumentArtifact reference")]
     doc_type: Annotated[DocumentType, Field(description="Document format type")]
     parse_status: Annotated[
         ParseStatus,

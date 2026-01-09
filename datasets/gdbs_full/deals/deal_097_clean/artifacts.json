@@ -1,0 +1,32 @@
+{
+  "artifacts": [
+    {
+      "artifact_id": "00000000-0000-0000-0003-000097000001",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000097",
+      "artifact_type": "PITCH_DECK",
+      "filename": "pitch_deck.pdf",
+      "storage_uri": "file://datasets/gdbs_full/deals/deal_097_clean/artifacts/pitch_deck.pdf",
+      "connector_type": "Upload",
+      "sha256": "7cfc3a10c2be37ce1cabbc7fe35a849a2d8967c1b72039d3aa7a8b6b8b674bb4",
+      "file_size_bytes": 2359,
+      "ingested_at": "2026-01-05T09:00:00Z",
+      "created_at": "2026-01-05T09:00:00Z",
+      "updated_at": "2026-01-05T09:00:00Z"
+    },
+    {
+      "artifact_id": "00000000-0000-0000-0003-000097000002",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000097",
+      "artifact_type": "FIN_MODEL",
+      "filename": "financials.xlsx",
+      "storage_uri": "file://datasets/gdbs_full/deals/deal_097_clean/artifacts/financials.xlsx",
+      "connector_type": "Upload",
+      "sha256": "40e21c30ebe8c72a44d26836a4688c70c49d2eb88ac744f97d0cce83af98b3e3",
+      "file_size_bytes": 6049,
+      "ingested_at": "2026-01-05T09:05:00Z",
+      "created_at": "2026-01-05T09:05:00Z",
+      "updated_at": "2026-01-05T09:05:00Z"
+    }
+  ]
+}

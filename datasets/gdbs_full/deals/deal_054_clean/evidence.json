@@ -1,0 +1,157 @@
+{
+  "evidence_items": [
+    {
+      "evidence_id": "00000000-0000-0000-0006-000054000001",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000054",
+      "source_span_id": "00000000-0000-0000-0004-000054000001",
+      "source_system": "Deck",
+      "upstream_origin_id": "deck-pulsebase-c1",
+      "retrieval_timestamp": "2026-01-05T09:10:00Z",
+      "verification_status": "VERIFIED",
+      "source_grade": "C",
+      "source_rank_subgrade": "C",
+      "rationale": {
+        "reason": "Self-reported metric from pitch deck"
+      },
+      "created_at": "2026-01-05T09:10:00Z",
+      "updated_at": "2026-01-05T09:10:00Z"
+    },
+    {
+      "evidence_id": "00000000-0000-0000-0006-000054000101",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000054",
+      "source_span_id": "00000000-0000-0000-0004-000054000008",
+      "source_system": "Model",
+      "upstream_origin_id": "model-pulsebase-c1",
+      "retrieval_timestamp": "2026-01-05T09:15:00Z",
+      "verification_status": "VERIFIED",
+      "source_grade": "B",
+      "source_rank_subgrade": "B",
+      "rationale": {
+        "reason": "Verified from financial model"
+      },
+      "created_at": "2026-01-05T09:15:00Z",
+      "updated_at": "2026-01-05T09:15:00Z"
+    },
+    {
+      "evidence_id": "00000000-0000-0000-0006-000054000002",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000054",
+      "source_span_id": "00000000-0000-0000-0004-000054000002",
+      "source_system": "Deck",
+      "upstream_origin_id": "deck-pulsebase-c2",
+      "retrieval_timestamp": "2026-01-05T09:10:00Z",
+      "verification_status": "VERIFIED",
+      "source_grade": "C",
+      "source_rank_subgrade": "C",
+      "rationale": {
+        "reason": "Self-reported metric from pitch deck"
+      },
+      "created_at": "2026-01-05T09:10:00Z",
+      "updated_at": "2026-01-05T09:10:00Z"
+    },
+    {
+      "evidence_id": "00000000-0000-0000-0006-000054000102",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000054",
+      "source_span_id": "00000000-0000-0000-0004-000054000009",
+      "source_system": "Model",
+      "upstream_origin_id": "model-pulsebase-c2",
+      "retrieval_timestamp": "2026-01-05T09:15:00Z",
+      "verification_status": "VERIFIED",
+      "source_grade": "B",
+      "source_rank_subgrade": "B",
+      "rationale": {
+        "reason": "Verified from financial model"
+      },
+      "created_at": "2026-01-05T09:15:00Z",
+      "updated_at": "2026-01-05T09:15:00Z"
+    },
+    {
+      "evidence_id": "00000000-0000-0000-0006-000054000003",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000054",
+      "source_span_id": "00000000-0000-0000-0004-000054000003",
+      "source_system": "Deck",
+      "upstream_origin_id": "deck-pulsebase-c3",
+      "retrieval_timestamp": "2026-01-05T09:10:00Z",
+      "verification_status": "VERIFIED",
+      "source_grade": "C",
+      "source_rank_subgrade": "C",
+      "rationale": {
+        "reason": "Self-reported metric from pitch deck"
+      },
+      "created_at": "2026-01-05T09:10:00Z",
+      "updated_at": "2026-01-05T09:10:00Z"
+    },
+    {
+      "evidence_id": "00000000-0000-0000-0006-000054000004",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000054",
+      "source_span_id": "00000000-0000-0000-0004-000054000004",
+      "source_system": "Deck",
+      "upstream_origin_id": "deck-pulsebase-c4",
+      "retrieval_timestamp": "2026-01-05T09:10:00Z",
+      "verification_status": "VERIFIED",
+      "source_grade": "C",
+      "source_rank_subgrade": "C",
+      "rationale": {
+        "reason": "Self-reported metric from pitch deck"
+      },
+      "created_at": "2026-01-05T09:10:00Z",
+      "updated_at": "2026-01-05T09:10:00Z"
+    },
+    {
+      "evidence_id": "00000000-0000-0000-0006-000054000005",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000054",
+      "source_span_id": "00000000-0000-0000-0004-000054000005",
+      "source_system": "Deck",
+      "upstream_origin_id": "deck-pulsebase-c5",
+      "retrieval_timestamp": "2026-01-05T09:10:00Z",
+      "verification_status": "VERIFIED",
+      "source_grade": "C",
+      "source_rank_subgrade": "C",
+      "rationale": {
+        "reason": "Self-reported metric from pitch deck"
+      },
+      "created_at": "2026-01-05T09:10:00Z",
+      "updated_at": "2026-01-05T09:10:00Z"
+    },
+    {
+      "evidence_id": "00000000-0000-0000-0006-000054000006",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000054",
+      "source_span_id": "00000000-0000-0000-0004-000054000006",
+      "source_system": "Deck",
+      "upstream_origin_id": "deck-pulsebase-c6",
+      "retrieval_timestamp": "2026-01-05T09:10:00Z",
+      "verification_status": "VERIFIED",
+      "source_grade": "C",
+      "source_rank_subgrade": "C",
+      "rationale": {
+        "reason": "Self-reported metric from pitch deck"
+      },
+      "created_at": "2026-01-05T09:10:00Z",
+      "updated_at": "2026-01-05T09:10:00Z"
+    },
+    {
+      "evidence_id": "00000000-0000-0000-0006-000054000007",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000054",
+      "source_span_id": "00000000-0000-0000-0004-000054000007",
+      "source_system": "Deck",
+      "upstream_origin_id": "deck-pulsebase-c7",
+      "retrieval_timestamp": "2026-01-05T09:10:00Z",
+      "verification_status": "VERIFIED",
+      "source_grade": "C",
+      "source_rank_subgrade": "C",
+      "rationale": {
+        "reason": "Self-reported metric from pitch deck"
+      },
+      "created_at": "2026-01-05T09:10:00Z",
+      "updated_at": "2026-01-05T09:10:00Z"
+    }
+  ]
+}

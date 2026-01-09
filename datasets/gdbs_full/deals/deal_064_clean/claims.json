@@ -1,0 +1,178 @@
+{
+  "claims": [
+    {
+      "claim_id": "00000000-0000-0000-0005-000064000001",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000064",
+      "claim_key": "C1",
+      "claim_class": "FINANCIAL",
+      "claim_text": "ARR is $3,164,000 as of December 2025",
+      "predicate": "ARR(CyberWare, 2025-12) = 3164000 USD",
+      "value": {
+        "value": 3164000,
+        "unit": "USD",
+        "currency": "USD",
+        "as_of": "2025-12-31",
+        "time_window": {
+          "label": "FY2025",
+          "start_date": "2025-01-01",
+          "end_date": "2025-12-31"
+        }
+      },
+      "materiality": "CRITICAL",
+      "ic_bound": true,
+      "primary_span_id": "00000000-0000-0000-0004-000064000001",
+      "created_by": "00000000-0000-0000-0001-000000000001",
+      "created_at": "2026-01-05T10:00:00Z",
+      "updated_at": "2026-01-05T10:00:00Z"
+    },
+    {
+      "claim_id": "00000000-0000-0000-0005-000064000002",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000064",
+      "claim_key": "C2",
+      "claim_class": "FINANCIAL",
+      "claim_text": "Gross Margin is 71.06%",
+      "predicate": "GrossMargin(CyberWare, 2025-12) = 71.06%",
+      "value": {
+        "value": 71.06,
+        "unit": "percent",
+        "currency": null,
+        "as_of": "2025-12-31",
+        "time_window": {
+          "label": "FY2025",
+          "start_date": "2025-01-01",
+          "end_date": "2025-12-31"
+        }
+      },
+      "materiality": "HIGH",
+      "ic_bound": true,
+      "primary_span_id": "00000000-0000-0000-0004-000064000002",
+      "created_by": "00000000-0000-0000-0001-000000000001",
+      "created_at": "2026-01-05T10:00:00Z",
+      "updated_at": "2026-01-05T10:00:00Z"
+    },
+    {
+      "claim_id": "00000000-0000-0000-0005-000064000003",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000064",
+      "claim_key": "C3",
+      "claim_class": "FINANCIAL",
+      "claim_text": "Monthly Burn Rate is $699,700",
+      "predicate": "MonthlyBurn(CyberWare, 2025-12) = 699700 USD",
+      "value": {
+        "value": 699700,
+        "unit": "USD/month",
+        "currency": "USD",
+        "as_of": "2025-12-31",
+        "time_window": {
+          "label": "Dec 2025",
+          "start_date": "2025-12-01",
+          "end_date": "2025-12-31"
+        }
+      },
+      "materiality": "HIGH",
+      "ic_bound": true,
+      "primary_span_id": "00000000-0000-0000-0004-000064000003",
+      "created_by": "00000000-0000-0000-0001-000000000001",
+      "created_at": "2026-01-05T10:00:00Z",
+      "updated_at": "2026-01-05T10:00:00Z"
+    },
+    {
+      "claim_id": "00000000-0000-0000-0005-000064000004",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000064",
+      "claim_key": "C4",
+      "claim_class": "FINANCIAL",
+      "claim_text": "Runway is 28.6 months",
+      "predicate": "Runway(CyberWare, 2025-12) = 28.6 months",
+      "value": {
+        "value": 28.6,
+        "unit": "months",
+        "currency": null,
+        "as_of": "2025-12-31",
+        "time_window": null
+      },
+      "materiality": "CRITICAL",
+      "ic_bound": true,
+      "primary_span_id": "00000000-0000-0000-0004-000064000004",
+      "created_by": "00000000-0000-0000-0001-000000000001",
+      "created_at": "2026-01-05T10:00:00Z",
+      "updated_at": "2026-01-05T10:00:00Z"
+    },
+    {
+      "claim_id": "00000000-0000-0000-0005-000064000005",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000064",
+      "claim_key": "C5",
+      "claim_class": "TRACTION",
+      "claim_text": "CAC is $5,400",
+      "predicate": "CAC(CyberWare, 2025-12) = 5400 USD",
+      "value": {
+        "value": 5400,
+        "unit": "USD",
+        "currency": "USD",
+        "as_of": "2025-12-31",
+        "time_window": {
+          "label": "Q4 2025",
+          "start_date": "2025-10-01",
+          "end_date": "2025-12-31"
+        }
+      },
+      "materiality": "MEDIUM",
+      "ic_bound": true,
+      "primary_span_id": "00000000-0000-0000-0004-000064000005",
+      "created_by": "00000000-0000-0000-0001-000000000001",
+      "created_at": "2026-01-05T10:00:00Z",
+      "updated_at": "2026-01-05T10:00:00Z"
+    },
+    {
+      "claim_id": "00000000-0000-0000-0005-000064000006",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000064",
+      "claim_key": "C6",
+      "claim_class": "TRACTION",
+      "claim_text": "NRR is 102.81%",
+      "predicate": "NRR(CyberWare, 2025) = 102.81%",
+      "value": {
+        "value": 102.81,
+        "unit": "percent",
+        "currency": null,
+        "as_of": "2025-12-31",
+        "time_window": {
+          "label": "FY2025",
+          "start_date": "2025-01-01",
+          "end_date": "2025-12-31"
+        }
+      },
+      "materiality": "HIGH",
+      "ic_bound": true,
+      "primary_span_id": "00000000-0000-0000-0004-000064000006",
+      "created_by": "00000000-0000-0000-0001-000000000001",
+      "created_at": "2026-01-05T10:00:00Z",
+      "updated_at": "2026-01-05T10:00:00Z"
+    },
+    {
+      "claim_id": "00000000-0000-0000-0005-000064000007",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000064",
+      "claim_key": "C7",
+      "claim_class": "MARKET_SIZE",
+      "claim_text": "TAM is $92,000,000,000",
+      "predicate": "TAM(AI/ML, 2025) = 92000000000 USD",
+      "value": {
+        "value": 92000000000,
+        "unit": "USD",
+        "currency": "USD",
+        "as_of": "2025-12-31",
+        "time_window": null
+      },
+      "materiality": "MEDIUM",
+      "ic_bound": true,
+      "primary_span_id": "00000000-0000-0000-0004-000064000007",
+      "created_by": "00000000-0000-0000-0001-000000000001",
+      "created_at": "2026-01-05T10:00:00Z",
+      "updated_at": "2026-01-05T10:00:00Z"
+    }
+  ]
+}

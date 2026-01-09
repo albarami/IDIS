@@ -8,19 +8,34 @@
     "C3": {"claim_grade": "C", "claim_verdict": "VERIFIED", "claim_action": "NONE", "defect_count": 0},
     "C4": {"claim_grade": "C", "claim_verdict": "VERIFIED", "claim_action": "NONE", "defect_count": 0},
     "C5": {"claim_grade": "C", "claim_verdict": "VERIFIED", "claim_action": "NONE", "defect_count": 0},
-    "C6": {"claim_grade": "D", "claim_verdict": "UNVERIFIED", "claim_action": "REQUEST_DATA", "defect_count": 1},
+    "C6": {"claim_grade": "D", "claim_verdict": "BLOCKED", "claim_action": "REJECT_NO_FREE_FACTS", "defect_count": 1},
     "C7": {"claim_grade": "C", "claim_verdict": "VERIFIED", "claim_action": "NONE", "defect_count": 0}
   },
   "expected_defects": [
     {"defect_type": "MISSING_LINK", "severity": "MAJOR", "affected_claim": "C6", "cure_protocol": "REQUEST_SOURCE"}
   ],
+  "blocked_claims": [
+    {
+      "claim_id": "00000000-0000-0000-0005-000005000006",
+      "claim_key": "C6",
+      "reason": "NO_FREE_FACTS_MISSING_EVIDENCE",
+      "description": "Claim C6 (NRR) is blocked from IC-bound outputs because it lacks primary evidence span linkage, violating No-Free-Facts invariant"
+    }
+  ],
   "expected_sanad_coverage": 0.857,
   "expected_grade_d_count": 1,
   "expected_ic_bound_claims": 7,
+  "no_free_facts_enforcement": {
+    "blocked_count": 1,
+    "blocked_claim_keys": ["C6"],
+    "enforcement_status": "ACTIVE"
+  },
   "validation_rules": [
-    {"rule": "c6_is_unverified", "expected": true},
+    {"rule": "c6_is_blocked", "expected": true},
     {"rule": "c6_grade_is_d", "expected": true},
     {"rule": "c6_has_no_primary_span", "expected": true},
-    {"rule": "missing_link_defect_detected", "expected": true}
+    {"rule": "missing_link_defect_detected", "expected": true},
+    {"rule": "no_free_facts_violation_detected", "expected": true},
+    {"rule": "c6_blocked_from_ic_output", "expected": true}
   ]
 }

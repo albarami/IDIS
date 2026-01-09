@@ -1,0 +1,178 @@
+{
+  "claims": [
+    {
+      "claim_id": "00000000-0000-0000-0005-000070000001",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000070",
+      "claim_key": "C1",
+      "claim_class": "FINANCIAL",
+      "claim_text": "ARR is $2,340,000 as of December 2025",
+      "predicate": "ARR(OmegaBase, 2025-12) = 2340000 USD",
+      "value": {
+        "value": 2340000,
+        "unit": "USD",
+        "currency": "USD",
+        "as_of": "2025-12-31",
+        "time_window": {
+          "label": "FY2025",
+          "start_date": "2025-01-01",
+          "end_date": "2025-12-31"
+        }
+      },
+      "materiality": "CRITICAL",
+      "ic_bound": true,
+      "primary_span_id": "00000000-0000-0000-0004-000070000001",
+      "created_by": "00000000-0000-0000-0001-000000000001",
+      "created_at": "2026-01-05T10:00:00Z",
+      "updated_at": "2026-01-05T10:00:00Z"
+    },
+    {
+      "claim_id": "00000000-0000-0000-0005-000070000002",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000070",
+      "claim_key": "C2",
+      "claim_class": "FINANCIAL",
+      "claim_text": "Gross Margin is 62.23%",
+      "predicate": "GrossMargin(OmegaBase, 2025-12) = 62.23%",
+      "value": {
+        "value": 62.23,
+        "unit": "percent",
+        "currency": null,
+        "as_of": "2025-12-31",
+        "time_window": {
+          "label": "FY2025",
+          "start_date": "2025-01-01",
+          "end_date": "2025-12-31"
+        }
+      },
+      "materiality": "HIGH",
+      "ic_bound": true,
+      "primary_span_id": "00000000-0000-0000-0004-000070000002",
+      "created_by": "00000000-0000-0000-0001-000000000001",
+      "created_at": "2026-01-05T10:00:00Z",
+      "updated_at": "2026-01-05T10:00:00Z"
+    },
+    {
+      "claim_id": "00000000-0000-0000-0005-000070000003",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000070",
+      "claim_key": "C3",
+      "claim_class": "FINANCIAL",
+      "claim_text": "Monthly Burn Rate is $735,900",
+      "predicate": "MonthlyBurn(OmegaBase, 2025-12) = 735900 USD",
+      "value": {
+        "value": 735900,
+        "unit": "USD/month",
+        "currency": "USD",
+        "as_of": "2025-12-31",
+        "time_window": {
+          "label": "Dec 2025",
+          "start_date": "2025-12-01",
+          "end_date": "2025-12-31"
+        }
+      },
+      "materiality": "HIGH",
+      "ic_bound": true,
+      "primary_span_id": "00000000-0000-0000-0004-000070000003",
+      "created_by": "00000000-0000-0000-0001-000000000001",
+      "created_at": "2026-01-05T10:00:00Z",
+      "updated_at": "2026-01-05T10:00:00Z"
+    },
+    {
+      "claim_id": "00000000-0000-0000-0005-000070000004",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000070",
+      "claim_key": "C4",
+      "claim_class": "FINANCIAL",
+      "claim_text": "Runway is 38.0 months",
+      "predicate": "Runway(OmegaBase, 2025-12) = 38.0 months",
+      "value": {
+        "value": 38.0,
+        "unit": "months",
+        "currency": null,
+        "as_of": "2025-12-31",
+        "time_window": null
+      },
+      "materiality": "CRITICAL",
+      "ic_bound": true,
+      "primary_span_id": "00000000-0000-0000-0004-000070000004",
+      "created_by": "00000000-0000-0000-0001-000000000001",
+      "created_at": "2026-01-05T10:00:00Z",
+      "updated_at": "2026-01-05T10:00:00Z"
+    },
+    {
+      "claim_id": "00000000-0000-0000-0005-000070000005",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000070",
+      "claim_key": "C5",
+      "claim_class": "TRACTION",
+      "claim_text": "CAC is $6,700",
+      "predicate": "CAC(OmegaBase, 2025-12) = 6700 USD",
+      "value": {
+        "value": 6700,
+        "unit": "USD",
+        "currency": "USD",
+        "as_of": "2025-12-31",
+        "time_window": {
+          "label": "Q4 2025",
+          "start_date": "2025-10-01",
+          "end_date": "2025-12-31"
+        }
+      },
+      "materiality": "MEDIUM",
+      "ic_bound": true,
+      "primary_span_id": "00000000-0000-0000-0004-000070000005",
+      "created_by": "00000000-0000-0000-0001-000000000001",
+      "created_at": "2026-01-05T10:00:00Z",
+      "updated_at": "2026-01-05T10:00:00Z"
+    },
+    {
+      "claim_id": "00000000-0000-0000-0005-000070000006",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000070",
+      "claim_key": "C6",
+      "claim_class": "TRACTION",
+      "claim_text": "NRR is 112.54%",
+      "predicate": "NRR(OmegaBase, 2025) = 112.54%",
+      "value": {
+        "value": 112.54,
+        "unit": "percent",
+        "currency": null,
+        "as_of": "2025-12-31",
+        "time_window": {
+          "label": "FY2025",
+          "start_date": "2025-01-01",
+          "end_date": "2025-12-31"
+        }
+      },
+      "materiality": "HIGH",
+      "ic_bound": true,
+      "primary_span_id": "00000000-0000-0000-0004-000070000006",
+      "created_by": "00000000-0000-0000-0001-000000000001",
+      "created_at": "2026-01-05T10:00:00Z",
+      "updated_at": "2026-01-05T10:00:00Z"
+    },
+    {
+      "claim_id": "00000000-0000-0000-0005-000070000007",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000070",
+      "claim_key": "C7",
+      "claim_class": "MARKET_SIZE",
+      "claim_text": "TAM is $79,000,000,000",
+      "predicate": "TAM(SaaS, 2025) = 79000000000 USD",
+      "value": {
+        "value": 79000000000,
+        "unit": "USD",
+        "currency": "USD",
+        "as_of": "2025-12-31",
+        "time_window": null
+      },
+      "materiality": "MEDIUM",
+      "ic_bound": true,
+      "primary_span_id": "00000000-0000-0000-0004-000070000007",
+      "created_by": "00000000-0000-0000-0001-000000000001",
+      "created_at": "2026-01-05T10:00:00Z",
+      "updated_at": "2026-01-05T10:00:00Z"
+    }
+  ]
+}

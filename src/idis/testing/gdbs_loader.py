@@ -148,6 +148,7 @@ class GDBSLoader:
         "claims.json",
         "evidence.json",
         "sanads.json",
+        "calcs.json",  # MANDATORY per v6.3 spec - fail-closed if missing
     ]
 
     def __init__(self, dataset_path: str | Path) -> None:
@@ -238,10 +239,21 @@ class GDBSLoader:
         if defects_path.exists():
             defects_data = self._load_json(defects_path)
 
+        # calcs.json is MANDATORY per v6.3 spec - fail-closed if missing
         calcs_path = deal_dir / "calcs.json"
-        calcs_data: dict[str, Any] = {"calc_sanads": []}
-        if calcs_path.exists():
-            calcs_data = self._load_json(calcs_path)
+        if not calcs_path.exists():
+            raise GDBSLoadError(
+                "Missing mandatory calcs.json - all deals must have deterministic calculations",
+                calcs_path,
+                {"deal_key": deal_key},
+            )
+        calcs_data = self._load_json(calcs_path)
+        if not calcs_data.get("calc_sanads"):
+            raise GDBSLoadError(
+                "calcs.json must contain non-empty calc_sanads array",
+                calcs_path,
+                {"deal_key": deal_key},
+            )
 
         return GDBSDeal(
             deal_id=deal_data["deal_id"],
@@ -283,14 +295,16 @@ class GDBSLoader:
 
         return deals
 
-    def _load_expected_outcomes(self) -> dict[str, GDBSExpectedOutcome]:
-        """Load all expected outcomes."""
+    def _load_expected_outcomes(self, manifest: dict[str, Any]) -> dict[str, GDBSExpectedOutcome]:
+        """Load all expected outcomes based on manifest deals."""
         outcomes: dict[str, GDBSExpectedOutcome] = {}
         outcomes_dir = self.dataset_path / "expected_outcomes"
         if not outcomes_dir.exists():
             raise GDBSLoadError("Expected outcomes directory not found", outcomes_dir)
 
-        for i in range(1, 9):
+        # Load expected outcomes for all deals in manifest (supports 100 deals)
+        deals_config = manifest.get("deals", [])
+        for i, _deal_cfg in enumerate(deals_config, 1):
             filename = f"deal_{i:03d}_expected.json"
             path = outcomes_dir / filename
             if not path.exists():
@@ -336,7 +350,7 @@ class GDBSLoader:
         tenant = self._load_tenant()
         actors = self._load_actors()
         deals = self._load_deals(manifest)
-        expected_outcomes = self._load_expected_outcomes()
+        expected_outcomes = self._load_expected_outcomes(manifest)
         audit_expectations = self._load_audit_expectations()
 
         return GDBSDataset(

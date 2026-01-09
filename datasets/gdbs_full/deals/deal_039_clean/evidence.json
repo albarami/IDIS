@@ -1,0 +1,157 @@
+{
+  "evidence_items": [
+    {
+      "evidence_id": "00000000-0000-0000-0006-000039000001",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000039",
+      "source_span_id": "00000000-0000-0000-0004-000039000001",
+      "source_system": "Deck",
+      "upstream_origin_id": "deck-zenithworks-c1",
+      "retrieval_timestamp": "2026-01-05T09:10:00Z",
+      "verification_status": "VERIFIED",
+      "source_grade": "C",
+      "source_rank_subgrade": "C",
+      "rationale": {
+        "reason": "Self-reported metric from pitch deck"
+      },
+      "created_at": "2026-01-05T09:10:00Z",
+      "updated_at": "2026-01-05T09:10:00Z"
+    },
+    {
+      "evidence_id": "00000000-0000-0000-0006-000039000101",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000039",
+      "source_span_id": "00000000-0000-0000-0004-000039000008",
+      "source_system": "Model",
+      "upstream_origin_id": "model-zenithworks-c1",
+      "retrieval_timestamp": "2026-01-05T09:15:00Z",
+      "verification_status": "VERIFIED",
+      "source_grade": "B",
+      "source_rank_subgrade": "B",
+      "rationale": {
+        "reason": "Verified from financial model"
+      },
+      "created_at": "2026-01-05T09:15:00Z",
+      "updated_at": "2026-01-05T09:15:00Z"
+    },
+    {
+      "evidence_id": "00000000-0000-0000-0006-000039000002",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000039",
+      "source_span_id": "00000000-0000-0000-0004-000039000002",
+      "source_system": "Deck",
+      "upstream_origin_id": "deck-zenithworks-c2",
+      "retrieval_timestamp": "2026-01-05T09:10:00Z",
+      "verification_status": "VERIFIED",
+      "source_grade": "C",
+      "source_rank_subgrade": "C",
+      "rationale": {
+        "reason": "Self-reported metric from pitch deck"
+      },
+      "created_at": "2026-01-05T09:10:00Z",
+      "updated_at": "2026-01-05T09:10:00Z"
+    },
+    {
+      "evidence_id": "00000000-0000-0000-0006-000039000102",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000039",
+      "source_span_id": "00000000-0000-0000-0004-000039000009",
+      "source_system": "Model",
+      "upstream_origin_id": "model-zenithworks-c2",
+      "retrieval_timestamp": "2026-01-05T09:15:00Z",
+      "verification_status": "VERIFIED",
+      "source_grade": "B",
+      "source_rank_subgrade": "B",
+      "rationale": {
+        "reason": "Verified from financial model"
+      },
+      "created_at": "2026-01-05T09:15:00Z",
+      "updated_at": "2026-01-05T09:15:00Z"
+    },
+    {
+      "evidence_id": "00000000-0000-0000-0006-000039000003",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000039",
+      "source_span_id": "00000000-0000-0000-0004-000039000003",
+      "source_system": "Deck",
+      "upstream_origin_id": "deck-zenithworks-c3",
+      "retrieval_timestamp": "2026-01-05T09:10:00Z",
+      "verification_status": "VERIFIED",
+      "source_grade": "C",
+      "source_rank_subgrade": "C",
+      "rationale": {
+        "reason": "Self-reported metric from pitch deck"
+      },
+      "created_at": "2026-01-05T09:10:00Z",
+      "updated_at": "2026-01-05T09:10:00Z"
+    },
+    {
+      "evidence_id": "00000000-0000-0000-0006-000039000004",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000039",
+      "source_span_id": "00000000-0000-0000-0004-000039000004",
+      "source_system": "Deck",
+      "upstream_origin_id": "deck-zenithworks-c4",
+      "retrieval_timestamp": "2026-01-05T09:10:00Z",
+      "verification_status": "VERIFIED",
+      "source_grade": "C",
+      "source_rank_subgrade": "C",
+      "rationale": {
+        "reason": "Self-reported metric from pitch deck"
+      },
+      "created_at": "2026-01-05T09:10:00Z",
+      "updated_at": "2026-01-05T09:10:00Z"
+    },
+    {
+      "evidence_id": "00000000-0000-0000-0006-000039000005",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000039",
+      "source_span_id": "00000000-0000-0000-0004-000039000005",
+      "source_system": "Deck",
+      "upstream_origin_id": "deck-zenithworks-c5",
+      "retrieval_timestamp": "2026-01-05T09:10:00Z",
+      "verification_status": "VERIFIED",
+      "source_grade": "C",
+      "source_rank_subgrade": "C",
+      "rationale": {
+        "reason": "Self-reported metric from pitch deck"
+      },
+      "created_at": "2026-01-05T09:10:00Z",
+      "updated_at": "2026-01-05T09:10:00Z"
+    },
+    {
+      "evidence_id": "00000000-0000-0000-0006-000039000006",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000039",
+      "source_span_id": "00000000-0000-0000-0004-000039000006",
+      "source_system": "Deck",
+      "upstream_origin_id": "deck-zenithworks-c6",
+      "retrieval_timestamp": "2026-01-05T09:10:00Z",
+      "verification_status": "VERIFIED",
+      "source_grade": "C",
+      "source_rank_subgrade": "C",
+      "rationale": {
+        "reason": "Self-reported metric from pitch deck"
+      },
+      "created_at": "2026-01-05T09:10:00Z",
+      "updated_at": "2026-01-05T09:10:00Z"
+    },
+    {
+      "evidence_id": "00000000-0000-0000-0006-000039000007",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000039",
+      "source_span_id": "00000000-0000-0000-0004-000039000007",
+      "source_system": "Deck",
+      "upstream_origin_id": "deck-zenithworks-c7",
+      "retrieval_timestamp": "2026-01-05T09:10:00Z",
+      "verification_status": "VERIFIED",
+      "source_grade": "C",
+      "source_rank_subgrade": "C",
+      "rationale": {
+        "reason": "Self-reported metric from pitch deck"
+      },
+      "created_at": "2026-01-05T09:10:00Z",
+      "updated_at": "2026-01-05T09:10:00Z"
+    }
+  ]
+}

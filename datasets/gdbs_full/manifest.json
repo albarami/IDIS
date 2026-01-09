@@ -154,6 +154,650 @@
       "directory": "deals/deal_008_version_drift",
       "deal_id": "00000000-0000-0000-0002-000000000008",
       "description": "Claim cites old document version, newer exists"
+    },
+    {
+      "deal_key": "deal_009",
+      "scenario": "clean",
+      "directory": "deals/deal_009_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000009",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_010",
+      "scenario": "clean",
+      "directory": "deals/deal_010_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000010",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_011",
+      "scenario": "clean",
+      "directory": "deals/deal_011_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000011",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_012",
+      "scenario": "clean",
+      "directory": "deals/deal_012_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000012",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_013",
+      "scenario": "clean",
+      "directory": "deals/deal_013_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000013",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_014",
+      "scenario": "clean",
+      "directory": "deals/deal_014_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000014",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_015",
+      "scenario": "clean",
+      "directory": "deals/deal_015_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000015",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_016",
+      "scenario": "clean",
+      "directory": "deals/deal_016_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000016",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_017",
+      "scenario": "clean",
+      "directory": "deals/deal_017_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000017",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_018",
+      "scenario": "clean",
+      "directory": "deals/deal_018_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000018",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_019",
+      "scenario": "clean",
+      "directory": "deals/deal_019_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000019",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_020",
+      "scenario": "clean",
+      "directory": "deals/deal_020_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000020",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_021",
+      "scenario": "clean",
+      "directory": "deals/deal_021_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000021",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_022",
+      "scenario": "clean",
+      "directory": "deals/deal_022_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000022",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_023",
+      "scenario": "clean",
+      "directory": "deals/deal_023_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000023",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_024",
+      "scenario": "clean",
+      "directory": "deals/deal_024_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000024",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_025",
+      "scenario": "clean",
+      "directory": "deals/deal_025_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000025",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_026",
+      "scenario": "clean",
+      "directory": "deals/deal_026_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000026",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_027",
+      "scenario": "clean",
+      "directory": "deals/deal_027_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000027",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_028",
+      "scenario": "clean",
+      "directory": "deals/deal_028_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000028",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_029",
+      "scenario": "clean",
+      "directory": "deals/deal_029_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000029",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_030",
+      "scenario": "clean",
+      "directory": "deals/deal_030_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000030",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_031",
+      "scenario": "clean",
+      "directory": "deals/deal_031_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000031",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_032",
+      "scenario": "clean",
+      "directory": "deals/deal_032_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000032",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_033",
+      "scenario": "clean",
+      "directory": "deals/deal_033_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000033",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_034",
+      "scenario": "clean",
+      "directory": "deals/deal_034_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000034",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_035",
+      "scenario": "clean",
+      "directory": "deals/deal_035_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000035",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_036",
+      "scenario": "clean",
+      "directory": "deals/deal_036_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000036",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_037",
+      "scenario": "clean",
+      "directory": "deals/deal_037_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000037",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_038",
+      "scenario": "clean",
+      "directory": "deals/deal_038_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000038",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_039",
+      "scenario": "clean",
+      "directory": "deals/deal_039_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000039",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_040",
+      "scenario": "clean",
+      "directory": "deals/deal_040_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000040",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_041",
+      "scenario": "clean",
+      "directory": "deals/deal_041_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000041",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_042",
+      "scenario": "clean",
+      "directory": "deals/deal_042_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000042",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_043",
+      "scenario": "clean",
+      "directory": "deals/deal_043_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000043",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_044",
+      "scenario": "clean",
+      "directory": "deals/deal_044_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000044",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_045",
+      "scenario": "clean",
+      "directory": "deals/deal_045_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000045",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_046",
+      "scenario": "clean",
+      "directory": "deals/deal_046_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000046",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_047",
+      "scenario": "clean",
+      "directory": "deals/deal_047_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000047",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_048",
+      "scenario": "clean",
+      "directory": "deals/deal_048_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000048",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_049",
+      "scenario": "clean",
+      "directory": "deals/deal_049_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000049",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_050",
+      "scenario": "clean",
+      "directory": "deals/deal_050_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000050",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_051",
+      "scenario": "clean",
+      "directory": "deals/deal_051_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000051",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_052",
+      "scenario": "clean",
+      "directory": "deals/deal_052_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000052",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_053",
+      "scenario": "clean",
+      "directory": "deals/deal_053_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000053",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_054",
+      "scenario": "clean",
+      "directory": "deals/deal_054_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000054",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_055",
+      "scenario": "clean",
+      "directory": "deals/deal_055_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000055",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_056",
+      "scenario": "clean",
+      "directory": "deals/deal_056_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000056",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_057",
+      "scenario": "clean",
+      "directory": "deals/deal_057_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000057",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_058",
+      "scenario": "clean",
+      "directory": "deals/deal_058_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000058",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_059",
+      "scenario": "clean",
+      "directory": "deals/deal_059_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000059",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_060",
+      "scenario": "clean",
+      "directory": "deals/deal_060_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000060",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_061",
+      "scenario": "clean",
+      "directory": "deals/deal_061_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000061",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_062",
+      "scenario": "clean",
+      "directory": "deals/deal_062_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000062",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_063",
+      "scenario": "clean",
+      "directory": "deals/deal_063_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000063",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_064",
+      "scenario": "clean",
+      "directory": "deals/deal_064_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000064",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_065",
+      "scenario": "clean",
+      "directory": "deals/deal_065_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000065",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_066",
+      "scenario": "clean",
+      "directory": "deals/deal_066_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000066",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_067",
+      "scenario": "clean",
+      "directory": "deals/deal_067_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000067",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_068",
+      "scenario": "clean",
+      "directory": "deals/deal_068_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000068",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_069",
+      "scenario": "clean",
+      "directory": "deals/deal_069_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000069",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_070",
+      "scenario": "clean",
+      "directory": "deals/deal_070_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000070",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_071",
+      "scenario": "clean",
+      "directory": "deals/deal_071_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000071",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_072",
+      "scenario": "clean",
+      "directory": "deals/deal_072_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000072",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_073",
+      "scenario": "clean",
+      "directory": "deals/deal_073_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000073",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_074",
+      "scenario": "clean",
+      "directory": "deals/deal_074_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000074",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_075",
+      "scenario": "clean",
+      "directory": "deals/deal_075_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000075",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_076",
+      "scenario": "clean",
+      "directory": "deals/deal_076_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000076",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_077",
+      "scenario": "clean",
+      "directory": "deals/deal_077_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000077",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_078",
+      "scenario": "clean",
+      "directory": "deals/deal_078_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000078",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_079",
+      "scenario": "clean",
+      "directory": "deals/deal_079_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000079",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_080",
+      "scenario": "clean",
+      "directory": "deals/deal_080_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000080",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_081",
+      "scenario": "clean",
+      "directory": "deals/deal_081_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000081",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_082",
+      "scenario": "clean",
+      "directory": "deals/deal_082_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000082",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_083",
+      "scenario": "clean",
+      "directory": "deals/deal_083_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000083",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_084",
+      "scenario": "clean",
+      "directory": "deals/deal_084_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000084",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_085",
+      "scenario": "clean",
+      "directory": "deals/deal_085_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000085",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_086",
+      "scenario": "clean",
+      "directory": "deals/deal_086_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000086",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_087",
+      "scenario": "clean",
+      "directory": "deals/deal_087_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000087",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_088",
+      "scenario": "clean",
+      "directory": "deals/deal_088_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000088",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_089",
+      "scenario": "clean",
+      "directory": "deals/deal_089_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000089",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_090",
+      "scenario": "clean",
+      "directory": "deals/deal_090_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000090",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_091",
+      "scenario": "clean",
+      "directory": "deals/deal_091_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000091",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_092",
+      "scenario": "clean",
+      "directory": "deals/deal_092_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000092",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_093",
+      "scenario": "clean",
+      "directory": "deals/deal_093_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000093",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_094",
+      "scenario": "clean",
+      "directory": "deals/deal_094_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000094",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_095",
+      "scenario": "clean",
+      "directory": "deals/deal_095_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000095",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_096",
+      "scenario": "clean",
+      "directory": "deals/deal_096_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000096",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_097",
+      "scenario": "clean",
+      "directory": "deals/deal_097_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000097",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_098",
+      "scenario": "clean",
+      "directory": "deals/deal_098_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000098",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_099",
+      "scenario": "clean",
+      "directory": "deals/deal_099_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000099",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_100",
+      "scenario": "clean",
+      "directory": "deals/deal_100_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000100",
+      "description": "Clean baseline deal with all claims verified"
     }
   ],
   "expected_outcomes": [
@@ -164,7 +808,99 @@
     "expected_outcomes/deal_005_expected.json",
     "expected_outcomes/deal_006_expected.json",
     "expected_outcomes/deal_007_expected.json",
-    "expected_outcomes/deal_008_expected.json"
+    "expected_outcomes/deal_008_expected.json",
+    "expected_outcomes/deal_009_expected.json",
+    "expected_outcomes/deal_010_expected.json",
+    "expected_outcomes/deal_011_expected.json",
+    "expected_outcomes/deal_012_expected.json",
+    "expected_outcomes/deal_013_expected.json",
+    "expected_outcomes/deal_014_expected.json",
+    "expected_outcomes/deal_015_expected.json",
+    "expected_outcomes/deal_016_expected.json",
+    "expected_outcomes/deal_017_expected.json",
+    "expected_outcomes/deal_018_expected.json",
+    "expected_outcomes/deal_019_expected.json",
+    "expected_outcomes/deal_020_expected.json",
+    "expected_outcomes/deal_021_expected.json",
+    "expected_outcomes/deal_022_expected.json",
+    "expected_outcomes/deal_023_expected.json",
+    "expected_outcomes/deal_024_expected.json",
+    "expected_outcomes/deal_025_expected.json",
+    "expected_outcomes/deal_026_expected.json",
+    "expected_outcomes/deal_027_expected.json",
+    "expected_outcomes/deal_028_expected.json",
+    "expected_outcomes/deal_029_expected.json",
+    "expected_outcomes/deal_030_expected.json",
+    "expected_outcomes/deal_031_expected.json",
+    "expected_outcomes/deal_032_expected.json",
+    "expected_outcomes/deal_033_expected.json",
+    "expected_outcomes/deal_034_expected.json",
+    "expected_outcomes/deal_035_expected.json",
+    "expected_outcomes/deal_036_expected.json",
+    "expected_outcomes/deal_037_expected.json",
+    "expected_outcomes/deal_038_expected.json",
+    "expected_outcomes/deal_039_expected.json",
+    "expected_outcomes/deal_040_expected.json",
+    "expected_outcomes/deal_041_expected.json",
+    "expected_outcomes/deal_042_expected.json",
+    "expected_outcomes/deal_043_expected.json",
+    "expected_outcomes/deal_044_expected.json",
+    "expected_outcomes/deal_045_expected.json",
+    "expected_outcomes/deal_046_expected.json",
+    "expected_outcomes/deal_047_expected.json",
+    "expected_outcomes/deal_048_expected.json",
+    "expected_outcomes/deal_049_expected.json",
+    "expected_outcomes/deal_050_expected.json",
+    "expected_outcomes/deal_051_expected.json",
+    "expected_outcomes/deal_052_expected.json",
+    "expected_outcomes/deal_053_expected.json",
+    "expected_outcomes/deal_054_expected.json",
+    "expected_outcomes/deal_055_expected.json",
+    "expected_outcomes/deal_056_expected.json",
+    "expected_outcomes/deal_057_expected.json",
+    "expected_outcomes/deal_058_expected.json",
+    "expected_outcomes/deal_059_expected.json",
+    "expected_outcomes/deal_060_expected.json",
+    "expected_outcomes/deal_061_expected.json",
+    "expected_outcomes/deal_062_expected.json",
+    "expected_outcomes/deal_063_expected.json",
+    "expected_outcomes/deal_064_expected.json",
+    "expected_outcomes/deal_065_expected.json",
+    "expected_outcomes/deal_066_expected.json",
+    "expected_outcomes/deal_067_expected.json",
+    "expected_outcomes/deal_068_expected.json",
+    "expected_outcomes/deal_069_expected.json",
+    "expected_outcomes/deal_070_expected.json",
+    "expected_outcomes/deal_071_expected.json",
+    "expected_outcomes/deal_072_expected.json",
+    "expected_outcomes/deal_073_expected.json",
+    "expected_outcomes/deal_074_expected.json",
+    "expected_outcomes/deal_075_expected.json",
+    "expected_outcomes/deal_076_expected.json",
+    "expected_outcomes/deal_077_expected.json",
+    "expected_outcomes/deal_078_expected.json",
+    "expected_outcomes/deal_079_expected.json",
+    "expected_outcomes/deal_080_expected.json",
+    "expected_outcomes/deal_081_expected.json",
+    "expected_outcomes/deal_082_expected.json",
+    "expected_outcomes/deal_083_expected.json",
+    "expected_outcomes/deal_084_expected.json",
+    "expected_outcomes/deal_085_expected.json",
+    "expected_outcomes/deal_086_expected.json",
+    "expected_outcomes/deal_087_expected.json",
+    "expected_outcomes/deal_088_expected.json",
+    "expected_outcomes/deal_089_expected.json",
+    "expected_outcomes/deal_090_expected.json",
+    "expected_outcomes/deal_091_expected.json",
+    "expected_outcomes/deal_092_expected.json",
+    "expected_outcomes/deal_093_expected.json",
+    "expected_outcomes/deal_094_expected.json",
+    "expected_outcomes/deal_095_expected.json",
+    "expected_outcomes/deal_096_expected.json",
+    "expected_outcomes/deal_097_expected.json",
+    "expected_outcomes/deal_098_expected.json",
+    "expected_outcomes/deal_099_expected.json",
+    "expected_outcomes/deal_100_expected.json"
   ],
   "audit_expectations": "audit_expectations/required_events.json",
   "checksums": {

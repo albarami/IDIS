@@ -1,0 +1,55 @@
+{
+  "calc_sanads": [
+    {
+      "calc_sanad_id": "00000000-0000-0000-0008-000068000001",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000068",
+      "calc_id": "calc-gm-068",
+      "calc_type": "GROSS_MARGIN",
+      "input_claim_ids": [
+        "00000000-0000-0000-0005-000068000002"
+      ],
+      "input_min_sanad_grade": "C",
+      "inputs": {
+        "revenue": 2376000,
+        "cogs": 860587
+      },
+      "formula_hash": "sha256:gm_v1_rev_minus_cogs_div_rev",
+      "code_version": "idis-calc-service@1.0.0",
+      "output": {
+        "gross_margin_percent": 63.78
+      },
+      "reproducibility_hash": "16ce8d610ed0dea6",
+      "calc_grade": "B",
+      "explanation": "GM = (Revenue - COGS) / Revenue = (2376000 - 860587) / 2376000 = 63.78%",
+      "created_at": "2026-01-05T11:00:00Z",
+      "updated_at": "2026-01-05T11:00:00Z"
+    },
+    {
+      "calc_sanad_id": "00000000-0000-0000-0008-000068000002",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000068",
+      "calc_id": "calc-runway-068",
+      "calc_type": "RUNWAY",
+      "input_claim_ids": [
+        "00000000-0000-0000-0005-000068000003",
+        "00000000-0000-0000-0005-000068000004"
+      ],
+      "input_min_sanad_grade": "C",
+      "inputs": {
+        "cash_balance": 9000000,
+        "monthly_burn": 110700
+      },
+      "formula_hash": "sha256:runway_v1_cash_div_burn",
+      "code_version": "idis-calc-service@1.0.0",
+      "output": {
+        "runway_months": 81.3
+      },
+      "reproducibility_hash": "2d9ca30b641c8bc0",
+      "calc_grade": "B",
+      "explanation": "Runway = Cash / Burn = 9000000 / 110700 = 81.3 months",
+      "created_at": "2026-01-05T11:00:00Z",
+      "updated_at": "2026-01-05T11:00:00Z"
+    }
+  ]
+}

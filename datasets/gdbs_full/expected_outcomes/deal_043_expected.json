@@ -1,0 +1,71 @@
+{
+  "deal_id": "00000000-0000-0000-0002-000000000043",
+  "deal_key": "deal_043",
+  "scenario": "clean",
+  "expected_claims": {
+    "C1": {
+      "claim_grade": "B",
+      "claim_verdict": "VERIFIED",
+      "claim_action": "NONE",
+      "defect_count": 0
+    },
+    "C2": {
+      "claim_grade": "B",
+      "claim_verdict": "VERIFIED",
+      "claim_action": "NONE",
+      "defect_count": 0
+    },
+    "C3": {
+      "claim_grade": "C",
+      "claim_verdict": "VERIFIED",
+      "claim_action": "NONE",
+      "defect_count": 0
+    },
+    "C4": {
+      "claim_grade": "C",
+      "claim_verdict": "VERIFIED",
+      "claim_action": "NONE",
+      "defect_count": 0
+    },
+    "C5": {
+      "claim_grade": "C",
+      "claim_verdict": "VERIFIED",
+      "claim_action": "NONE",
+      "defect_count": 0
+    },
+    "C6": {
+      "claim_grade": "C",
+      "claim_verdict": "VERIFIED",
+      "claim_action": "NONE",
+      "defect_count": 0
+    },
+    "C7": {
+      "claim_grade": "C",
+      "claim_verdict": "VERIFIED",
+      "claim_action": "NONE",
+      "defect_count": 0
+    }
+  },
+  "expected_defects": [],
+  "expected_sanad_coverage": 1.0,
+  "expected_grade_d_count": 0,
+  "expected_ic_bound_claims": 7,
+  "validation_rules": [
+    {
+      "rule": "all_claims_have_sanad",
+      "expected": true
+    },
+    {
+      "rule": "no_fatal_defects",
+      "expected": true
+    },
+    {
+      "rule": "no_major_defects",
+      "expected": true
+    },
+    {
+      "rule": "all_material_claims_verified",
+      "expected": true
+    }
+  ]
+}

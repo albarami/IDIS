@@ -64,10 +64,10 @@ class TestManifestContract:
         parts = version.split(".")
         assert len(parts) == 3, f"Invalid version format: {version}"
 
-    def test_manifest_defines_eight_deals(self, gdbs_dataset: GDBSDataset) -> None:
-        """Manifest must define exactly 8 deals."""
+    def test_manifest_defines_100_deals(self, gdbs_dataset: GDBSDataset) -> None:
+        """Manifest must define exactly 100 deals per v6.3 GDBS-F spec."""
         deals = gdbs_dataset.manifest.get("deals", [])
-        assert len(deals) == 8, f"Expected 8 deals, got {len(deals)}"
+        assert len(deals) == 100, f"Expected 100 deals (GDBS-F spec), got {len(deals)}"
 
     def test_manifest_defines_seven_claims(self, gdbs_dataset: GDBSDataset) -> None:
         """Manifest must define C1-C7 claim set."""
@@ -118,18 +118,18 @@ class TestActorsContract:
 class TestDealsContract:
     """Test deal structure and coverage."""
 
-    def test_has_eight_deals(self, gdbs_dataset: GDBSDataset) -> None:
-        """Dataset must have exactly 8 deals."""
-        assert len(gdbs_dataset.deals) == 8
+    def test_has_100_deals(self, gdbs_dataset: GDBSDataset) -> None:
+        """Dataset must have exactly 100 deals per v6.3 GDBS-F spec."""
+        assert len(gdbs_dataset.deals) == 100, f"Expected 100 deals, got {len(gdbs_dataset.deals)}"
 
     def test_deals_have_unique_ids(self, gdbs_dataset: GDBSDataset) -> None:
         """All deals must have unique deal_ids."""
         deal_ids = [d.deal_id for d in gdbs_dataset.deals]
         assert len(deal_ids) == len(set(deal_ids)), "Duplicate deal_ids found"
 
-    def test_deals_cover_all_scenarios(self, gdbs_dataset: GDBSDataset) -> None:
-        """Deals must cover all 8 adversarial scenarios."""
-        expected_scenarios = {
+    def test_deals_cover_all_adversarial_scenarios(self, gdbs_dataset: GDBSDataset) -> None:
+        """Deals 1-8 must cover all 8 adversarial scenarios."""
+        expected_adversarial = {
             "clean",
             "contradiction",
             "unit_mismatch",
@@ -139,12 +139,24 @@ class TestDealsContract:
             "chain_break",
             "version_drift",
         }
-        actual_scenarios = {d.scenario for d in gdbs_dataset.deals}
-        assert actual_scenarios == expected_scenarios, f"Scenario mismatch: {actual_scenarios}"
+        adversarial_deals = [d for d in gdbs_dataset.deals if int(d.deal_key.split("_")[1]) <= 8]
+        actual_scenarios = {d.scenario for d in adversarial_deals}
+        assert actual_scenarios == expected_adversarial, (
+            f"Adversarial scenario mismatch: {actual_scenarios}"
+        )
 
-    @pytest.mark.parametrize("deal_key", [f"deal_{i:03d}" for i in range(1, 9)])
+    def test_deals_9_to_100_are_clean(self, gdbs_dataset: GDBSDataset) -> None:
+        """Deals 9-100 must all be clean scenarios."""
+        clean_deals = [d for d in gdbs_dataset.deals if int(d.deal_key.split("_")[1]) > 8]
+        assert len(clean_deals) == 92, f"Expected 92 clean deals, got {len(clean_deals)}"
+        for deal in clean_deals:
+            assert deal.scenario == "clean", (
+                f"Deal {deal.deal_key} should be clean, got {deal.scenario}"
+            )
+
+    @pytest.mark.parametrize("deal_key", [f"deal_{i:03d}" for i in range(1, 101)])
     def test_deal_has_required_components(self, gdbs_dataset: GDBSDataset, deal_key: str) -> None:
-        """Each deal must have artifacts, spans, claims, evidence, sanads."""
+        """Each deal must have artifacts, spans, claims, evidence, sanads, calcs."""
         deal = gdbs_dataset.get_deal(deal_key)
         assert deal is not None, f"Deal {deal_key} not found"
         assert len(deal.artifacts) >= 1, f"Deal {deal_key} missing artifacts"
@@ -152,6 +164,7 @@ class TestDealsContract:
         assert len(deal.claims) == 7, f"Deal {deal_key} must have 7 claims (C1-C7)"
         assert len(deal.evidence) >= 1, f"Deal {deal_key} missing evidence"
         assert len(deal.sanads) == 7, f"Deal {deal_key} must have 7 sanads"
+        assert len(deal.calcs) >= 1, f"Deal {deal_key} missing mandatory calcs"
 
 
 class TestClaimsContract:
@@ -318,3 +331,187 @@ class TestExpectedOutcomes:
         for deal_key, outcome in gdbs_dataset.expected_outcomes.items():
             claim_keys = set(outcome.expected_claims.keys())
             assert claim_keys == expected_keys, f"Outcome {deal_key} missing claims"
+
+    def test_100_expected_outcomes_exist(self, gdbs_dataset: GDBSDataset) -> None:
+        """Must have exactly 100 expected outcomes."""
+        assert len(gdbs_dataset.expected_outcomes) == 100, (
+            f"Expected 100 outcomes, got {len(gdbs_dataset.expected_outcomes)}"
+        )
+
+
+class TestMandatoryCalcs:
+    """Test mandatory calcs.json for all deals."""
+
+    def test_all_deals_have_calcs(self, gdbs_dataset: GDBSDataset) -> None:
+        """All 100 deals must have calcs.json with calc_sanads."""
+        for deal in gdbs_dataset.deals:
+            assert len(deal.calcs) >= 1, f"Deal {deal.deal_key} missing mandatory calcs"
+
+    def test_calcs_have_required_fields(self, gdbs_dataset: GDBSDataset) -> None:
+        """All calc_sanads must have required fields."""
+        required = ["calc_sanad_id", "tenant_id", "calc_type", "inputs", "output", "calc_grade"]
+        for deal in gdbs_dataset.deals:
+            for calc in deal.calcs:
+                for field in required:
+                    assert field in calc, f"Calc missing {field} in deal {deal.deal_key}"
+
+    def test_calcs_include_gm_and_runway(self, gdbs_dataset: GDBSDataset) -> None:
+        """Each deal should have GM and runway calculations."""
+        for deal in gdbs_dataset.deals:
+            calc_types = {c.get("calc_type") for c in deal.calcs}
+            assert "GROSS_MARGIN" in calc_types, f"Deal {deal.deal_key} missing GROSS_MARGIN calc"
+            assert "RUNWAY" in calc_types, f"Deal {deal.deal_key} missing RUNWAY calc"
+
+    def test_calcs_have_reproducibility_hash(self, gdbs_dataset: GDBSDataset) -> None:
+        """All calcs must have reproducibility_hash for determinism."""
+        for deal in gdbs_dataset.deals:
+            for calc in deal.calcs:
+                assert "reproducibility_hash" in calc, (
+                    f"Calc {calc.get('calc_id')} missing reproducibility_hash in {deal.deal_key}"
+                )
+                assert calc["reproducibility_hash"], "reproducibility_hash must not be empty"
+
+
+class TestAuditTaxonomyValidation:
+    """Test audit taxonomy coverage and validation."""
+
+    # Required event types per IDIS Audit Event Taxonomy v6.3
+    REQUIRED_EVENT_TYPES = {
+        "deal.created",
+        "deal.updated",
+        "deal.status.changed",
+        "document.created",
+        "claim.created",
+        "claim.updated",
+        "claim.verdict.changed",
+        "claim.grade.changed",
+        "sanad.created",
+        "sanad.updated",
+        "sanad.defect.added",
+        "defect.created",
+        "defect.cured",
+        "defect.waived",
+        "calc.started",
+        "calc.completed",
+        "calc.failed",
+    }
+
+    def test_audit_expectations_exist(self, gdbs_dataset: GDBSDataset) -> None:
+        """Audit expectations file must exist and be loaded."""
+        assert gdbs_dataset.audit_expectations is not None
+        assert "event_categories" in gdbs_dataset.audit_expectations
+
+    def test_required_event_types_defined(self, gdbs_dataset: GDBSDataset) -> None:
+        """All required event types must be defined in audit expectations."""
+        audit = gdbs_dataset.audit_expectations
+        defined_events: set[str] = set()
+
+        for category_data in audit.get("event_categories", {}).values():
+            for event in category_data.get("required_events", []):
+                defined_events.add(event.get("event_type", ""))
+
+        missing = self.REQUIRED_EVENT_TYPES - defined_events
+        assert not missing, f"Missing required audit event types: {missing}"
+
+    def test_event_types_have_severity(self, gdbs_dataset: GDBSDataset) -> None:
+        """All event types must have severity defined."""
+        audit = gdbs_dataset.audit_expectations
+        valid_severities = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
+
+        for cat_name, category_data in audit.get("event_categories", {}).items():
+            for event in category_data.get("required_events", []):
+                severity = event.get("severity")
+                assert severity in valid_severities, (
+                    f"Invalid severity {severity} for {event.get('event_type')} in {cat_name}"
+                )
+
+    def test_event_types_have_required_fields_spec(self, gdbs_dataset: GDBSDataset) -> None:
+        """All event types must specify required_fields."""
+        audit = gdbs_dataset.audit_expectations
+
+        for cat_name, category_data in audit.get("event_categories", {}).items():
+            for event in category_data.get("required_events", []):
+                assert "required_fields" in event, (
+                    f"Event {event.get('event_type')} in {cat_name} missing required_fields"
+                )
+
+    def test_per_deal_audit_expectations(self, gdbs_dataset: GDBSDataset) -> None:
+        """Per-deal audit expectations must exist for adversarial deals."""
+        audit = gdbs_dataset.audit_expectations
+        per_deal = audit.get("per_deal_expected_events", {})
+
+        # Check adversarial deals have audit expectations
+        adversarial_keys = [
+            "deal_001_clean",
+            "deal_002_contradiction",
+            "deal_003_unit_mismatch",
+            "deal_004_time_window_mismatch",
+            "deal_005_missing_evidence",
+            "deal_006_calc_conflict",
+            "deal_007_chain_break",
+            "deal_008_version_drift",
+        ]
+        for key in adversarial_keys:
+            assert key in per_deal, f"Missing per-deal audit expectations for {key}"
+
+    def test_tenant_isolation_audit_events(self, gdbs_dataset: GDBSDataset) -> None:
+        """Tenant isolation violation events must be defined."""
+        audit = gdbs_dataset.audit_expectations
+        security_events = audit.get("event_categories", {}).get("security_events", {})
+        event_types = {e.get("event_type") for e in security_events.get("required_events", [])}
+
+        assert "tenant.isolation.violation" in event_types, (
+            "tenant.isolation.violation event type must be defined"
+        )
+
+
+class TestRealArtifacts:
+    """Test that real PDF/XLSX artifacts exist."""
+
+    def test_artifacts_have_sha256(self, gdbs_dataset: GDBSDataset) -> None:
+        """All artifacts must have sha256 hash."""
+        for deal in gdbs_dataset.deals:
+            for artifact in deal.artifacts:
+                assert "sha256" in artifact, f"Artifact missing sha256 in {deal.deal_key}"
+                sha = artifact["sha256"]
+                assert len(sha) == 64, f"Invalid sha256 length in {deal.deal_key}"
+
+    def test_artifacts_have_file_size(self, gdbs_dataset: GDBSDataset) -> None:
+        """All artifacts must have file_size_bytes."""
+        for deal in gdbs_dataset.deals:
+            for artifact in deal.artifacts:
+                size = artifact.get("file_size_bytes")
+                if size is not None:
+                    assert size > 0, f"Invalid file size in {deal.deal_key}"
+
+    def test_artifact_files_exist(self, gdbs_dataset: GDBSDataset) -> None:
+        """Real artifact files must exist on disk."""
+
+        for deal in gdbs_dataset.deals:
+            deal_num = int(deal.deal_key.split("_")[1])
+            if deal_num <= 8:
+                deal_dir_suffix = {
+                    1: "clean",
+                    2: "contradiction",
+                    3: "unit_mismatch",
+                    4: "time_window_mismatch",
+                    5: "missing_evidence",
+                    6: "calc_conflict",
+                    7: "chain_break",
+                    8: "version_drift",
+                }[deal_num]
+                deal_dir = f"deal_{deal_num:03d}_{deal_dir_suffix}"
+            else:
+                deal_dir = f"deal_{deal_num:03d}_clean"
+
+            artifacts_dir = gdbs_dataset.dataset_path / "deals" / deal_dir / "artifacts"
+
+            # Check PDF exists
+            pdf_path = artifacts_dir / "pitch_deck.pdf"
+            assert pdf_path.exists(), f"Missing pitch_deck.pdf for {deal.deal_key}"
+            assert pdf_path.stat().st_size > 0, f"Empty pitch_deck.pdf for {deal.deal_key}"
+
+            # Check XLSX exists
+            xlsx_path = artifacts_dir / "financials.xlsx"
+            assert xlsx_path.exists(), f"Missing financials.xlsx for {deal.deal_key}"
+            assert xlsx_path.stat().st_size > 0, f"Empty financials.xlsx for {deal.deal_key}"

@@ -1,0 +1,260 @@
+{
+  "sanads": [
+    {
+      "sanad_id": "00000000-0000-0000-0007-000032000001",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "claim_id": "00000000-0000-0000-0005-000032000001",
+      "deal_id": "00000000-0000-0000-0002-000000000032",
+      "primary_evidence_id": "00000000-0000-0000-0006-000032000001",
+      "corroborating_evidence_ids": [
+        "00000000-0000-0000-0006-000032000101"
+      ],
+      "extraction_confidence": 0.95,
+      "dhabt_score": 0.9,
+      "corroboration_status": "MUTAWATIR",
+      "sanad_grade": "B",
+      "grade_explanation": [
+        {
+          "step": "base_grade",
+          "value": "C",
+          "reason": "Primary evidence from deck is Grade C"
+        },
+        {
+          "step": "corroboration_upgrade",
+          "value": "B",
+          "reason": "Corroboration status: MUTAWATIR"
+        }
+      ],
+      "transmission_chain": [
+        {
+          "node_id": "00000000-0000-0000-0010-000032000001",
+          "node_type": "SOURCE",
+          "input_refs": [],
+          "output_ref": "00000000-0000-0000-0006-000032000001",
+          "description": "Deck C1 extraction"
+        }
+      ],
+      "defects": [],
+      "created_at": "2026-01-05T10:30:00Z",
+      "updated_at": "2026-01-05T10:30:00Z"
+    },
+    {
+      "sanad_id": "00000000-0000-0000-0007-000032000002",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "claim_id": "00000000-0000-0000-0005-000032000002",
+      "deal_id": "00000000-0000-0000-0002-000000000032",
+      "primary_evidence_id": "00000000-0000-0000-0006-000032000002",
+      "corroborating_evidence_ids": [
+        "00000000-0000-0000-0006-000032000102"
+      ],
+      "extraction_confidence": 0.95,
+      "dhabt_score": 0.9,
+      "corroboration_status": "MUTAWATIR",
+      "sanad_grade": "B",
+      "grade_explanation": [
+        {
+          "step": "base_grade",
+          "value": "C",
+          "reason": "Primary evidence from deck is Grade C"
+        },
+        {
+          "step": "corroboration_upgrade",
+          "value": "B",
+          "reason": "Corroboration status: MUTAWATIR"
+        }
+      ],
+      "transmission_chain": [
+        {
+          "node_id": "00000000-0000-0000-0010-000032000002",
+          "node_type": "SOURCE",
+          "input_refs": [],
+          "output_ref": "00000000-0000-0000-0006-000032000002",
+          "description": "Deck C2 extraction"
+        }
+      ],
+      "defects": [],
+      "created_at": "2026-01-05T10:30:00Z",
+      "updated_at": "2026-01-05T10:30:00Z"
+    },
+    {
+      "sanad_id": "00000000-0000-0000-0007-000032000003",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "claim_id": "00000000-0000-0000-0005-000032000003",
+      "deal_id": "00000000-0000-0000-0002-000000000032",
+      "primary_evidence_id": "00000000-0000-0000-0006-000032000003",
+      "corroborating_evidence_ids": [],
+      "extraction_confidence": 0.95,
+      "dhabt_score": 0.9,
+      "corroboration_status": "AHAD_1",
+      "sanad_grade": "C",
+      "grade_explanation": [
+        {
+          "step": "base_grade",
+          "value": "C",
+          "reason": "Primary evidence from deck is Grade C"
+        },
+        {
+          "step": "corroboration_upgrade",
+          "value": "C",
+          "reason": "Corroboration status: AHAD_1"
+        }
+      ],
+      "transmission_chain": [
+        {
+          "node_id": "00000000-0000-0000-0010-000032000003",
+          "node_type": "SOURCE",
+          "input_refs": [],
+          "output_ref": "00000000-0000-0000-0006-000032000003",
+          "description": "Deck C3 extraction"
+        }
+      ],
+      "defects": [],
+      "created_at": "2026-01-05T10:30:00Z",
+      "updated_at": "2026-01-05T10:30:00Z"
+    },
+    {
+      "sanad_id": "00000000-0000-0000-0007-000032000004",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "claim_id": "00000000-0000-0000-0005-000032000004",
+      "deal_id": "00000000-0000-0000-0002-000000000032",
+      "primary_evidence_id": "00000000-0000-0000-0006-000032000004",
+      "corroborating_evidence_ids": [],
+      "extraction_confidence": 0.95,
+      "dhabt_score": 0.9,
+      "corroboration_status": "AHAD_1",
+      "sanad_grade": "C",
+      "grade_explanation": [
+        {
+          "step": "base_grade",
+          "value": "C",
+          "reason": "Primary evidence from deck is Grade C"
+        },
+        {
+          "step": "corroboration_upgrade",
+          "value": "C",
+          "reason": "Corroboration status: AHAD_1"
+        }
+      ],
+      "transmission_chain": [
+        {
+          "node_id": "00000000-0000-0000-0010-000032000004",
+          "node_type": "SOURCE",
+          "input_refs": [],
+          "output_ref": "00000000-0000-0000-0006-000032000004",
+          "description": "Deck C4 extraction"
+        }
+      ],
+      "defects": [],
+      "created_at": "2026-01-05T10:30:00Z",
+      "updated_at": "2026-01-05T10:30:00Z"
+    },
+    {
+      "sanad_id": "00000000-0000-0000-0007-000032000005",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "claim_id": "00000000-0000-0000-0005-000032000005",
+      "deal_id": "00000000-0000-0000-0002-000000000032",
+      "primary_evidence_id": "00000000-0000-0000-0006-000032000005",
+      "corroborating_evidence_ids": [],
+      "extraction_confidence": 0.95,
+      "dhabt_score": 0.9,
+      "corroboration_status": "AHAD_1",
+      "sanad_grade": "C",
+      "grade_explanation": [
+        {
+          "step": "base_grade",
+          "value": "C",
+          "reason": "Primary evidence from deck is Grade C"
+        },
+        {
+          "step": "corroboration_upgrade",
+          "value": "C",
+          "reason": "Corroboration status: AHAD_1"
+        }
+      ],
+      "transmission_chain": [
+        {
+          "node_id": "00000000-0000-0000-0010-000032000005",
+          "node_type": "SOURCE",
+          "input_refs": [],
+          "output_ref": "00000000-0000-0000-0006-000032000005",
+          "description": "Deck C5 extraction"
+        }
+      ],
+      "defects": [],
+      "created_at": "2026-01-05T10:30:00Z",
+      "updated_at": "2026-01-05T10:30:00Z"
+    },
+    {
+      "sanad_id": "00000000-0000-0000-0007-000032000006",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "claim_id": "00000000-0000-0000-0005-000032000006",
+      "deal_id": "00000000-0000-0000-0002-000000000032",
+      "primary_evidence_id": "00000000-0000-0000-0006-000032000006",
+      "corroborating_evidence_ids": [],
+      "extraction_confidence": 0.95,
+      "dhabt_score": 0.9,
+      "corroboration_status": "AHAD_1",
+      "sanad_grade": "C",
+      "grade_explanation": [
+        {
+          "step": "base_grade",
+          "value": "C",
+          "reason": "Primary evidence from deck is Grade C"
+        },
+        {
+          "step": "corroboration_upgrade",
+          "value": "C",
+          "reason": "Corroboration status: AHAD_1"
+        }
+      ],
+      "transmission_chain": [
+        {
+          "node_id": "00000000-0000-0000-0010-000032000006",
+          "node_type": "SOURCE",
+          "input_refs": [],
+          "output_ref": "00000000-0000-0000-0006-000032000006",
+          "description": "Deck C6 extraction"
+        }
+      ],
+      "defects": [],
+      "created_at": "2026-01-05T10:30:00Z",
+      "updated_at": "2026-01-05T10:30:00Z"
+    },
+    {
+      "sanad_id": "00000000-0000-0000-0007-000032000007",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "claim_id": "00000000-0000-0000-0005-000032000007",
+      "deal_id": "00000000-0000-0000-0002-000000000032",
+      "primary_evidence_id": "00000000-0000-0000-0006-000032000007",
+      "corroborating_evidence_ids": [],
+      "extraction_confidence": 0.95,
+      "dhabt_score": 0.9,
+      "corroboration_status": "AHAD_1",
+      "sanad_grade": "C",
+      "grade_explanation": [
+        {
+          "step": "base_grade",
+          "value": "C",
+          "reason": "Primary evidence from deck is Grade C"
+        },
+        {
+          "step": "corroboration_upgrade",
+          "value": "C",
+          "reason": "Corroboration status: AHAD_1"
+        }
+      ],
+      "transmission_chain": [
+        {
+          "node_id": "00000000-0000-0000-0010-000032000007",
+          "node_type": "SOURCE",
+          "input_refs": [],
+          "output_ref": "00000000-0000-0000-0006-000032000007",
+          "description": "Deck C7 extraction"
+        }
+      ],
+      "defects": [],
+      "created_at": "2026-01-05T10:30:00Z",
+      "updated_at": "2026-01-05T10:30:00Z"
+    }
+  ]
+}

@@ -161,6 +161,46 @@ class TestDeal005MissingEvidence:
         assert outcome is not None
         assert outcome.expected_claims["C6"]["claim_grade"] == "D"
 
+    def test_c6_is_blocked_no_free_facts(self, gdbs_dataset: GDBSDataset) -> None:
+        """C6 must be explicitly BLOCKED due to No-Free-Facts violation."""
+        outcome = gdbs_dataset.get_expected_outcome("deal_005")
+        assert outcome is not None
+        assert outcome.expected_claims["C6"]["claim_verdict"] == "BLOCKED"
+        assert outcome.expected_claims["C6"]["claim_action"] == "REJECT_NO_FREE_FACTS"
+
+    def test_blocked_claims_list_exists(self, gdbs_dataset: GDBSDataset) -> None:
+        """Expected outcome must have blocked_claims list."""
+        outcome = gdbs_dataset.get_expected_outcome("deal_005")
+        assert outcome is not None
+        blocked = outcome.raw.get("blocked_claims", [])
+        assert len(blocked) >= 1, "Must have at least one blocked claim"
+
+    def test_blocked_claim_has_no_free_facts_reason(self, gdbs_dataset: GDBSDataset) -> None:
+        """Blocked claim must have NO_FREE_FACTS_MISSING_EVIDENCE reason."""
+        outcome = gdbs_dataset.get_expected_outcome("deal_005")
+        assert outcome is not None
+        blocked = outcome.raw.get("blocked_claims", [])
+        c6_blocked = next((b for b in blocked if b.get("claim_key") == "C6"), None)
+        assert c6_blocked is not None, "C6 must be in blocked_claims"
+        assert c6_blocked["reason"] == "NO_FREE_FACTS_MISSING_EVIDENCE"
+
+    def test_no_free_facts_enforcement_active(self, gdbs_dataset: GDBSDataset) -> None:
+        """No-Free-Facts enforcement must be explicitly ACTIVE."""
+        outcome = gdbs_dataset.get_expected_outcome("deal_005")
+        assert outcome is not None
+        enforcement = outcome.raw.get("no_free_facts_enforcement", {})
+        assert enforcement.get("enforcement_status") == "ACTIVE"
+        assert enforcement.get("blocked_count") == 1
+        assert "C6" in enforcement.get("blocked_claim_keys", [])
+
+    def test_validation_rules_include_no_free_facts(self, gdbs_dataset: GDBSDataset) -> None:
+        """Validation rules must include no_free_facts_violation_detected."""
+        outcome = gdbs_dataset.get_expected_outcome("deal_005")
+        assert outcome is not None
+        rules = {r["rule"]: r["expected"] for r in outcome.validation_rules}
+        assert rules.get("no_free_facts_violation_detected") is True
+        assert rules.get("c6_blocked_from_ic_output") is True
+
 
 class TestDeal006CalcConflict:
     """Test deal_006 (calc_conflict) expected outcomes."""

@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 _tracer_provider: TracerProvider | None = None
 _is_configured: bool = False
 _test_spans: list[ReadableSpan] = []
+_test_exporter: Any = None  # Reference to InMemorySpanExporter for testing
 
 
 class TracingConfigError(Exception):
@@ -118,19 +119,27 @@ def configure_tracing() -> bool:
     Raises:
         TracingConfigError: If IDIS_REQUIRE_OTEL=1 and configuration fails.
     """
-    global _tracer_provider, _is_configured, _test_spans
-
-    if _is_configured:
-        return _tracer_provider is not None
-
-    _is_configured = True
+    global _tracer_provider, _is_configured, _test_spans, _test_exporter
 
     enabled = _get_env_bool("IDIS_OTEL_ENABLED", False)
     require_otel = _get_env_bool("IDIS_REQUIRE_OTEL", False)
+    test_capture = _get_env_bool("IDIS_OTEL_TEST_CAPTURE", False)
 
+    # If not enabled, always return False regardless of previous state
     if not enabled:
+        _is_configured = True
         logger.debug("OpenTelemetry tracing disabled (IDIS_OTEL_ENABLED not set)")
         return False
+
+    # If test exporter already exists and enabled+test_capture, reuse it
+    if _test_exporter is not None and enabled and test_capture:
+        return True
+
+    # If already fully configured with a provider, return success
+    if _is_configured and _tracer_provider is not None:
+        return True
+
+    _is_configured = True
 
     try:
         from opentelemetry import trace
@@ -156,8 +165,8 @@ def configure_tracing() -> bool:
                 InMemorySpanExporter,
             )
 
-            test_exporter = InMemorySpanExporter()
-            test_processor = SimpleSpanProcessor(test_exporter)
+            _test_exporter = InMemorySpanExporter()
+            test_processor = SimpleSpanProcessor(_test_exporter)
             provider.add_span_processor(test_processor)
             _test_spans.clear()
         elif exporter_type == "console":
@@ -308,56 +317,33 @@ def get_test_spans() -> list[ReadableSpan]:
     Returns:
         List of captured spans if IDIS_OTEL_TEST_CAPTURE=1, else empty list.
     """
-    try:
-        from opentelemetry import trace
-
-        provider = trace.get_tracer_provider()
-        if hasattr(provider, "_active_span_processor"):
-            processor = provider._active_span_processor
-            if hasattr(processor, "_span_processors"):
-                for sp in processor._span_processors:
-                    if hasattr(sp, "span_exporter"):
-                        exporter = sp.span_exporter
-                        if hasattr(exporter, "get_finished_spans"):
-                            return list(exporter.get_finished_spans())
-        return []
-    except Exception:
-        return []
+    global _test_exporter
+    if _test_exporter is not None and hasattr(_test_exporter, "get_finished_spans"):
+        return list(_test_exporter.get_finished_spans())
+    return []
 
 
 def clear_test_spans() -> None:
     """Clear captured spans from in-memory exporter (for testing)."""
-    try:
-        from opentelemetry import trace
-
-        provider = trace.get_tracer_provider()
-        if hasattr(provider, "_active_span_processor"):
-            processor = provider._active_span_processor
-            if hasattr(processor, "_span_processors"):
-                for sp in processor._span_processors:
-                    if hasattr(sp, "span_exporter"):
-                        exporter = sp.span_exporter
-                        if hasattr(exporter, "clear"):
-                            exporter.clear()
-    except Exception:
-        pass
+    global _test_exporter
+    if _test_exporter is not None and hasattr(_test_exporter, "clear"):
+        _test_exporter.clear()
 
 
 def reset_tracing() -> None:
-    """Reset tracing configuration (for testing)."""
-    global _tracer_provider, _is_configured, _test_spans
+    """Reset tracing configuration (for testing).
 
-    try:
-        from opentelemetry import trace
-        from opentelemetry.sdk.trace import TracerProvider
+    Note: OpenTelemetry TracerProvider cannot be replaced once set.
+    This function clears the test exporter spans but keeps the exporter
+    reference intact so subsequent configure_tracing() calls work.
+    """
+    global _tracer_provider, _is_configured, _test_spans, _test_exporter
 
-        if _tracer_provider is not None and hasattr(_tracer_provider, "shutdown"):
-            _tracer_provider.shutdown()
+    # Clear the test exporter spans but keep the exporter reference
+    if _test_exporter is not None and hasattr(_test_exporter, "clear"):
+        _test_exporter.clear()
 
-        trace.set_tracer_provider(TracerProvider())
-    except Exception:
-        pass
-
-    _tracer_provider = None
+    # Reset configured flag to allow reconfiguration
+    # but DON'T clear _test_exporter - it needs to persist
     _is_configured = False
     _test_spans.clear()

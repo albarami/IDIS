@@ -237,16 +237,19 @@ class TestDBInstrumentation:
     """Tests for SQLAlchemy DB instrumentation."""
 
     def test_db_span_emitted_for_simple_query(self) -> None:
-        """DB operations should emit spans when tracing is enabled."""
+        """DB operations should emit spans with db.system attribute."""
         os.environ["IDIS_OTEL_ENABLED"] = "1"
         os.environ["IDIS_OTEL_TEST_CAPTURE"] = "1"
 
         from idis.observability.tracing import (
+            clear_test_spans,
             configure_tracing,
+            get_test_spans,
             instrument_sqlalchemy,
         )
 
         configure_tracing()
+        clear_test_spans()
 
         from sqlalchemy import create_engine, text
 
@@ -257,28 +260,60 @@ class TestDBInstrumentation:
 
         tracer = trace.get_tracer("test")
 
-        # Create a span and execute query within it
-        with tracer.start_as_current_span("parent-span") as span:
+        # Create a parent span and execute query within it
+        with tracer.start_as_current_span("parent-span") as parent_span:
+            parent_trace_id = parent_span.get_span_context().trace_id
             with engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
-            # Verify span was created and is valid
-            assert span is not None
-            assert span.name == "parent-span"
-            ctx = span.get_span_context()
-            assert ctx.is_valid
+
+        # Fetch captured spans and validate DB span existence
+        spans = get_test_spans()
+        assert len(spans) >= 1, f"Expected at least 1 span, got {len(spans)}"
+
+        # Find DB span with db.system attribute
+        db_spans = []
+        for s in spans:
+            attrs = dict(s.attributes) if s.attributes else {}
+            if "db.system" in attrs:
+                db_spans.append(s)
+
+        assert len(db_spans) >= 1, (
+            f"Expected at least one DB span with db.system attribute. "
+            f"Captured span names: {[s.name for s in spans]}"
+        )
+
+        # Verify DB span attributes
+        db_span = db_spans[0]
+        db_attrs = dict(db_span.attributes) if db_span.attributes else {}
+        assert "db.system" in db_attrs, "DB span must have db.system attribute"
+        # SQLite should report "sqlite" as db.system
+        assert db_attrs["db.system"] in ("sqlite", "postgresql"), (
+            f"db.system should be sqlite or postgresql, got {db_attrs['db.system']}"
+        )
+
+        # Verify DB span is descendant of parent (same trace_id)
+        db_span_trace_id = db_span.get_span_context().trace_id
+        assert db_span_trace_id == parent_trace_id, (
+            "DB span should be in the same trace as parent span"
+        )
 
 
 class TestWebhookDeliverySpans:
     """Tests for webhook delivery span instrumentation."""
 
     def test_webhook_delivery_emits_child_span(self) -> None:
-        """Webhook delivery should emit a child span with safe attributes."""
+        """Webhook delivery should emit a span with safe attributes and identifiers."""
         os.environ["IDIS_OTEL_ENABLED"] = "1"
         os.environ["IDIS_OTEL_TEST_CAPTURE"] = "1"
 
-        from idis.observability.tracing import configure_tracing
+        from idis.observability.tracing import (
+            clear_test_spans,
+            configure_tracing,
+            get_test_spans,
+        )
 
         configure_tracing()
+        clear_test_spans()
 
         from idis.services.webhooks.delivery import deliver_webhook_sync
 
@@ -300,6 +335,36 @@ class TestWebhookDeliverySpans:
         assert result.error is not None
         assert result.attempt_id == attempt_id
 
+        # Fetch captured spans and validate webhook delivery span
+        spans = get_test_spans()
+        assert len(spans) >= 1, f"Expected at least 1 span, got {len(spans)}"
+
+        # Find webhook delivery span
+        webhook_spans = [s for s in spans if "webhook" in s.name.lower()]
+        assert len(webhook_spans) >= 1, (
+            f"Expected at least one webhook delivery span. "
+            f"Captured spans: {[s.name for s in spans]}"
+        )
+
+        # Verify webhook span attributes
+        webhook_span = webhook_spans[0]
+        attrs = dict(webhook_span.attributes) if webhook_span.attributes else {}
+
+        # Assert identifiers are present
+        assert attrs.get("idis.webhook_id") == webhook_id, (
+            f"Expected idis.webhook_id={webhook_id}, got {attrs.get('idis.webhook_id')}"
+        )
+        assert attrs.get("idis.delivery_attempt_id") == attempt_id, (
+            f"Expected idis.delivery_attempt_id={attempt_id}, "
+            f"got {attrs.get('idis.delivery_attempt_id')}"
+        )
+
+        # Assert URL attribute is sanitized (no credentials/query/fragment)
+        url_attr = attrs.get("http.url", "")
+        assert "@" not in url_attr, f"URL should not contain userinfo (@): {url_attr}"
+        assert "?" not in url_attr, f"URL should not contain query (?): {url_attr}"
+        assert "#" not in url_attr, f"URL should not contain fragment (#): {url_attr}"
+
     def test_webhook_delivery_sanitizes_url(self) -> None:
         """Webhook delivery spans should not include querystring or auth in URL."""
         from idis.services.webhooks.delivery import _sanitize_url_for_span
@@ -312,6 +377,77 @@ class TestWebhookDeliverySpans:
         assert "token" not in sanitized.lower()
         assert "?" not in sanitized
         assert sanitized == "http://localhost:9999/webhook"
+
+    def test_webhook_url_sanitization_strips_userinfo(self) -> None:
+        """URL sanitization must strip userinfo (credentials) from URLs."""
+        from idis.services.webhooks.delivery import _sanitize_url_for_span
+
+        # Test URLs with userinfo (credentials)
+        test_cases = [
+            ("http://user:pass@example.com/webhook", "http://example.com/webhook"),
+            (
+                "https://admin:secret123@api.example.com:8443/hook",
+                "https://api.example.com:8443/hook",
+            ),
+            ("http://user@example.com/path", "http://example.com/path"),
+            ("http://user:pass@host:9999/path?query=1#frag", "http://host:9999/path"),
+        ]
+
+        for raw_url, expected in test_cases:
+            sanitized = _sanitize_url_for_span(raw_url)
+            # Must not contain @ (userinfo separator)
+            assert "@" not in sanitized, f"Sanitized URL contains @: {sanitized} (from {raw_url})"
+            # Must not contain query
+            assert "?" not in sanitized, f"Sanitized URL contains ?: {sanitized} (from {raw_url})"
+            # Must not contain fragment
+            assert "#" not in sanitized, f"Sanitized URL contains #: {sanitized} (from {raw_url})"
+            # Should match expected
+            assert sanitized == expected, f"Expected {expected}, got {sanitized} (from {raw_url})"
+
+    def test_webhook_span_url_attribute_is_safe(self) -> None:
+        """Webhook span URL attributes must never contain credentials/query/fragment."""
+        os.environ["IDIS_OTEL_ENABLED"] = "1"
+        os.environ["IDIS_OTEL_TEST_CAPTURE"] = "1"
+
+        from idis.observability.tracing import (
+            clear_test_spans,
+            configure_tracing,
+            get_test_spans,
+        )
+
+        configure_tracing()
+        clear_test_spans()
+
+        from idis.services.webhooks.delivery import deliver_webhook_sync
+
+        # Use a URL with credentials, query, and fragment
+        dangerous_url = "http://user:pass@localhost:9999/webhook?secret=abc&token=xyz#section"
+
+        deliver_webhook_sync(
+            url=dangerous_url,
+            payload={"event": "test"},
+            headers={},
+            webhook_id=str(uuid.uuid4()),
+            attempt_id=str(uuid.uuid4()),
+            timeout_seconds=1,
+        )
+
+        spans = get_test_spans()
+        webhook_spans = [s for s in spans if "webhook" in s.name.lower()]
+        assert len(webhook_spans) >= 1, "Expected webhook span"
+
+        # Check all URL-related attributes
+        for span in webhook_spans:
+            attrs = dict(span.attributes) if span.attributes else {}
+            for key in ("http.url", "url.full", "http.target"):
+                if key in attrs:
+                    url_val = str(attrs[key])
+                    assert "@" not in url_val, f"{key} contains @: {url_val}"
+                    assert "?" not in url_val, f"{key} contains ?: {url_val}"
+                    assert "#" not in url_val, f"{key} contains #: {url_val}"
+                    assert "user" not in url_val.lower(), f"{key} contains 'user': {url_val}"
+                    assert "pass" not in url_val.lower(), f"{key} contains 'pass': {url_val}"
+                    assert "secret" not in url_val.lower(), f"{key} contains 'secret': {url_val}"
 
 
 class TestTracingWithAppDisabled:

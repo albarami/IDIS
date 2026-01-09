@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlparse
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -49,19 +49,52 @@ class DeliveryResult:
 
 
 def _sanitize_url_for_span(url: str) -> str:
-    """Sanitize URL for span attributes - remove querystring and auth."""
+    """Sanitize URL for span attributes.
+
+    Security: Removes all sensitive components:
+    - NO userinfo (no "user:pass@")
+    - NO querystring
+    - NO fragment
+    Preserves: scheme, host, optional port, and path only.
+
+    Args:
+        url: Raw URL potentially containing credentials/query/fragment.
+
+    Returns:
+        Sanitized URL safe for span attributes, or "unknown" if malformed.
+    """
     try:
-        parsed = urlparse(url)
-        return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+        parts = urlsplit(url)
+        # Extract hostname and port separately to strip userinfo
+        host = parts.hostname or ""
+        if not host:
+            return "unknown"
+        port = f":{parts.port}" if parts.port else ""
+        # Reconstruct netloc WITHOUT userinfo
+        safe_netloc = f"{host}{port}"
+        # Reconstruct URL: scheme, netloc (no userinfo), path, NO query, NO fragment
+        safe_url = urlunsplit((parts.scheme, safe_netloc, parts.path, "", ""))
+        return safe_url if safe_url else "unknown"
     except Exception:
         return "unknown"
 
 
 def _get_host_from_url(url: str) -> str:
-    """Extract host from URL for span attributes."""
+    """Extract host from URL for span attributes (no userinfo).
+
+    Args:
+        url: Raw URL.
+
+    Returns:
+        Hostname (and port if present), never includes userinfo.
+    """
     try:
-        parsed = urlparse(url)
-        return parsed.netloc or "unknown"
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        if not host:
+            return "unknown"
+        port = f":{parts.port}" if parts.port else ""
+        return f"{host}{port}"
     except Exception:
         return "unknown"
 

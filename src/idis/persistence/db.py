@@ -99,6 +99,7 @@ def get_app_engine() -> Engine:
     """Get or create the application database engine.
 
     Uses IDIS_DATABASE_URL for non-superuser application connections.
+    Automatically instruments with OpenTelemetry if tracing is enabled.
 
     Returns:
         SQLAlchemy Engine for application use.
@@ -118,6 +119,13 @@ def get_app_engine() -> Engine:
             echo=False,
         )
         logger.info("Created application database engine")
+
+        try:
+            from idis.observability.tracing import instrument_sqlalchemy
+
+            instrument_sqlalchemy(_app_engine)
+        except ImportError:
+            pass
 
     return _app_engine
 

@@ -20,12 +20,14 @@ from idis.api.middleware.openapi_validate import OpenAPIValidationMiddleware
 from idis.api.middleware.rate_limit import RateLimitMiddleware
 from idis.api.middleware.rbac import RBACMiddleware
 from idis.api.middleware.request_id import RequestIdMiddleware
+from idis.api.middleware.tracing import TracingEnrichmentMiddleware
 from idis.api.routes.deals import router as deals_router
 from idis.api.routes.health import router as health_router
 from idis.api.routes.tenancy import router as tenancy_router
 from idis.api.routes.webhooks import router as webhooks_router
 from idis.audit.sink import AuditSink
 from idis.idempotency.store import SqliteIdempotencyStore
+from idis.observability.tracing import configure_tracing, instrument_fastapi, instrument_httpx
 from idis.rate_limit.limiter import TenantRateLimiter
 
 try:
@@ -91,6 +93,9 @@ def create_app(
         version=IDIS_VERSION,
     )
 
+    configure_tracing()
+    instrument_httpx()
+
     app.add_middleware(
         IdempotencyMiddleware,
         store=idempotency_store,
@@ -98,10 +103,13 @@ def create_app(
     )
     app.add_middleware(RBACMiddleware)
     app.add_middleware(RateLimitMiddleware, limiter=rate_limiter)
+    app.add_middleware(TracingEnrichmentMiddleware)
     app.add_middleware(OpenAPIValidationMiddleware)
     app.add_middleware(AuditMiddleware, sink=audit_sink, postgres_sink=postgres_audit_sink)
     app.add_middleware(DBTransactionMiddleware)
     app.add_middleware(RequestIdMiddleware)
+
+    instrument_fastapi(app)
 
     app.add_exception_handler(IdisHttpError, idis_http_error_handler)
     app.add_exception_handler(HTTPException, http_exception_handler)

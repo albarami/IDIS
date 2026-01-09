@@ -801,9 +801,7 @@ class TestOtelSpans:
             assert "password" not in span.name.lower(), (
                 f"Span name contains 'password': {span.name}"
             )
-            assert "hunter2" not in span.name.lower(), (
-                f"Span name contains 'hunter2': {span.name}"
-            )
+            assert "hunter2" not in span.name.lower(), f"Span name contains 'hunter2': {span.name}"
 
             attrs = dict(span.attributes) if span.attributes else {}
 

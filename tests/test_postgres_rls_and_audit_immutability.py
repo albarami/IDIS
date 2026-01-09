@@ -110,7 +110,8 @@ def clean_tables(admin_engine: Engine, migrated_db: None) -> Generator[None, Non
     with admin_engine.begin() as conn:
         conn.execute(
             text(
-                "TRUNCATE deals, idempotency_records, audit_events, "
+                "TRUNCATE document_spans, documents, deal_artifacts, deals, "
+                "idempotency_records, audit_events, "
                 "webhook_delivery_attempts, webhooks CASCADE"
             )
         )
@@ -120,7 +121,8 @@ def clean_tables(admin_engine: Engine, migrated_db: None) -> Generator[None, Non
     with admin_engine.begin() as conn:
         conn.execute(
             text(
-                "TRUNCATE deals, idempotency_records, audit_events, "
+                "TRUNCATE document_spans, documents, deal_artifacts, deals, "
+                "idempotency_records, audit_events, "
                 "webhook_delivery_attempts, webhooks CASCADE"
             )
         )
@@ -1053,6 +1055,896 @@ class TestWebhookDeliveryAttemptsRLS:
         assert "uuid" not in error_msg or "row-level" in error_msg, (
             f"Error should be RLS violation, not UUID cast error: {exc_info.value}"
         )
+        assert (
+            "row-level security" in error_msg
+            or "policy" in error_msg
+            or "permission denied" in error_msg
+        ), f"Mismatched tenant INSERT should be blocked by RLS WITH CHECK: {exc_info.value}"
+
+
+class TestDealArtifactsRLS:
+    """Tests for deal_artifacts table RLS tenant isolation (Phase 3.1)."""
+
+    def _create_deal(self, conn: object, tenant_id: str, deal_id: str) -> None:
+        """Helper to create a deal for FK constraint."""
+        now = datetime.now(UTC)
+        conn.execute(
+            text(
+                """
+                INSERT INTO deals (deal_id, tenant_id, name, created_at)
+                VALUES (:deal_id, :tenant_id, :name, :created_at)
+                """
+            ),
+            {
+                "deal_id": deal_id,
+                "tenant_id": tenant_id,
+                "name": "Test Deal",
+                "created_at": now,
+            },
+        )
+
+    def test_deal_artifacts_same_tenant_read_allowed(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        """Insert artifact under tenant A, read under tenant A => 1 row."""
+        deal_id = str(uuid.uuid4())
+        artifact_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            self._create_deal(conn, TENANT_A_ID, deal_id)
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO deal_artifacts
+                    (artifact_id, tenant_id, deal_id, artifact_type, storage_uri,
+                     sha256, created_at, updated_at)
+                    VALUES (:artifact_id, :tenant_id, :deal_id, :artifact_type, :storage_uri,
+                            :sha256, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "artifact_id": artifact_id,
+                    "tenant_id": TENANT_A_ID,
+                    "deal_id": deal_id,
+                    "artifact_type": "PITCH_DECK",
+                    "storage_uri": "s3://bucket/test.pdf",
+                    "sha256": "a" * 64,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            result = conn.execute(
+                text(
+                    "SELECT artifact_id, artifact_type FROM deal_artifacts "
+                    "WHERE artifact_id = :artifact_id"
+                ),
+                {"artifact_id": artifact_id},
+            )
+            rows = result.fetchall()
+
+        assert len(rows) == 1, "RLS should allow same-tenant artifact reads"
+        assert rows[0].artifact_type == "PITCH_DECK"
+
+    def test_deal_artifacts_cross_tenant_read_blocked(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        """Insert artifact under tenant A, read under tenant B => 0 rows."""
+        deal_id = str(uuid.uuid4())
+        artifact_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            self._create_deal(conn, TENANT_A_ID, deal_id)
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO deal_artifacts
+                    (artifact_id, tenant_id, deal_id, artifact_type, storage_uri,
+                     sha256, created_at, updated_at)
+                    VALUES (:artifact_id, :tenant_id, :deal_id, :artifact_type, :storage_uri,
+                            :sha256, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "artifact_id": artifact_id,
+                    "tenant_id": TENANT_A_ID,
+                    "deal_id": deal_id,
+                    "artifact_type": "PITCH_DECK",
+                    "storage_uri": "s3://bucket/test.pdf",
+                    "sha256": "a" * 64,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_B_ID}'"))
+            result = conn.execute(
+                text("SELECT artifact_id FROM deal_artifacts WHERE artifact_id = :artifact_id"),
+                {"artifact_id": artifact_id},
+            )
+            rows = result.fetchall()
+
+        assert len(rows) == 0, "RLS should block cross-tenant artifact reads"
+
+    def test_deal_artifacts_fail_closed_without_tenant_context(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        """No SET LOCAL => SELECT returns 0 rows (fail closed)."""
+        deal_id = str(uuid.uuid4())
+        artifact_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            self._create_deal(conn, TENANT_A_ID, deal_id)
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO deal_artifacts
+                    (artifact_id, tenant_id, deal_id, artifact_type, storage_uri,
+                     sha256, created_at, updated_at)
+                    VALUES (:artifact_id, :tenant_id, :deal_id, :artifact_type, :storage_uri,
+                            :sha256, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "artifact_id": artifact_id,
+                    "tenant_id": TENANT_A_ID,
+                    "deal_id": deal_id,
+                    "artifact_type": "PITCH_DECK",
+                    "storage_uri": "s3://bucket/test.pdf",
+                    "sha256": "a" * 64,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        with app_engine.begin() as conn:
+            result = conn.execute(text("SELECT artifact_id FROM deal_artifacts"))
+            rows = result.fetchall()
+
+        assert len(rows) == 0, "RLS should return 0 rows without tenant context"
+
+    def test_deal_artifacts_insert_blocked_without_tenant_context(
+        self, app_engine: Engine, admin_engine: Engine, clean_tables: None
+    ) -> None:
+        """INSERT without SET LOCAL should be blocked by RLS WITH CHECK."""
+        deal_id = str(uuid.uuid4())
+        artifact_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        with admin_engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO deals (deal_id, tenant_id, name, created_at)
+                    VALUES (:deal_id, :tenant_id, :name, :created_at)
+                    """
+                ),
+                {
+                    "deal_id": deal_id,
+                    "tenant_id": TENANT_A_ID,
+                    "name": "Test Deal",
+                    "created_at": now,
+                },
+            )
+
+        with pytest.raises(DBAPIError) as exc_info, app_engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO deal_artifacts
+                    (artifact_id, tenant_id, deal_id, artifact_type, storage_uri,
+                     sha256, created_at, updated_at)
+                    VALUES (:artifact_id, :tenant_id, :deal_id, :artifact_type, :storage_uri,
+                            :sha256, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "artifact_id": artifact_id,
+                    "tenant_id": TENANT_A_ID,
+                    "deal_id": deal_id,
+                    "artifact_type": "PITCH_DECK",
+                    "storage_uri": "s3://bucket/test.pdf",
+                    "sha256": "a" * 64,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        error_msg = str(exc_info.value).lower()
+        assert (
+            "row-level security" in error_msg
+            or "policy" in error_msg
+            or "permission denied" in error_msg
+        ), f"INSERT without tenant context should be blocked by RLS, got: {exc_info.value}"
+
+    def test_deal_artifacts_rls_blocks_mismatched_tenant_insert(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        """INSERT with tenant context A but tenant_id=B must be blocked by WITH CHECK."""
+        deal_id = str(uuid.uuid4())
+        artifact_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            self._create_deal(conn, TENANT_A_ID, deal_id)
+
+        with pytest.raises(DBAPIError) as exc_info, app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO deal_artifacts
+                    (artifact_id, tenant_id, deal_id, artifact_type, storage_uri,
+                     sha256, created_at, updated_at)
+                    VALUES (:artifact_id, :tenant_id, :deal_id, :artifact_type, :storage_uri,
+                            :sha256, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "artifact_id": artifact_id,
+                    "tenant_id": TENANT_B_ID,  # Mismatched: context=A, value=B
+                    "deal_id": deal_id,
+                    "artifact_type": "PITCH_DECK",
+                    "storage_uri": "s3://bucket/test.pdf",
+                    "sha256": "a" * 64,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        error_msg = str(exc_info.value).lower()
+        assert (
+            "row-level security" in error_msg
+            or "policy" in error_msg
+            or "permission denied" in error_msg
+        ), f"Mismatched tenant INSERT should be blocked by RLS WITH CHECK: {exc_info.value}"
+
+
+class TestDocumentsRLS:
+    """Tests for documents table RLS tenant isolation (Phase 3.1)."""
+
+    def _create_deal_and_artifact(
+        self, conn: object, tenant_id: str, deal_id: str, artifact_id: str
+    ) -> None:
+        """Helper to create deal and artifact for FK constraints."""
+        now = datetime.now(UTC)
+        conn.execute(
+            text(
+                """
+                INSERT INTO deals (deal_id, tenant_id, name, created_at)
+                VALUES (:deal_id, :tenant_id, :name, :created_at)
+                """
+            ),
+            {
+                "deal_id": deal_id,
+                "tenant_id": tenant_id,
+                "name": "Test Deal",
+                "created_at": now,
+            },
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO deal_artifacts
+                (artifact_id, tenant_id, deal_id, artifact_type, storage_uri,
+                 sha256, created_at, updated_at)
+                VALUES (:artifact_id, :tenant_id, :deal_id, :artifact_type, :storage_uri,
+                        :sha256, :created_at, :updated_at)
+                """
+            ),
+            {
+                "artifact_id": artifact_id,
+                "tenant_id": tenant_id,
+                "deal_id": deal_id,
+                "artifact_type": "PITCH_DECK",
+                "storage_uri": "s3://bucket/test.pdf",
+                "sha256": "a" * 64,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+
+    def test_documents_same_tenant_read_allowed(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        """Insert document under tenant A, read under tenant A => 1 row."""
+        deal_id = str(uuid.uuid4())
+        artifact_id = str(uuid.uuid4())
+        document_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            self._create_deal_and_artifact(conn, TENANT_A_ID, deal_id, artifact_id)
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO documents
+                    (document_id, tenant_id, deal_id, artifact_id, doc_type,
+                     parse_status, created_at, updated_at)
+                    VALUES (:document_id, :tenant_id, :deal_id, :artifact_id, :doc_type,
+                            :parse_status, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "document_id": document_id,
+                    "tenant_id": TENANT_A_ID,
+                    "deal_id": deal_id,
+                    "artifact_id": artifact_id,
+                    "doc_type": "PDF",
+                    "parse_status": "PENDING",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            result = conn.execute(
+                text(
+                    "SELECT document_id, doc_type FROM documents WHERE document_id = :document_id"
+                ),
+                {"document_id": document_id},
+            )
+            rows = result.fetchall()
+
+        assert len(rows) == 1, "RLS should allow same-tenant document reads"
+        assert rows[0].doc_type == "PDF"
+
+    def test_documents_cross_tenant_read_blocked(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        """Insert document under tenant A, read under tenant B => 0 rows."""
+        deal_id = str(uuid.uuid4())
+        artifact_id = str(uuid.uuid4())
+        document_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            self._create_deal_and_artifact(conn, TENANT_A_ID, deal_id, artifact_id)
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO documents
+                    (document_id, tenant_id, deal_id, artifact_id, doc_type,
+                     parse_status, created_at, updated_at)
+                    VALUES (:document_id, :tenant_id, :deal_id, :artifact_id, :doc_type,
+                            :parse_status, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "document_id": document_id,
+                    "tenant_id": TENANT_A_ID,
+                    "deal_id": deal_id,
+                    "artifact_id": artifact_id,
+                    "doc_type": "PDF",
+                    "parse_status": "PENDING",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_B_ID}'"))
+            result = conn.execute(
+                text("SELECT document_id FROM documents WHERE document_id = :document_id"),
+                {"document_id": document_id},
+            )
+            rows = result.fetchall()
+
+        assert len(rows) == 0, "RLS should block cross-tenant document reads"
+
+    def test_documents_fail_closed_without_tenant_context(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        """No SET LOCAL => SELECT returns 0 rows (fail closed)."""
+        deal_id = str(uuid.uuid4())
+        artifact_id = str(uuid.uuid4())
+        document_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            self._create_deal_and_artifact(conn, TENANT_A_ID, deal_id, artifact_id)
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO documents
+                    (document_id, tenant_id, deal_id, artifact_id, doc_type,
+                     parse_status, created_at, updated_at)
+                    VALUES (:document_id, :tenant_id, :deal_id, :artifact_id, :doc_type,
+                            :parse_status, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "document_id": document_id,
+                    "tenant_id": TENANT_A_ID,
+                    "deal_id": deal_id,
+                    "artifact_id": artifact_id,
+                    "doc_type": "PDF",
+                    "parse_status": "PENDING",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        with app_engine.begin() as conn:
+            result = conn.execute(text("SELECT document_id FROM documents"))
+            rows = result.fetchall()
+
+        assert len(rows) == 0, "RLS should return 0 rows without tenant context"
+
+    def test_documents_insert_blocked_without_tenant_context(
+        self, app_engine: Engine, admin_engine: Engine, clean_tables: None
+    ) -> None:
+        """INSERT without SET LOCAL should be blocked by RLS WITH CHECK."""
+        deal_id = str(uuid.uuid4())
+        artifact_id = str(uuid.uuid4())
+        document_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        with admin_engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO deals (deal_id, tenant_id, name, created_at)
+                    VALUES (:deal_id, :tenant_id, :name, :created_at)
+                    """
+                ),
+                {
+                    "deal_id": deal_id,
+                    "tenant_id": TENANT_A_ID,
+                    "name": "Test Deal",
+                    "created_at": now,
+                },
+            )
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO deal_artifacts
+                    (artifact_id, tenant_id, deal_id, artifact_type, storage_uri,
+                     sha256, created_at, updated_at)
+                    VALUES (:artifact_id, :tenant_id, :deal_id, :artifact_type, :storage_uri,
+                            :sha256, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "artifact_id": artifact_id,
+                    "tenant_id": TENANT_A_ID,
+                    "deal_id": deal_id,
+                    "artifact_type": "PITCH_DECK",
+                    "storage_uri": "s3://bucket/test.pdf",
+                    "sha256": "a" * 64,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        with pytest.raises(DBAPIError) as exc_info, app_engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO documents
+                    (document_id, tenant_id, deal_id, artifact_id, doc_type,
+                     parse_status, created_at, updated_at)
+                    VALUES (:document_id, :tenant_id, :deal_id, :artifact_id, :doc_type,
+                            :parse_status, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "document_id": document_id,
+                    "tenant_id": TENANT_A_ID,
+                    "deal_id": deal_id,
+                    "artifact_id": artifact_id,
+                    "doc_type": "PDF",
+                    "parse_status": "PENDING",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        error_msg = str(exc_info.value).lower()
+        assert (
+            "row-level security" in error_msg
+            or "policy" in error_msg
+            or "permission denied" in error_msg
+        ), f"INSERT without tenant context should be blocked by RLS, got: {exc_info.value}"
+
+    def test_documents_rls_blocks_mismatched_tenant_insert(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        """INSERT with tenant context A but tenant_id=B must be blocked by WITH CHECK."""
+        deal_id = str(uuid.uuid4())
+        artifact_id = str(uuid.uuid4())
+        document_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            self._create_deal_and_artifact(conn, TENANT_A_ID, deal_id, artifact_id)
+
+        with pytest.raises(DBAPIError) as exc_info, app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO documents
+                    (document_id, tenant_id, deal_id, artifact_id, doc_type,
+                     parse_status, created_at, updated_at)
+                    VALUES (:document_id, :tenant_id, :deal_id, :artifact_id, :doc_type,
+                            :parse_status, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "document_id": document_id,
+                    "tenant_id": TENANT_B_ID,  # Mismatched: context=A, value=B
+                    "deal_id": deal_id,
+                    "artifact_id": artifact_id,
+                    "doc_type": "PDF",
+                    "parse_status": "PENDING",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        error_msg = str(exc_info.value).lower()
+        assert (
+            "row-level security" in error_msg
+            or "policy" in error_msg
+            or "permission denied" in error_msg
+        ), f"Mismatched tenant INSERT should be blocked by RLS WITH CHECK: {exc_info.value}"
+
+
+class TestDocumentSpansRLS:
+    """Tests for document_spans table RLS tenant isolation (Phase 3.1)."""
+
+    def _create_full_hierarchy(
+        self,
+        conn: object,
+        tenant_id: str,
+        deal_id: str,
+        artifact_id: str,
+        document_id: str,
+    ) -> None:
+        """Helper to create deal, artifact, document for FK constraints."""
+        now = datetime.now(UTC)
+        conn.execute(
+            text(
+                """
+                INSERT INTO deals (deal_id, tenant_id, name, created_at)
+                VALUES (:deal_id, :tenant_id, :name, :created_at)
+                """
+            ),
+            {
+                "deal_id": deal_id,
+                "tenant_id": tenant_id,
+                "name": "Test Deal",
+                "created_at": now,
+            },
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO deal_artifacts
+                (artifact_id, tenant_id, deal_id, artifact_type, storage_uri,
+                 sha256, created_at, updated_at)
+                VALUES (:artifact_id, :tenant_id, :deal_id, :artifact_type, :storage_uri,
+                        :sha256, :created_at, :updated_at)
+                """
+            ),
+            {
+                "artifact_id": artifact_id,
+                "tenant_id": tenant_id,
+                "deal_id": deal_id,
+                "artifact_type": "PITCH_DECK",
+                "storage_uri": "s3://bucket/test.pdf",
+                "sha256": "a" * 64,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO documents
+                (document_id, tenant_id, deal_id, artifact_id, doc_type,
+                 parse_status, created_at, updated_at)
+                VALUES (:document_id, :tenant_id, :deal_id, :artifact_id, :doc_type,
+                        :parse_status, :created_at, :updated_at)
+                """
+            ),
+            {
+                "document_id": document_id,
+                "tenant_id": tenant_id,
+                "deal_id": deal_id,
+                "artifact_id": artifact_id,
+                "doc_type": "PDF",
+                "parse_status": "PARSED",
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+
+    def test_document_spans_same_tenant_read_allowed(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        """Insert span under tenant A, read under tenant A => 1 row."""
+        deal_id = str(uuid.uuid4())
+        artifact_id = str(uuid.uuid4())
+        document_id = str(uuid.uuid4())
+        span_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            self._create_full_hierarchy(conn, TENANT_A_ID, deal_id, artifact_id, document_id)
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO document_spans
+                    (span_id, tenant_id, document_id, span_type, locator,
+                     text_excerpt, created_at, updated_at)
+                    VALUES (:span_id, :tenant_id, :document_id, :span_type, :locator,
+                            :text_excerpt, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "span_id": span_id,
+                    "tenant_id": TENANT_A_ID,
+                    "document_id": document_id,
+                    "span_type": "PAGE_TEXT",
+                    "locator": json.dumps({"page": 1}),
+                    "text_excerpt": "Sample text",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            result = conn.execute(
+                text("SELECT span_id, span_type FROM document_spans WHERE span_id = :span_id"),
+                {"span_id": span_id},
+            )
+            rows = result.fetchall()
+
+        assert len(rows) == 1, "RLS should allow same-tenant span reads"
+        assert rows[0].span_type == "PAGE_TEXT"
+
+    def test_document_spans_cross_tenant_read_blocked(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        """Insert span under tenant A, read under tenant B => 0 rows."""
+        deal_id = str(uuid.uuid4())
+        artifact_id = str(uuid.uuid4())
+        document_id = str(uuid.uuid4())
+        span_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            self._create_full_hierarchy(conn, TENANT_A_ID, deal_id, artifact_id, document_id)
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO document_spans
+                    (span_id, tenant_id, document_id, span_type, locator,
+                     text_excerpt, created_at, updated_at)
+                    VALUES (:span_id, :tenant_id, :document_id, :span_type, :locator,
+                            :text_excerpt, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "span_id": span_id,
+                    "tenant_id": TENANT_A_ID,
+                    "document_id": document_id,
+                    "span_type": "PAGE_TEXT",
+                    "locator": json.dumps({"page": 1}),
+                    "text_excerpt": "Sample text",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_B_ID}'"))
+            result = conn.execute(
+                text("SELECT span_id FROM document_spans WHERE span_id = :span_id"),
+                {"span_id": span_id},
+            )
+            rows = result.fetchall()
+
+        assert len(rows) == 0, "RLS should block cross-tenant span reads"
+
+    def test_document_spans_fail_closed_without_tenant_context(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        """No SET LOCAL => SELECT returns 0 rows (fail closed)."""
+        deal_id = str(uuid.uuid4())
+        artifact_id = str(uuid.uuid4())
+        document_id = str(uuid.uuid4())
+        span_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            self._create_full_hierarchy(conn, TENANT_A_ID, deal_id, artifact_id, document_id)
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO document_spans
+                    (span_id, tenant_id, document_id, span_type, locator,
+                     text_excerpt, created_at, updated_at)
+                    VALUES (:span_id, :tenant_id, :document_id, :span_type, :locator,
+                            :text_excerpt, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "span_id": span_id,
+                    "tenant_id": TENANT_A_ID,
+                    "document_id": document_id,
+                    "span_type": "PAGE_TEXT",
+                    "locator": json.dumps({"page": 1}),
+                    "text_excerpt": "Sample text",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        with app_engine.begin() as conn:
+            result = conn.execute(text("SELECT span_id FROM document_spans"))
+            rows = result.fetchall()
+
+        assert len(rows) == 0, "RLS should return 0 rows without tenant context"
+
+    def test_document_spans_insert_blocked_without_tenant_context(
+        self, app_engine: Engine, admin_engine: Engine, clean_tables: None
+    ) -> None:
+        """INSERT without SET LOCAL should be blocked by RLS WITH CHECK."""
+        deal_id = str(uuid.uuid4())
+        artifact_id = str(uuid.uuid4())
+        document_id = str(uuid.uuid4())
+        span_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        with admin_engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO deals (deal_id, tenant_id, name, created_at)
+                    VALUES (:deal_id, :tenant_id, :name, :created_at)
+                    """
+                ),
+                {
+                    "deal_id": deal_id,
+                    "tenant_id": TENANT_A_ID,
+                    "name": "Test Deal",
+                    "created_at": now,
+                },
+            )
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO deal_artifacts
+                    (artifact_id, tenant_id, deal_id, artifact_type, storage_uri,
+                     sha256, created_at, updated_at)
+                    VALUES (:artifact_id, :tenant_id, :deal_id, :artifact_type, :storage_uri,
+                            :sha256, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "artifact_id": artifact_id,
+                    "tenant_id": TENANT_A_ID,
+                    "deal_id": deal_id,
+                    "artifact_type": "PITCH_DECK",
+                    "storage_uri": "s3://bucket/test.pdf",
+                    "sha256": "a" * 64,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO documents
+                    (document_id, tenant_id, deal_id, artifact_id, doc_type,
+                     parse_status, created_at, updated_at)
+                    VALUES (:document_id, :tenant_id, :deal_id, :artifact_id, :doc_type,
+                            :parse_status, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "document_id": document_id,
+                    "tenant_id": TENANT_A_ID,
+                    "deal_id": deal_id,
+                    "artifact_id": artifact_id,
+                    "doc_type": "PDF",
+                    "parse_status": "PARSED",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        with pytest.raises(DBAPIError) as exc_info, app_engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO document_spans
+                    (span_id, tenant_id, document_id, span_type, locator,
+                     text_excerpt, created_at, updated_at)
+                    VALUES (:span_id, :tenant_id, :document_id, :span_type, :locator,
+                            :text_excerpt, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "span_id": span_id,
+                    "tenant_id": TENANT_A_ID,
+                    "document_id": document_id,
+                    "span_type": "PAGE_TEXT",
+                    "locator": json.dumps({"page": 1}),
+                    "text_excerpt": "Sample text",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        error_msg = str(exc_info.value).lower()
+        assert (
+            "row-level security" in error_msg
+            or "policy" in error_msg
+            or "permission denied" in error_msg
+        ), f"INSERT without tenant context should be blocked by RLS, got: {exc_info.value}"
+
+    def test_document_spans_rls_blocks_mismatched_tenant_insert(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        """INSERT with tenant context A but tenant_id=B must be blocked by WITH CHECK."""
+        deal_id = str(uuid.uuid4())
+        artifact_id = str(uuid.uuid4())
+        document_id = str(uuid.uuid4())
+        span_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        with app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            self._create_full_hierarchy(conn, TENANT_A_ID, deal_id, artifact_id, document_id)
+
+        with pytest.raises(DBAPIError) as exc_info, app_engine.begin() as conn:
+            conn.execute(text(f"SET LOCAL idis.tenant_id = '{TENANT_A_ID}'"))
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO document_spans
+                    (span_id, tenant_id, document_id, span_type, locator,
+                     text_excerpt, created_at, updated_at)
+                    VALUES (:span_id, :tenant_id, :document_id, :span_type, :locator,
+                            :text_excerpt, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "span_id": span_id,
+                    "tenant_id": TENANT_B_ID,  # Mismatched: context=A, value=B
+                    "document_id": document_id,
+                    "span_type": "PAGE_TEXT",
+                    "locator": json.dumps({"page": 1}),
+                    "text_excerpt": "Sample text",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        error_msg = str(exc_info.value).lower()
         assert (
             "row-level security" in error_msg
             or "policy" in error_msg

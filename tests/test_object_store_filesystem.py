@@ -568,7 +568,9 @@ class TestOtelSpans:
         reset_tracing()
 
     def test_put_emits_span_with_safe_attributes(self, store: Any, tenant_a: str) -> None:
-        """Put operation should emit span with safe attributes (no absolute paths)."""
+        """Put operation should emit span with safe attributes (no absolute paths, no raw keys)."""
+        import hashlib
+
         os.environ["IDIS_OTEL_ENABLED"] = "1"
         os.environ["IDIS_OTEL_TEST_CAPTURE"] = "1"
 
@@ -582,6 +584,7 @@ class TestOtelSpans:
         clear_test_spans()
 
         key = "test/otel_put.txt"
+        expected_key_sha256 = hashlib.sha256(key.encode("utf-8")).hexdigest()
         store.put(tenant_a, key, b"test data", content_type="text/plain")
 
         spans = get_test_spans()
@@ -593,7 +596,9 @@ class TestOtelSpans:
         attrs = dict(span.attributes) if span.attributes else {}
 
         assert attrs.get("idis.tenant_id") == tenant_a
-        assert attrs.get("idis.object_key") == key
+        # SECURITY: raw key must NOT be in spans - only sha256 hash
+        assert "idis.object_key" not in attrs, "Raw key must not be in span attributes"
+        assert attrs.get("idis.object_key_sha256") == expected_key_sha256
         assert attrs.get("storage.backend") == "filesystem"
         assert "idis.object_sha256" in attrs
         assert "idis.object_version_id" in attrs
@@ -727,7 +732,7 @@ class TestOtelSpans:
         assert len(storage_spans) == 0
 
     def test_span_attributes_do_not_contain_credentials(self, store: Any, tenant_a: str) -> None:
-        """Span attributes should never contain credentials or secrets."""
+        """Span attributes should never contain credentials or secrets in ANY attribute."""
         os.environ["IDIS_OTEL_ENABLED"] = "1"
         os.environ["IDIS_OTEL_TEST_CAPTURE"] = "1"
 
@@ -751,10 +756,94 @@ class TestOtelSpans:
             attrs = dict(span.attributes) if span.attributes else {}
             for attr_key, attr_value in attrs.items():
                 attr_str = str(attr_value).lower()
-                assert "secret" not in attr_str or attr_key == "idis.object_key", (
-                    f"Attribute {attr_key} may contain secret: {attr_value}"
+                # NO exceptions - secrets must never appear in ANY attribute
+                assert "secret" not in attr_str, (
+                    f"Attribute {attr_key} contains 'secret': {attr_value}"
                 )
-                assert "password" not in attr_str, f"Attribute {attr_key} contains password"
-                assert "api_key" not in attr_str or attr_key == "idis.object_key", (
-                    f"Attribute {attr_key} may contain api_key"
+                assert "password" not in attr_str, (
+                    f"Attribute {attr_key} contains 'password': {attr_value}"
                 )
+                assert "api_key" not in attr_str, (
+                    f"Attribute {attr_key} contains 'api_key': {attr_value}"
+                )
+
+    def test_secret_in_key_never_appears_in_spans(self, store: Any, tenant_a: str) -> None:
+        """Regression test: secrets embedded in object keys must NEVER appear in spans.
+
+        This test uses a key containing obvious secret patterns and verifies that
+        the raw key content does not appear anywhere in any span attribute.
+        """
+        import hashlib
+
+        os.environ["IDIS_OTEL_ENABLED"] = "1"
+        os.environ["IDIS_OTEL_TEST_CAPTURE"] = "1"
+
+        from idis.observability.tracing import (
+            clear_test_spans,
+            configure_tracing,
+            get_test_spans,
+        )
+
+        configure_tracing()
+        clear_test_spans()
+
+        # Key containing obvious secret patterns (using only allowed chars: a-zA-Z0-9_-./)
+        secret_key = "uploads/password-hunter2/token-abcd1234/secret.txt"
+        expected_key_sha256 = hashlib.sha256(secret_key.encode("utf-8")).hexdigest()
+
+        store.put(tenant_a, secret_key, b"sensitive content")
+
+        spans = get_test_spans()
+        assert len(spans) >= 1, "Expected at least one span"
+
+        for span in spans:
+            # Check span name does not contain raw key
+            assert "password" not in span.name.lower(), (
+                f"Span name contains 'password': {span.name}"
+            )
+            assert "hunter2" not in span.name.lower(), (
+                f"Span name contains 'hunter2': {span.name}"
+            )
+
+            attrs = dict(span.attributes) if span.attributes else {}
+
+            # Check NO attribute key contains secret patterns
+            for attr_key in attrs:
+                attr_key_lower = attr_key.lower()
+                assert "password" not in attr_key_lower, (
+                    f"Attribute key contains 'password': {attr_key}"
+                )
+
+            # Check NO attribute value contains raw key or secret substrings
+            for attr_key, attr_value in attrs.items():
+                attr_str = str(attr_value)
+                attr_str_lower = attr_str.lower()
+
+                # Raw key must never appear
+                assert secret_key not in attr_str, (
+                    f"Attribute {attr_key} contains raw key: {attr_value}"
+                )
+
+                # Secret substrings must never appear
+                assert "password" not in attr_str_lower, (
+                    f"Attribute {attr_key} contains 'password': {attr_value}"
+                )
+                assert "hunter2" not in attr_str_lower, (
+                    f"Attribute {attr_key} contains 'hunter2': {attr_value}"
+                )
+                assert "abcd1234" not in attr_str_lower, (
+                    f"Attribute {attr_key} contains 'abcd1234': {attr_value}"
+                )
+
+            # Verify idis.object_key_sha256 exists and equals expected hash
+            assert "idis.object_key_sha256" in attrs, (
+                "Expected idis.object_key_sha256 attribute in span"
+            )
+            assert attrs["idis.object_key_sha256"] == expected_key_sha256, (
+                f"Expected key SHA256 {expected_key_sha256}, got {attrs['idis.object_key_sha256']}"
+            )
+
+            # Verify raw idis.object_key does NOT exist
+            assert "idis.object_key" not in attrs, (
+                "idis.object_key should not exist - use idis.object_key_sha256 instead"
+            )

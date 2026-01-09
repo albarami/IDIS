@@ -11,6 +11,7 @@ Security (per docs/IDIS_Security_Threat_Model_v6_3.md):
 from __future__ import annotations
 
 import functools
+import hashlib
 import logging
 import os
 from collections.abc import Callable
@@ -65,7 +66,10 @@ def traced_storage_operation(operation: str) -> Callable[[F], F]:
 
                 with tracer.start_as_current_span(span_name) as span:
                     span.set_attribute("idis.tenant_id", tenant_id)
-                    span.set_attribute("idis.object_key", key)
+                    # SECURITY: Never export raw keys - they may contain secrets.
+                    # Use SHA256 hash for correlation without exposing key content.
+                    key_sha256 = hashlib.sha256(key.encode("utf-8")).hexdigest()
+                    span.set_attribute("idis.object_key_sha256", key_sha256)
                     span.set_attribute("storage.backend", getattr(self, "backend_name", "unknown"))
 
                     if "version_id" in kwargs and kwargs["version_id"] is not None:

@@ -1,0 +1,21 @@
+{
+  "deal_id": "00000000-0000-0000-0002-000000000002",
+  "tenant_id": "00000000-0000-0000-0000-000000000001",
+  "external_ref": "QAV-2026-002",
+  "company_name": "DataSync Solutions",
+  "stage": "SERIES_A",
+  "sector": "SaaS",
+  "status": "IN_REVIEW",
+  "materiality_threshold": 0.5,
+  "scenario": "contradiction",
+  "scenario_description": "Deck ARR ($5,200,000) contradicts Financial Model ARR ($4,800,000) - 8.3% discrepancy",
+  "injected_issue": {
+    "type": "INCONSISTENCY",
+    "affected_claim": "C1",
+    "deck_value": 5200000,
+    "model_value": 4800000,
+    "discrepancy_percent": 8.33
+  },
+  "created_at": "2026-01-05T10:00:00Z",
+  "updated_at": "2026-01-05T10:00:00Z"
+}

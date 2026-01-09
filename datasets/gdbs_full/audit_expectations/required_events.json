@@ -1,0 +1,119 @@
+{
+  "version": "1.0.0",
+  "description": "Required audit events for GDBS-FULL dataset operations, per IDIS Audit Event Taxonomy v6.3",
+  "event_categories": {
+    "deal_operations": {
+      "required_events": [
+        {"event_type": "deal.created", "severity": "MEDIUM", "required_fields": ["deal_id", "tenant_id", "company_name"]},
+        {"event_type": "deal.updated", "severity": "MEDIUM", "required_fields": ["deal_id", "changed_fields"]},
+        {"event_type": "deal.status.changed", "severity": "MEDIUM", "required_fields": ["deal_id", "old_status", "new_status"]}
+      ]
+    },
+    "document_operations": {
+      "required_events": [
+        {"event_type": "document.created", "severity": "MEDIUM", "required_fields": ["artifact_id", "deal_id", "sha256"]},
+        {"event_type": "document.version.created", "severity": "MEDIUM", "required_fields": ["artifact_id", "version_label"]}
+      ]
+    },
+    "claim_operations": {
+      "required_events": [
+        {"event_type": "claim.created", "severity": "MEDIUM", "required_fields": ["claim_id", "deal_id", "claim_class"]},
+        {"event_type": "claim.updated", "severity": "MEDIUM", "required_fields": ["claim_id", "changed_fields"]},
+        {"event_type": "claim.verdict.changed", "severity": "HIGH", "required_fields": ["claim_id", "old_verdict", "new_verdict"]},
+        {"event_type": "claim.grade.changed", "severity": "HIGH", "required_fields": ["claim_id", "old_grade", "new_grade"]}
+      ]
+    },
+    "sanad_operations": {
+      "required_events": [
+        {"event_type": "sanad.created", "severity": "MEDIUM", "required_fields": ["sanad_id", "claim_id", "sanad_grade"]},
+        {"event_type": "sanad.updated", "severity": "MEDIUM", "required_fields": ["sanad_id", "changed_fields"]},
+        {"event_type": "sanad.defect.added", "severity": "HIGH", "required_fields": ["sanad_id", "defect_id", "defect_type"]},
+        {"event_type": "sanad.integrity.failed", "severity": "CRITICAL", "required_fields": ["sanad_id", "failure_reason"]}
+      ]
+    },
+    "defect_operations": {
+      "required_events": [
+        {"event_type": "defect.created", "severity": "HIGH", "required_fields": ["defect_id", "defect_type", "severity", "affected_claim_ids"]},
+        {"event_type": "defect.cured", "severity": "MEDIUM", "required_fields": ["defect_id", "cure_method"]},
+        {"event_type": "defect.waived", "severity": "HIGH", "required_fields": ["defect_id", "waiver_reason", "waived_by"]}
+      ]
+    },
+    "calc_operations": {
+      "required_events": [
+        {"event_type": "calc.started", "severity": "LOW", "required_fields": ["calc_id", "calc_type"]},
+        {"event_type": "calc.completed", "severity": "LOW", "required_fields": ["calc_id", "reproducibility_hash"]},
+        {"event_type": "calc.failed", "severity": "MEDIUM", "required_fields": ["calc_id", "failure_reason"]}
+      ]
+    },
+    "security_events": {
+      "required_events": [
+        {"event_type": "tenant.isolation.violation", "severity": "CRITICAL", "required_fields": ["requesting_tenant_id", "target_tenant_id", "resource_type"]},
+        {"event_type": "rbac.denied", "severity": "MEDIUM", "required_fields": ["actor_id", "resource_type", "action"]}
+      ]
+    }
+  },
+  "per_deal_expected_events": {
+    "deal_001_clean": {
+      "expected_claim_events": 7,
+      "expected_sanad_events": 7,
+      "expected_defect_events": 0,
+      "expected_severity_distribution": {"LOW": 0, "MEDIUM": 14, "HIGH": 0, "CRITICAL": 0}
+    },
+    "deal_002_contradiction": {
+      "expected_claim_events": 7,
+      "expected_sanad_events": 7,
+      "expected_defect_events": 1,
+      "expected_severity_distribution": {"LOW": 0, "MEDIUM": 13, "HIGH": 2, "CRITICAL": 0}
+    },
+    "deal_003_unit_mismatch": {
+      "expected_claim_events": 7,
+      "expected_sanad_events": 7,
+      "expected_defect_events": 1,
+      "expected_severity_distribution": {"LOW": 0, "MEDIUM": 13, "HIGH": 2, "CRITICAL": 0}
+    },
+    "deal_004_time_window_mismatch": {
+      "expected_claim_events": 7,
+      "expected_sanad_events": 7,
+      "expected_defect_events": 1,
+      "expected_severity_distribution": {"LOW": 0, "MEDIUM": 13, "HIGH": 2, "CRITICAL": 0}
+    },
+    "deal_005_missing_evidence": {
+      "expected_claim_events": 7,
+      "expected_sanad_events": 7,
+      "expected_defect_events": 1,
+      "expected_severity_distribution": {"LOW": 0, "MEDIUM": 13, "HIGH": 2, "CRITICAL": 0}
+    },
+    "deal_006_calc_conflict": {
+      "expected_claim_events": 7,
+      "expected_sanad_events": 7,
+      "expected_defect_events": 1,
+      "expected_calc_events": 1,
+      "expected_severity_distribution": {"LOW": 1, "MEDIUM": 13, "HIGH": 2, "CRITICAL": 0}
+    },
+    "deal_007_chain_break": {
+      "expected_claim_events": 7,
+      "expected_sanad_events": 7,
+      "expected_defect_events": 1,
+      "expected_severity_distribution": {"LOW": 0, "MEDIUM": 13, "HIGH": 1, "CRITICAL": 1}
+    },
+    "deal_008_version_drift": {
+      "expected_claim_events": 7,
+      "expected_sanad_events": 7,
+      "expected_defect_events": 1,
+      "expected_severity_distribution": {"LOW": 0, "MEDIUM": 13, "HIGH": 2, "CRITICAL": 0}
+    }
+  },
+  "tenant_isolation_tests": {
+    "cross_tenant_access": {
+      "wrong_tenant_id": "00000000-0000-0000-0000-000000000099",
+      "expected_result": "unknown_or_out_of_scope",
+      "expected_event": "tenant.isolation.violation"
+    }
+  },
+  "validation_rules": [
+    {"rule": "all_mutations_emit_events", "tolerance": 0},
+    {"rule": "critical_events_have_all_required_fields", "tolerance": 0},
+    {"rule": "no_cross_tenant_data_leakage", "tolerance": 0},
+    {"rule": "audit_events_immutable", "tolerance": 0}
+  ]
+}

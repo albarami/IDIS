@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "manifest_version": "1.0.0",
+  "dataset_id": "gdbs-full",
+  "dataset_name": "Golden Deal Benchmark Suite - Full",
+  "version": "1.0.0",
+  "created_at": "2026-01-09T12:00:00Z",
+  "immutable": true,
+  "description": "Deterministic, adversarial, realistic synthetic dataset for IDIS v6.3 end-to-end validation",
+  "idis_version_compatibility": "6.3",
+  "rounding_rules": {
+    "currency": "USD",
+    "arr_revenue": {
+      "precision": 1000,
+      "mode": "ROUND_HALF_UP",
+      "description": "Round to nearest $1,000"
+    },
+    "percentages": {
+      "precision": 2,
+      "mode": "ROUND_HALF_UP",
+      "description": "2 decimal places"
+    },
+    "burn_cac": {
+      "precision": 100,
+      "mode": "ROUND_HALF_UP",
+      "description": "Round to nearest $100"
+    },
+    "runway": {
+      "precision": 1,
+      "mode": "ROUND_HALF_UP",
+      "description": "1 decimal place (months)"
+    },
+    "tam": {
+      "precision": 1000000,
+      "mode": "ROUND_HALF_UP",
+      "description": "Round to nearest $1M"
+    }
+  },
+  "claim_set": [
+    {
+      "claim_key": "C1",
+      "claim_class": "FINANCIAL",
+      "description": "ARR (Annual Recurring Revenue)",
+      "materiality": "CRITICAL"
+    },
+    {
+      "claim_key": "C2",
+      "claim_class": "FINANCIAL",
+      "description": "Gross Margin (%)",
+      "materiality": "HIGH"
+    },
+    {
+      "claim_key": "C3",
+      "claim_class": "FINANCIAL",
+      "description": "Monthly Burn Rate",
+      "materiality": "HIGH"
+    },
+    {
+      "claim_key": "C4",
+      "claim_class": "FINANCIAL",
+      "description": "Runway (months)",
+      "materiality": "CRITICAL"
+    },
+    {
+      "claim_key": "C5",
+      "claim_class": "TRACTION",
+      "description": "CAC (Customer Acquisition Cost)",
+      "materiality": "MEDIUM"
+    },
+    {
+      "claim_key": "C6",
+      "claim_class": "TRACTION",
+      "description": "NRR (Net Revenue Retention)",
+      "materiality": "HIGH"
+    },
+    {
+      "claim_key": "C7",
+      "claim_class": "MARKET_SIZE",
+      "description": "TAM Estimate",
+      "materiality": "MEDIUM"
+    }
+  ],
+  "tenant": {
+    "file": "tenant/tenant_qatar_alpha.json",
+    "tenant_id": "00000000-0000-0000-0000-000000000001"
+  },
+  "actors": [
+    {
+      "file": "actors/analyst_1.json",
+      "actor_id": "00000000-0000-0000-0001-000000000001"
+    },
+    {
+      "file": "actors/analyst_2.json",
+      "actor_id": "00000000-0000-0000-0001-000000000002"
+    },
+    {
+      "file": "actors/admin_1.json",
+      "actor_id": "00000000-0000-0000-0001-000000000003"
+    }
+  ],
+  "deals": [
+    {
+      "deal_key": "deal_001",
+      "scenario": "clean",
+      "directory": "deals/deal_001_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000001",
+      "description": "Clean baseline deal with all claims verified"
+    },
+    {
+      "deal_key": "deal_002",
+      "scenario": "contradiction",
+      "directory": "deals/deal_002_contradiction",
+      "deal_id": "00000000-0000-0000-0002-000000000002",
+      "description": "Deck ARR contradicts Model ARR"
+    },
+    {
+      "deal_key": "deal_003",
+      "scenario": "unit_mismatch",
+      "directory": "deals/deal_003_unit_mismatch",
+      "deal_id": "00000000-0000-0000-0002-000000000003",
+      "description": "ARR labeled but value is MRR calculation error"
+    },
+    {
+      "deal_key": "deal_004",
+      "scenario": "time_window_mismatch",
+      "directory": "deals/deal_004_time_window_mismatch",
+      "deal_id": "00000000-0000-0000-0002-000000000004",
+      "description": "FY2024 vs LTM time window confusion"
+    },
+    {
+      "deal_key": "deal_005",
+      "scenario": "missing_evidence",
+      "directory": "deals/deal_005_missing_evidence",
+      "deal_id": "00000000-0000-0000-0002-000000000005",
+      "description": "Claim with no backing evidence span"
+    },
+    {
+      "deal_key": "deal_006",
+      "scenario": "calc_conflict",
+      "directory": "deals/deal_006_calc_conflict",
+      "deal_id": "00000000-0000-0000-0002-000000000006",
+      "description": "Calculated GM differs from stated GM"
+    },
+    {
+      "deal_key": "deal_007",
+      "scenario": "chain_break",
+      "directory": "deals/deal_007_chain_break",
+      "deal_id": "00000000-0000-0000-0002-000000000007",
+      "description": "Sanad chain has orphaned transmission node"
+    },
+    {
+      "deal_key": "deal_008",
+      "scenario": "version_drift",
+      "directory": "deals/deal_008_version_drift",
+      "deal_id": "00000000-0000-0000-0002-000000000008",
+      "description": "Claim cites old document version, newer exists"
+    }
+  ],
+  "expected_outcomes": [
+    "expected_outcomes/deal_001_expected.json",
+    "expected_outcomes/deal_002_expected.json",
+    "expected_outcomes/deal_003_expected.json",
+    "expected_outcomes/deal_004_expected.json",
+    "expected_outcomes/deal_005_expected.json",
+    "expected_outcomes/deal_006_expected.json",
+    "expected_outcomes/deal_007_expected.json",
+    "expected_outcomes/deal_008_expected.json"
+  ],
+  "audit_expectations": "audit_expectations/required_events.json",
+  "checksums": {
+    "algorithm": "sha256",
+    "manifest_excludes_self": true
+  }
+}

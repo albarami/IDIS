@@ -1,0 +1,29 @@
+{
+  "deal_id": "00000000-0000-0000-0002-000000000006",
+  "deal_key": "deal_006",
+  "scenario": "calc_conflict",
+  "expected_claims": {
+    "C1": {"claim_grade": "C", "claim_verdict": "VERIFIED", "claim_action": "NONE", "defect_count": 0},
+    "C2": {"claim_grade": "D", "claim_verdict": "CONTRADICTED", "claim_action": "RED_FLAG", "defect_count": 1},
+    "C3": {"claim_grade": "C", "claim_verdict": "VERIFIED", "claim_action": "NONE", "defect_count": 0},
+    "C4": {"claim_grade": "C", "claim_verdict": "VERIFIED", "claim_action": "NONE", "defect_count": 0},
+    "C5": {"claim_grade": "C", "claim_verdict": "VERIFIED", "claim_action": "NONE", "defect_count": 0},
+    "C6": {"claim_grade": "C", "claim_verdict": "VERIFIED", "claim_action": "NONE", "defect_count": 0},
+    "C7": {"claim_grade": "C", "claim_verdict": "VERIFIED", "claim_action": "NONE", "defect_count": 0}
+  },
+  "expected_defects": [
+    {"defect_type": "INCONSISTENCY", "severity": "MAJOR", "affected_claim": "C2", "cure_protocol": "REQUEST_SOURCE"}
+  ],
+  "expected_calc_sanads": [
+    {"calc_type": "GROSS_MARGIN", "calc_grade": "B", "output_gm": 68.50}
+  ],
+  "expected_sanad_coverage": 1.0,
+  "expected_grade_d_count": 1,
+  "expected_ic_bound_claims": 7,
+  "validation_rules": [
+    {"rule": "c2_is_contradicted", "expected": true},
+    {"rule": "c2_grade_is_d", "expected": true},
+    {"rule": "calc_gm_differs_from_stated", "expected": true},
+    {"rule": "stated_gm_71_calculated_gm_68_5", "expected": true}
+  ]
+}

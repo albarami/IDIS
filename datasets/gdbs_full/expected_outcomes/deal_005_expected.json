@@ -1,0 +1,26 @@
+{
+  "deal_id": "00000000-0000-0000-0002-000000000005",
+  "deal_key": "deal_005",
+  "scenario": "missing_evidence",
+  "expected_claims": {
+    "C1": {"claim_grade": "C", "claim_verdict": "VERIFIED", "claim_action": "NONE", "defect_count": 0},
+    "C2": {"claim_grade": "C", "claim_verdict": "VERIFIED", "claim_action": "NONE", "defect_count": 0},
+    "C3": {"claim_grade": "C", "claim_verdict": "VERIFIED", "claim_action": "NONE", "defect_count": 0},
+    "C4": {"claim_grade": "C", "claim_verdict": "VERIFIED", "claim_action": "NONE", "defect_count": 0},
+    "C5": {"claim_grade": "C", "claim_verdict": "VERIFIED", "claim_action": "NONE", "defect_count": 0},
+    "C6": {"claim_grade": "D", "claim_verdict": "UNVERIFIED", "claim_action": "REQUEST_DATA", "defect_count": 1},
+    "C7": {"claim_grade": "C", "claim_verdict": "VERIFIED", "claim_action": "NONE", "defect_count": 0}
+  },
+  "expected_defects": [
+    {"defect_type": "MISSING_LINK", "severity": "MAJOR", "affected_claim": "C6", "cure_protocol": "REQUEST_SOURCE"}
+  ],
+  "expected_sanad_coverage": 0.857,
+  "expected_grade_d_count": 1,
+  "expected_ic_bound_claims": 7,
+  "validation_rules": [
+    {"rule": "c6_is_unverified", "expected": true},
+    {"rule": "c6_grade_is_d", "expected": true},
+    {"rule": "c6_has_no_primary_span", "expected": true},
+    {"rule": "missing_link_defect_detected", "expected": true}
+  ]
+}

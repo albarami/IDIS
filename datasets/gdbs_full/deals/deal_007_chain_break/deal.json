@@ -1,0 +1,19 @@
+{
+  "deal_id": "00000000-0000-0000-0002-000000000007",
+  "tenant_id": "00000000-0000-0000-0000-000000000001",
+  "external_ref": "QAV-2026-007",
+  "company_name": "LogiChain Networks",
+  "stage": "SERIES_A",
+  "sector": "DeepTech",
+  "status": "IN_REVIEW",
+  "materiality_threshold": 0.5,
+  "scenario": "chain_break",
+  "scenario_description": "Sanad chain for ARR claim has orphaned transmission node - references non-existent evidence_id",
+  "injected_issue": {
+    "type": "BROKEN_CHAIN",
+    "affected_claim": "C1",
+    "issue": "Transmission node references evidence_id that does not exist in evidence_items"
+  },
+  "created_at": "2026-01-05T15:00:00Z",
+  "updated_at": "2026-01-05T15:00:00Z"
+}

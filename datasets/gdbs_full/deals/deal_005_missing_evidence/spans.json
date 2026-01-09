@@ -1,0 +1,11 @@
+{
+  "spans": [
+    {"span_id": "00000000-0000-0000-0004-000000050101", "tenant_id": "00000000-0000-0000-0000-000000000001", "document_id": "00000000-0000-0000-0003-000000000501", "span_type": "PAGE_TEXT", "locator": {"page": 1, "bbox": [100, 200, 400, 250]}, "text_excerpt": "ARR: $3,200,000 (as of Dec 2025)", "created_at": "2026-01-05T13:10:00Z", "updated_at": "2026-01-05T13:10:00Z"},
+    {"span_id": "00000000-0000-0000-0004-000000050102", "tenant_id": "00000000-0000-0000-0000-000000000001", "document_id": "00000000-0000-0000-0003-000000000501", "span_type": "PAGE_TEXT", "locator": {"page": 1, "bbox": [100, 260, 400, 310]}, "text_excerpt": "Gross Margin: 78.00%", "created_at": "2026-01-05T13:10:00Z", "updated_at": "2026-01-05T13:10:00Z"},
+    {"span_id": "00000000-0000-0000-0004-000000050103", "tenant_id": "00000000-0000-0000-0000-000000000001", "document_id": "00000000-0000-0000-0003-000000000501", "span_type": "PAGE_TEXT", "locator": {"page": 1, "bbox": [100, 320, 400, 370]}, "text_excerpt": "Monthly Burn: $280,000", "created_at": "2026-01-05T13:10:00Z", "updated_at": "2026-01-05T13:10:00Z"},
+    {"span_id": "00000000-0000-0000-0004-000000050104", "tenant_id": "00000000-0000-0000-0000-000000000001", "document_id": "00000000-0000-0000-0003-000000000501", "span_type": "PAGE_TEXT", "locator": {"page": 1, "bbox": [100, 380, 400, 430]}, "text_excerpt": "Runway: 21.0 months", "created_at": "2026-01-05T13:10:00Z", "updated_at": "2026-01-05T13:10:00Z"},
+    {"span_id": "00000000-0000-0000-0004-000000050105", "tenant_id": "00000000-0000-0000-0000-000000000001", "document_id": "00000000-0000-0000-0003-000000000501", "span_type": "PAGE_TEXT", "locator": {"page": 2, "bbox": [100, 100, 400, 150]}, "text_excerpt": "CAC: $5,200", "created_at": "2026-01-05T13:10:00Z", "updated_at": "2026-01-05T13:10:00Z"},
+    {"span_id": "00000000-0000-0000-0004-000000050107", "tenant_id": "00000000-0000-0000-0000-000000000001", "document_id": "00000000-0000-0000-0003-000000000501", "span_type": "PAGE_TEXT", "locator": {"page": 2, "bbox": [100, 220, 400, 270]}, "text_excerpt": "TAM: $42,000,000,000 (Digital Health)", "created_at": "2026-01-05T13:10:00Z", "updated_at": "2026-01-05T13:10:00Z"}
+  ],
+  "_note": "span_id 00000000-0000-0000-0004-000000050106 for NRR is intentionally MISSING to simulate missing evidence"
+}

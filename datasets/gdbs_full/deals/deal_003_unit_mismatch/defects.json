@@ -1,0 +1,25 @@
+{
+  "defects": [
+    {
+      "defect_id": "00000000-0000-0000-0009-000000030101",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000003",
+      "defect_type": "UNIT_MISMATCH",
+      "severity": "MAJOR",
+      "detected_by": null,
+      "description": "Unit mismatch: Deck labels value as ARR ($1,800,000) but financial model shows MRR of $150,000. The $1.8M is MRR×12, not actual contracted ARR. This inflates the revenue metric presentation.",
+      "evidence_refs": [
+        {"type": "evidence", "id": "00000000-0000-0000-0006-000000030101", "label": "ARR", "value": 1800000},
+        {"type": "evidence", "id": "00000000-0000-0000-0006-000000030102", "label": "MRR", "value": 150000}
+      ],
+      "cure_protocol": "REQUEST_SOURCE",
+      "status": "OPEN",
+      "waiver_reason": null,
+      "waived_by": null,
+      "affected_claim_ids": ["00000000-0000-0000-0005-000000030101"],
+      "timestamp": "2026-01-05T12:30:00Z",
+      "created_at": "2026-01-05T12:30:00Z",
+      "updated_at": "2026-01-05T12:30:00Z"
+    }
+  ]
+}

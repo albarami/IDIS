@@ -1,0 +1,15 @@
+{
+  "tenant_id": "00000000-0000-0000-0000-000000000001",
+  "name": "Qatar Alpha Ventures",
+  "data_residency_region": "me-south-1",
+  "tier": "enterprise",
+  "settings": {
+    "materiality_threshold_default": 0.5,
+    "audit_retention_years": 7,
+    "require_partner_override_for_grade_d": true,
+    "no_free_facts_enforcement": "strict",
+    "calc_reproducibility_required": true
+  },
+  "created_at": "2026-01-01T00:00:00Z",
+  "updated_at": "2026-01-01T00:00:00Z"
+}

@@ -1,0 +1,22 @@
+{
+  "deal_id": "00000000-0000-0000-0002-000000000004",
+  "tenant_id": "00000000-0000-0000-0000-000000000001",
+  "external_ref": "QAV-2026-004",
+  "company_name": "FinStack Platform",
+  "stage": "SERIES_A",
+  "sector": "Fintech",
+  "status": "IN_REVIEW",
+  "materiality_threshold": 0.5,
+  "scenario": "time_window_mismatch",
+  "scenario_description": "Deck claims FY2025 ARR but model shows this is LTM (trailing 12 months ending Nov 2025), not calendar year",
+  "injected_issue": {
+    "type": "TIME_WINDOW_MISMATCH",
+    "affected_claim": "C1",
+    "stated_window": "FY2025",
+    "actual_window": "LTM Nov 2025",
+    "stated_end": "2025-12-31",
+    "actual_end": "2025-11-30"
+  },
+  "created_at": "2026-01-05T12:00:00Z",
+  "updated_at": "2026-01-05T12:00:00Z"
+}

@@ -1,0 +1,25 @@
+{
+  "defects": [
+    {
+      "defect_id": "00000000-0000-0000-0009-000000080101",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000008",
+      "defect_type": "STALENESS",
+      "severity": "MAJOR",
+      "detected_by": null,
+      "description": "Version drift: ARR claim (C1) cites deck v1 ($5,500,000) but newer v2 exists with updated value ($5,800,000). The claim is stale by 4 days and the value differs by $300,000 (5.5%). IC materials should use the latest version.",
+      "evidence_refs": [
+        {"type": "evidence", "id": "00000000-0000-0000-0006-000000080101", "version": "v1", "value": 5500000, "timestamp": "2026-01-01T09:10:00Z"},
+        {"type": "evidence", "id": "00000000-0000-0000-0006-000000080102", "version": "v2", "value": 5800000, "timestamp": "2026-01-05T16:10:00Z"}
+      ],
+      "cure_protocol": "REQUEST_SOURCE",
+      "status": "OPEN",
+      "waiver_reason": null,
+      "waived_by": null,
+      "affected_claim_ids": ["00000000-0000-0000-0005-000000080101"],
+      "timestamp": "2026-01-05T17:30:00Z",
+      "created_at": "2026-01-05T17:30:00Z",
+      "updated_at": "2026-01-05T17:30:00Z"
+    }
+  ]
+}

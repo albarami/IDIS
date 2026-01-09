@@ -1,0 +1,24 @@
+{
+  "defects": [
+    {
+      "defect_id": "00000000-0000-0000-0009-000000070101",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000007",
+      "defect_type": "BROKEN_CHAIN",
+      "severity": "FATAL",
+      "detected_by": null,
+      "description": "Broken chain: Sanad transmission chain for ARR claim (C1) references evidence_id '00000000-0000-0000-0006-000000070199' which does not exist in evidence_items. Chain integrity cannot be verified.",
+      "evidence_refs": [
+        {"type": "orphan_reference", "id": "00000000-0000-0000-0006-000000070199", "issue": "evidence_id not found"}
+      ],
+      "cure_protocol": "RECONSTRUCT_CHAIN",
+      "status": "OPEN",
+      "waiver_reason": null,
+      "waived_by": null,
+      "affected_claim_ids": ["00000000-0000-0000-0005-000000070101"],
+      "timestamp": "2026-01-05T16:30:00Z",
+      "created_at": "2026-01-05T16:30:00Z",
+      "updated_at": "2026-01-05T16:30:00Z"
+    }
+  ]
+}

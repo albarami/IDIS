@@ -1,0 +1,219 @@
+{
+  "sanads": [
+    {
+      "sanad_id": "00000000-0000-0000-0007-000000010101",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "claim_id": "00000000-0000-0000-0005-000000010101",
+      "deal_id": "00000000-0000-0000-0002-000000000001",
+      "primary_evidence_id": "00000000-0000-0000-0006-000000010101",
+      "corroborating_evidence_ids": ["00000000-0000-0000-0006-000000010102"],
+      "extraction_confidence": 0.98,
+      "dhabt_score": 0.95,
+      "corroboration_status": "AHAD_2",
+      "sanad_grade": "B",
+      "grade_explanation": [
+        {"step": "base_grade", "value": "C", "reason": "Primary evidence from deck is Grade C"},
+        {"step": "corroboration_upgrade", "value": "B", "reason": "AHAD_2 with Grade B corroborating source upgrades C→B"}
+      ],
+      "transmission_chain": [
+        {
+          "node_id": "00000000-0000-0000-0008-000000010101",
+          "node_type": "SOURCE",
+          "input_refs": [],
+          "output_ref": "00000000-0000-0000-0006-000000010101",
+          "description": "Deck ARR extraction"
+        },
+        {
+          "node_id": "00000000-0000-0000-0008-000000010102",
+          "node_type": "CORROBORATION",
+          "input_refs": ["00000000-0000-0000-0006-000000010102"],
+          "output_ref": "00000000-0000-0000-0005-000000010101",
+          "description": "Model corroborates deck ARR"
+        }
+      ],
+      "defects": [],
+      "created_at": "2026-01-05T10:30:00Z",
+      "updated_at": "2026-01-05T10:30:00Z"
+    },
+    {
+      "sanad_id": "00000000-0000-0000-0007-000000010102",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "claim_id": "00000000-0000-0000-0005-000000010102",
+      "deal_id": "00000000-0000-0000-0002-000000000001",
+      "primary_evidence_id": "00000000-0000-0000-0006-000000010103",
+      "corroborating_evidence_ids": ["00000000-0000-0000-0006-000000010104"],
+      "extraction_confidence": 0.97,
+      "dhabt_score": 0.94,
+      "corroboration_status": "AHAD_2",
+      "sanad_grade": "B",
+      "grade_explanation": [
+        {"step": "base_grade", "value": "C", "reason": "Primary evidence from deck is Grade C"},
+        {"step": "corroboration_upgrade", "value": "B", "reason": "AHAD_2 with Grade B corroborating source"}
+      ],
+      "transmission_chain": [
+        {
+          "node_id": "00000000-0000-0000-0008-000000010201",
+          "node_type": "SOURCE",
+          "input_refs": [],
+          "output_ref": "00000000-0000-0000-0006-000000010103",
+          "description": "Deck GM extraction"
+        },
+        {
+          "node_id": "00000000-0000-0000-0008-000000010202",
+          "node_type": "CORROBORATION",
+          "input_refs": ["00000000-0000-0000-0006-000000010104"],
+          "output_ref": "00000000-0000-0000-0005-000000010102",
+          "description": "Model corroborates deck GM"
+        }
+      ],
+      "defects": [],
+      "created_at": "2026-01-05T10:30:00Z",
+      "updated_at": "2026-01-05T10:30:00Z"
+    },
+    {
+      "sanad_id": "00000000-0000-0000-0007-000000010103",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "claim_id": "00000000-0000-0000-0005-000000010103",
+      "deal_id": "00000000-0000-0000-0002-000000000001",
+      "primary_evidence_id": "00000000-0000-0000-0006-000000010105",
+      "corroborating_evidence_ids": ["00000000-0000-0000-0006-000000010106"],
+      "extraction_confidence": 0.96,
+      "dhabt_score": 0.93,
+      "corroboration_status": "AHAD_2",
+      "sanad_grade": "B",
+      "grade_explanation": [
+        {"step": "base_grade", "value": "C", "reason": "Primary evidence from deck is Grade C"},
+        {"step": "corroboration_upgrade", "value": "B", "reason": "AHAD_2 with Grade B corroborating source"}
+      ],
+      "transmission_chain": [
+        {
+          "node_id": "00000000-0000-0000-0008-000000010301",
+          "node_type": "SOURCE",
+          "input_refs": [],
+          "output_ref": "00000000-0000-0000-0006-000000010105",
+          "description": "Deck burn rate extraction"
+        },
+        {
+          "node_id": "00000000-0000-0000-0008-000000010302",
+          "node_type": "CORROBORATION",
+          "input_refs": ["00000000-0000-0000-0006-000000010106"],
+          "output_ref": "00000000-0000-0000-0005-000000010103",
+          "description": "Model corroborates deck burn"
+        }
+      ],
+      "defects": [],
+      "created_at": "2026-01-05T10:30:00Z",
+      "updated_at": "2026-01-05T10:30:00Z"
+    },
+    {
+      "sanad_id": "00000000-0000-0000-0007-000000010104",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "claim_id": "00000000-0000-0000-0005-000000010104",
+      "deal_id": "00000000-0000-0000-0002-000000000001",
+      "primary_evidence_id": "00000000-0000-0000-0006-000000010107",
+      "corroborating_evidence_ids": [],
+      "extraction_confidence": 0.95,
+      "dhabt_score": 0.92,
+      "corroboration_status": "AHAD_1",
+      "sanad_grade": "C",
+      "grade_explanation": [
+        {"step": "base_grade", "value": "C", "reason": "Primary evidence from deck is Grade C"},
+        {"step": "no_upgrade", "value": "C", "reason": "AHAD_1 does not upgrade"}
+      ],
+      "transmission_chain": [
+        {
+          "node_id": "00000000-0000-0000-0008-000000010401",
+          "node_type": "SOURCE",
+          "input_refs": [],
+          "output_ref": "00000000-0000-0000-0006-000000010107",
+          "description": "Deck runway extraction"
+        }
+      ],
+      "defects": [],
+      "created_at": "2026-01-05T10:30:00Z",
+      "updated_at": "2026-01-05T10:30:00Z"
+    },
+    {
+      "sanad_id": "00000000-0000-0000-0007-000000010105",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "claim_id": "00000000-0000-0000-0005-000000010105",
+      "deal_id": "00000000-0000-0000-0002-000000000001",
+      "primary_evidence_id": "00000000-0000-0000-0006-000000010108",
+      "corroborating_evidence_ids": [],
+      "extraction_confidence": 0.96,
+      "dhabt_score": 0.91,
+      "corroboration_status": "AHAD_1",
+      "sanad_grade": "C",
+      "grade_explanation": [
+        {"step": "base_grade", "value": "C", "reason": "Primary evidence from deck is Grade C"}
+      ],
+      "transmission_chain": [
+        {
+          "node_id": "00000000-0000-0000-0008-000000010501",
+          "node_type": "SOURCE",
+          "input_refs": [],
+          "output_ref": "00000000-0000-0000-0006-000000010108",
+          "description": "Deck CAC extraction"
+        }
+      ],
+      "defects": [],
+      "created_at": "2026-01-05T10:30:00Z",
+      "updated_at": "2026-01-05T10:30:00Z"
+    },
+    {
+      "sanad_id": "00000000-0000-0000-0007-000000010106",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "claim_id": "00000000-0000-0000-0005-000000010106",
+      "deal_id": "00000000-0000-0000-0002-000000000001",
+      "primary_evidence_id": "00000000-0000-0000-0006-000000010109",
+      "corroborating_evidence_ids": [],
+      "extraction_confidence": 0.95,
+      "dhabt_score": 0.90,
+      "corroboration_status": "AHAD_1",
+      "sanad_grade": "C",
+      "grade_explanation": [
+        {"step": "base_grade", "value": "C", "reason": "Primary evidence from deck is Grade C"}
+      ],
+      "transmission_chain": [
+        {
+          "node_id": "00000000-0000-0000-0008-000000010601",
+          "node_type": "SOURCE",
+          "input_refs": [],
+          "output_ref": "00000000-0000-0000-0006-000000010109",
+          "description": "Deck NRR extraction"
+        }
+      ],
+      "defects": [],
+      "created_at": "2026-01-05T10:30:00Z",
+      "updated_at": "2026-01-05T10:30:00Z"
+    },
+    {
+      "sanad_id": "00000000-0000-0000-0007-000000010107",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "claim_id": "00000000-0000-0000-0005-000000010107",
+      "deal_id": "00000000-0000-0000-0002-000000000001",
+      "primary_evidence_id": "00000000-0000-0000-0006-000000010110",
+      "corroborating_evidence_ids": [],
+      "extraction_confidence": 0.90,
+      "dhabt_score": 0.85,
+      "corroboration_status": "AHAD_1",
+      "sanad_grade": "C",
+      "grade_explanation": [
+        {"step": "base_grade", "value": "C", "reason": "Primary evidence from deck is Grade C"},
+        {"step": "tam_penalty", "value": "C", "reason": "TAM claims typically C unless validated by third-party research"}
+      ],
+      "transmission_chain": [
+        {
+          "node_id": "00000000-0000-0000-0008-000000010701",
+          "node_type": "SOURCE",
+          "input_refs": [],
+          "output_ref": "00000000-0000-0000-0006-000000010110",
+          "description": "Deck TAM extraction"
+        }
+      ],
+      "defects": [],
+      "created_at": "2026-01-05T10:30:00Z",
+      "updated_at": "2026-01-05T10:30:00Z"
+    }
+  ]
+}

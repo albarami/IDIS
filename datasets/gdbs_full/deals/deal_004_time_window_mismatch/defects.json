@@ -1,0 +1,25 @@
+{
+  "defects": [
+    {
+      "defect_id": "00000000-0000-0000-0009-000000040101",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000004",
+      "defect_type": "TIME_WINDOW_MISMATCH",
+      "severity": "MAJOR",
+      "detected_by": null,
+      "description": "Time window mismatch: Deck claims 'FY2025 ARR' but financial model header explicitly states 'LTM Revenue (Dec 2024 - Nov 2025)'. The reported figure is trailing 12 months, not full calendar year 2025. December 2025 data is missing.",
+      "evidence_refs": [
+        {"type": "evidence", "id": "00000000-0000-0000-0006-000000040101", "stated_window": "FY2025"},
+        {"type": "evidence", "id": "00000000-0000-0000-0006-000000040102", "actual_window": "LTM Nov 2025"}
+      ],
+      "cure_protocol": "REQUEST_SOURCE",
+      "status": "OPEN",
+      "waiver_reason": null,
+      "waived_by": null,
+      "affected_claim_ids": ["00000000-0000-0000-0005-000000040101"],
+      "timestamp": "2026-01-05T13:30:00Z",
+      "created_at": "2026-01-05T13:30:00Z",
+      "updated_at": "2026-01-05T13:30:00Z"
+    }
+  ]
+}

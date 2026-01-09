@@ -1,0 +1,27 @@
+{
+  "deal_id": "00000000-0000-0000-0002-000000000007",
+  "deal_key": "deal_007",
+  "scenario": "chain_break",
+  "expected_claims": {
+    "C1": {"claim_grade": "D", "claim_verdict": "UNVERIFIED", "claim_action": "PARTNER_OVERRIDE_REQUIRED", "defect_count": 1},
+    "C2": {"claim_grade": "C", "claim_verdict": "VERIFIED", "claim_action": "NONE", "defect_count": 0},
+    "C3": {"claim_grade": "C", "claim_verdict": "VERIFIED", "claim_action": "NONE", "defect_count": 0},
+    "C4": {"claim_grade": "C", "claim_verdict": "VERIFIED", "claim_action": "NONE", "defect_count": 0},
+    "C5": {"claim_grade": "C", "claim_verdict": "VERIFIED", "claim_action": "NONE", "defect_count": 0},
+    "C6": {"claim_grade": "C", "claim_verdict": "VERIFIED", "claim_action": "NONE", "defect_count": 0},
+    "C7": {"claim_grade": "C", "claim_verdict": "VERIFIED", "claim_action": "NONE", "defect_count": 0}
+  },
+  "expected_defects": [
+    {"defect_type": "BROKEN_CHAIN", "severity": "FATAL", "affected_claim": "C1", "cure_protocol": "RECONSTRUCT_CHAIN"}
+  ],
+  "expected_sanad_coverage": 1.0,
+  "expected_grade_d_count": 1,
+  "expected_ic_bound_claims": 7,
+  "validation_rules": [
+    {"rule": "c1_is_unverified", "expected": true},
+    {"rule": "c1_grade_is_d", "expected": true},
+    {"rule": "fatal_defect_detected", "expected": true},
+    {"rule": "orphan_evidence_ref_detected", "expected": true},
+    {"rule": "chain_integrity_failed", "expected": true}
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "defects": [
+    {
+      "defect_id": "00000000-0000-0000-0009-000000050101",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000005",
+      "defect_type": "MISSING_LINK",
+      "severity": "MAJOR",
+      "detected_by": null,
+      "description": "Missing evidence: NRR claim (C6) has no primary_span_id. The claim 'NRR is 122.00%' was stated in summary materials but the source document span is missing. Cannot verify claim origin.",
+      "evidence_refs": [],
+      "cure_protocol": "REQUEST_SOURCE",
+      "status": "OPEN",
+      "waiver_reason": null,
+      "waived_by": null,
+      "affected_claim_ids": ["00000000-0000-0000-0005-000000050106"],
+      "timestamp": "2026-01-05T14:30:00Z",
+      "created_at": "2026-01-05T14:30:00Z",
+      "updated_at": "2026-01-05T14:30:00Z"
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "defects": [
+    {
+      "defect_id": "00000000-0000-0000-0009-000000020101",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000002",
+      "defect_type": "INCONSISTENCY",
+      "severity": "MAJOR",
+      "detected_by": null,
+      "description": "ARR contradiction: Deck claims $5,200,000 but Financial Model shows $4,800,000 (8.33% discrepancy). Material claim cannot be verified.",
+      "evidence_refs": [
+        {"type": "evidence", "id": "00000000-0000-0000-0006-000000020101", "value": 5200000},
+        {"type": "evidence", "id": "00000000-0000-0000-0006-000000020102", "value": 4800000}
+      ],
+      "cure_protocol": "REQUEST_SOURCE",
+      "status": "OPEN",
+      "waiver_reason": null,
+      "waived_by": null,
+      "affected_claim_ids": ["00000000-0000-0000-0005-000000020101"],
+      "timestamp": "2026-01-05T11:30:00Z",
+      "created_at": "2026-01-05T11:30:00Z",
+      "updated_at": "2026-01-05T11:30:00Z"
+    }
+  ]
+}

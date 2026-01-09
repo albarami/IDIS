@@ -1,0 +1,19 @@
+{
+  "deal_id": "00000000-0000-0000-0002-000000000005",
+  "tenant_id": "00000000-0000-0000-0000-000000000001",
+  "external_ref": "QAV-2026-005",
+  "company_name": "HealthBridge Analytics",
+  "stage": "SERIES_A",
+  "sector": "Healthcare",
+  "status": "IN_REVIEW",
+  "materiality_threshold": 0.5,
+  "scenario": "missing_evidence",
+  "scenario_description": "NRR claim (C6) has no backing evidence span - claim text exists in summary but source document span is missing/deleted",
+  "injected_issue": {
+    "type": "MISSING_LINK",
+    "affected_claim": "C6",
+    "issue": "Claim has no primary_span_id reference"
+  },
+  "created_at": "2026-01-05T13:00:00Z",
+  "updated_at": "2026-01-05T13:00:00Z"
+}

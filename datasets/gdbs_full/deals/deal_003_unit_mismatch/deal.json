@@ -1,0 +1,23 @@
+{
+  "deal_id": "00000000-0000-0000-0002-000000000003",
+  "tenant_id": "00000000-0000-0000-0000-000000000001",
+  "external_ref": "QAV-2026-003",
+  "company_name": "MetricFlow AI",
+  "stage": "SEED",
+  "sector": "SaaS",
+  "status": "IN_REVIEW",
+  "materiality_threshold": 0.5,
+  "scenario": "unit_mismatch",
+  "scenario_description": "ARR labeled as $1,800,000 but value is actually MRR ($150K) x 12. Deck erroneously reports MRR as ARR.",
+  "injected_issue": {
+    "type": "UNIT_MISMATCH",
+    "affected_claim": "C1",
+    "stated_metric": "ARR",
+    "actual_metric": "MRR",
+    "stated_value": 1800000,
+    "implied_arr_from_mrr": 1800000,
+    "actual_mrr": 150000
+  },
+  "created_at": "2026-01-05T11:00:00Z",
+  "updated_at": "2026-01-05T11:00:00Z"
+}

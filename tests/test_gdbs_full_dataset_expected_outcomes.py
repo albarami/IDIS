@@ -184,6 +184,36 @@ class TestDeal005MissingEvidence:
         assert c6_blocked is not None, "C6 must be in blocked_claims"
         assert c6_blocked["reason"] == "NO_FREE_FACTS_MISSING_EVIDENCE"
 
+    def test_blocked_claim_has_exact_claim_id(self, gdbs_dataset: GDBSDataset) -> None:
+        """Blocked claim must have exact claim_id matching claims.json (B2 Codex fix).
+
+        The claim_id in blocked_claims must match the actual claim record from
+        deal_005_missing_evidence/claims.json for C6 (NRR with null primary_span_id).
+        """
+        import json
+
+        # Load claims.json to get the actual C6 claim_id
+        deal_dir = gdbs_dataset.dataset_path / "deals" / "deal_005_missing_evidence"
+        claims_json = deal_dir / "claims.json"
+        claims_data = json.loads(claims_json.read_text(encoding="utf-8"))
+
+        # Find C6 claim (NRR with missing evidence)
+        c6_claim = next((c for c in claims_data["claims"] if c.get("claim_key") == "C6"), None)
+        assert c6_claim is not None, "C6 claim not found in claims.json"
+        expected_claim_id = c6_claim["claim_id"]
+
+        # Verify the blocked_claims entry uses this exact claim_id
+        outcome = gdbs_dataset.get_expected_outcome("deal_005")
+        assert outcome is not None
+        blocked = outcome.raw.get("blocked_claims", [])
+        c6_blocked = next((b for b in blocked if b.get("claim_key") == "C6"), None)
+        assert c6_blocked is not None, "C6 must be in blocked_claims"
+
+        actual_claim_id = c6_blocked.get("claim_id")
+        assert actual_claim_id == expected_claim_id, (
+            f"blocked_claims claim_id mismatch: expected {expected_claim_id}, got {actual_claim_id}"
+        )
+
     def test_no_free_facts_enforcement_active(self, gdbs_dataset: GDBSDataset) -> None:
         """No-Free-Facts enforcement must be explicitly ACTIVE."""
         outcome = gdbs_dataset.get_expected_outcome("deal_005")

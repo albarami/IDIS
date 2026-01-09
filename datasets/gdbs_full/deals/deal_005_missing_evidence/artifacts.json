@@ -1,6 +1,34 @@
 {
   "artifacts": [
-    {"artifact_id": "00000000-0000-0000-0003-000000000501", "tenant_id": "00000000-0000-0000-0000-000000000001", "deal_id": "00000000-0000-0000-0002-000000000005", "artifact_type": "PITCH_DECK", "filename": "healthbridge_deck_v1.pdf", "storage_uri": "file://datasets/gdbs_full/deals/deal_005_missing_evidence/artifacts/healthbridge_deck_v1.pdf", "connector_type": "Upload", "sha256": "a5b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f60501", "version_label": "v1", "ingested_at": "2026-01-05T13:00:00Z", "created_at": "2026-01-05T13:00:00Z", "updated_at": "2026-01-05T13:00:00Z"},
-    {"artifact_id": "00000000-0000-0000-0003-000000000502", "tenant_id": "00000000-0000-0000-0000-000000000001", "deal_id": "00000000-0000-0000-0002-000000000005", "artifact_type": "FIN_MODEL", "filename": "healthbridge_model_v1.xlsx", "storage_uri": "file://datasets/gdbs_full/deals/deal_005_missing_evidence/artifacts/healthbridge_model_v1.xlsx", "connector_type": "Upload", "sha256": "b5c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a10502", "version_label": "v1", "ingested_at": "2026-01-05T13:05:00Z", "created_at": "2026-01-05T13:05:00Z", "updated_at": "2026-01-05T13:05:00Z"}
+    {
+      "artifact_id": "00000000-0000-0000-0003-000005000001",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000005",
+      "artifact_type": "PITCH_DECK",
+      "filename": "pitch_deck.pdf",
+      "storage_uri": "file://datasets/gdbs_full/deals/deal_005_missing_evidence/artifacts/pitch_deck.pdf",
+      "connector_type": "Upload",
+      "sha256": "209d423183be9b61a1c6f43c58e0d45a35b6de239cf9b474e5bd6cd8977084a0",
+      "file_size_bytes": 2359,
+      "version_label": "v1",
+      "ingested_at": "2026-01-05T09:00:00Z",
+      "created_at": "2026-01-05T09:00:00Z",
+      "updated_at": "2026-01-05T09:00:00Z"
+    },
+    {
+      "artifact_id": "00000000-0000-0000-0003-000005000002",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "deal_id": "00000000-0000-0000-0002-000000000005",
+      "artifact_type": "FIN_MODEL",
+      "filename": "financials.xlsx",
+      "storage_uri": "file://datasets/gdbs_full/deals/deal_005_missing_evidence/artifacts/financials.xlsx",
+      "connector_type": "Upload",
+      "sha256": "7bd5385d9f05d7931272a82aabe65f5f4c6cd003401ff591416170a15c054816",
+      "file_size_bytes": 6044,
+      "version_label": "v1",
+      "ingested_at": "2026-01-05T09:05:00Z",
+      "created_at": "2026-01-05T09:05:00Z",
+      "updated_at": "2026-01-05T09:05:00Z"
+    }
   ]
 }

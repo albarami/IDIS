@@ -464,6 +464,46 @@ class TestAuditTaxonomyValidation:
             "tenant.isolation.violation event type must be defined"
         )
 
+    def test_required_events_accepted_by_validator(self, gdbs_dataset: GDBSDataset) -> None:
+        """All required event types must be accepted by the validator (B3 Codex fix).
+
+        Cross-checks audit expectations against the validator source of truth:
+        src/idis/validators/audit_event_validator.py VALID_EVENT_PREFIXES.
+        """
+        from idis.validators.audit_event_validator import VALID_EVENT_PREFIXES
+
+        audit = gdbs_dataset.audit_expectations
+
+        # Collect all event types from audit expectations
+        all_event_types: set[str] = set()
+        for category_data in audit.get("event_categories", {}).values():
+            for event in category_data.get("required_events", []):
+                event_type = event.get("event_type", "")
+                if event_type:
+                    all_event_types.add(event_type)
+
+        # Validate each event type starts with a valid prefix
+        invalid_events: list[str] = []
+        for event_type in all_event_types:
+            valid = any(event_type.startswith(prefix) for prefix in VALID_EVENT_PREFIXES)
+            if not valid:
+                invalid_events.append(event_type)
+
+        assert not invalid_events, (
+            f"Event types not accepted by validator (invalid prefix): {invalid_events}. "
+            f"Valid prefixes: {sorted(VALID_EVENT_PREFIXES)}"
+        )
+
+    def test_validator_prefixes_cover_required_categories(self, gdbs_dataset: GDBSDataset) -> None:
+        """Validator VALID_EVENT_PREFIXES must cover all audit taxonomy categories."""
+        from idis.validators.audit_event_validator import VALID_EVENT_PREFIXES
+
+        # These prefixes are required per audit taxonomy
+        required_prefixes = {"deal.", "claim.", "sanad.", "defect.", "calc.", "tenant."}
+
+        missing = required_prefixes - VALID_EVENT_PREFIXES
+        assert not missing, f"Validator missing required prefixes: {missing}"
+
 
 class TestRealArtifacts:
     """Test that real PDF/XLSX artifacts exist."""
@@ -506,12 +546,107 @@ class TestRealArtifacts:
 
             artifacts_dir = gdbs_dataset.dataset_path / "deals" / deal_dir / "artifacts"
 
-            # Check PDF exists
-            pdf_path = artifacts_dir / "pitch_deck.pdf"
-            assert pdf_path.exists(), f"Missing pitch_deck.pdf for {deal.deal_key}"
-            assert pdf_path.stat().st_size > 0, f"Empty pitch_deck.pdf for {deal.deal_key}"
+            # Check PDF exists (deal_008 has v1/v2 versioned PDFs)
+            if deal_num == 8:
+                pdf_v1 = artifacts_dir / "pitch_deck_v1.pdf"
+                pdf_v2 = artifacts_dir / "pitch_deck_v2.pdf"
+                assert pdf_v1.exists(), f"Missing pitch_deck_v1.pdf for {deal.deal_key}"
+                assert pdf_v2.exists(), f"Missing pitch_deck_v2.pdf for {deal.deal_key}"
+            else:
+                pdf_path = artifacts_dir / "pitch_deck.pdf"
+                assert pdf_path.exists(), f"Missing pitch_deck.pdf for {deal.deal_key}"
+                assert pdf_path.stat().st_size > 0, f"Empty pitch_deck.pdf for {deal.deal_key}"
 
             # Check XLSX exists
             xlsx_path = artifacts_dir / "financials.xlsx"
             assert xlsx_path.exists(), f"Missing financials.xlsx for {deal.deal_key}"
             assert xlsx_path.stat().st_size > 0, f"Empty financials.xlsx for {deal.deal_key}"
+
+
+class TestArtifactHashVerification:
+    """Test that artifact sha256 and file_size_bytes match actual files (B1 Codex fix)."""
+
+    DEAL_DIR_SUFFIX = {
+        1: "clean",
+        2: "contradiction",
+        3: "unit_mismatch",
+        4: "time_window_mismatch",
+        5: "missing_evidence",
+        6: "calc_conflict",
+        7: "chain_break",
+        8: "version_drift",
+    }
+
+    def _get_deal_dir(self, gdbs_dataset: GDBSDataset, deal_num: int) -> Path:
+        """Get the directory path for a deal."""
+        if deal_num <= 8:
+            suffix = self.DEAL_DIR_SUFFIX[deal_num]
+            deal_dir = f"deal_{deal_num:03d}_{suffix}"
+        else:
+            deal_dir = f"deal_{deal_num:03d}_clean"
+        return gdbs_dataset.dataset_path / "deals" / deal_dir
+
+    def _compute_sha256(self, file_path: Path) -> str:
+        """Compute SHA256 hash of a file."""
+        import hashlib
+
+        content = file_path.read_bytes()
+        return hashlib.sha256(content).hexdigest()
+
+    @pytest.mark.parametrize("deal_num", list(range(1, 9)))
+    def test_adversarial_artifact_hash_match(
+        self, gdbs_dataset: GDBSDataset, deal_num: int
+    ) -> None:
+        """Adversarial deals 001-008: artifact sha256 and size must match actual files."""
+        deal_dir = self._get_deal_dir(gdbs_dataset, deal_num)
+        artifacts_dir = deal_dir / "artifacts"
+
+        # Load artifacts.json
+        import json
+
+        artifacts_json = deal_dir / "artifacts.json"
+        assert artifacts_json.exists(), f"Missing artifacts.json for deal_{deal_num:03d}"
+        data = json.loads(artifacts_json.read_text(encoding="utf-8"))
+
+        for artifact in data.get("artifacts", []):
+            filename = artifact.get("filename")
+            expected_sha256 = artifact.get("sha256")
+            expected_size = artifact.get("file_size_bytes")
+
+            assert filename, f"Artifact missing filename in deal_{deal_num:03d}"
+            assert expected_sha256, f"Artifact {filename} missing sha256"
+            assert expected_size, f"Artifact {filename} missing file_size_bytes"
+
+            # Verify file exists
+            file_path = artifacts_dir / filename
+            assert file_path.exists(), (
+                f"Artifact file {filename} does not exist for deal_{deal_num:03d}"
+            )
+
+            # Verify size matches
+            actual_size = file_path.stat().st_size
+            assert actual_size == expected_size, (
+                f"Size mismatch for {filename} in deal_{deal_num:03d}: "
+                f"expected {expected_size}, got {actual_size}"
+            )
+
+            # Verify sha256 matches
+            actual_sha256 = self._compute_sha256(file_path)
+            assert actual_sha256 == expected_sha256, (
+                f"SHA256 mismatch for {filename} in deal_{deal_num:03d}: "
+                f"expected {expected_sha256}, got {actual_sha256}"
+            )
+
+    def test_all_100_deals_have_artifacts_json(self, gdbs_dataset: GDBSDataset) -> None:
+        """All 100 deals must have a valid artifacts.json file."""
+        import json
+
+        for deal in gdbs_dataset.deals:
+            deal_num = int(deal.deal_key.split("_")[1])
+            deal_dir = self._get_deal_dir(gdbs_dataset, deal_num)
+            artifacts_json = deal_dir / "artifacts.json"
+
+            assert artifacts_json.exists(), f"Missing artifacts.json for {deal.deal_key}"
+            data = json.loads(artifacts_json.read_text(encoding="utf-8"))
+            assert "artifacts" in data, f"Invalid artifacts.json for {deal.deal_key}"
+            assert len(data["artifacts"]) >= 1, f"No artifacts in {deal.deal_key}"

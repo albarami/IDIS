@@ -16,7 +16,7 @@
   ],
   "blocked_claims": [
     {
-      "claim_id": "00000000-0000-0000-0005-000005000006",
+      "claim_id": "00000000-0000-0000-0005-000000050106",
       "claim_key": "C6",
       "reason": "NO_FREE_FACTS_MISSING_EVIDENCE",
       "description": "Claim C6 (NRR) is blocked from IC-bound outputs because it lacks primary evidence span linkage, violating No-Free-Facts invariant"

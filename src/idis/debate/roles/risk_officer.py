@@ -121,8 +121,7 @@ class RiskOfficerRole(RoleRunner):
         risk_claim_ids: list[str] = sorted(
             str(claim_ref)
             for risk in risks_identified
-            if (claim_ref := risk.get("claim_ref")) is not None
-            and isinstance(claim_ref, str)
+            if (claim_ref := risk.get("claim_ref")) is not None and isinstance(claim_ref, str)
         )
 
         message = DebateMessage(

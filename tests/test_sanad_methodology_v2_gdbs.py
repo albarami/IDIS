@@ -56,11 +56,26 @@ def load_sanads(deal_key: str) -> list[dict[str, Any]]:
     return []
 
 
-def load_evidence(deal_key: str) -> list[dict[str, Any]]:
+def load_evidence(
+    deal_key: str,
+    *,
+    require_non_empty: bool = True,
+) -> list[dict[str, Any]]:
     """Load evidence.json from GDBS-FULL deal directory.
 
     NOTE: Dataset uses 'evidence.json', not 'evidence_items.json'.
     Falls back to evidence_items.json for backwards compatibility.
+
+    Args:
+        deal_key: Deal directory name (e.g., "deal_002_contradiction")
+        require_non_empty: If True, assert that evidence is non-empty after load.
+            Set to False only for tests that intentionally test missing evidence.
+
+    Returns:
+        List of evidence items.
+
+    Raises:
+        AssertionError: If require_non_empty=True and no evidence found.
     """
     deal_dir = GDBS_PATH / "deals" / deal_key
 
@@ -68,14 +83,35 @@ def load_evidence(deal_key: str) -> list[dict[str, Any]]:
     evidence_file = deal_dir / "evidence.json"
     if evidence_file.exists():
         data = json.loads(evidence_file.read_text(encoding="utf-8"))
-        return data if isinstance(data, list) else data.get("evidence", [])
+        # Dataset may use "evidence" or "evidence_items" key
+        if isinstance(data, list):
+            result = data
+        else:
+            result = data.get("evidence") or data.get("evidence_items") or []
+        if require_non_empty:
+            assert result and len(result) > 0, (
+                f"Evidence file {evidence_file} exists but contains no items. "
+                f"Use require_non_empty=False if testing empty evidence scenario."
+            )
+        return result
 
     # Fallback: evidence_items.json (legacy)
     legacy_file = deal_dir / "evidence_items.json"
     if legacy_file.exists():
         data = json.loads(legacy_file.read_text(encoding="utf-8"))
-        return data if isinstance(data, list) else data.get("evidence_items", [])
+        result = data if isinstance(data, list) else data.get("evidence_items", [])
+        if require_non_empty:
+            assert result and len(result) > 0, (
+                f"Evidence file {legacy_file} exists but contains no items. "
+                f"Use require_non_empty=False if testing empty evidence scenario."
+            )
+        return result
 
+    if require_non_empty:
+        raise AssertionError(
+            f"No evidence file found for {deal_key} at {deal_dir}. "
+            f"Expected evidence.json or evidence_items.json to exist."
+        )
     return []
 
 
@@ -121,7 +157,11 @@ class TestDeal002Contradiction:
         assert deal.get("scenario") == "contradiction"
 
     def test_contradiction_triggers_shudhudh(self, gdbs_available: bool) -> None:
-        """Contradiction between deck and model should trigger shudhudh anomaly."""
+        """Contradiction between deck and model MUST trigger shudhudh anomaly/defect.
+
+        This test proves that the adversarial contradiction scenario produces
+        a real anomaly detection, not just reconciliation attempts.
+        """
         if not gdbs_available:
             pytest.skip("GDBS-FULL dataset not available")
 
@@ -136,27 +176,36 @@ class TestDeal002Contradiction:
         discrepancy = abs(deck_value - model_value) / max(deck_value, model_value)
         assert discrepancy > 0.05, f"Expected >5% discrepancy, got {discrepancy * 100:.1f}%"
 
+        # Use SHAYKH (support-only tier) for lower-tier source to trigger anomaly
+        # The anomaly is detected when a lower-tier source contradicts higher-tier
         claim_values = [
             {"value": deck_value, "source": "deck"},
             {"value": model_value, "source": "model"},
         ]
         sources = [
-            {"source_type": "PITCH_DECK", "evidence_id": "deck-evidence"},
             {"source_type": "FINANCIAL_MODEL", "evidence_id": "model-evidence"},
+            {"source_type": "MANAGEMENT_INTERVIEW", "evidence_id": "interview-evidence"},
         ]
 
-        # MUST assert shudhudh detection outcome - cannot pass silently
         result = detect_shudhudh(claim_values, sources, contradiction_threshold=0.05)
         assert result is not None, "detect_shudhudh must return a result"
 
-        # Either anomaly detected OR reconciliation attempted
-        # The key assertion: we got a meaningful response, not silent pass
-        has_reconciliation = len(result.reconciliation_attempts) > 0
-        has_anomaly = result.has_anomaly
-        assert has_reconciliation or has_anomaly is not None, (
-            f"Shudhudh detection must produce reconciliation attempts or anomaly flag. "
-            f"Got: anomaly={result.has_anomaly}, attempts={len(result.reconciliation_attempts)}"
+        # MUST assert actual anomaly detection - not just attempts
+        assert result.has_anomaly is True, (
+            f"Shudhudh MUST detect anomaly for contradiction scenario. "
+            f"Got has_anomaly={result.has_anomaly}, defect_code={result.defect_code}"
         )
+
+        # Assert specific defect code for determinism
+        assert result.defect_code == "SHUDHUDH_ANOMALY", (
+            f"Expected defect_code='SHUDHUDH_ANOMALY', got '{result.defect_code}'"
+        )
+
+        # Assert severity matches spec (MAJOR for anomaly vs stronger sources)
+        assert result.severity == "MAJOR", f"Expected severity='MAJOR', got '{result.severity}'"
+
+        # Assert cure protocol is specified
+        assert result.cure_protocol is not None, "Cure protocol must be specified"
 
     def test_contradiction_deal_grade_reflects_issue(self, gdbs_available: bool) -> None:
         """Contradiction deal should result in grade impact or defect flag."""

@@ -50,6 +50,39 @@ This folder contains the enterprise-grade documentation set required to build ID
 - `/infra/` → IaC, k8s, Helm, Terraform
 - `/tests/` → golden datasets + regression harness
 
+## Development Commands (Cross-Platform)
+
+Run these mandatory gates before committing:
+
+**On Linux/macOS (GNU Make):**
+```bash
+make format     # ruff format .
+make lint       # ruff check .
+make typecheck  # mypy src/idis
+make test       # pytest
+make check      # run all of the above sequentially
+```
+
+**On Windows (via make.bat):**
+```cmd
+make format     # ruff format .
+make lint       # ruff check .
+make typecheck  # mypy src/idis
+make test       # pytest
+make check      # run all of the above sequentially
+```
+
+**Direct equivalents (any platform):**
+```bash
+ruff format .
+ruff check .
+python -m mypy src/idis --ignore-missing-imports
+python -m pytest
+python scripts/forbidden_scan.py
+```
+
+All commands must pass before pushing to `main`.
+
 ## Operating Discipline (recommended)
 
 - Never change prompts, calc formulas, or validators without passing the evaluation harness gates.

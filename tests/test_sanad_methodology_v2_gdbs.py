@@ -383,10 +383,24 @@ class TestDeal005MissingEvidence:
         assert deal.get("scenario") == "missing_evidence"
 
     def test_missing_evidence_blocked_by_no_free_facts(self, gdbs_available: bool) -> None:
-        """Missing evidence should be blocked by No-Free-Facts validator."""
+        """Missing evidence REFERENCE should be blocked by No-Free-Facts validator.
+
+        Note: deal_005 scenario is about a claim (C6) missing its evidence span reference,
+        not about empty evidence files. The deal HAS evidence, but specific claims lack
+        proper primary_span_id links - which No-Free-Facts must catch.
+        """
         if not gdbs_available:
             pytest.skip("GDBS-FULL dataset not available")
 
+        # EXPLICIT ASSERTION: deal HAS evidence (scenario is missing REFERENCE, not file)
+        evidence = load_evidence("deal_005_missing_evidence", require_non_empty=True)
+        assert len(evidence) > 0, (
+            "deal_005_missing_evidence must have evidence items. "
+            "Scenario is claim C6 missing span reference, not empty evidence."
+        )
+
+        # This deliverable has factual claims but NO referenced_claim_ids - simulating the
+        # adversarial scenario where claim text exists but evidence links are missing
         deliverable_without_refs = {
             "deliverable_type": "IC_MEMO",
             "sections": [

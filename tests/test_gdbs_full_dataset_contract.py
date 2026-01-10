@@ -162,7 +162,15 @@ class TestDealsContract:
         assert len(deal.artifacts) >= 1, f"Deal {deal_key} missing artifacts"
         assert len(deal.spans) >= 1, f"Deal {deal_key} missing spans"
         assert len(deal.claims) == 7, f"Deal {deal_key} must have 7 claims (C1-C7)"
-        assert len(deal.evidence) >= 1, f"Deal {deal_key} missing evidence"
+
+        # deal_005 is the "missing_evidence" adversarial scenario - intentionally has NO evidence
+        if deal_key == "deal_005":
+            assert len(deal.evidence) == 0, (
+                f"Deal {deal_key} is missing_evidence scenario - must have ZERO evidence"
+            )
+        else:
+            assert len(deal.evidence) >= 1, f"Deal {deal_key} missing evidence"
+
         assert len(deal.sanads) == 7, f"Deal {deal_key} must have 7 sanads"
         assert len(deal.calcs) >= 1, f"Deal {deal_key} missing mandatory calcs"
 

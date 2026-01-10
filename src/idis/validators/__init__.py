@@ -4,6 +4,19 @@ from idis.validators.audit_event_validator import (
     AuditEventValidator,
     validate_audit_event,
 )
+from idis.validators.extraction_gate import (
+    CONFIDENCE_THRESHOLD,
+    DHABT_THRESHOLD,
+    ExtractionGateBlockedError,
+    ExtractionGateBlockReason,
+    ExtractionGateDecision,
+    ExtractionGateInput,
+    ExtractionGateValidator,
+    VerificationMethod,
+    evaluate_extraction_gate,
+    evaluate_extraction_gate_batch,
+    validate_extraction_gate,
+)
 from idis.validators.muhasabah import MuhasabahValidator, validate_muhasabah
 from idis.validators.no_free_facts import NoFreeFactsValidator, validate_no_free_facts
 from idis.validators.sanad_integrity import SanadIntegrityValidator, validate_sanad_integrity
@@ -25,4 +38,15 @@ __all__ = [
     "validate_sanad_integrity",
     "AuditEventValidator",
     "validate_audit_event",
+    "ExtractionGateValidator",
+    "ExtractionGateInput",
+    "ExtractionGateDecision",
+    "ExtractionGateBlockedError",
+    "ExtractionGateBlockReason",
+    "VerificationMethod",
+    "evaluate_extraction_gate",
+    "evaluate_extraction_gate_batch",
+    "validate_extraction_gate",
+    "CONFIDENCE_THRESHOLD",
+    "DHABT_THRESHOLD",
 ]

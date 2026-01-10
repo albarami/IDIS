@@ -139,14 +139,16 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | **Source Doc** | TDD §10; Global Rules §3.3 |
 | **Source Section** | "Implementation Notes", "Fail Closed Rule" |
 | **Enforcing Component** | All validator classes; middleware; auth handlers |
-| **Secondary Enforcement** | Default deny in RBAC; extraction gate |
+| **Secondary Enforcement** | Default deny in RBAC; extraction gate (`src/idis/validators/extraction_gate.py`) |
 | **Tests** | `tests/test_fail_closed.py::test_auth_fails_closed` |
 | | `tests/test_fail_closed.py::test_tenant_fails_closed` |
 | | `tests/test_fail_closed.py::test_validator_fails_closed` |
-| | `tests/test_extraction_gate.py::test_low_confidence_blocked` |
+| | `tests/test_extraction_gate.py::test_low_confidence_blocked` ✅ |
+| | `tests/test_extraction_gate.py::test_missing_values_fail_closed` ✅ |
 | **Phase Gate** | All phases (from Phase 0) |
 | **Evidence Artifact** | Rejection events with explicit deny reason; `rbac.denied` audit events |
 | **Violation Severity** | Depends on context (SEV-1 for auth/tenant; SEV-2 for validators) |
+| **Implementation Status** | ✅ Extraction gate implemented (Phase 4.2) |
 
 ---
 
@@ -475,7 +477,7 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | DN-002 | Calc-Sanad grade derivation | TDD §1.1 | `calc/engine.py` | test_calc_sanad.py::TestGradeDerivation* | 4.1 | ✅ Exists | material-aware calc_grade (non-material excluded) |
 | DN-003 | Calc RLS tenant isolation | Security §6 | migration 0005 | test_postgres_rls_and_audit_immutability.py::TestDeterministicCalculationsRLS | 4.1 | ✅ Exists | RLS policies |
 | DN-004 | CalcSanad RLS tenant isolation | Security §6 | migration 0005 | test_postgres_rls_and_audit_immutability.py::TestCalcSanadsRLS | 4.1 | ✅ Exists | RLS policies |
-| FC-001 | Fail-closed | TDD §10 | All validators | test_fail_closed.py | 0+ | ⏳ Planned | Rejection events |
+| FC-001 | Fail-closed | TDD §10 | All validators, `extraction_gate.py` | test_extraction_gate.py | 0+/4.2 | ✅ Exists | Rejection events |
 | API-001 | Idempotency | API §4.1 | `idempotency.py` | test_api_idempotency_middleware.py | 2.5 | ✅ Exists | request_id |
 | API-002 | Error model | API §8 | `errors.py` | test_error_model.py | 2.6 | ⏳ Planned | Error responses |
 | API-003 | Rate limiting | API §4.3 | `rate_limit.py` | test_rate_limiting.py | 2.7 | ⏳ Planned | 429 responses |
@@ -518,6 +520,7 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | `tests/test_calc_reproducibility.py` | Calc engine hash stability | 4.1 | ✅ Passing |
 | `tests/test_calc_sanad.py` | Calc-Sanad grade derivation + tamper detection | 4.1 | ✅ Passing |
 | `tests/test_postgres_rls_and_audit_immutability.py` | RLS tenant isolation (incl. calc tables) | 2/4.1 | ✅ Passing |
+| `tests/test_extraction_gate.py` | Extraction confidence gate (fail-closed) | 4.2 | ✅ Passing |
 
 ### 9.2 Planned Tests (By Phase Gate)
 
@@ -535,9 +538,9 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | `tests/test_defect_cure_protocol.py` | Cure workflows | 3 | `defects/service.py` (planned) |
 | `tests/test_defect_waiver.py` | Defect waiver process | 3 | `defects/service.py` (planned) |
 | `tests/test_sanad_coverage.py` | Material claims have Sanad | 3 | `sanad/` (planned) |
-| `tests/test_calc_reproducibility.py` | Same inputs → same hash | 4 | `calc/engine.py` (planned) |
-| `tests/test_calc_sanad.py` | Calc provenance to claim_ids | 4 | `calc_sanad.py` (planned) |
-| `tests/test_extraction_gate.py` | Blocks low-confidence calcs | 4 | `extraction_gate.py` (planned) |
+| `tests/test_calc_reproducibility.py` | Same inputs → same hash | 4 | `calc/engine.py` ✅ |
+| `tests/test_calc_sanad.py` | Calc provenance to claim_ids | 4 | `calc_sanad.py` ✅ |
+| `tests/test_extraction_gate.py` | Blocks low-confidence calcs | 4.2 | `extraction_gate.py` ✅ |
 | `tests/test_fail_closed.py` | Validators fail closed | 0+ | All validators |
 | `tests/test_tenant_rls.py` | Postgres RLS enforcement | 7 | Database config |
 | `tests/test_cache_tenant_keying.py` | Cache tenant isolation | 7 | Cache layer |
@@ -578,3 +581,4 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | 2026-01-07 | 1.1 | Cascade | Added Implementation Status column; hard/soft gate classification; corrected test coverage matrix to reflect actual repo state; added planned tests/modules by phase gate |
 | 2026-01-09 | 1.2 | Cascade | Added Phase 3.3 Sanad Methodology v2 traceability (SAN-003 through SAN-008); updated SAN-001, SAN-002, DEF-001 to Exists status |
 | 2026-01-10 | 1.3 | Cascade | Added Phase 4.1 Deterministic Calc Engine traceability (DN-001 through DN-004); added calc tests to test coverage matrix |
+| 2026-01-10 | 1.4 | Cascade | Added Phase 4.2 Extraction Confidence Gate (FC-001 updated); test_extraction_gate.py::test_low_confidence_blocked implemented |

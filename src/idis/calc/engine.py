@@ -1,6 +1,7 @@
 """Deterministic Calculation Engine.
 
 Phase 4.1: CalcEngine with run() and verify_reproducibility() methods.
+Phase 4.2: Extraction confidence gate enforcement.
 All arithmetic uses Decimal exclusively; no float operations.
 """
 
@@ -24,6 +25,12 @@ from idis.models.deterministic_calculation import (
     CalcOutput,
     CalcType,
     DeterministicCalculation,
+)
+from idis.validators.extraction_gate import (
+    ExtractionGateBlockedError,
+    ExtractionGateInput,
+    VerificationMethod,
+    evaluate_extraction_gate_batch,
 )
 
 if TYPE_CHECKING:
@@ -81,11 +88,19 @@ class CalcIntegrityError(Exception):
 
 @dataclass
 class InputGradeInfo:
-    """Grade information for a single input claim."""
+    """Grade information for a single input claim.
+
+    Phase 4.2 additions: extraction_confidence, dhabt_score, is_human_verified
+    for extraction gate enforcement.
+    """
 
     claim_id: str
     grade: SanadGrade
     is_material: bool = True
+    extraction_confidence: Decimal | None = None
+    dhabt_score: Decimal | None = None
+    is_human_verified: bool = False
+    verification_method: VerificationMethod = VerificationMethod.NONE
 
 
 @dataclass
@@ -104,21 +119,29 @@ class CalcEngine:
 
     All calculations use Decimal arithmetic exclusively.
     Every calculation produces a reproducibility hash for tamper detection.
+
+    Phase 4.2: Enforces extraction confidence gate on all inputs.
+    Inputs with extraction_confidence < 0.95 or dhabt_score < 0.90
+    are blocked UNLESS human-verified.
     """
 
     def __init__(
         self,
         registry: FormulaRegistry | None = None,
         code_version: str | None = None,
+        enforce_extraction_gate: bool = True,
     ) -> None:
         """Initialize the calc engine.
 
         Args:
             registry: Formula registry to use. Defaults to singleton.
             code_version: Code version string. Defaults to package __version__.
+            enforce_extraction_gate: Whether to enforce extraction confidence gate.
+                Defaults to True. Only set to False for legacy/migration scenarios.
         """
         self._registry = registry or FormulaRegistry()
         self._code_version = code_version or __version__
+        self._enforce_extraction_gate = enforce_extraction_gate
 
     def run(
         self,
@@ -144,10 +167,15 @@ class CalcEngine:
 
         Raises:
             CalcMissingInputError: If required inputs are missing.
+            ExtractionGateBlockedError: If any input fails extraction gate.
             KeyError: If calc_type is not registered.
             ValueError: If formula computation fails.
         """
         spec = self._registry.get_or_raise(calc_type)
+
+        # Phase 4.2: Enforce extraction gate BEFORE any computation
+        if self._enforce_extraction_gate:
+            self._enforce_extraction_gate_on_inputs(input_grades, calc_type)
 
         self._validate_required_inputs(spec, input_values)
 
@@ -267,6 +295,49 @@ class CalcEngine:
         merged = dict(spec.optional_inputs)
         merged.update(input_values)
         return merged
+
+    def _enforce_extraction_gate_on_inputs(
+        self,
+        input_grades: list[InputGradeInfo],
+        calc_type: CalcType,
+    ) -> None:
+        """Enforce extraction confidence gate on all inputs.
+
+        Phase 4.2: Blocks calculation if ANY input fails the extraction gate.
+        Gate conditions (fail-closed):
+        - extraction_confidence < 0.95 → blocked
+        - dhabt_score < 0.90 → blocked
+        - missing confidence or dhabt → blocked
+        UNLESS the input is human-verified.
+
+        Args:
+            input_grades: List of input grade info with extraction metadata.
+            calc_type: The calculation type (for error message).
+
+        Raises:
+            ExtractionGateBlockedError: If any input fails the gate.
+        """
+        if not input_grades:
+            return
+
+        # Convert InputGradeInfo to ExtractionGateInput
+        gate_inputs = [
+            ExtractionGateInput(
+                claim_id=ig.claim_id,
+                extraction_confidence=ig.extraction_confidence,
+                dhabt_score=ig.dhabt_score,
+                is_human_verified=ig.is_human_verified,
+                verification_method=ig.verification_method,
+            )
+            for ig in input_grades
+        ]
+
+        # Evaluate all inputs
+        _, blocked = evaluate_extraction_gate_batch(gate_inputs)
+
+        # If any are blocked, raise error
+        if blocked:
+            raise ExtractionGateBlockedError(blocked, calc_type.value)
 
     def _compute_reproducibility_hash(
         self,

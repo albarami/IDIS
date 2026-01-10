@@ -155,6 +155,7 @@ Exit criteria:
 - Calc outputs reproducible (same inputs → same hash)
 - No LLM-generated arithmetic in deliverables
 - Calcs are traceable to claim_ids and source evidence
+- Extraction gate enforced at calc engine boundary
 
 #### Phase 4.1 — Deterministic Calc Engine Framework ✅ COMPLETE
 
@@ -219,6 +220,45 @@ Exit criteria:
 - `tests/test_calc_reproducibility.py` — hash stability tests
 - `tests/test_calc_sanad.py` — grade derivation and tamper detection
 - `tests/test_postgres_rls_and_audit_immutability.py` — RLS tests for new tables
+
+#### Phase 4.2 — Extraction Confidence Gate ✅ COMPLETE
+
+**Implemented (2026-01-10):**
+
+1. **Extraction Gate Validator**
+   - `src/idis/validators/extraction_gate.py`
+   - Thresholds as Decimal constants: `CONFIDENCE_THRESHOLD = 0.95`, `DHABT_THRESHOLD = 0.90`
+   - Fail-closed semantics: missing/invalid values block unless human-verified
+
+2. **Gate Decision Model**
+   - `ExtractionGateInput` dataclass with claim_id, extraction_confidence, dhabt_score, verification flags
+   - `ExtractionGateDecision` with allowed/blocked status, reason, and bypass flag
+   - `ExtractionGateBlockReason` enum: LOW_CONFIDENCE, LOW_DHABT, MISSING_*, INVALID_*
+
+3. **Human Verification Bypass**
+   - `is_human_verified` flag bypasses ALL gate checks
+   - `VerificationMethod` enum: NONE, HUMAN_VERIFIED, SYSTEM_VERIFIED, DUAL_VERIFIED
+   - HUMAN_VERIFIED and DUAL_VERIFIED bypass the gate
+
+4. **Calc Engine Integration**
+   - `InputGradeInfo` extended with extraction_confidence, dhabt_score, is_human_verified
+   - `CalcEngine._enforce_extraction_gate_on_inputs()` called before computation
+   - `ExtractionGateBlockedError` raised if ANY input fails gate
+   - `enforce_extraction_gate` flag (default True) for migration scenarios
+
+5. **Validator Interfaces**
+   - `evaluate_extraction_gate(input)` — returns decision
+   - `evaluate_extraction_gate_batch(inputs)` — returns (allowed, blocked) lists
+   - `validate_extraction_gate(input)` — returns ValidationResult
+   - `ExtractionGateValidator` class for consistency with other validators
+
+**Tests:**
+- `tests/test_extraction_gate.py` — comprehensive gate tests including:
+  - `test_low_confidence_blocked` (required by FC-001)
+  - `test_low_dhabt_blocked`
+  - `test_missing_values_fail_closed`
+  - `test_human_verified_bypasses_gate`
+  - CalcEngine integration tests
 
 ---
 

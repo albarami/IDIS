@@ -32,8 +32,12 @@ def registry() -> FormulaRegistry:
 
 @pytest.fixture
 def engine(registry: FormulaRegistry) -> CalcEngine:
-    """Create a calc engine with the test registry."""
-    return CalcEngine(registry=registry, code_version="test-1.0.0")
+    """Create a calc engine with the test registry.
+
+    Note: enforce_extraction_gate=False for Phase 4.1 tests focused on
+    reproducibility. Phase 4.2 extraction gate tests are in test_extraction_gate.py.
+    """
+    return CalcEngine(registry=registry, code_version="test-1.0.0", enforce_extraction_gate=False)
 
 
 class TestSameInputsSameHash:

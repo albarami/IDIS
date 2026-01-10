@@ -2,9 +2,21 @@
 
 Phase 3.1: Ingestion Gate storage primitives.
 Phase 4.1: Deterministic calculation models.
+Phase 5.1: Debate orchestration models.
 """
 
 from idis.models.calc_sanad import CalcSanad, GradeExplanationEntry, SanadGrade
+from idis.models.debate import (
+    AgentOutput,
+    ArbiterDecision,
+    DebateConfig,
+    DebateMessage,
+    DebateRole,
+    DebateState,
+    MuhasabahRecord,
+    PositionSnapshot,
+    StopReason,
+)
 from idis.models.deterministic_calculation import (
     CalcInputs,
     CalcOutput,
@@ -16,10 +28,16 @@ from idis.models.document_artifact import DocType, DocumentArtifact
 from idis.models.document_span import DocumentSpan, SpanLocator, SpanType
 
 __all__ = [
+    "AgentOutput",
+    "ArbiterDecision",
     "CalcInputs",
     "CalcOutput",
     "CalcSanad",
     "CalcType",
+    "DebateConfig",
+    "DebateMessage",
+    "DebateRole",
+    "DebateState",
     "DeterministicCalculation",
     "DocType",
     "Document",
@@ -27,8 +45,11 @@ __all__ = [
     "DocumentSpan",
     "DocumentType",
     "GradeExplanationEntry",
+    "MuhasabahRecord",
     "ParseStatus",
+    "PositionSnapshot",
     "SanadGrade",
     "SpanLocator",
     "SpanType",
+    "StopReason",
 ]

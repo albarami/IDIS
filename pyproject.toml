@@ -22,6 +22,7 @@ dependencies = [
     "opentelemetry-instrumentation-fastapi>=0.43b0",
     "opentelemetry-instrumentation-sqlalchemy>=0.43b0",
     "opentelemetry-instrumentation-httpx>=0.43b0",
+    "langgraph>=0.0.40",
 ]
 
 [project.optional-dependencies]

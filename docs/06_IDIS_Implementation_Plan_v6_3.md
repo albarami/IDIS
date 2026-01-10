@@ -278,6 +278,62 @@ Exit criteria:
 - Outputs blocked if Muḥāsabah missing or No-Free-Facts violated
 - Stable dissent produces deliverables with dissent section
 
+#### Phase 5.1 — LangGraph Orchestration Core ✅ COMPLETE
+
+**Implemented (2026-01-10):**
+
+1. **Debate State Models**
+   - `src/idis/models/debate.py`
+   - `DebateState` — canonical state for LangGraph orchestration
+   - `DebateMessage`, `AgentOutput`, `MuhasabahRecord` — structured outputs
+   - `ArbiterDecision`, `PositionSnapshot` — round artifacts
+   - `StopReason` enum with normative priority order
+   - `DebateConfig` with max_rounds=5, consensus_threshold=0.10
+
+2. **Stop Conditions Module**
+   - `src/idis/debate/stop_conditions.py`
+   - Priority order (normative): CRITICAL_DEFECT > MAX_ROUNDS > CONSENSUS > STABLE_DISSENT > EVIDENCE_EXHAUSTED
+   - `StopConditionChecker` class with deterministic evaluation
+   - `check_stop_condition()` convenience function
+   - `StopConditionError` for fail-closed behavior on invalid state
+   - Max rounds = 5 (hard limit per v6.3)
+
+3. **Role Runner Interface**
+   - `src/idis/debate/roles/base.py`
+   - `RoleRunnerProtocol` — typed interface for role implementations
+   - `RoleRunner` abstract base class
+   - `RoleResult` — structured state updates from role execution
+   - Supports injected role runners for deterministic testing
+
+4. **Role Implementations**
+   - `src/idis/debate/roles/advocate.py` — Advocate (thesis + rebuttal)
+   - `src/idis/debate/roles/sanad_breaker.py` — Sanad Breaker (chain challenges)
+   - `src/idis/debate/roles/contradiction_finder.py` — Contradiction Finder (Matn)
+   - `src/idis/debate/roles/risk_officer.py` — Risk Officer (downside/fraud/regulatory)
+   - `src/idis/debate/roles/arbiter.py` — Arbiter (utility + dissent preservation)
+
+5. **Debate Orchestrator**
+   - `src/idis/debate/orchestrator.py`
+   - `DebateOrchestrator` class with LangGraph state machine
+   - Node graph order matches Appendix C-1 exactly:
+     START → advocate_opening → sanad_breaker_challenge → observer_critiques_parallel
+     → advocate_rebuttal → (conditional evidence_call_retrieval) → arbiter_close
+     → stop_condition_check → muhasabah_validate_all → finalize_outputs → END
+   - `muhasabah_validate_all` is structural no-op in Phase 5.1 (hard gate in Phase 5.2)
+   - Deterministic execution: no randomness, stable role order
+   - `build_debate_graph()` convenience function
+
+**Tests:**
+- `tests/test_debate_node_graph.py` — node order matches v6.3
+- `tests/test_debate_stop_conditions.py` — priority order and max rounds = 5
+
+**Design Constraints (Per v6.3):**
+- Node order matches Appendix C-1 normative graph
+- Stop condition priority: CRITICAL_DEFECT > MAX_ROUNDS > CONSENSUS > STABLE_DISSENT > EVIDENCE_EXHAUSTED
+- Max rounds = 5 (hard)
+- Deterministic: no randomness, stable execution order
+- Role runners injected (no LLM calls in Phase 5.1)
+
 ---
 
 ### Phase 6 — Deliverables Generator + Frontend v1 (Weeks 23–28)

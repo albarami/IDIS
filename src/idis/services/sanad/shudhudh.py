@@ -158,8 +158,19 @@ def _attempt_unit_reconciliation(
             explanation="Insufficient numeric values for unit reconciliation",
         )
 
-    base_values = [nv["numeric"] for nv in numeric_values]
-    units = [nv["unit"] for nv in numeric_values]
+    # Extract numeric values with explicit typing for mypy
+    # nv["numeric"] is guaranteed to be a float from _extract_numeric_value
+    base_values: list[float] = []
+    units: list[str | None] = []
+    for nv in numeric_values:
+        num_val = nv["numeric"]
+        # Type narrowing: num_val is known to be numeric from _extract_numeric_value
+        if isinstance(num_val, (int, float)):
+            base_values.append(float(num_val))
+        else:
+            base_values.append(0.0)
+        unit_val = nv["unit"]
+        units.append(str(unit_val) if unit_val is not None else None)
 
     for i, (val_a, unit_a) in enumerate(zip(base_values, units, strict=False)):
         for j, (val_b, unit_b) in enumerate(zip(base_values, units, strict=False)):
@@ -169,13 +180,13 @@ def _attempt_unit_reconciliation(
             if val_a == 0 or val_b == 0:
                 continue
 
-            ratio = val_a / val_b if val_b != 0 else 0
+            ratio = val_a / val_b if val_b != 0 else 0.0
 
             if 999 <= ratio <= 1001 and unit_a and unit_b:
                 return ReconciliationAttempt(
                     reconciliation_type=ReconciliationType.UNIT_CONVERSION,
                     success=True,
-                    original_values=base_values,
+                    original_values=list(base_values),
                     reconciled_value=max(val_a, val_b),
                     explanation=(
                         f"Values differ by ~1000x with units {unit_a}/{unit_b} - reconciled"
@@ -186,7 +197,7 @@ def _attempt_unit_reconciliation(
                 return ReconciliationAttempt(
                     reconciliation_type=ReconciliationType.UNIT_CONVERSION,
                     success=True,
-                    original_values=base_values,
+                    original_values=list(base_values),
                     reconciled_value=max(val_a, val_b),
                     explanation=(f"Values differ by ~1M with units {unit_a}/{unit_b} - reconciled"),
                 )

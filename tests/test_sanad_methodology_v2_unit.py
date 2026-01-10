@@ -19,6 +19,7 @@ from idis.services.sanad.coi import (
     extract_coi_metadata,
 )
 from idis.services.sanad.dabt import (
+    DIMENSION_WEIGHTS,
     DabtDimensions,
     calculate_dabt_score,
     get_dabt_grade_impact,
@@ -157,6 +158,90 @@ class TestDabt:
         cap, warning = get_dabt_grade_impact(0.40)
         assert cap == "B"
         assert warning is not None
+
+    def test_fail_closed_missing_temporal_reduces_score(self) -> None:
+        """Missing temporal_precision (required) must REDUCE score, not increase it.
+
+        This test catches the fail-closed bug where missing required dims
+        were excluded from denominator, allowing higher scores.
+        """
+        doc_w = DIMENSION_WEIGHTS["documentation_precision"]
+        trans_w = DIMENSION_WEIGHTS["transmission_precision"]
+        temporal_w = DIMENSION_WEIGHTS["temporal_precision"]
+        required_total = doc_w + trans_w + temporal_w  # 0.85
+
+        # Two required dims present, one missing
+        factors = DabtDimensions(
+            documentation_precision=1.0,
+            transmission_precision=1.0,
+            temporal_precision=None,  # Missing required dim
+            cognitive_precision=None,
+        )
+        result = calculate_dabt_score(factors)
+
+        # Expected: (1.0*0.30 + 1.0*0.30 + 0.0*0.25) / 0.85 = 0.60 / 0.85 ≈ 0.7059
+        expected = (doc_w * 1.0 + trans_w * 1.0) / required_total
+        assert abs(result.score - expected) < 0.001, (
+            f"Expected score ~{expected:.4f}, got {result.score}"
+        )
+        # Score must be < 1.0 because a required dim is missing
+        assert result.score < 1.0, "Missing required dim must reduce score below 1.0"
+
+    def test_fail_closed_only_doc_precision_gives_low_score(self) -> None:
+        """Only documentation_precision=1.0 present → low score.
+
+        Score = (doc_weight * 1.0) / (doc_weight + trans_weight + temporal_weight)
+        """
+        doc_w = DIMENSION_WEIGHTS["documentation_precision"]
+        trans_w = DIMENSION_WEIGHTS["transmission_precision"]
+        temporal_w = DIMENSION_WEIGHTS["temporal_precision"]
+        required_total = doc_w + trans_w + temporal_w
+
+        factors = DabtDimensions(
+            documentation_precision=1.0,
+            transmission_precision=None,
+            temporal_precision=None,
+            cognitive_precision=None,
+        )
+        result = calculate_dabt_score(factors)
+
+        expected = (doc_w * 1.0) / required_total  # 0.30 / 0.85 ≈ 0.353
+        assert abs(result.score - expected) < 0.001, (
+            f"Expected score ~{expected:.4f}, got {result.score}"
+        )
+
+    def test_fail_closed_temporal_zero_equals_temporal_none(self) -> None:
+        """temporal_precision=0.0 must equal temporal_precision=None for required dims.
+
+        Both should contribute 0 to numerator with weight in denominator.
+        """
+        factors_none = DabtDimensions(
+            documentation_precision=1.0,
+            transmission_precision=1.0,
+            temporal_precision=None,
+        )
+        factors_zero = DabtDimensions(
+            documentation_precision=1.0,
+            transmission_precision=1.0,
+            temporal_precision=0.0,
+        )
+        result_none = calculate_dabt_score(factors_none)
+        result_zero = calculate_dabt_score(factors_zero)
+
+        assert result_none.score == result_zero.score, (
+            f"temporal=None ({result_none.score}) must equal temporal=0.0 ({result_zero.score})"
+        )
+
+    def test_fail_closed_all_required_missing_gives_zero(self) -> None:
+        """All required dimensions missing → score 0.0."""
+        factors = DabtDimensions(
+            documentation_precision=None,
+            transmission_precision=None,
+            temporal_precision=None,
+            cognitive_precision=None,
+        )
+        result = calculate_dabt_score(factors)
+        assert result.score == 0.0, "All required dims missing must give score 0.0"
 
 
 class TestTawatur:

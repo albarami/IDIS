@@ -123,20 +123,55 @@ def calculate_dabt_score(
     else:
         dimensions = factors
 
-    total_weight = 0.0
+    # FAIL-CLOSED: Required dimensions ALWAYS contribute to denominator.
+    # Missing required dim → value 0.0, weight still in denominator (score decreases).
+    # cognitive_precision is optional: only contributes when present.
+    REQUIRED_DIMS = ("documentation_precision", "transmission_precision", "temporal_precision")
+    OPTIONAL_DIMS = ("cognitive_precision",)
+
     weighted_sum = 0.0
     available_count = 0
 
-    for dim_name, weight in DIMENSION_WEIGHTS.items():
+    # Calculate fixed denominator for required dimensions
+    required_weight = sum(DIMENSION_WEIGHTS[d] for d in REQUIRED_DIMS)
+    total_weight = required_weight  # Start with required dims always in denominator
+
+    for dim_name in REQUIRED_DIMS:
+        weight = DIMENSION_WEIGHTS[dim_name]
         value = getattr(dimensions, dim_name, None)
 
         if value is None:
-            if dim_name != "cognitive_precision":
-                warnings.append(f"{dim_name} missing - treated as 0.0")
+            warnings.append(
+                f"{dim_name} missing - fail closed to 0.0 (weight {weight} in denominator)"
+            )
+            # Value is 0.0, weight already in total_weight
             continue
 
         if not isinstance(value, (int, float)):
-            warnings.append(f"{dim_name} invalid type {type(value).__name__} - treated as 0.0")
+            warnings.append(f"{dim_name} invalid type {type(value).__name__} - fail closed to 0.0")
+            # Value is 0.0, weight already in total_weight
+            continue
+
+        clamped = _clamp(float(value))
+        if clamped != value:
+            warnings.append(f"{dim_name} clamped from {value} to {clamped}")
+
+        weighted_sum += clamped * weight
+        available_count += 1
+
+    # Optional dimensions: only add to numerator AND denominator if present and valid
+    for dim_name in OPTIONAL_DIMS:
+        weight = DIMENSION_WEIGHTS[dim_name]
+        value = getattr(dimensions, dim_name, None)
+
+        if value is None:
+            # Optional dim missing: do not add to numerator or denominator (score unchanged)
+            continue
+
+        if not isinstance(value, (int, float)):
+            warnings.append(
+                f"{dim_name} invalid type {type(value).__name__} - excluded from calculation"
+            )
             continue
 
         clamped = _clamp(float(value))
@@ -147,11 +182,8 @@ def calculate_dabt_score(
         total_weight += weight
         available_count += 1
 
-    if total_weight == 0.0:
-        score = 0.0
-        warnings.append("No valid dimensions available - fail closed to 0.0")
-    else:
-        score = weighted_sum / total_weight
+    # Denominator is always >= required_weight (0.85), never zero
+    score = weighted_sum / total_weight
 
     return DabtScore(
         score=round(score, 4),

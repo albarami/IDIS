@@ -157,28 +157,28 @@ def _collect_defect_summaries(
     major: list[DefectSummary] = []
     minor: list[DefectSummary] = []
 
-    for defect in ilal_defects:
+    for ilal_defect in ilal_defects:
         summary = DefectSummary(
-            code=defect.code.value,
-            severity=defect.severity,
-            description=defect.description,
+            code=ilal_defect.code.value,
+            severity=ilal_defect.severity,
+            description=ilal_defect.description,
         )
-        if defect.severity == "FATAL":
+        if ilal_defect.severity == "FATAL":
             fatal.append(summary)
-        elif defect.severity == "MAJOR":
+        elif ilal_defect.severity == "MAJOR":
             major.append(summary)
         else:
             minor.append(summary)
 
-    for defect in coi_defects:
+    for coi_defect in coi_defects:
         summary = DefectSummary(
-            code=defect.code.value,
-            severity=defect.severity,
-            description=defect.description,
+            code=coi_defect.code.value,
+            severity=coi_defect.severity,
+            description=coi_defect.description,
         )
-        if defect.severity == "FATAL":
+        if coi_defect.severity == "FATAL":
             fatal.append(summary)
-        elif defect.severity == "MAJOR":
+        elif coi_defect.severity == "MAJOR":
             major.append(summary)
         else:
             minor.append(summary)

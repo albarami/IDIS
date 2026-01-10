@@ -96,9 +96,11 @@ def detect_ilal_version_drift(
     if not cited_ref:
         return None
 
+    cited_doc_id: str | None = None
+    cited_version: Any = None
+
     if isinstance(cited_ref, str):
         cited_doc_id = cited_ref
-        cited_version = None
     elif isinstance(cited_ref, dict):
         cited_doc_id = cited_ref.get("document_id") or cited_ref.get("artifact_id")
         cited_version = cited_ref.get(version_field)
@@ -241,6 +243,22 @@ def detect_ilal_chain_break(
                     "missing_evidence_id": evidence_ref,
                 },
             )
+
+        # Check input_refs for broken references (used in GDBS dataset format)
+        input_refs = node.get("input_refs", [])
+        if isinstance(input_refs, list) and evidence_ids is not None:
+            for ref in input_refs:
+                if ref and str(ref) not in evidence_ids and str(ref) not in node_ids:
+                    return IlalDefect(
+                        code=IlalDefectCode.ILAL_CHAIN_BREAK,
+                        severity="FATAL",
+                        description=f"Node {node_id} references non-existent input {ref}",
+                        cure_protocol="REQUEST_SOURCE",
+                        metadata={
+                            "node_id": node_id,
+                            "missing_input_ref": ref,
+                        },
+                    )
 
     parent_map: dict[str, str | None] = {}
     children_map: dict[str, list[str]] = {}

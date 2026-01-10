@@ -160,7 +160,8 @@ class TestDeal002Contradiction:
         """Contradiction between deck and model MUST trigger shudhudh anomaly/defect.
 
         This test proves that the adversarial contradiction scenario produces
-        a real anomaly detection, not just reconciliation attempts.
+        a real anomaly detection with all reconciliation attempts failed.
+        NO OR patterns allowed - all conditions must be met.
         """
         if not gdbs_available:
             pytest.skip("GDBS-FULL dataset not available")
@@ -190,22 +191,33 @@ class TestDeal002Contradiction:
         result = detect_shudhudh(claim_values, sources, contradiction_threshold=0.05)
         assert result is not None, "detect_shudhudh must return a result"
 
-        # MUST assert actual anomaly detection - not just attempts
-        assert result.has_anomaly is True, (
-            f"Shudhudh MUST detect anomaly for contradiction scenario. "
-            f"Got has_anomaly={result.has_anomaly}, defect_code={result.defect_code}"
+        # ========== REQUIRED ASSERTIONS (NO OR PATTERNS) ==========
+
+        # 1. Reconciliation MUST have failed for this adversarial deal
+        assert result.all_reconciliations_failed is True, (
+            f"Reconciliation MUST fail for contradiction scenario. "
+            f"Got reconciliation_succeeded={result.reconciliation_succeeded}"
         )
 
-        # Assert specific defect code for determinism
+        # 2. Anomaly MUST be detected
+        assert result.has_anomaly is True, (
+            f"Shudhudh MUST detect anomaly for contradiction scenario. "
+            f"Got has_anomaly={result.has_anomaly}"
+        )
+
+        # 3. Defect code MUST be SHUDHUDH_ANOMALY (exact match)
         assert result.defect_code == "SHUDHUDH_ANOMALY", (
             f"Expected defect_code='SHUDHUDH_ANOMALY', got '{result.defect_code}'"
         )
 
-        # Assert severity matches spec (MAJOR for anomaly vs stronger sources)
+        # 4. Severity MUST match spec (MAJOR for lower-tier contradiction)
         assert result.severity == "MAJOR", f"Expected severity='MAJOR', got '{result.severity}'"
 
-        # Assert cure protocol is specified
+        # 5. Cure protocol MUST be specified
         assert result.cure_protocol is not None, "Cure protocol must be specified"
+        assert result.cure_protocol == "HUMAN_ARBITRATION", (
+            f"Expected cure_protocol='HUMAN_ARBITRATION', got '{result.cure_protocol}'"
+        )
 
     def test_contradiction_deal_grade_reflects_issue(self, gdbs_available: bool) -> None:
         """Contradiction deal should result in grade impact or defect flag."""

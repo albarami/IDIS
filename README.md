@@ -42,6 +42,7 @@ curl http://localhost:8000/health
 
 ### Development Commands
 
+**With GNU Make (Linux/macOS):**
 ```bash
 make format     # Format code with ruff
 make lint       # Lint code with ruff
@@ -49,6 +50,39 @@ make typecheck  # Type check with mypy
 make test       # Run tests with pytest
 make check      # Run all checks (format, lint, typecheck, test)
 ```
+
+**With py-make (Windows or without GNU Make):**
+```bash
+# Install py-make (included in dev dependencies)
+pip install py-make
+
+# Run targets using pymake
+pymake format
+pymake lint
+pymake typecheck
+pymake test
+pymake check
+```
+
+**With make.bat (Windows native):**
+```cmd
+make format
+make lint
+make typecheck
+make test
+make check
+```
+
+**Direct Commands (any platform, no make required):**
+```bash
+ruff format .                              # Format
+ruff check .                               # Lint
+python -m mypy src/idis --ignore-missing-imports  # Typecheck
+python -m pytest                           # Test
+python scripts/forbidden_scan.py           # Forbidden pattern scan
+```
+
+All gate commands must pass before pushing to `main`.
 
 ## Project Structure
 

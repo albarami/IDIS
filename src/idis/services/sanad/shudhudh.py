@@ -46,6 +46,18 @@ class ShudhuhResult:
     reconciliation_attempts: list[ReconciliationAttempt]
     consensus_value: Any | None
 
+    @property
+    def reconciliation_succeeded(self) -> bool:
+        """Return True if any reconciliation attempt succeeded."""
+        return any(r.success for r in self.reconciliation_attempts)
+
+    @property
+    def all_reconciliations_failed(self) -> bool:
+        """Return True if all reconciliation attempts failed (or none attempted)."""
+        if not self.reconciliation_attempts:
+            return True
+        return all(not r.success for r in self.reconciliation_attempts)
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary representation."""
         return {

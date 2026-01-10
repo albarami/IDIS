@@ -225,11 +225,14 @@ class TestDeal002Contradiction:
             pytest.skip("GDBS-FULL dataset not available")
 
         sanads = load_sanads("deal_002_contradiction")
-        if not sanads:
-            pytest.skip("No sanads found for deal_002")
+        # EXPLICIT ASSERTION: sanads must exist for deal_002
+        assert sanads, "Expected non-empty sanads for deal_002_contradiction"
+
+        # EXPLICIT ASSERTION: evidence must exist for deal_002
+        sources = load_evidence("deal_002_contradiction")
+        assert sources, "Expected non-empty evidence for deal_002_contradiction"
 
         for sanad in sanads:
-            sources = load_evidence("deal_002_contradiction")
             result = calculate_sanad_grade(sanad, sources=sources)
             assert result.grade in {"A", "B", "C", "D"}
 
@@ -250,7 +253,12 @@ class TestDeal007ChainBreak:
             pytest.skip("GDBS-FULL dataset not available")
 
         sanads = load_sanads("deal_007_chain_break")
+        # EXPLICIT ASSERTION: sanads must exist for deal_007
+        assert sanads, "Expected non-empty sanads for deal_007_chain_break"
+
         evidence = load_evidence("deal_007_chain_break")
+        # EXPLICIT ASSERTION: evidence must exist for deal_007
+        assert evidence, "Expected non-empty evidence for deal_007_chain_break"
 
         # Build evidence_ids set for chain break detection
         evidence_ids: set[str] = set()
@@ -259,35 +267,21 @@ class TestDeal007ChainBreak:
             if eid:
                 evidence_ids.add(str(eid))
 
-        # Fallback test data if sanads not in dataset
-        sanad_with_break = {
-            "transmission_chain": [
-                {"node_id": "node-1", "prev_node_id": None},
-                {"node_id": "node-2", "prev_node_id": "non-existent-node"},
-            ]
-        }
-
         # Track whether chain break was found - MUST assert at end
         found_chain_break = False
         scanned_sanads: list[str] = []
 
-        if sanads:
-            for sanad in sanads:
-                sanad_id = sanad.get("sanad_id", "unknown")
-                scanned_sanads.append(sanad_id)
-                # Pass evidence_ids to detect broken input_refs
-                defect = detect_ilal_chain_break(sanad, evidence_ids=evidence_ids)
-                if defect:
-                    assert defect.code == IlalDefectCode.ILAL_CHAIN_BREAK
-                    assert defect.severity == "FATAL"
-                    found_chain_break = True
-                    break
-        else:
-            # Use fallback test data
-            scanned_sanads.append("fallback_sanad_with_break")
-            defect = detect_ilal_chain_break(sanad_with_break)
-            if defect and defect.code == IlalDefectCode.ILAL_CHAIN_BREAK:
+        # NO FALLBACK: test must use actual dataset sanads
+        for sanad in sanads:
+            sanad_id = sanad.get("sanad_id", "unknown")
+            scanned_sanads.append(sanad_id)
+            # Pass evidence_ids to detect broken input_refs
+            defect = detect_ilal_chain_break(sanad, evidence_ids=evidence_ids)
+            if defect:
+                assert defect.code == IlalDefectCode.ILAL_CHAIN_BREAK
+                assert defect.severity == "FATAL"
                 found_chain_break = True
+                break
 
         # MUST assert chain break was detected - cannot pass silently
         assert found_chain_break, (

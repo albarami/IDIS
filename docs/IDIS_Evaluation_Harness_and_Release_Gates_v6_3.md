@@ -300,7 +300,53 @@ Each prompt is stored as:
 
 ---
 
-## 11) Implementation Checklist
+## 11) Local Gate Execution
+
+### 11.1 With GNU Make (Linux/macOS)
+
+```bash
+make format     # ruff format .
+make lint       # ruff check .
+make typecheck  # mypy src/idis
+make test       # pytest
+make check      # Run all gates sequentially
+```
+
+### 11.2 Without GNU Make (Windows or any platform)
+
+**Option A: Use the gate runner script (recommended)**
+```bash
+python scripts/run_gates.py          # Run all gates
+python scripts/run_gates.py format   # Run only format
+python scripts/run_gates.py lint     # Run only lint
+python scripts/run_gates.py typecheck  # Run only typecheck
+python scripts/run_gates.py test     # Run only test
+python scripts/run_gates.py forbidden  # Run forbidden scan
+```
+
+**Option B: Run commands directly**
+```bash
+ruff format .
+ruff check .
+python -m mypy src/idis --ignore-missing-imports
+python -m pytest -q
+python scripts/forbidden_scan.py
+```
+
+**Option C: Use make.bat (Windows native)**
+```cmd
+make format
+make lint
+make typecheck
+make test
+make check
+```
+
+All gate commands must pass before pushing to `main`.
+
+---
+
+## 12) Implementation Checklist
 
 - Create `benchmarks/` repo with immutable versions
 - Build test harness CLI:

@@ -462,9 +462,15 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | AI-002 | Audit event validation | Audit §3 | `audit_event_validator.py` | test_audit_event_validator.py | 2.3.1 | ✅ Exists | Schema validation |
 | NFF-001 | No-Free-Facts | TDD §1.1 | `no_free_facts.py` (validator) | test_no_free_facts.py | 2/6 | ✅ Exists | muhasabah.rejected |
 | MUH-001 | Muḥāsabah gate | TDD §4.4 | `muhasabah.py` (validator) | test_muhasabah_validator.py | 5 | ✅ Exists | muhasabah.recorded |
-| SAN-001 | Sanad integrity | TDD §4.2 | `sanad/grader.py` | test_sanad_integrity.py | 3 | ⏳ Planned | Sanad records |
-| SAN-002 | Independence rules | TDD §5.2 | `sanad/independence.py` | test_independence_rules.py | 3 | ⏳ Planned | corroboration_status |
-| DEF-001 | Defect handling | TDD §4.3 | `defects/service.py` | test_defect_severity.py | 3 | ⏳ Planned | Defect records |
+| SAN-001 | Sanad integrity | TDD §4.2 | `sanad/grader.py` | test_sanad_integrity.py, test_sanad_methodology_v2_unit.py | 3 | ✅ Exists | Sanad records |
+| SAN-002 | Independence rules | TDD §5.2 | `sanad/tawatur.py` | test_sanad_methodology_v2_unit.py::TestTawatur | 3.3 | ✅ Exists | corroboration_status |
+| SAN-003 | Source tiers (6-level) | Methodology v2 §2 | `sanad/source_tiers.py` | test_sanad_methodology_v2_unit.py::TestSourceTiers | 3.3 | ✅ Exists | tier assignment |
+| SAN-004 | Dabt scoring | Methodology v2 §3 | `sanad/dabt.py` | test_sanad_methodology_v2_unit.py::TestDabt | 3.3 | ✅ Exists | dabt_score |
+| SAN-005 | Shudhudh detection | Methodology v2 §5 | `sanad/shudhudh.py` | test_sanad_methodology_v2_unit.py::TestShudhudh | 3.3 | ✅ Exists | SHUDHUDH_ANOMALY |
+| SAN-006 | I'lal defects | Methodology v2 §6 | `sanad/ilal.py` | test_sanad_methodology_v2_unit.py::TestIlal | 3.3 | ✅ Exists | ILAL_* defects |
+| SAN-007 | COI handling | Methodology v2 §7 | `sanad/coi.py` | test_sanad_methodology_v2_unit.py::TestCOI | 3.3 | ✅ Exists | COI_* defects |
+| SAN-008 | Grader v2 | Methodology v2 §8 | `sanad/grader.py` | test_sanad_methodology_v2_unit.py::TestGraderV2 | 3.3 | ✅ Exists | grade_sanad_v2() |
+| DEF-001 | Defect handling | TDD §4.3 | `sanad/defects.py`, `sanad/ilal.py` | test_sanad_methodology_v2_unit.py | 3 | ✅ Exists | Defect records |
 | DN-001 | Calc reproducibility | TDD §1.1 | `calc/engine.py` | test_calc_reproducibility.py | 4 | ⏳ Planned | CalcSanad record |
 | FC-001 | Fail-closed | TDD §10 | All validators | test_fail_closed.py | 0+ | ⏳ Planned | Rejection events |
 | API-001 | Idempotency | API §4.1 | `idempotency.py` | test_api_idempotency_middleware.py | 2.5 | ✅ Exists | request_id |
@@ -564,3 +570,4 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |------|---------|--------|---------|
 | 2026-01-07 | 1.0 | Cascade | Initial creation from v6.3 docs consolidation |
 | 2026-01-07 | 1.1 | Cascade | Added Implementation Status column; hard/soft gate classification; corrected test coverage matrix to reflect actual repo state; added planned tests/modules by phase gate |
+| 2026-01-09 | 1.2 | Cascade | Added Phase 3.3 Sanad Methodology v2 traceability (SAN-003 through SAN-008); updated SAN-001, SAN-002, DEF-001 to Exists status |

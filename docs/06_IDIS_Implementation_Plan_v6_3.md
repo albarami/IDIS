@@ -85,6 +85,60 @@ Exit criteria:
 - Grade algorithm unit-tested with worked examples
 - Defect creation and waiver workflow operational
 
+#### Phase 3.3 — Sanad Methodology v2 Enhancements ✅ COMPLETE
+
+**Implemented (2026-01-09):**
+
+1. **Source Tiers (6-level hierarchy)**
+   - `src/idis/services/sanad/source_tiers.py`
+   - Tiers: ATHBAT_AL_NAS (1.00) → MAQBUL (0.40)
+   - PRIMARY (1-4) vs SUPPORT_ONLY (5-6) admissibility
+   - Deterministic assignment based on source_type
+
+2. **Dabt Multi-Dimensional Scoring**
+   - `src/idis/services/sanad/dabt.py`
+   - 4 dimensions: documentation, transmission, temporal, cognitive
+   - Fail-closed: missing dimension → 0.0
+   - Quality bands: EXCELLENT/GOOD/FAIR/POOR
+
+3. **Tawatur Independence + Collusion Detection**
+   - `src/idis/services/sanad/tawatur.py`
+   - Independence key computation (source_system, upstream_origin_id, artifact_id, time_bucket)
+   - Collusion risk scoring (system concentration + time clustering + chain overlap)
+   - MUTAWATIR requires ≥3 independent AND collusion_risk ≤ 0.30
+
+4. **Shudhudh Reconciliation-First Anomaly Detection**
+   - `src/idis/services/sanad/shudhudh.py`
+   - Reconciliation heuristics: unit conversion, time window, rounding
+   - SHUDHUDH_ANOMALY only if reconciliation fails AND lower-tier contradicts consensus
+
+5. **I'lal Hidden Defect Detection**
+   - `src/idis/services/sanad/ilal.py`
+   - ILAL_VERSION_DRIFT (MAJOR): sha drift + metric change
+   - ILAL_CHAIN_BREAK (FATAL): missing node / broken parent ref
+   - ILAL_CHAIN_GRAFTING (FATAL): inconsistent provenance
+   - ILAL_CHRONOLOGY_IMPOSSIBLE (FATAL): timestamp causality violation
+
+6. **COI Handling + Cure Protocol**
+   - `src/idis/services/sanad/coi.py`
+   - HIGH undisclosed → grade cap C unless cured by independent high-tier
+   - HIGH disclosed → requires MUTAWATIR or multiple high-tier
+   - Deterministic cure evaluation
+
+7. **Integrated Grader v2**
+   - `src/idis/services/sanad/grader.py`
+   - `grade_sanad_v2()` combines all enhancements
+   - FATAL defect → Grade D (hard gate)
+   - MAJOR defects → downgrade per defect
+   - MUTAWATIR → upgrade (if no MAJOR defects)
+
+**Tests:**
+- `tests/test_sanad_methodology_v2_unit.py` — unit tests for all components
+- `tests/test_sanad_methodology_v2_gdbs.py` — GDBS-FULL adversarial deal tests
+
+**Documentation:**
+- `docs/IDIS_Sanad_Methodology_v2.md` — full methodology specification
+
 ---
 
 ### Phase 4 — Deterministic Engines + Calc-Sanad (Weeks 13–16)

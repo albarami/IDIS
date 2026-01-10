@@ -216,11 +216,11 @@ See §1.1 for completed work.
 
 ---
 
-### Phase 3 — Sanad Trust Framework ⏳ PLANNED
+### Phase 3 — Sanad Trust Framework ⚠️ IN PROGRESS
 
 **Scope:** Implement evidence chain building, grading, and defect handling.
 
-#### Task 3.1: Claim Registry
+#### Task 3.1: Claim Registry ⏳ PLANNED
 | Deliverable | Module |
 |-------------|--------|
 | Claim model | `src/idis/models/claim.py` |
@@ -231,7 +231,7 @@ See §1.1 for completed work.
 - Claims have `claim_id`, `claim_type`, `value_struct`, `source_refs`
 - No-Free-Facts validator enforced at creation
 
-#### Task 3.2: Sanad Models
+#### Task 3.2: Sanad Models ⏳ PLANNED
 | Deliverable | Module |
 |-------------|--------|
 | EvidenceItem model | `src/idis/models/evidence_item.py` |
@@ -239,30 +239,43 @@ See §1.1 for completed work.
 | TransmissionNode model | `src/idis/models/transmission_node.py` |
 | Defect model | `src/idis/models/defect.py` |
 
-#### Task 3.3: Sanad Services
-| Deliverable | Module |
-|-------------|--------|
-| Sanad grader | `src/idis/services/sanad/grader.py` |
-| Independence checker | `src/idis/services/sanad/independence.py` |
-| Defect service | `src/idis/services/defects/service.py` |
+#### Task 3.3: Sanad Methodology v2 Enhancements ✅ COMPLETE
 
-**Acceptance:**
-- Grade algorithm matches TDD §5 (A/B/C/D)
-- FATAL defects → Grade D
-- Independence uses `upstream_origin_id`
+**Implemented (2026-01-09):** Full Sanad v2 methodology with six enhancements.
+
+| Deliverable | Module | Status |
+|-------------|--------|--------|
+| Source Tiers (6-level) | `src/idis/services/sanad/source_tiers.py` | ✅ |
+| Dabt Scoring | `src/idis/services/sanad/dabt.py` | ✅ |
+| Tawatur Independence | `src/idis/services/sanad/tawatur.py` | ✅ |
+| Shudhudh Detection | `src/idis/services/sanad/shudhudh.py` | ✅ |
+| I'lal Defects | `src/idis/services/sanad/ilal.py` | ✅ |
+| COI Handling | `src/idis/services/sanad/coi.py` | ✅ |
+| Grader v2 | `src/idis/services/sanad/grader.py` | ✅ |
+| Defects Interface | `src/idis/services/sanad/defects.py` | ✅ |
+| Methodology Doc | `docs/IDIS_Sanad_Methodology_v2.md` | ✅ |
+
+**Acceptance (Phase 3.3):**
+- [x] 6-level source tiers with deterministic assignment
+- [x] Dabt multi-dimensional scoring (fail-closed)
+- [x] Tawatur independence + collusion detection
+- [x] Shudhudh reconciliation-first anomalies
+- [x] I'lal hidden defects (VERSION_DRIFT, CHAIN_BREAK, CHAIN_GRAFTING, CHRONOLOGY_IMPOSSIBLE)
+- [x] COI handling with cure protocols
+- [x] Integrated grader_v2 with all enhancements
+
+**Testing (Phase 3.3):**
+- `tests/test_sanad_methodology_v2_unit.py` — 40+ unit tests
+- `tests/test_sanad_methodology_v2_gdbs.py` — GDBS-FULL adversarial deals
 
 **Controls Enforced:**
 - Sanad integrity validator (deterministic)
 - Defect severity rules (FATAL/MAJOR/MINOR)
-
-**Testing:**
-- `test_sanad_grade_algorithm.py` — worked examples
-- `test_independence_rules.py` — corroboration
-- `test_defect_severity.py` — FATAL/MAJOR/MINOR
+- Fail-closed on all components
 
 **Exit Criteria:**
 - [ ] 100% claims have Sanad objects
-- [ ] Grade algorithm unit-tested with worked examples
+- [x] Grade algorithm unit-tested with worked examples
 - [ ] Defect waiver workflow operational
 - [ ] Gate 2 (Sanad≥95%, defect recall≥90%)
 

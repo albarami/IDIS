@@ -114,10 +114,8 @@ class ArbiterRole(RoleRunner):
 
         position_hash = deterministic_position_hash(role_name, state.round_number, content_summary)
 
-        # Collect all claim IDs from validated challenges
-        validated_claim_ids = sorted(
-            {c.get("claim_ref") for c in challenges_validated if c.get("claim_ref")}
-        )
+        # Collect all claim IDs from validated challenges (challenges_validated is list[str])
+        validated_claim_ids: list[str] = sorted(challenges_validated)
 
         # State-derived message content
         message_content = (
@@ -197,26 +195,22 @@ class ArbiterRole(RoleRunner):
             position_hash=position_hash,
         )
 
-    def _validate_challenges(self, state: DebateState) -> list[dict]:
+    def _validate_challenges(self, state: DebateState) -> list[str]:
         """Validate challenges from prior outputs (deterministic).
 
         In Phase 5.1, deterministically validate based on output content.
+        Returns list of validated challenge IDs (claim IDs that were challenged).
         """
-        validated = []
+        validated: list[str] = []
         for i, output in enumerate(state.agent_outputs):
             if output.output_type == "challenge":
                 content = output.content or {}
                 challenged_ids = content.get("challenged_claim_ids", [])
                 for j, claim_id in enumerate(challenged_ids):
-                    validated.append(
-                        {
-                            "challenge_index": i,
-                            "claim_ref": claim_id,
-                            "validation_status": "accepted" if (i + j) % 2 == 0 else "pending",
-                            "evidence_quality": "sufficient" if j % 3 == 0 else "partial",
-                        }
-                    )
-        return validated
+                    # Deterministic validation: accept based on index parity
+                    if (i + j) % 2 == 0 and isinstance(claim_id, str):
+                        validated.append(claim_id)
+        return sorted(set(validated))
 
     def _compute_utility_adjustments(self, state: DebateState) -> dict[str, float]:
         """Compute utility adjustments for agents (deterministic).
@@ -242,15 +236,15 @@ class ArbiterRole(RoleRunner):
         # Deterministic: preserve if round > 1 and there are outputs with low confidence
         if state.round_number <= 1:
             return False
-        low_confidence_count = sum(
-            1 for o in state.agent_outputs if o.muhasabah and o.muhasabah.confidence < 0.6
-        )
-        return low_confidence_count >= 2
+        low_confidence_outputs = [
+            o for o in state.agent_outputs if o.muhasabah and o.muhasabah.confidence < 0.6
+        ]
+        return len(low_confidence_outputs) >= 2
 
     def _derive_rationale(
         self,
         state: DebateState,
-        challenges_validated: list[dict],
+        challenges_validated: list[str],
         dissent_preserved: bool,
     ) -> str:
         """Derive decision rationale from state (deterministic)."""

@@ -105,7 +105,6 @@ class DebateOrchestrator:
         g.add_node("evidence_call_retrieval", self._node_evidence_call_retrieval)
         g.add_node("arbiter_close", self._node_arbiter_close)
         g.add_node("stop_condition_check", self._node_stop_condition_check)
-        g.add_node("increment_round", self._node_increment_round)
         g.add_node("muhasabah_validate_all", self._node_muhasabah_validate_all)
         g.add_node("finalize_outputs", self._node_finalize_outputs)
 
@@ -131,12 +130,10 @@ class DebateOrchestrator:
             "stop_condition_check",
             self._route_after_stop_check,
             {
-                "increment_round": "increment_round",
+                "advocate_opening": "advocate_opening",
                 "muhasabah_validate_all": "muhasabah_validate_all",
             },
         )
-
-        g.add_edge("increment_round", "advocate_opening")
         g.add_edge("muhasabah_validate_all", "finalize_outputs")
         g.add_edge("finalize_outputs", END)
 
@@ -254,6 +251,9 @@ class DebateOrchestrator:
             updates["stop_reason"] = stop_reason
             if stop_reason == StopReason.CONSENSUS:
                 updates["consensus_reached"] = True
+        else:
+            # Increment round for next iteration (no separate node needed)
+            updates["round_number"] = state.round_number + 1
 
         return state.model_copy(update=updates)
 
@@ -289,16 +289,12 @@ class DebateOrchestrator:
         """Route after stop condition check.
 
         If stop reason is set, proceed to muhasabah validation.
-        Otherwise, loop back to advocate_opening (round increment happens in node).
+        Otherwise, loop back to advocate_opening for next round.
         """
         if state.stop_reason is not None:
             return "muhasabah_validate_all"
 
-        return "increment_round"
-
-    def _node_increment_round(self, state: DebateState) -> DebateState:
-        """Increment round number when looping back."""
-        return state.model_copy(update={"round_number": state.round_number + 1})
+        return "advocate_opening"
 
     def _build_position_snapshot(self, state: DebateState) -> PositionSnapshot:
         """Build position snapshot from current round outputs."""

@@ -117,9 +117,12 @@ class RiskOfficerRole(RoleRunner):
             f"{len(regulatory_concerns)} regulatory)"
         )
 
-        # Collect all claim IDs referenced in risks
-        risk_claim_ids = sorted(
-            {risk.get("claim_ref") for risk in risks_identified if risk.get("claim_ref")}
+        # Collect all claim IDs referenced in risks (filter None, ensure list[str])
+        risk_claim_ids: list[str] = sorted(
+            str(claim_ref)
+            for risk in risks_identified
+            if (claim_ref := risk.get("claim_ref")) is not None
+            and isinstance(claim_ref, str)
         )
 
         message = DebateMessage(
@@ -189,13 +192,15 @@ class RiskOfficerRole(RoleRunner):
             claim_ids.update(msg.claim_refs)
         return sorted(claim_ids)
 
-    def _derive_risks(self, state: DebateState, scanned_claim_ids: list[str]) -> list[dict]:
+    def _derive_risks(
+        self, state: DebateState, scanned_claim_ids: list[str]
+    ) -> list[dict[str, str | int]]:
         """Derive risk flags from state (deterministic).
 
         In Phase 5.1, deterministically flag risks based on position in
         sorted claim list and round number.
         """
-        risks = []
+        risks: list[dict[str, str | int]] = []
         # Deterministic risk flagging: every 3rd claim based on round
         for i, claim_id in enumerate(scanned_claim_ids):
             if (i + state.round_number) % 3 == 0:

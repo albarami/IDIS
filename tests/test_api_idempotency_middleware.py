@@ -389,6 +389,98 @@ class TestIdempotencyCollision:
         assert body["request_id"] is not None
 
 
+class TestIdempotencyConflictOnPayloadMismatch:
+    """Roadmap Task 2.7: test_idempotency_conflict_on_payload_mismatch.
+
+    Acceptance criteria from 12_IDIS_End_to_End_Implementation_Roadmap_v6_3.md:
+    1) First request with key K + payload P1 returns 2xx and stores record.
+    2) Second request with same key K and different payload P2 returns 409.
+    3) Third request with original payload P1 still returns stored response (no overwrite).
+    4) Same key K but different actor_id does NOT conflict with original record.
+    """
+
+    def test_idempotency_conflict_on_payload_mismatch(
+        self, client_multi_tenant: TestClient, api_key_a: str, api_key_b: str
+    ) -> None:
+        """Comprehensive test per roadmap Task 2.7 acceptance criteria."""
+        idempotency_key = f"idem_conflict_{uuid.uuid4().hex[:8]}"
+        payload_p1 = {"name": "Deal P1", "company_name": "P1 Corp"}
+        payload_p2 = {"name": "Deal P2", "company_name": "P2 Corp"}
+
+        # Assertion 1: First request with key K + payload P1 returns 2xx and stores record
+        response1 = client_multi_tenant.post(
+            "/v1/deals",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/json",
+                "Idempotency-Key": idempotency_key,
+            },
+            json=payload_p1,
+        )
+        assert response1.status_code == 201, "First request must return 201"
+        original_deal_id = response1.json()["deal_id"]
+        assert original_deal_id is not None, "First request must create deal"
+        assert response1.headers.get("X-IDIS-Idempotency-Replay") is None, (
+            "First request must not be a replay"
+        )
+
+        # Assertion 2: Second request with same key K and different payload P2 returns 409
+        response2 = client_multi_tenant.post(
+            "/v1/deals",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/json",
+                "Idempotency-Key": idempotency_key,
+            },
+            json=payload_p2,
+        )
+        assert response2.status_code == 409, "Payload mismatch must return 409"
+        body2 = response2.json()
+        assert body2["code"] == "IDEMPOTENCY_KEY_CONFLICT", (
+            "409 must have IDEMPOTENCY_KEY_CONFLICT code"
+        )
+        assert "request_id" in body2, "409 must include request_id"
+
+        # Assertion 3: Third request with original payload P1 still returns stored response
+        response3 = client_multi_tenant.post(
+            "/v1/deals",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/json",
+                "Idempotency-Key": idempotency_key,
+            },
+            json=payload_p1,
+        )
+        assert response3.status_code == 201, "Replay with original payload must return 201"
+        assert response3.json()["deal_id"] == original_deal_id, (
+            "Replay must return original deal_id (proves no overwrite on conflict)"
+        )
+        assert response3.headers.get("X-IDIS-Idempotency-Replay") == "true", (
+            "Replay must have X-IDIS-Idempotency-Replay header"
+        )
+
+        # Assertion 4: Same key K but different actor_id does NOT conflict
+        response4 = client_multi_tenant.post(
+            "/v1/deals",
+            headers={
+                "X-IDIS-API-Key": api_key_b,
+                "Content-Type": "application/json",
+                "Idempotency-Key": idempotency_key,
+            },
+            json=payload_p1,
+        )
+        assert response4.status_code == 201, (
+            "Different actor must NOT conflict (creates new record)"
+        )
+        different_actor_deal_id = response4.json()["deal_id"]
+        assert different_actor_deal_id != original_deal_id, (
+            "Different actor must create separate deal"
+        )
+        assert response4.headers.get("X-IDIS-Idempotency-Replay") is None, (
+            "Different actor request must not be a replay"
+        )
+
+
 class TestTenantIsolation:
     """Test C: Tenant isolation - no cross-tenant replay."""
 

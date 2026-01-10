@@ -21,7 +21,7 @@ Ensures deterministic, phase-disciplined delivery aligned to v6.3 spec.
 | **INV-04** | Sanad Integrity Validator | TDD §4.2-4.3, §5 | `validators/sanad_integrity.py` | `test_sanad_integrity.py` | DONE | 0 | Validator; services=Phase 3 |
 | **INV-05** | Sanad Defect Rules | TDD §4.3, Data Model §3.4 | `validators/sanad_integrity.py` | `test_sanad_integrity.py` | DONE | 0 | FATAL/MAJOR/MINOR rules |
 | **INV-06** | Muḥāsabah Gate | TDD §4.4, Eval §2.1 | `validators/muhasabah.py` | `test_muhasabah.py`, `test_muhasabah_validator.py` | DONE | 0 | Validator complete |
-| **INV-07** | Calc-Sanad Determinism | TDD §1.1, §6 | `calc/engine.py`, `models/calc_sanad.py` | `test_calc_reproducibility.py`, `test_calc_sanad.py` | PLANNED | 4 | Exit: Gate 2 (repro≥99.9%) |
+| **INV-07** | Calc-Sanad Determinism | TDD §1.1, §6 | `calc/engine.py`, `models/calc_sanad.py` | `test_calc_reproducibility.py`, `test_calc_sanad.py`, `test_postgres_rls_and_audit_immutability.py` | DONE | 4.1 | DN-001: material-aware calc_grade, FK constraints, RLS tests |
 | **INV-08** | Request ID Propagation | API §4 | `middleware/request_id.py` | `test_api_openapi_validation.py` | DONE | 2.1 | |
 | **INV-09** | OpenAPI Validation | API §5 | `middleware/openapi_validate.py` | `test_api_openapi_validation.py` | DONE | 2.2 | |
 | **INV-10** | Idempotency-Key | API §4.3 | `middleware/idempotency.py`, `idempotency/store.py` | `test_api_idempotency_middleware.py` | DONE | 2.4-2.5 | Tenant+actor scoped |

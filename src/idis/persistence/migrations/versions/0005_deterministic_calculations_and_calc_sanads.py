@@ -1,14 +1,16 @@
-"""Phase 4.1: Add deterministic_calculations and calc_sanads tables with RLS.
+"""Phase 4.1: Add tenants, deterministic_calculations, and calc_sanads tables with RLS.
 
 Revision ID: 0005
 Revises: 0004
 Create Date: 2026-01-10
 
 Tables:
+- tenants: Tenant registry (required for FK constraints per Data Model §3.5)
 - deterministic_calculations: Reproducible numeric computations
 - calc_sanads: Provenance records linking calcs to input claims
 
 RLS policies use NULLIF hardening for fail-closed tenant isolation.
+FK constraints enforce referential integrity per Data Model §3.5.
 """
 
 import sqlalchemy as sa
@@ -21,15 +23,25 @@ depends_on = None
 
 
 def upgrade() -> None:
-    """Create deterministic_calculations and calc_sanads tables with RLS."""
+    """Create tenants, deterministic_calculations, and calc_sanads tables with RLS."""
     conn = op.get_bind()
+
+    conn.execute(
+        sa.text("""
+        CREATE TABLE IF NOT EXISTS tenants (
+            tenant_id uuid PRIMARY KEY,
+            name text NOT NULL,
+            created_at timestamptz NOT NULL DEFAULT now()
+        )
+        """)
+    )
 
     conn.execute(
         sa.text("""
         CREATE TABLE deterministic_calculations (
             calc_id uuid PRIMARY KEY,
-            tenant_id uuid NOT NULL,
-            deal_id uuid NOT NULL,
+            tenant_id uuid NOT NULL REFERENCES tenants(tenant_id),
+            deal_id uuid NOT NULL REFERENCES deals(deal_id),
             calc_type text NOT NULL,
             inputs jsonb NOT NULL,
             formula_hash text NOT NULL,
@@ -46,7 +58,7 @@ def upgrade() -> None:
         sa.text("""
         CREATE TABLE calc_sanads (
             calc_sanad_id uuid PRIMARY KEY,
-            tenant_id uuid NOT NULL,
+            tenant_id uuid NOT NULL REFERENCES tenants(tenant_id),
             calc_id uuid NOT NULL REFERENCES deterministic_calculations(calc_id),
             input_claim_ids jsonb NOT NULL,
             input_min_sanad_grade text NOT NULL,
@@ -127,7 +139,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Drop deterministic_calculations and calc_sanads tables."""
+    """Drop tenants, deterministic_calculations, and calc_sanads tables."""
     conn = op.get_bind()
 
     conn.execute(sa.text("DROP POLICY IF EXISTS calc_sanads_tenant_isolation ON calc_sanads"))
@@ -140,3 +152,4 @@ def downgrade() -> None:
 
     conn.execute(sa.text("DROP TABLE IF EXISTS calc_sanads CASCADE"))
     conn.execute(sa.text("DROP TABLE IF EXISTS deterministic_calculations CASCADE"))
+    conn.execute(sa.text("DROP TABLE IF EXISTS tenants CASCADE"))

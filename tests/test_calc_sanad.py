@@ -183,14 +183,19 @@ class TestGradeDPropagation:
 
         assert result.calc_sanad.calc_grade == SanadGrade.D
 
-        has_d_gate_explanation = any(
-            "D" in (entry.impact or "") and "hard gate" in (entry.impact or "").lower()
-            for entry in result.calc_sanad.explanation
+        has_material_grade_d = any(
+            "calc_grade = D" in (entry.impact or "") for entry in result.calc_sanad.explanation
         )
-        assert has_d_gate_explanation, "Explanation should mention D hard gate"
+        assert has_material_grade_d, "Explanation should show calc_grade = D from material inputs"
 
     def test_non_material_grade_d_does_not_force_d(self, engine: CalcEngine) -> None:
-        """Non-material input with grade D does not force calc_grade D."""
+        """Non-material input with grade D does not force calc_grade D.
+
+        Expected behavior:
+        - input_min_sanad_grade = D (min over ALL inputs)
+        - calc_grade = A (min over MATERIAL inputs only)
+        - Explanation must reflect that non-material inputs are excluded
+        """
         result = engine.run(
             tenant_id="11111111-1111-1111-1111-111111111111",
             deal_id="22222222-2222-2222-2222-222222222222",
@@ -206,7 +211,16 @@ class TestGradeDPropagation:
         )
 
         assert result.calc_sanad.input_min_sanad_grade == SanadGrade.D
-        assert result.calc_sanad.calc_grade == SanadGrade.D
+        assert result.calc_sanad.calc_grade == SanadGrade.A
+
+        has_non_material_excluded = any(
+            "non-material" in (entry.step or "").lower()
+            and "excluded" in (entry.step or "").lower()
+            for entry in result.calc_sanad.explanation
+        )
+        assert has_non_material_excluded, (
+            "Explanation should state that non-material inputs are excluded from calc_grade"
+        )
 
     def test_multiple_grade_d_still_grade_d(self, engine: CalcEngine) -> None:
         """Multiple grade D inputs → calc_grade = D."""

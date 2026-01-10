@@ -1961,9 +1961,28 @@ class TestDocumentSpansRLS:
 class TestDeterministicCalculationsRLS:
     """Tests for deterministic_calculations table RLS tenant isolation (Phase 4.1)."""
 
-    def _create_deal(self, conn: object, tenant_id: str, deal_id: str) -> None:
-        """Helper to create a deal for FK constraint."""
+    def _create_tenant(self, conn: object, tenant_id: str) -> None:
+        """Helper to create a tenant for FK constraint."""
         now = datetime.now(UTC)
+        conn.execute(
+            text(
+                """
+                INSERT INTO tenants (tenant_id, name, created_at)
+                VALUES (:tenant_id, :name, :created_at)
+                ON CONFLICT (tenant_id) DO NOTHING
+                """
+            ),
+            {
+                "tenant_id": tenant_id,
+                "name": "Test Tenant",
+                "created_at": now,
+            },
+        )
+
+    def _create_deal(self, conn: object, tenant_id: str, deal_id: str) -> None:
+        """Helper to create a tenant and deal for FK constraints."""
+        now = datetime.now(UTC)
+        self._create_tenant(conn, tenant_id)
         conn.execute(
             text(
                 """
@@ -2129,6 +2148,20 @@ class TestDeterministicCalculationsRLS:
             conn.execute(
                 text(
                     """
+                    INSERT INTO tenants (tenant_id, name, created_at)
+                    VALUES (:tenant_id, :name, :created_at)
+                    ON CONFLICT (tenant_id) DO NOTHING
+                    """
+                ),
+                {
+                    "tenant_id": TENANT_A_ID,
+                    "name": "Test Tenant",
+                    "created_at": now,
+                },
+            )
+            conn.execute(
+                text(
+                    """
                     INSERT INTO deals (deal_id, tenant_id, name, created_at)
                     VALUES (:deal_id, :tenant_id, :name, :created_at)
                     """
@@ -2224,11 +2257,30 @@ class TestDeterministicCalculationsRLS:
 class TestCalcSanadsRLS:
     """Tests for calc_sanads table RLS tenant isolation (Phase 4.1)."""
 
+    def _create_tenant(self, conn: object, tenant_id: str) -> None:
+        """Helper to create a tenant for FK constraint."""
+        now = datetime.now(UTC)
+        conn.execute(
+            text(
+                """
+                INSERT INTO tenants (tenant_id, name, created_at)
+                VALUES (:tenant_id, :name, :created_at)
+                ON CONFLICT (tenant_id) DO NOTHING
+                """
+            ),
+            {
+                "tenant_id": tenant_id,
+                "name": "Test Tenant",
+                "created_at": now,
+            },
+        )
+
     def _create_deal_and_calc(
         self, conn: object, tenant_id: str, deal_id: str, calc_id: str
     ) -> None:
-        """Helper to create deal and calc for FK constraints."""
+        """Helper to create tenant, deal, and calc for FK constraints."""
         now = datetime.now(UTC)
+        self._create_tenant(conn, tenant_id)
         conn.execute(
             text(
                 """
@@ -2416,6 +2468,20 @@ class TestCalcSanadsRLS:
         now = datetime.now(UTC)
 
         with admin_engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO tenants (tenant_id, name, created_at)
+                    VALUES (:tenant_id, :name, :created_at)
+                    ON CONFLICT (tenant_id) DO NOTHING
+                    """
+                ),
+                {
+                    "tenant_id": TENANT_A_ID,
+                    "name": "Test Tenant",
+                    "created_at": now,
+                },
+            )
             conn.execute(
                 text(
                     """

@@ -315,9 +315,11 @@ class CalcEngine:
         """Compute the CalcSanad with grade derivation.
 
         Grade derivation rules:
-        - input_min_sanad_grade = minimum across all input grades
-        - calc_grade = input_min_sanad_grade (worst grade propagates)
+        - input_min_sanad_grade = minimum across ALL input grades
+        - calc_grade = minimum across MATERIAL inputs only
         - If any material input has grade D -> calc_grade = D
+        - If no material inputs, fall back to input_min_sanad_grade
+        - Non-material inputs do NOT affect calc_grade
         """
         explanation: list[GradeExplanationEntry] = []
 
@@ -334,33 +336,45 @@ class CalcEngine:
             all_grades = [ig.grade for ig in input_grades]
             input_min_grade = SanadGrade.min_grade(all_grades)
 
+            material_inputs = [ig for ig in input_grades if ig.is_material]
+            non_material_inputs = [ig for ig in input_grades if not ig.is_material]
+
             for ig in input_grades:
+                material_label = "material" if ig.is_material else "non-material"
+                step_text = f"Input {ig.claim_id[:8]}... grade {ig.grade.value} ({material_label})"
                 explanation.append(
                     GradeExplanationEntry(
-                        step=f"Input claim {ig.claim_id[:8]}... has grade {ig.grade.value}",
+                        step=step_text,
                         input_grade=ig.grade,
                         claim_id=ig.claim_id,
                         is_material=ig.is_material,
                     )
                 )
 
-            material_grades = [ig.grade for ig in input_grades if ig.is_material]
-            has_material_d = any(g == SanadGrade.D for g in material_grades)
-
-            if has_material_d:
-                calc_grade = SanadGrade.D
+            if non_material_inputs:
+                excluded_msg = f"{len(non_material_inputs)} non-material input(s) excluded"
                 explanation.append(
                     GradeExplanationEntry(
-                        step="Material input has grade D; forcing calc_grade to D",
-                        impact="calc_grade = D (hard gate)",
+                        step=excluded_msg,
+                        impact="non-material grades do not affect calc_grade",
+                    )
+                )
+
+            if material_inputs:
+                material_grades = [ig.grade for ig in material_inputs]
+                calc_grade = SanadGrade.min_grade(material_grades)
+                explanation.append(
+                    GradeExplanationEntry(
+                        step=f"calc_grade derived from {len(material_inputs)} material input(s)",
+                        impact=f"calc_grade = {calc_grade.value} (min of material grades)",
                     )
                 )
             else:
                 calc_grade = input_min_grade
                 explanation.append(
                     GradeExplanationEntry(
-                        step=f"Minimum input grade is {input_min_grade.value}",
-                        impact=f"calc_grade = {input_min_grade.value}",
+                        step="No material inputs; using min of all inputs as fallback",
+                        impact=f"calc_grade = {calc_grade.value}",
                     )
                 )
 

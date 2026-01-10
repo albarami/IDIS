@@ -472,7 +472,7 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | SAN-008 | Grader v2 | Methodology v2 §8 | `sanad/grader.py` | test_sanad_methodology_v2_unit.py::TestGraderV2 | 3.3 | ✅ Exists | grade_sanad_v2() |
 | DEF-001 | Defect handling | TDD §4.3 | `sanad/defects.py`, `sanad/ilal.py` | test_sanad_methodology_v2_unit.py | 3 | ✅ Exists | Defect records |
 | DN-001 | Calc reproducibility | TDD §1.1 | `calc/engine.py` | test_calc_reproducibility.py, test_calc_sanad.py | 4.1 | ✅ Exists | CalcSanad record |
-| DN-002 | Calc-Sanad grade derivation | TDD §1.1 | `calc/engine.py` | test_calc_sanad.py::TestGradeDerivation* | 4.1 | ✅ Exists | calc_grade field |
+| DN-002 | Calc-Sanad grade derivation | TDD §1.1 | `calc/engine.py` | test_calc_sanad.py::TestGradeDerivation* | 4.1 | ✅ Exists | material-aware calc_grade (non-material excluded) |
 | DN-003 | Calc RLS tenant isolation | Security §6 | migration 0005 | test_postgres_rls_and_audit_immutability.py::TestDeterministicCalculationsRLS | 4.1 | ✅ Exists | RLS policies |
 | DN-004 | CalcSanad RLS tenant isolation | Security §6 | migration 0005 | test_postgres_rls_and_audit_immutability.py::TestCalcSanadsRLS | 4.1 | ✅ Exists | RLS policies |
 | FC-001 | Fail-closed | TDD §10 | All validators | test_fail_closed.py | 0+ | ⏳ Planned | Rejection events |

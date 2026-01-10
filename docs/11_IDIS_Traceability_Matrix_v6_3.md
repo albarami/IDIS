@@ -471,7 +471,10 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | SAN-007 | COI handling | Methodology v2 §7 | `sanad/coi.py` | test_sanad_methodology_v2_unit.py::TestCOI | 3.3 | ✅ Exists | COI_* defects |
 | SAN-008 | Grader v2 | Methodology v2 §8 | `sanad/grader.py` | test_sanad_methodology_v2_unit.py::TestGraderV2 | 3.3 | ✅ Exists | grade_sanad_v2() |
 | DEF-001 | Defect handling | TDD §4.3 | `sanad/defects.py`, `sanad/ilal.py` | test_sanad_methodology_v2_unit.py | 3 | ✅ Exists | Defect records |
-| DN-001 | Calc reproducibility | TDD §1.1 | `calc/engine.py` | test_calc_reproducibility.py | 4 | ⏳ Planned | CalcSanad record |
+| DN-001 | Calc reproducibility | TDD §1.1 | `calc/engine.py` | test_calc_reproducibility.py, test_calc_sanad.py | 4.1 | ✅ Exists | CalcSanad record |
+| DN-002 | Calc-Sanad grade derivation | TDD §1.1 | `calc/engine.py` | test_calc_sanad.py::TestGradeDerivation* | 4.1 | ✅ Exists | calc_grade field |
+| DN-003 | Calc RLS tenant isolation | Security §6 | migration 0005 | test_postgres_rls_and_audit_immutability.py::TestDeterministicCalculationsRLS | 4.1 | ✅ Exists | RLS policies |
+| DN-004 | CalcSanad RLS tenant isolation | Security §6 | migration 0005 | test_postgres_rls_and_audit_immutability.py::TestCalcSanadsRLS | 4.1 | ✅ Exists | RLS policies |
 | FC-001 | Fail-closed | TDD §10 | All validators | test_fail_closed.py | 0+ | ⏳ Planned | Rejection events |
 | API-001 | Idempotency | API §4.1 | `idempotency.py` | test_api_idempotency_middleware.py | 2.5 | ✅ Exists | request_id |
 | API-002 | Error model | API §8 | `errors.py` | test_error_model.py | 2.6 | ⏳ Planned | Error responses |
@@ -512,6 +515,9 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | `tests/test_openapi_loader.py` | OpenAPI loader tests | 0 | ✅ Passing |
 | `tests/test_cli_validate.py` | CLI validation commands | 0 | ✅ Passing |
 | `tests/test_health.py` | Health module tests | 0 | ✅ Passing |
+| `tests/test_calc_reproducibility.py` | Calc engine hash stability | 4.1 | ✅ Passing |
+| `tests/test_calc_sanad.py` | Calc-Sanad grade derivation + tamper detection | 4.1 | ✅ Passing |
+| `tests/test_postgres_rls_and_audit_immutability.py` | RLS tenant isolation (incl. calc tables) | 2/4.1 | ✅ Passing |
 
 ### 9.2 Planned Tests (By Phase Gate)
 
@@ -571,3 +577,4 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | 2026-01-07 | 1.0 | Cascade | Initial creation from v6.3 docs consolidation |
 | 2026-01-07 | 1.1 | Cascade | Added Implementation Status column; hard/soft gate classification; corrected test coverage matrix to reflect actual repo state; added planned tests/modules by phase gate |
 | 2026-01-09 | 1.2 | Cascade | Added Phase 3.3 Sanad Methodology v2 traceability (SAN-003 through SAN-008); updated SAN-001, SAN-002, DEF-001 to Exists status |
+| 2026-01-10 | 1.3 | Cascade | Added Phase 4.1 Deterministic Calc Engine traceability (DN-001 through DN-004); added calc tests to test coverage matrix |

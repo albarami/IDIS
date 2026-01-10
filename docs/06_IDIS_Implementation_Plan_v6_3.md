@@ -156,6 +156,70 @@ Exit criteria:
 - No LLM-generated arithmetic in deliverables
 - Calcs are traceable to claim_ids and source evidence
 
+#### Phase 4.1 — Deterministic Calc Engine Framework ✅ COMPLETE
+
+**Implemented (2026-01-10):**
+
+1. **Canonical JSON Serialization Rules for Hashes**
+   - All JSON keys sorted alphabetically (recursive)
+   - Lists maintain order unless explicitly sorted (input_claim_ids sorted before hashing)
+   - Decimal values serialized as strings with explicit precision (e.g., "123.4500")
+   - UUIDs serialized as lowercase hyphenated strings
+   - No whitespace in serialized JSON (`separators=(',', ':')`)
+   - UTF-8 encoding for hash input
+
+2. **Decimal Rounding Profile**
+   - All calculations use `decimal.Decimal` exclusively (no float arithmetic)
+   - Default precision: 28 significant digits (Python Decimal default)
+   - Rounding mode: `ROUND_HALF_UP` for all quantize operations
+   - Output precision: configurable per calc_type, default 4 decimal places
+   - Explicit quantize before storage: `value.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)`
+
+3. **Formula Registry Versioning**
+   - Each formula has: `calc_type`, `version` (semver), `expression_id`
+   - `formula_hash = sha256(canonical_json({calc_type, formula_version, expression_id}))`
+   - Formula registry is immutable once deployed; new versions create new entries
+   - Code version tracked via package `__version__` or git SHA
+
+4. **Reproducibility Hash Computation**
+   - `reproducibility_hash = sha256(canonical_json({tenant_id, deal_id, calc_type, formula_hash, code_version, inputs, output}))`
+   - `inputs` includes sorted `input_claim_ids` and all numeric inputs as Decimal strings
+   - `output` includes all computed values as Decimal strings
+   - Hash is recomputed on verification; mismatch raises `CalcIntegrityError`
+
+5. **Calc-Sanad Grade Derivation**
+   - `input_min_sanad_grade = min(grade for all input claims)`
+   - Grade ordering: A > B > C > D
+   - `calc_grade = input_min_sanad_grade` (worst grade propagates)
+   - If any material input has grade D → `calc_grade = D` (hard gate)
+   - Phase 4.1 default: all inputs treated as material
+
+6. **Fail-Closed Validation**
+   - Missing required inputs → `CalcMissingInputError` (typed exception)
+   - Unsupported unit/currency/time_window → `CalcUnsupportedValueError`
+   - Integrity mismatch on verify → `CalcIntegrityError`
+   - No defaults for missing values; explicit rejection required
+
+**Modules:**
+- `src/idis/calc/__init__.py` — package exports
+- `src/idis/calc/engine.py` — CalcEngine with run() and verify_reproducibility()
+- `src/idis/calc/formulas/__init__.py` — formula package
+- `src/idis/calc/formulas/registry.py` — FormulaSpec and FormulaRegistry
+- `src/idis/calc/formulas/core.py` — minimal formulas for tests (runway, gross_margin)
+- `src/idis/models/calc_sanad.py` — CalcSanad model with grade enum
+- `src/idis/models/deterministic_calculation.py` — DeterministicCalculation model
+
+**Persistence:**
+- `src/idis/persistence/migrations/versions/0005_deterministic_calculations_and_calc_sanads.py`
+- Tables: `deterministic_calculations`, `calc_sanads`
+- RLS policies with NULLIF hardening for tenant isolation
+- Indexes: `(tenant_id, deal_id)`, `(tenant_id, calc_type)`
+
+**Tests:**
+- `tests/test_calc_reproducibility.py` — hash stability tests
+- `tests/test_calc_sanad.py` — grade derivation and tamper detection
+- `tests/test_postgres_rls_and_audit_immutability.py` — RLS tests for new tables
+
 ---
 
 ### Phase 5 — Multi-Agent Debate + Muḥāsabah Gate (Weeks 17–22)

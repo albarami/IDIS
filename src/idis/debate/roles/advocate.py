@@ -4,16 +4,22 @@ The Advocate proposes the investment thesis based on claim registry
 and deterministic calculations. All factual statements must reference
 claim_ids or calc_ids (No-Free-Facts).
 
-Phase 5.1 implements the interface contract. LLM integration is deferred.
+Phase 5.1 implements the interface contract with deterministic outputs.
+LLM integration is deferred to later phases.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import TYPE_CHECKING
-from uuid import uuid4
 
-from idis.debate.roles.base import RoleResult, RoleRunner
+from idis.debate.roles.base import (
+    RoleResult,
+    RoleRunner,
+    default_agent_id,
+    deterministic_id,
+    deterministic_position_hash,
+    deterministic_timestamp,
+)
 from idis.models.debate import (
     AgentOutput,
     DebateMessage,
@@ -38,57 +44,110 @@ class AdvocateRole(RoleRunner):
         """Initialize advocate role.
 
         Args:
-            agent_id: Unique identifier. Auto-generated if not provided.
+            agent_id: Unique identifier. Uses deterministic default if not provided.
         """
         super().__init__(
             role=DebateRole.ADVOCATE,
-            agent_id=agent_id or f"advocate-{uuid4().hex[:8]}",
+            agent_id=agent_id or default_agent_id(DebateRole.ADVOCATE),
         )
 
     def run(self, state: DebateState) -> RoleResult:
-        """Execute advocate role.
-
-        In Phase 5.1, this returns a structured placeholder result.
-        The orchestrator injects the actual implementation.
+        """Execute advocate role with deterministic, state-derived outputs.
 
         Args:
             state: Current debate state.
 
         Returns:
-            RoleResult with advocate's messages and outputs.
+            RoleResult with advocate's messages and outputs derived from state.
         """
-        timestamp = datetime.utcnow()
-        message_id = f"msg-{uuid4().hex[:12]}"
-        output_id = f"out-{uuid4().hex[:12]}"
-        record_id = f"muh-{uuid4().hex[:12]}"
+        role_name = self.role.value
+        timestamp = deterministic_timestamp(state.round_number, step=0)
 
+        # Deterministic IDs from state
+        message_id = deterministic_id(
+            "msg",
+            tenant_id=state.tenant_id,
+            deal_id=state.deal_id,
+            role=role_name,
+            round_number=state.round_number,
+            step=0,
+        )
+        output_id = deterministic_id(
+            "out",
+            tenant_id=state.tenant_id,
+            deal_id=state.deal_id,
+            role=role_name,
+            round_number=state.round_number,
+            step=0,
+        )
+        record_id = deterministic_id(
+            "muh",
+            tenant_id=state.tenant_id,
+            deal_id=state.deal_id,
+            role=role_name,
+            round_number=state.round_number,
+            step=0,
+        )
+
+        # Determine output type from state
         is_opening = state.round_number == 1 and not any(
             m.role == DebateRole.ADVOCATE for m in state.messages
         )
-
         output_type = "opening_thesis" if is_opening else "rebuttal"
+
+        # Derive content from state - extract claim/calc refs from prior outputs
+        prior_claim_refs = self._extract_prior_claim_refs(state)
+        prior_calc_refs = self._extract_prior_calc_refs(state)
+        messages_count = len(state.messages)
+        outputs_count = len(state.agent_outputs)
+
+        # Build state-derived content summary for position hash
+        content_summary = (
+            f"claims:{len(prior_claim_refs)}|"
+            f"calcs:{len(prior_calc_refs)}|"
+            f"msgs:{messages_count}|"
+            f"outs:{outputs_count}"
+        )
+
+        position_hash = deterministic_position_hash(role_name, state.round_number, content_summary)
+
+        # State-derived message content
+        message_content = (
+            f"Advocate {output_type} for round {state.round_number}: "
+            f"reviewed {len(prior_claim_refs)} claims, {len(prior_calc_refs)} calcs, "
+            f"{messages_count} prior messages"
+        )
 
         message = DebateMessage(
             message_id=message_id,
             role=DebateRole.ADVOCATE,
             agent_id=self.agent_id,
-            content=f"[Advocate {output_type} for round {state.round_number}]",
-            claim_refs=[],
-            calc_refs=[],
+            content=message_content,
+            claim_refs=sorted(prior_claim_refs),
+            calc_refs=sorted(prior_calc_refs),
             round_number=state.round_number,
             timestamp=timestamp,
         )
+
+        # Confidence derived from state (more data = higher confidence)
+        base_confidence = 0.5
+        confidence_boost = min(0.3, len(prior_claim_refs) * 0.05)
+        confidence = min(0.95, base_confidence + confidence_boost)
 
         muhasabah = MuhasabahRecord(
             record_id=record_id,
             agent_id=self.agent_id,
             output_id=output_id,
-            supported_claim_ids=[],
-            supported_calc_ids=[],
-            falsifiability_tests=[],
-            uncertainties=[],
-            confidence=0.5,
-            failure_modes=[],
+            supported_claim_ids=sorted(prior_claim_refs),
+            supported_calc_ids=sorted(prior_calc_refs),
+            falsifiability_tests=[
+                {"test_id": f"test_claim_validity_{state.round_number}", "type": "claim_validation"}
+            ],
+            uncertainties=[
+                {"type": u, "severity": "medium"} for u in self._derive_uncertainties(state)
+            ],
+            confidence=confidence,
+            failure_modes=[f"data_gap_round_{state.round_number}"],
             timestamp=timestamp,
         )
 
@@ -98,8 +157,14 @@ class AdvocateRole(RoleRunner):
             role=DebateRole.ADVOCATE,
             output_type=output_type,
             content={
-                "thesis": f"[Structured thesis for round {state.round_number}]",
-                "position_hash": f"advocate-pos-{state.round_number}",
+                "thesis_type": output_type,
+                "round_number": state.round_number,
+                "claims_reviewed": len(prior_claim_refs),
+                "calcs_reviewed": len(prior_calc_refs),
+                "prior_messages_count": messages_count,
+                "claim_refs": sorted(prior_claim_refs),
+                "calc_refs": sorted(prior_calc_refs),
+                "position_hash": position_hash,
             },
             muhasabah=muhasabah,
             round_number=state.round_number,
@@ -109,5 +174,28 @@ class AdvocateRole(RoleRunner):
         return RoleResult(
             messages=[message],
             outputs=[output],
-            position_hash=f"advocate-pos-{state.round_number}",
+            position_hash=position_hash,
         )
+
+    def _extract_prior_claim_refs(self, state: DebateState) -> list[str]:
+        """Extract all claim references from prior messages (deterministic)."""
+        claim_refs: set[str] = set()
+        for msg in state.messages:
+            claim_refs.update(msg.claim_refs)
+        return sorted(claim_refs)
+
+    def _extract_prior_calc_refs(self, state: DebateState) -> list[str]:
+        """Extract all calc references from prior messages (deterministic)."""
+        calc_refs: set[str] = set()
+        for msg in state.messages:
+            calc_refs.update(msg.calc_refs)
+        return sorted(calc_refs)
+
+    def _derive_uncertainties(self, state: DebateState) -> list[str]:
+        """Derive uncertainties from state (deterministic)."""
+        uncertainties = []
+        if len(state.messages) == 0:
+            uncertainties.append("no_prior_discussion")
+        if len(state.open_questions) > 0:
+            uncertainties.append(f"open_questions_count_{len(state.open_questions)}")
+        return sorted(uncertainties)

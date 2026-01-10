@@ -11,9 +11,6 @@ START → advocate_opening → sanad_breaker_challenge → observer_critiques_pa
 
 from __future__ import annotations
 
-from datetime import datetime
-from uuid import uuid4
-
 from idis.debate.orchestrator import (
     NORMATIVE_NODE_ORDER,
     DebateOrchestrator,
@@ -23,7 +20,12 @@ from idis.debate.orchestrator import (
 )
 from idis.debate.roles.advocate import AdvocateRole
 from idis.debate.roles.arbiter import ArbiterRole
-from idis.debate.roles.base import RoleResult, RoleRunner
+from idis.debate.roles.base import (
+    RoleResult,
+    RoleRunner,
+    deterministic_id,
+    deterministic_timestamp,
+)
 from idis.debate.roles.contradiction_finder import ContradictionFinderRole
 from idis.debate.roles.risk_officer import RiskOfficerRole
 from idis.debate.roles.sanad_breaker import SanadBreakerRole
@@ -62,10 +64,31 @@ class FakeMaxRoundsRole(RoleRunner):
 
     def run(self, state: DebateState) -> RoleResult:
         self._call_count += 1
-        timestamp = datetime.utcnow()
-        message_id = f"msg-{uuid4().hex[:12]}"
-        output_id = f"out-{uuid4().hex[:12]}"
-        record_id = f"muh-{uuid4().hex[:12]}"
+        timestamp = deterministic_timestamp(state.round_number, step=self._call_count)
+        message_id = deterministic_id(
+            "msg",
+            tenant_id=state.tenant_id,
+            deal_id=state.deal_id,
+            role=self._role.value,
+            round_number=state.round_number,
+            step=self._call_count,
+        )
+        output_id = deterministic_id(
+            "out",
+            tenant_id=state.tenant_id,
+            deal_id=state.deal_id,
+            role=self._role.value,
+            round_number=state.round_number,
+            step=self._call_count,
+        )
+        record_id = deterministic_id(
+            "muh",
+            tenant_id=state.tenant_id,
+            deal_id=state.deal_id,
+            role=self._role.value,
+            round_number=state.round_number,
+            step=self._call_count,
+        )
 
         message = DebateMessage(
             message_id=message_id,
@@ -194,11 +217,35 @@ class TestNodeGraphExecution:
                 super().__init__(DebateRole.ADVOCATE, "evidence-requester")
 
             def run(self, state: DebateState) -> RoleResult:
-                timestamp = datetime.utcnow()
+                timestamp = deterministic_timestamp(state.round_number, step=50)
+                msg_id = deterministic_id(
+                    "msg",
+                    tenant_id=state.tenant_id,
+                    deal_id=state.deal_id,
+                    role="evidence-requester",
+                    round_number=state.round_number,
+                    step=50,
+                )
+                out_id = deterministic_id(
+                    "out",
+                    tenant_id=state.tenant_id,
+                    deal_id=state.deal_id,
+                    role="evidence-requester",
+                    round_number=state.round_number,
+                    step=50,
+                )
+                muh_id = deterministic_id(
+                    "muh",
+                    tenant_id=state.tenant_id,
+                    deal_id=state.deal_id,
+                    role="evidence-requester",
+                    round_number=state.round_number,
+                    step=50,
+                )
                 return RoleResult(
                     messages=[
                         DebateMessage(
-                            message_id=f"msg-{uuid4().hex[:12]}",
+                            message_id=msg_id,
                             role=DebateRole.ADVOCATE,
                             agent_id=self.agent_id,
                             content="Request evidence",
@@ -208,15 +255,15 @@ class TestNodeGraphExecution:
                     ],
                     outputs=[
                         AgentOutput(
-                            output_id=f"out-{uuid4().hex[:12]}",
+                            output_id=out_id,
                             agent_id=self.agent_id,
                             role=DebateRole.ADVOCATE,
                             output_type="rebuttal",
                             content={"position_hash": "test"},
                             muhasabah=MuhasabahRecord(
-                                record_id=f"muh-{uuid4().hex[:12]}",
+                                record_id=muh_id,
                                 agent_id=self.agent_id,
-                                output_id="test",
+                                output_id=out_id,
                                 supported_claim_ids=[],
                                 supported_calc_ids=[],
                                 falsifiability_tests=[],

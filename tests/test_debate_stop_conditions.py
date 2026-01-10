@@ -13,11 +13,9 @@ Priority order (normative, highest to lowest):
 
 from __future__ import annotations
 
-from datetime import datetime
-from uuid import uuid4
-
 import pytest
 
+from idis.debate.roles.base import deterministic_timestamp
 from idis.debate.stop_conditions import (
     STOP_CONDITION_PRIORITY_ORDER,
     StopConditionChecker,
@@ -66,10 +64,10 @@ def create_agent_output(
     agent_id: str | None = None,
 ) -> AgentOutput:
     """Create an AgentOutput for testing."""
-    timestamp = datetime.utcnow()
-    agent_id = agent_id or f"agent-{uuid4().hex[:8]}"
-    output_id = f"out-{uuid4().hex[:12]}"
-    record_id = f"muh-{uuid4().hex[:12]}"
+    timestamp = deterministic_timestamp(round_number, step=0)
+    agent_id = agent_id or f"agent-test-{round_number}"
+    output_id = f"out-test-{round_number}-{agent_id}"
+    record_id = f"muh-test-{round_number}-{agent_id}"
 
     return AgentOutput(
         output_id=output_id,

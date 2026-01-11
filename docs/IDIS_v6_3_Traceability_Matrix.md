@@ -98,11 +98,14 @@ Ensures deterministic, phase-disciplined delivery aligned to v6.3 spec.
 | `api/middleware/audit.py` | `test_api_audit_middleware.py` | 10 | Emission, fail-closed |
 | `api/middleware/idempotency.py` | `test_api_idempotency_middleware.py` | 40+ | Replay, collision, actor |
 | `api/middleware/openapi_validate.py` | `test_api_openapi_validation.py` | 20+ | Validation, errors |
-| `validators/no_free_facts.py` | `test_no_free_facts.py` | 15+ | All validation rules |
+| `validators/no_free_facts.py` | `test_no_free_facts.py`, `test_no_free_facts_semantic_cases.py` | 38+ | All validation rules + semantic extensions |
 | `validators/sanad_integrity.py` | `test_sanad_integrity.py` | 28 | Grade, defects |
 | `validators/muhasabah.py` | `test_muhasabah.py`, `test_muhasabah_validator.py` | 27 | Record validation |
 | `validators/audit_event_validator.py` | `test_audit_event_validator.py` | 10+ | Schema validation |
 | `schemas/registry.py` | `test_schema_registry.py` | 10+ | Schema loading |
+| `models/value_structs.py` | `test_value_structs.py`, `test_calc_value_types_integration.py` | 56 | ValueStruct type hierarchy |
+| `models/claim.py` | `test_claim_type_enforcement.py`, `test_calc_loop_guardrail.py` | 28 | Claim types + calc loop guardrail |
+| `persistence/saga.py` | `test_graph_postgres_consistency_saga.py` | 24 | Dual-write saga consistency |
 
 ---
 
@@ -118,7 +121,9 @@ Ensures deterministic, phase-disciplined delivery aligned to v6.3 spec.
 | 3 | Gate 2 | INV-04, INV-05 (Sanad services) |
 | 4 | Gate 2 | INV-07 (Calc-Sanad engine) |
 | 5 | Gate 3 | INV-06 (Muḥāsabah integration) |
+| POST-5.2 | Gate 3 | VS-001 (ValueStruct), CLT-001 (Claim types), NFF-002 (Semantic), DW-001 (Saga) |
 | 6 | Gate 3 | INV-14 (Frontend contracts) |
+| 6.5 | SPEC | PM-001 (Pattern matching — spec only, no implementation) |
 | 7 | Gate 4 | INV-12, INV-13, INV-15 (hardening) |
 
 ---
@@ -141,3 +146,4 @@ Ensures deterministic, phase-disciplined delivery aligned to v6.3 spec.
 |------|---------|---------|
 | 2026-01-07 | 1.0 | Initial creation |
 | 2026-01-07 | 1.1 | Added planned modules/tests for INV-07, INV-12, INV-13, INV-15; added gate references |
+| 2026-01-11 | 1.2 | Added POST-5.2 hardening: VS-001, CLT-001, NFF-002, DW-001; added PM-001 (spec only); updated test coverage matrix |

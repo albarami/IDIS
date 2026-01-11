@@ -602,6 +602,7 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | 2026-01-10 | 1.5 | Cascade | Added Phase 5.1 LangGraph Orchestration Core traceability (DB-001 through DB-004); added debate tests to test coverage matrix |
 | 2026-01-11 | 1.6 | Cascade | Added Phase 5.2 Muḥāsabah Gate traceability (MUH-002); updated MUH-001 with gate enforcement; added test_muhasabah_gate.py and test_debate_muhasabah_integration.py to test coverage matrix |
 | 2026-01-11 | 1.7 | Cascade | Added Phase POST-5.2 Architecture Hardening: ValueStruct types (VS-001), Claim types & calc loop guardrail (CLT-001), NFF semantic extensions (NFF-002), Graph-Postgres saga (DW-001), Pattern matching spec (PM-001) |
+| 2026-01-11 | 1.8 | Cascade | DOC-ALIGN-001: Clarified claim_class vs claim_type distinction; updated CLT-001 with invariants and key fields; aligned with Data Model §5.5 |
 
 ---
 
@@ -619,14 +620,16 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | **Phase Gate** | POST-5.2 |
 | **Implementation Status** | ✅ Exists |
 
-### 11.2 Claim Type & Calc Loop Guardrail
+### 11.2 Claim Lineage Type & Calc Loop Guardrail
 
 | Attribute | Value |
 |-----------|-------|
 | **Requirement ID** | CLT-001 |
-| **Requirement** | PRIMARY vs DERIVED claim typing; derived claims cannot auto-trigger calcs |
+| **Requirement** | `claim_class` (category: FINANCIAL, etc.) vs `claim_type` (lineage: PRIMARY/DERIVED); derived claims cannot auto-trigger calcs; `source_calc_id` required for derived |
 | **Source Doc** | Data Model §5.5 |
-| **Enforcing Component** | `src/idis/models/claim.py` — CalcLoopGuard |
+| **Enforcing Component** | `src/idis/models/claim.py` — `Claim`, `ClaimClass`, `ClaimType`, `CalcLoopGuard`, `CalcLoopGuardError` |
+| **Key Fields** | `claim_class` (category), `claim_type` (lineage), `source_calc_id` (for derived claims) |
+| **Invariants** | CLG-1: PRIMARY claims trigger calcs; CLG-2: DERIVED cannot auto-trigger; CLG-3: Violation is fail-closed |
 | **Tests** | `tests/test_claim_type_enforcement.py`, `tests/test_calc_loop_guardrail.py` |
 | **Phase Gate** | POST-5.2 |
 | **Implementation Status** | ✅ Exists |

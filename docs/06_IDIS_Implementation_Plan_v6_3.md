@@ -379,6 +379,63 @@ Exit criteria:
 
 ---
 
+### Phase POST-5.2 — Architecture Hardening ✅ COMPLETE
+
+**Implemented (2026-01-11):**
+
+Architecture hardening addressing schema gaps and consistency requirements.
+
+#### 1. Calc Loop Guardrail (Primary vs Derived Claims)
+
+Prevents infinite calculation loops by distinguishing claim lineage.
+
+| Aspect | Implementation |
+|--------|----------------|
+| **Enforcing Component** | `src/idis/models/claim.py` — `CalcLoopGuard`, `CalcLoopGuardError` |
+| **Claim Fields** | `claim_class` (category), `claim_type` (lineage: primary/derived), `source_calc_id` |
+| **Invariants** | PRIMARY claims trigger calcs; DERIVED claims cannot auto-trigger |
+| **Tests** | `tests/test_claim_type_enforcement.py`, `tests/test_calc_loop_guardrail.py` |
+
+#### 2. No-Free-Facts Semantic Extensions
+
+Enhanced factual assertion detection using deterministic subject-predicate patterns.
+
+| Aspect | Implementation |
+|--------|----------------|
+| **Enforcing Component** | `src/idis/validators/no_free_facts.py` — `SEMANTIC_RULES`, `SemanticMatch` |
+| **Pattern Categories** | Company achievement, revenue change, funding event, market size, team growth, valuation claim |
+| **Determinism** | Static regex rules only (no ML models); same input → same output |
+| **Tests** | `tests/test_no_free_facts_semantic_cases.py` |
+
+#### 3. Cross-DB Dual-Write Saga Consistency
+
+Saga pattern ensuring Postgres + Graph DB writes are atomic.
+
+| Aspect | Implementation |
+|--------|----------------|
+| **Enforcing Component** | `src/idis/persistence/saga.py` — `DualWriteSagaExecutor`, `SagaStep` |
+| **Pattern** | Execute steps in order; on failure, compensate completed steps in reverse |
+| **Fail-Closed** | Any step failure triggers full compensation; no partial writes |
+| **Helpers** | `create_claim_dual_write_saga()`, `create_sanad_dual_write_saga()` |
+| **Tests** | `tests/test_graph_postgres_consistency_saga.py` |
+
+#### 4. ValueStruct Type Hierarchy
+
+Typed value structures replacing untyped dict for claims and calculations.
+
+| Aspect | Implementation |
+|--------|----------------|
+| **Enforcing Component** | `src/idis/models/value_structs.py` |
+| **Types** | `MonetaryValue`, `PercentageValue`, `CountValue`, `DateValue`, `RangeValue`, `TextValue` |
+| **Schema** | `schemas/value_struct.schema.json` |
+| **Tests** | `tests/test_value_structs.py`, `tests/test_calc_value_types_integration.py` |
+
+**Documentation:**
+- Data Model §5.4 (ValueStruct), §5.5 (Claim Lineage), §5.6 (Dual-Write), §5.7 (NFF Semantic)
+- Data Model §10 (Pattern Matching schemas — SPEC only)
+
+---
+
 ### Phase 6 — Deliverables Generator + Frontend v1 (Weeks 23–28)
 
 Implement:

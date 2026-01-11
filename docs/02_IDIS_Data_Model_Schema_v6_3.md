@@ -152,16 +152,26 @@ CREATE TABLE claims (
   tenant_id uuid NOT NULL REFERENCES tenants(tenant_id),
   deal_id uuid NOT NULL REFERENCES deals(deal_id),
   claim_text text NOT NULL,
-  claim_type text NOT NULL,               -- FINANCIAL_METRIC|MARKET_SIZE|COMPETITION|TRACTION|TEAM|LEGAL|TECH|OTHER
-  value_struct jsonb NOT NULL DEFAULT '{}'::jsonb, -- {value:..., unit:..., currency:..., time_window:...}
-  materiality numeric NOT NULL DEFAULT 0.5,        -- 0..1
-  status text NOT NULL DEFAULT 'UNKNOWN',          -- VERIFIED|CONTRADICTED|INFLATED|UNVERIFIED|SUBJECTIVE|UNKNOWN
+  claim_class text NOT NULL,              -- FINANCIAL|TRACTION|MARKET_SIZE|COMPETITION|TEAM|LEGAL_TERMS|TECHNICAL|OTHER (category)
+  claim_type text NOT NULL DEFAULT 'primary', -- primary|derived (lineage for calc loop guardrail)
+  value_struct jsonb NOT NULL DEFAULT '{}'::jsonb, -- ValueStruct typed value (see §5.4)
+  materiality text NOT NULL DEFAULT 'MEDIUM',      -- LOW|MEDIUM|HIGH|CRITICAL
+  claim_verdict text NOT NULL DEFAULT 'UNVERIFIED', -- VERIFIED|CONTRADICTED|INFLATED|UNVERIFIED|SUBJECTIVE
+  claim_grade text NOT NULL,              -- A|B|C|D (Sanad grade)
+  claim_action text NOT NULL DEFAULT 'NONE', -- NONE|REQUEST_DATA|FLAG|RED_FLAG|HUMAN_GATE|PARTNER_OVERRIDE_REQUIRED
+  sanad_id uuid NULL,                     -- FK to sanads (when created)
+  source_calc_id uuid NULL,               -- FK to deterministic_calculations (required when claim_type='derived')
   primary_span_id uuid NULL REFERENCES document_spans(span_id),
+  ic_bound boolean NOT NULL DEFAULT false,
   created_by uuid NULL REFERENCES actors(actor_id),
   created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT chk_derived_has_source CHECK (
+    claim_type != 'derived' OR source_calc_id IS NOT NULL
+  )
 );
 CREATE INDEX idx_claims_deal ON claims(tenant_id, deal_id);
+CREATE INDEX idx_claims_type ON claims(tenant_id, claim_type);
 
 CREATE TABLE evidence_items (
   evidence_id uuid PRIMARY KEY,
@@ -497,29 +507,58 @@ See `schemas/value_struct.schema.json` for full JSON Schema definition.
 
 ---
 
-## 5.5 Claim Type and Calc Loop Guardrail (Phase POST-5.2)
+## 5.5 Claim Lineage Type and Calc Loop Guardrail (Phase POST-5.2)
 
-Claims are typed as PRIMARY or DERIVED to prevent calculation loops.
+Claims have two distinct type fields:
+- **`claim_class`** — Category/domain (FINANCIAL, TRACTION, MARKET_SIZE, etc.)
+- **`claim_type`** — Lineage (PRIMARY or DERIVED) for calc loop guardrail
 
-### claim_type Field
+### claim_class Field (Category)
+
+| Value | Description |
+|-------|-------------|
+| `FINANCIAL` | Financial metrics (revenue, margins, burn rate) |
+| `TRACTION` | Customer/user traction metrics |
+| `MARKET_SIZE` | TAM/SAM/SOM estimates |
+| `COMPETITION` | Competitive landscape claims |
+| `TEAM` | Team composition and background |
+| `LEGAL_TERMS` | Legal/term sheet claims |
+| `TECHNICAL` | Technical/product claims |
+| `OTHER` | Other claim types |
+
+### claim_type Field (Lineage)
 
 | Value | Description | Can Trigger Calc? |
 |-------|-------------|-------------------|
-| `PRIMARY` | Extracted from source documents | ✅ Yes |
-| `DERIVED` | Created by calc output | ❌ No (loop guard) |
+| `primary` | Extracted from source documents | ✅ Yes |
+| `derived` | Created by calc output | ❌ No (loop guard) |
 
-### Calc Loop Guardrail Rules
+### Required Linkage for Derived Claims
 
-1. Only PRIMARY claims can trigger automated calculation runs
-2. DERIVED claims are created by calc output but cannot auto-trigger more calcs
-3. DERIVED claims track `source_calc_id` for provenance
-4. Explicit override (`allow_derived=True`) permitted for human-triggered recalcs
+When `claim_type = 'derived'`:
+- **`source_calc_id`** (required) — UUID of the DeterministicCalculation that produced this claim
+- Database constraint enforces: `claim_type != 'derived' OR source_calc_id IS NOT NULL`
+
+### Calc Loop Guardrail Invariants
+
+> **INVARIANT CLG-1**: Deterministic calcs may only consume PRIMARY claims (unless explicitly human-approved).
+>
+> **INVARIANT CLG-2**: DERIVED claims cannot automatically trigger further deterministic calcs.
+>
+> **INVARIANT CLG-3**: Violation is fail-closed (typed `CalcLoopGuardError` / defect created).
 
 ### Enforcement
 
-- `CalcLoopGuard.validate_calc_trigger()` — raises `CalcLoopGuardError` for derived claims
-- `CalcLoopGuard.filter_triggerable()` — returns only PRIMARY claims
-- Calc engine should use guardrail before processing claims
+| Component | Function | Behavior |
+|-----------|----------|----------|
+| `src/idis/models/claim.py` | `CalcLoopGuard.validate_calc_trigger()` | Raises `CalcLoopGuardError` if derived claims present |
+| `src/idis/models/claim.py` | `CalcLoopGuard.filter_triggerable()` | Returns only PRIMARY claims |
+| `src/idis/models/claim.py` | `Claim.can_trigger_calc()` | Returns `True` only for PRIMARY claims |
+
+### Tests
+
+- `tests/test_claim_type_enforcement.py` — claim_type field validation
+- `tests/test_calc_loop_guardrail.py` — guardrail enforcement and filtering
 
 ---
 
@@ -674,4 +713,180 @@ schema/
   events/
     cloudevents.md
 ```
+
+---
+
+## 10. Deal Outcomes & Pattern Matching Schemas (SPEC / Phase 6+)
+
+> **STATUS**: SPEC / PLANNED — Documentation only. No implementation claimed.
+>
+> This section documents future data models for deal outcome tracking and pattern matching.
+> Implementation is planned for Phase 6.5+.
+
+### 10.1 DealOutcome
+
+Records the outcome of a historical deal for pattern matching analysis.
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://idis.example.com/schemas/deal_outcome.schema.json",
+  "title": "DealOutcome",
+  "description": "Outcome record for a historical deal (SPEC / Phase 6+)",
+  "type": "object",
+  "required": ["outcome_id", "tenant_id", "deal_id", "outcome_type", "confidence"],
+  "properties": {
+    "outcome_id": {"type": "string", "format": "uuid"},
+    "tenant_id": {"type": "string", "format": "uuid"},
+    "deal_id": {"type": "string", "format": "uuid"},
+    "outcome_type": {
+      "type": "string",
+      "enum": ["INVESTED", "PASSED", "EXITED", "WRITTEN_OFF"],
+      "description": "Final disposition of the deal"
+    },
+    "exit_date": {
+      "type": ["string", "null"],
+      "format": "date",
+      "description": "Date of exit (if exited)"
+    },
+    "irr": {
+      "type": ["number", "null"],
+      "description": "Internal Rate of Return (if exited), as decimal"
+    },
+    "moic": {
+      "type": ["number", "null"],
+      "description": "Multiple on Invested Capital (if exited)"
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Confidence in outcome data accuracy"
+    },
+    "notes": {
+      "type": ["string", "null"],
+      "description": "Optional notes on outcome"
+    },
+    "created_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": "string", "format": "date-time"}
+  }
+}
+```
+
+### 10.2 SimilarityFeature
+
+Canonical typed features for deal comparison, referencing ValueStruct where applicable.
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://idis.example.com/schemas/similarity_feature.schema.json",
+  "title": "SimilarityFeature",
+  "description": "Feature vector for deal comparison (SPEC / Phase 6+)",
+  "type": "object",
+  "required": ["feature_id", "tenant_id", "deal_id", "sector", "stage", "geography", "feature_version"],
+  "properties": {
+    "feature_id": {"type": "string", "format": "uuid"},
+    "tenant_id": {"type": "string", "format": "uuid"},
+    "deal_id": {"type": "string", "format": "uuid"},
+    "sector": {"type": "string", "description": "Primary sector (e.g., fintech, healthtech)"},
+    "sub_sector": {"type": ["string", "null"]},
+    "stage": {"type": "string", "enum": ["SEED", "SERIES_A", "SERIES_B", "GROWTH"]},
+    "geography": {"type": "string", "description": "Primary market geography"},
+    "revenue_range": {
+      "type": ["object", "null"],
+      "description": "RangeValue (see §5.4) — revenue range"
+    },
+    "arr_growth_rate": {
+      "type": ["object", "null"],
+      "description": "PercentageValue (see §5.4) — ARR growth rate"
+    },
+    "gross_margin": {
+      "type": ["object", "null"],
+      "description": "PercentageValue (see §5.4) — gross margin"
+    },
+    "burn_rate": {
+      "type": ["object", "null"],
+      "description": "MonetaryValue (see §5.4) — monthly burn rate"
+    },
+    "team_size": {
+      "type": ["object", "null"],
+      "description": "CountValue (see §5.4) — team headcount"
+    },
+    "tam_estimate": {
+      "type": ["object", "null"],
+      "description": "MonetaryValue (see §5.4) — TAM estimate"
+    },
+    "feature_version": {"type": "string", "description": "Version of feature extraction algorithm"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": "string", "format": "date-time"}
+  }
+}
+```
+
+### 10.3 PatternMatch
+
+Similarity match result linking a target deal to historical comparables.
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://idis.example.com/schemas/pattern_match.schema.json",
+  "title": "PatternMatch",
+  "description": "Similarity match result (SPEC / Phase 6+)",
+  "type": "object",
+  "required": ["match_id", "tenant_id", "target_deal_id", "historical_deal_ids", "similarity_scores", "pattern_confidence", "feature_version", "computed_at"],
+  "properties": {
+    "match_id": {"type": "string", "format": "uuid"},
+    "tenant_id": {"type": "string", "format": "uuid"},
+    "target_deal_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Deal being analyzed"
+    },
+    "historical_deal_ids": {
+      "type": "array",
+      "items": {"type": "string", "format": "uuid"},
+      "description": "Historical deals matched as comparables"
+    },
+    "similarity_scores": {
+      "type": "object",
+      "additionalProperties": {"type": "number", "minimum": 0, "maximum": 1},
+      "description": "Map of deal_id → similarity score (0-1)"
+    },
+    "pattern_confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Overall confidence in pattern match"
+    },
+    "feature_version": {
+      "type": "string",
+      "description": "Version of feature extraction used"
+    },
+    "computed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When pattern match was computed"
+    },
+    "analyst_reviewed": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether an analyst has reviewed this match"
+    },
+    "review_notes": {
+      "type": ["string", "null"],
+      "description": "Analyst notes on match quality"
+    }
+  }
+}
+```
+
+### 10.4 Trust Invariants for Pattern Matching (PLANNED)
+
+1. **Tenant Isolation**: Pattern matches only consider deals within same tenant
+2. **Audit Trail**: All pattern matches logged with full feature inputs
+3. **Human Review Gate**: Predictions marked `analyst_reviewed=false` until reviewed
+4. **Confidence Thresholds**: Matches below 0.6 confidence flagged for review
+5. **No Outcome Leakage**: Target deal outcome (if known) excluded from similarity
 

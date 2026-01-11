@@ -5,6 +5,7 @@ Phase 4.1: Deterministic calculation models.
 Phase 5.1: Debate orchestration models.
 Phase 5.2: Canonical MuhasabahRecord with nested structures.
 Phase POST-5.2: ValueStruct type hierarchy for typed values.
+Phase 6.1: Evidence-linked deliverables models.
 """
 
 from idis.models.calc_sanad import CalcSanad, GradeExplanationEntry, SanadGrade
@@ -30,6 +31,19 @@ from idis.models.debate import (
     MuhasabahRecord,
     PositionSnapshot,
     StopReason,
+)
+from idis.models.deliverables import (
+    AuditAppendix,
+    AuditAppendixEntry,
+    DeliverableExportFormat,
+    DeliverableExportRequest,
+    DeliverableExportResult,
+    DeliverableFact,
+    DeliverableSection,
+    DissentSection,
+    ICMemo,
+    RefType,
+    ScreeningSnapshot,
 )
 from idis.models.deterministic_calculation import (
     CalcInputs,
@@ -66,6 +80,8 @@ from idis.models.value_structs import (
 __all__ = [
     "AgentOutput",
     "ArbiterDecision",
+    "AuditAppendix",
+    "AuditAppendixEntry",
     "CalcInputs",
     "CalcLoopGuard",
     "CalcLoopGuardError",
@@ -86,7 +102,13 @@ __all__ = [
     "DebateMessage",
     "DebateRole",
     "DebateState",
+    "DeliverableExportFormat",
+    "DeliverableExportRequest",
+    "DeliverableExportResult",
+    "DeliverableFact",
+    "DeliverableSection",
     "DeterministicCalculation",
+    "DissentSection",
     "DocType",
     "Document",
     "DocumentArtifact",
@@ -94,6 +116,7 @@ __all__ = [
     "DocumentType",
     "FalsifiabilityTest",
     "GradeExplanationEntry",
+    "ICMemo",
     "ImpactLevel",
     "Materiality",
     "MonetaryValue",
@@ -103,7 +126,9 @@ __all__ = [
     "PercentageValue",
     "PositionSnapshot",
     "RangeValue",
+    "RefType",
     "SanadGrade",
+    "ScreeningSnapshot",
     "SemanticTag",
     "SpanLocator",
     "SpanType",

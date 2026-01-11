@@ -603,6 +603,7 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | 2026-01-11 | 1.6 | Cascade | Added Phase 5.2 Muḥāsabah Gate traceability (MUH-002); updated MUH-001 with gate enforcement; added test_muhasabah_gate.py and test_debate_muhasabah_integration.py to test coverage matrix |
 | 2026-01-11 | 1.7 | Cascade | Added Phase POST-5.2 Architecture Hardening: ValueStruct types (VS-001), Claim types & calc loop guardrail (CLT-001), NFF semantic extensions (NFF-002), Graph-Postgres saga (DW-001), Pattern matching spec (PM-001) |
 | 2026-01-11 | 1.8 | Cascade | DOC-ALIGN-001: Clarified claim_class vs claim_type distinction; updated CLT-001 with invariants and key fields; aligned with Data Model §5.5 |
+| 2026-01-11 | 1.9 | Cascade | Added Phase 6.1 Deliverables Generator traceability (DG-001 through DG-004); added test coverage for screening snapshot, IC memo, deliverable validator, export formats |
 
 ---
 
@@ -669,3 +670,106 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | **Tests** | Planned: `test_deal_outcome.py`, `test_similarity_feature.py`, `test_pattern_match.py` |
 | **Phase Gate** | Phase 6.5 (future) |
 | **Implementation Status** | ⏳ Spec documented, implementation pending |
+
+---
+
+## 12) Phase 6.1 Traceability (Deliverables Generator)
+
+### 12.1 Deliverables Generator Core
+
+| Attribute | Value |
+|-----------|-------|
+| **Requirement ID** | DG-001 |
+| **Requirement** | Evidence-linked deliverables generator: Screening Snapshot, IC Memo, PDF/DOCX export |
+| **Source Doc** | Implementation Plan §Phase 6; Go-Live §Phase 6; Requirements §8 |
+| **Source Section** | "Deliverables Generator", "Every fact in memo has claim_id/calc_id reference" |
+| **Enforcing Component** | `src/idis/deliverables/screening.py` — ScreeningSnapshotBuilder |
+| | `src/idis/deliverables/memo.py` — ICMemoBuilder |
+| | `src/idis/deliverables/export.py` — DeliverableExporter |
+| **Secondary Enforcement** | `src/idis/validators/deliverable.py` — DeliverableValidator |
+| **Tests** | `tests/test_screening_snapshot.py` — all facts include refs |
+| | `tests/test_ic_memo.py` — sections evidence-linked, dissent has refs |
+| | `tests/test_export_formats.py` — PDF/DOCX generation |
+| **Phase Gate** | Phase 6.1 |
+| **Evidence Artifact** | `deliverable.exported` audit event; audit appendix in export |
+| **Implementation Status** | ✅ Exists |
+
+**Deliverables Object Model:**
+| Type | Description |
+|------|-------------|
+| `DeliverableFact` | Fact with `claim_refs`, `calc_refs`, `is_factual`, `is_subjective` |
+| `DeliverableSection` | Section containing multiple facts |
+| `ScreeningSnapshot` | Partner-ready one-pager with metrics, red flags, missing info |
+| `ICMemo` | Full IC memo with all sections + dissent + truth dashboard summary |
+| `AuditAppendix` | Evidence appendix with sorted refs |
+| `DissentSection` | Structured dissent with refs (required when stable dissent exists) |
+
+---
+
+### 12.2 No-Free-Facts at Export (Hard Gate)
+
+| Attribute | Value |
+|-----------|-------|
+| **Requirement ID** | DG-002 |
+| **Requirement** | Every DeliverableFact with is_factual=True must have non-empty claim_refs; export blocked on violation |
+| **Source Doc** | TDD §1.1; Go-Live §Phase 6; Implementation Plan §Phase 6 |
+| **Source Section** | "No-Free-Facts at deliverable export (hard gate)" |
+| **Enforcing Component** | `src/idis/validators/deliverable.py` — validate_deliverable_no_free_facts() |
+| **Secondary Enforcement** | `src/idis/deliverables/export.py` — validation before export |
+| **Tests** | `tests/test_deliverable_no_free_facts.py` — factual without refs raises |
+| | `tests/test_deliverable_no_free_facts.py` — valid deliverable passes |
+| **Phase Gate** | Phase 6.1 |
+| **Evidence Artifact** | Validation errors with stable code `NO_FREE_FACTS_UNREFERENCED_FACT` |
+| **Implementation Status** | ✅ Exists |
+
+**Validator Rules (Normative):**
+| Rule | Condition | Action |
+|------|-----------|--------|
+| Factual without refs | `is_factual=True` AND `claim_refs` empty AND `calc_refs` empty | REJECT |
+| Subjective skip | `is_subjective=True` | ALLOW (skip validation) |
+| Subjective section skip | `section.is_subjective=True` | ALLOW all facts in section |
+| Dissent missing refs | `dissent_section` has empty `claim_refs` | REJECT at build time |
+
+---
+
+### 12.3 Audit Appendix Requirement
+
+| Attribute | Value |
+|-----------|-------|
+| **Requirement ID** | DG-003 |
+| **Requirement** | Exports include audit appendix with all unique refs (stable ordering) |
+| **Source Doc** | Implementation Plan §Phase 6; Requirements §8.2 |
+| **Source Section** | "Exports include audit appendix (optional) for compliance" |
+| **Enforcing Component** | `src/idis/models/deliverables.py` — AuditAppendix, AuditAppendixEntry |
+| | `src/idis/deliverables/export.py` — _render_audit_appendix_text() |
+| **Tests** | `tests/test_screening_snapshot.py::test_audit_appendix_contains_all_refs` |
+| | `tests/test_screening_snapshot.py::test_audit_appendix_entries_sorted` |
+| | `tests/test_export_formats.py::test_pdf_includes_audit_appendix_text` |
+| **Phase Gate** | Phase 6.1 |
+| **Evidence Artifact** | Audit appendix section in PDF/DOCX exports |
+| **Implementation Status** | ✅ Exists |
+
+**Stable Ordering Rules:**
+| Element | Ordering |
+|---------|----------|
+| `claim_refs` within fact | Lexicographically sorted |
+| `calc_refs` within fact | Lexicographically sorted |
+| `AuditAppendixEntry` list | Sorted by `(ref_type, ref_id)` |
+
+---
+
+### 12.4 Dissent Section Handling
+
+| Attribute | Value |
+|-----------|-------|
+| **Requirement ID** | DG-004 |
+| **Requirement** | If debate state indicates stable dissent, include as structured section with explicit refs |
+| **Source Doc** | Implementation Plan §Phase 5; Requirements §6.3 |
+| **Source Section** | "Stable dissent produces deliverables with dissent section" |
+| **Enforcing Component** | `src/idis/models/deliverables.py` — DissentSection |
+| | `src/idis/deliverables/memo.py` — ICMemoBuilder.set_dissent() |
+| **Tests** | `tests/test_ic_memo.py::test_stable_dissent_produces_dissent_section` |
+| | `tests/test_ic_memo.py::test_empty_dissent_refs_rejected` |
+| **Phase Gate** | Phase 6.1 |
+| **Evidence Artifact** | DissentSection in ICMemo with claim_refs |
+| **Implementation Status** | ✅ Exists |

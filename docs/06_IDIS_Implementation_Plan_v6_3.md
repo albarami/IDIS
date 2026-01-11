@@ -453,6 +453,67 @@ Exit criteria:
 - Every fact in memo has claim_id/calc_id reference
 - Exports include an audit appendix (optional) for compliance
 
+#### Phase 6.1 — Deliverables Generator ✅ COMPLETE
+
+**Implemented (2026-01-11):**
+
+1. **Deliverables Object Model**
+   - `src/idis/models/deliverables.py`
+   - `DeliverableFact` — fact with `claim_refs`, `calc_refs`, `is_factual`, `is_subjective`
+   - `DeliverableSection` — section containing multiple facts
+   - `ScreeningSnapshot` — partner-ready one-pager
+   - `ICMemo` — full IC memo with all sections + dissent
+   - `AuditAppendix` — evidence appendix with sorted refs
+   - `DissentSection` — structured dissent with refs
+
+2. **Screening Snapshot Builder**
+   - `src/idis/deliverables/screening.py`
+   - `ScreeningSnapshotBuilder` class with fluent API
+   - Sections: summary, metrics, red flags, missing info
+   - All facts track claim/calc refs
+   - Audit appendix auto-generated from all refs
+
+3. **IC Memo Builder**
+   - `src/idis/deliverables/memo.py`
+   - `ICMemoBuilder` class with fluent API
+   - 8 required sections + optional scenario analysis
+   - Dissent section with mandatory refs (fail-closed)
+   - Sanad grade distribution summary
+
+4. **PDF/DOCX Exporter**
+   - `src/idis/deliverables/export.py`
+   - `DeliverableExporter` with validation before export
+   - Minimal PDF generator (valid %PDF header)
+   - Minimal DOCX generator (valid PK/zip header)
+   - Audit appendix rendered in all exports
+
+5. **No-Free-Facts at Export (Hard Gate)**
+   - `src/idis/validators/deliverable.py`
+   - `validate_deliverable_no_free_facts()` — enforced at export
+   - Per-section validation (refs elsewhere don't satisfy)
+   - Stable error code: `NO_FREE_FACTS_UNREFERENCED_FACT`
+   - Fail-closed: missing refs block export
+
+**Design Details:**
+- **Determinism**: no randomness (no uuid4/uuid1/random/datetime.now/utcnow)
+- **Stable ordering**: claim_refs sorted lexicographically; audit appendix sorted by (ref_type, ref_id)
+- **Fail-closed**: factual outputs without refs rejected at validation
+- **Dissent handling**: if stable dissent exists, must have non-empty refs
+
+**Tests:**
+- `tests/test_screening_snapshot.py` — builder + validation
+- `tests/test_ic_memo.py` — sections evidence-linked + dissent handling
+- `tests/test_deliverable_no_free_facts.py` — validator enforcement
+- `tests/test_export_formats.py` — PDF/DOCX headers + audit appendix
+
+**Acceptance (Phase 6.1):**
+- [x] All facts produced by builder include claim_id/calc_id references
+- [x] Missing refs fail-closed via validator
+- [x] Stable dissent produces dissent section with refs
+- [x] PDF export returns bytes beginning with %PDF
+- [x] DOCX export returns bytes beginning with PK
+- [x] Exports include audit appendix section
+
 ---
 
 ### Phase 6.5 — Pattern Matching & Deal Outcome Analysis (Weeks 28–30) — SPEC ONLY

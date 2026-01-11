@@ -3,6 +3,7 @@
 Phase 3.1: Ingestion Gate storage primitives.
 Phase 4.1: Deterministic calculation models.
 Phase 5.1: Debate orchestration models.
+Phase 5.2: Canonical MuhasabahRecord with nested structures.
 """
 
 from idis.models.calc_sanad import CalcSanad, GradeExplanationEntry, SanadGrade
@@ -26,6 +27,13 @@ from idis.models.deterministic_calculation import (
 from idis.models.document import Document, DocumentType, ParseStatus
 from idis.models.document_artifact import DocType, DocumentArtifact
 from idis.models.document_span import DocumentSpan, SpanLocator, SpanType
+from idis.models.muhasabah_record import (
+    FalsifiabilityTest,
+    ImpactLevel,
+    MuhasabahRecordCanonical,
+    Uncertainty,
+    muhasabah_to_validator_dict,
+)
 
 __all__ = [
     "AgentOutput",
@@ -44,12 +52,17 @@ __all__ = [
     "DocumentArtifact",
     "DocumentSpan",
     "DocumentType",
+    "FalsifiabilityTest",
     "GradeExplanationEntry",
+    "ImpactLevel",
     "MuhasabahRecord",
+    "MuhasabahRecordCanonical",
     "ParseStatus",
     "PositionSnapshot",
     "SanadGrade",
     "SpanLocator",
     "SpanType",
     "StopReason",
+    "Uncertainty",
+    "muhasabah_to_validator_dict",
 ]

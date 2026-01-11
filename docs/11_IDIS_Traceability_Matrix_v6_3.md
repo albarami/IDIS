@@ -91,14 +91,22 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | **Source Doc** | TDD §4.4; Data Model §7.2; Evaluation Harness §6.2 |
 | **Source Section** | "MuḥāsabahRecord — Normative Output Contract", "Muḥāsabah Validator" |
 | **Enforcing Component** | `src/idis/validators/muhasabah.py` — MuhasabahValidator |
-| **Secondary Enforcement** | Debate orchestrator hard gate; Agent output wrapper |
+| **Secondary Enforcement** | `src/idis/debate/muhasabah_gate.py` — MuhasabahGate (output boundary); `src/idis/debate/orchestrator.py` — gate enforcement point |
 | **Tests** | `tests/test_muhasabah_validator.py::test_rejects_empty_claim_ids` |
 | | `tests/test_muhasabah_validator.py::test_rejects_overconfident_no_uncertainty` |
 | | `tests/test_muhasabah_validator.py::test_rejects_missing_falsifiability` |
 | | `tests/test_muhasabah_validator.py::test_accepts_valid_record` |
-| **Phase Gate** | Phase 5 (debate); mandatory before any IC output |
+| | `tests/test_muhasabah_gate.py::test_gate_blocks_missing_muhasabah_record` |
+| | `tests/test_muhasabah_gate.py::test_gate_blocks_invalid_muhasabah_overconfidence_without_uncertainty` |
+| | `tests/test_muhasabah_gate.py::test_gate_blocks_missing_falsifiability_when_confident` |
+| | `tests/test_muhasabah_gate.py::test_gate_blocks_no_free_facts_violation_at_output_boundary` |
+| | `tests/test_muhasabah_gate.py::test_gate_allows_valid_record_with_claim_refs` |
+| | `tests/test_debate_muhasabah_integration.py::test_orchestrator_blocks_invalid_output_no_claims` |
+| | `tests/test_debate_muhasabah_integration.py::test_orchestrator_proceeds_with_valid_output` |
+| **Phase Gate** | Phase 5.2 (debate gate); mandatory before any IC output |
 | **Evidence Artifact** | `muhasabah.recorded` event; `muhasabah.rejected` event with rejection reasons |
 | **Violation Severity** | SEV-2 (rejection); SEV-1 (bypass) |
+| **Implementation Status** | ✅ Gate enforced at output boundary (Phase 5.2)
 
 **Validator Rules (Normative):**
 | Rule | Condition | Action |
@@ -482,6 +490,7 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | DB-002 | Stop condition priority | Go-Live §5, Appendix C-1 | `debate/stop_conditions.py` | test_debate_stop_conditions.py | 5.1 | ✅ Exists | StopReason enum |
 | DB-003 | Max rounds = 5 | Go-Live §5, TDD §6 | `debate/stop_conditions.py` | test_debate_stop_conditions.py::test_max_rounds* | 5.1 | ✅ Exists | DebateConfig.max_rounds |
 | DB-004 | Role runner injection | Implementation Plan §5.1 | `debate/roles/base.py` | test_debate_node_graph.py | 5.1 | ✅ Exists | RoleRunnerProtocol |
+| MUH-002 | Muḥāsabah gate at output boundary | TDD §4.4; Implementation Plan §5.2 | `debate/muhasabah_gate.py`, `debate/orchestrator.py` | test_muhasabah_gate.py, test_debate_muhasabah_integration.py | 5.2 | ✅ Exists | GateDecision, StopReason.CRITICAL_DEFECT |
 | API-001 | Idempotency | API §4.1 | `idempotency.py` | test_api_idempotency_middleware.py | 2.5 | ✅ Exists | request_id |
 | API-002 | Error model | API §8 | `errors.py` | test_error_model.py | 2.6 | ⏳ Planned | Error responses |
 | API-003 | Rate limiting | API §4.3 | `rate_limit.py` | test_rate_limiting.py | 2.7 | ⏳ Planned | 429 responses |
@@ -527,6 +536,8 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | `tests/test_extraction_gate.py` | Extraction confidence gate (fail-closed) | 4.2 | ✅ Passing |
 | `tests/test_debate_node_graph.py` | Debate node graph order matches v6.3 | 5.1 | ✅ Passing |
 | `tests/test_debate_stop_conditions.py` | Stop condition priority order + max rounds | 5.1 | ✅ Passing |
+| `tests/test_muhasabah_gate.py` | Muḥāsabah gate blocking/allowing tests | 5.2 | ✅ Passing |
+| `tests/test_debate_muhasabah_integration.py` | Orchestrator + gate integration tests | 5.2 | ✅ Passing |
 
 ### 9.2 Planned Tests (By Phase Gate)
 
@@ -589,3 +600,4 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | 2026-01-10 | 1.3 | Cascade | Added Phase 4.1 Deterministic Calc Engine traceability (DN-001 through DN-004); added calc tests to test coverage matrix |
 | 2026-01-10 | 1.4 | Cascade | Added Phase 4.2 Extraction Confidence Gate (FC-001 updated); test_extraction_gate.py::test_low_confidence_blocked implemented |
 | 2026-01-10 | 1.5 | Cascade | Added Phase 5.1 LangGraph Orchestration Core traceability (DB-001 through DB-004); added debate tests to test coverage matrix |
+| 2026-01-11 | 1.6 | Cascade | Added Phase 5.2 Muḥāsabah Gate traceability (MUH-002); updated MUH-001 with gate enforcement; added test_muhasabah_gate.py and test_debate_muhasabah_integration.py to test coverage matrix |

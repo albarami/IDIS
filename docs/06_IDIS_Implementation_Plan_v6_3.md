@@ -334,6 +334,49 @@ Exit criteria:
 - Deterministic: no randomness, stable execution order
 - Role runners injected (no LLM calls in Phase 5.1)
 
+#### Phase 5.2 — Muḥāsabah Gate Integration ✅ COMPLETE
+
+**Implemented (2026-01-11):**
+
+1. **Output Boundary Enforcement**
+   - `src/idis/debate/muhasabah_gate.py`
+   - `enforce_muhasabah_gate()` function called after each role produces output
+   - Runs BOTH MuhasabahValidator AND NoFreeFactsValidator at output boundary
+   - Gate blocks outputs BEFORE they are accepted into debate state
+
+2. **Fail-Closed Semantics**
+   - Missing muhasabah record → REJECT (GateRejectionReason.MISSING_MUHASABAH)
+   - Any validator error → REJECT with structured error (no uncaught exceptions)
+   - Gate failure halts run with StopReason.CRITICAL_DEFECT
+   - No outputs accepted into state without passing gate
+
+3. **Deterministic Handling**
+   - No uuid4/datetime.utcnow in gate code paths
+   - All validation is deterministic and reproducible
+   - Same inputs → same gate decision
+
+4. **No-Free-Facts Linkage**
+   - NoFreeFactsValidator called at output boundary
+   - Outputs with factual content but empty claim_ids → REJECT
+   - Per-section validation: refs elsewhere do NOT satisfy a section
+
+**Modules:**
+- `src/idis/models/muhasabah_record.py` — Canonical MuhasabahRecordCanonical + nested types
+- `src/idis/debate/muhasabah_gate.py` — MuhasabahGate, GateDecision, MuhasabahGateError
+- `src/idis/debate/orchestrator.py` — Updated with gate enforcement at output boundary
+
+**Tests:**
+- `tests/test_muhasabah_gate.py` — gate blocking/allowing tests
+- `tests/test_debate_muhasabah_integration.py` — orchestrator integration tests
+
+**Acceptance (Phase 5.2):**
+- [x] Gate enforced at output boundary (after each role produces output)
+- [x] Gate blocks missing/invalid MuhasabahRecord
+- [x] Gate blocks No-Free-Facts violations
+- [x] Gate failure halts run with CRITICAL_DEFECT
+- [x] No randomness in gate code paths
+- [x] Stable dissent preserved (gate does not erase properly-referenced dissent)
+
 ---
 
 ### Phase 6 — Deliverables Generator + Frontend v1 (Weeks 23–28)

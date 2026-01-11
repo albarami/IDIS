@@ -1,4 +1,4 @@
-"""IDIS Debate Orchestrator — v6.3 Phase 5.1
+"""IDIS Debate Orchestrator — v6.3 Phase 5.1 + 5.2
 
 LangGraph-based debate orchestration per Appendix C-1.
 
@@ -12,6 +12,11 @@ Key invariants:
 - Stop conditions evaluated in priority order
 - Max rounds = 5 (hard limit)
 - Role runners are injected (no LLM calls in Phase 5.1)
+
+Phase 5.2 additions:
+- Muḥāsabah gate enforced at output boundary (after each role produces output)
+- No-Free-Facts validation at output boundary
+- Fail-closed: gate rejection halts the run deterministically
 """
 
 from __future__ import annotations
@@ -21,6 +26,11 @@ from typing import TYPE_CHECKING, Any
 
 from langgraph.graph import END, StateGraph
 
+from idis.debate.muhasabah_gate import (
+    GateDecision,
+    MuhasabahGate,
+    MuhasabahGateError,
+)
 from idis.debate.roles.advocate import AdvocateRole
 from idis.debate.roles.arbiter import ArbiterRole
 from idis.debate.roles.base import RoleResult, RoleRunnerProtocol
@@ -69,23 +79,36 @@ class DebateOrchestrator:
 
     Implements the v6.3 node graph with injected role runners.
     All execution is deterministic - no randomness in node order or evaluation.
+
+    Phase 5.2: Muḥāsabah gate enforced at output boundary.
+    - Gate is called immediately after each role produces output
+    - Gate rejection halts the run with CRITICAL_DEFECT stop reason
+    - No outputs accepted into state without passing gate
     """
 
     def __init__(
         self,
         config: DebateConfig | None = None,
         role_runners: RoleRunners | None = None,
+        *,
+        enforce_muhasabah: bool = False,
     ) -> None:
         """Initialize orchestrator.
 
         Args:
             config: Debate configuration. Uses defaults if not provided.
             role_runners: Injected role runners. Uses defaults if not provided.
+            enforce_muhasabah: If True, enforce Muḥāsabah gate on all outputs.
+                              Defaults to False for backward compatibility.
+                              Production usage SHOULD set this to True.
         """
         self.config = config or DebateConfig()
         self.runners = role_runners or RoleRunners()
         self.stop_checker = StopConditionChecker(self.config)
+        self.enforce_muhasabah = enforce_muhasabah
+        self._muhasabah_gate = MuhasabahGate() if enforce_muhasabah else None
         self._graph: Any | None = None
+        self._gate_failure: MuhasabahGateError | None = None
 
     def build_graph(self) -> Any:
         """Build and compile the LangGraph state machine.
@@ -148,7 +171,15 @@ class DebateOrchestrator:
 
         Returns:
             Final debate state after completion.
+
+        Note:
+            Phase 5.2: If Muḥāsabah gate rejects an output, the run halts
+            with stop_reason=CRITICAL_DEFECT. Use get_gate_failure() to
+            retrieve the error details.
         """
+        # Reset gate failure state for this run
+        self._gate_failure = None
+
         graph = self.build_graph()
         # Set recursion limit high enough for max_rounds * nodes_per_round
         # Each round visits ~9 nodes, so 5 rounds = 45 nodes + buffer
@@ -159,10 +190,23 @@ class DebateOrchestrator:
         )
         return DebateState(**result)
 
+    def get_gate_failure(self) -> MuhasabahGateError | None:
+        """Get the Muḥāsabah gate failure from the last run, if any.
+
+        Returns:
+            MuhasabahGateError if the last run was halted by a gate rejection,
+            None otherwise.
+        """
+        return self._gate_failure
+
     def _apply_role_result(
         self, state: DebateState, result: RoleResult, node_name: str
     ) -> DebateState:
-        """Apply role result to state."""
+        """Apply role result to state.
+
+        Phase 5.2: Muḥāsabah gate is enforced on each output before acceptance.
+        If any output fails the gate, the run is halted with gate_failure set.
+        """
         updates: dict[str, Any] = {
             "nodes_visited": [*state.nodes_visited, node_name],
         }
@@ -171,12 +215,48 @@ class DebateOrchestrator:
             updates["messages"] = [*state.messages, *result.messages]
 
         if result.outputs:
-            updates["agent_outputs"] = [*state.agent_outputs, *result.outputs]
+            # Phase 5.2: Enforce Muḥāsabah gate on each output before acceptance
+            validated_outputs = []
+            for output in result.outputs:
+                gate_decision = self._enforce_gate_on_output(output, state)
+                if gate_decision is not None and not gate_decision.allowed:
+                    # Gate failed - halt the run deterministically
+                    # Set stop_reason to CRITICAL_DEFECT and record the failure
+                    updates["stop_reason"] = StopReason.CRITICAL_DEFECT
+                    self._gate_failure = MuhasabahGateError(
+                        message=f"Muḥāsabah gate rejected output from {output.agent_id}",
+                        decision=gate_decision,
+                        output_id=output.output_id,
+                        agent_id=output.agent_id,
+                    )
+                    # Do not add the invalid output to state
+                    break
+                validated_outputs.append(output)
+
+            if validated_outputs:
+                updates["agent_outputs"] = [*state.agent_outputs, *validated_outputs]
 
         if result.evidence_retrieval_requested:
             updates["evidence_retrieval_requested"] = True
 
         return state.model_copy(update=updates)
+
+    def _enforce_gate_on_output(self, output: Any, state: DebateState) -> GateDecision | None:
+        """Enforce Muḥāsabah gate on a single output.
+
+        Returns:
+            GateDecision if gate is enforced, None if gate is disabled.
+        """
+        if not self.enforce_muhasabah or self._muhasabah_gate is None:
+            return None
+
+        context = {
+            "tenant_id": state.tenant_id,
+            "deal_id": state.deal_id,
+            "round_number": state.round_number,
+        }
+
+        return self._muhasabah_gate.evaluate(output, context=context)
 
     def _node_advocate_opening(self, state: DebateState) -> DebateState:
         """Execute advocate opening node."""
@@ -260,12 +340,40 @@ class DebateOrchestrator:
     def _node_muhasabah_validate_all(self, state: DebateState) -> DebateState:
         """Execute muhasabah validation node.
 
-        Phase 5.1: This is a structural no-op that records the node was reached.
-        The hard gate validation is implemented in Phase 5.2.
+        Phase 5.2: Final validation of all outputs before finalization.
+        This is a belt-and-suspenders check - outputs should already be validated
+        at the output boundary, but this node re-validates all outputs in case
+        any were added without going through the gate.
+
+        If any output fails validation here, the run is halted with CRITICAL_DEFECT.
         """
         updates: dict[str, Any] = {
             "nodes_visited": [*state.nodes_visited, "muhasabah_validate_all"],
         }
+
+        # Check if we already have a gate failure from earlier
+        if self._gate_failure is not None:
+            updates["stop_reason"] = StopReason.CRITICAL_DEFECT
+            return state.model_copy(update=updates)
+
+        # Phase 5.2: Re-validate all outputs as final check
+        if self.enforce_muhasabah and self._muhasabah_gate is not None:
+            for output in state.agent_outputs:
+                decision = self._enforce_gate_on_output(output, state)
+                if decision is not None and not decision.allowed:
+                    # Found an invalid output - this should not happen if gate
+                    # was enforced at output boundary, but we fail closed anyway
+                    updates["stop_reason"] = StopReason.CRITICAL_DEFECT
+                    self._gate_failure = MuhasabahGateError(
+                        message=(
+                            f"Muḥāsabah gate rejected output in final validation: {output.agent_id}"
+                        ),
+                        decision=decision,
+                        output_id=output.output_id,
+                        agent_id=output.agent_id,
+                    )
+                    break
+
         return state.model_copy(update=updates)
 
     def _node_finalize_outputs(self, state: DebateState) -> DebateState:

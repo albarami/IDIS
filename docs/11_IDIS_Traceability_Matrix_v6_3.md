@@ -773,3 +773,80 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | **Phase Gate** | Phase 6.1 |
 | **Evidence Artifact** | DissentSection in ICMemo with claim_refs |
 | **Implementation Status** | ✅ Exists |
+
+---
+
+## 13) Phase 6.2 — Frontend Backend Contracts Traceability
+
+### 13.1 Truth Dashboard API
+
+| Attribute | Value |
+|-----------|-------|
+| **Requirement ID** | FE-001 |
+| **Requirement** | GET /v1/deals/{dealId}/truth-dashboard returns aggregated claim statistics and paginated claims |
+| **Source Doc** | Implementation Plan §Phase 6.2; Roadmap §6.2 |
+| **Source Section** | "Frontend Backend Contracts — Truth Dashboard API" |
+| **Enforcing Component** | `src/idis/api/routes/claims.py` — get_deal_truth_dashboard() |
+| **Secondary Enforcement** | `src/idis/api/policy.py` — getDealTruthDashboard RBAC rule |
+| **Tests** | `tests/test_api_truth_dashboard.py::test_returns_200_with_correct_schema` |
+| | `tests/test_api_truth_dashboard.py::test_summary_counts_match_seeded_data` |
+| | `tests/test_api_truth_dashboard.py::test_stable_ordering_determinism` |
+| | `tests/test_api_truth_dashboard.py::test_cross_tenant_access_blocked` |
+| **Phase Gate** | Phase 6.2 |
+| **Evidence Artifact** | TruthDashboard response with summary (by_grade, by_verdict, fatal_defects) |
+| **Implementation Status** | ✅ Exists |
+
+**Response Schema (TruthDashboard):**
+| Field | Type | Description |
+|-------|------|-------------|
+| `deal_id` | uuid | Deal UUID |
+| `summary.total_claims` | integer | Total claim count |
+| `summary.by_grade` | object | {A, B, C, D} counts |
+| `summary.by_verdict` | object | {VERIFIED, INFLATED, CONTRADICTED, UNVERIFIED, SUBJECTIVE} counts |
+| `summary.fatal_defects` | integer | Fatal defect count |
+| `claims` | PaginatedClaimList | Paginated claims (sorted by claim_id) |
+
+---
+
+### 13.2 Claim Detail API
+
+| Attribute | Value |
+|-----------|-------|
+| **Requirement ID** | FE-002 |
+| **Requirement** | GET /v1/claims/{claimId} returns full claim body with tenant isolation |
+| **Source Doc** | Implementation Plan §Phase 6.2; Roadmap §6.2 |
+| **Source Section** | "Frontend Backend Contracts — Claim Detail API" |
+| **Enforcing Component** | `src/idis/api/routes/claims.py` — get_claim() |
+| **Secondary Enforcement** | `src/idis/api/policy.py` — getClaim RBAC rule |
+| **Tests** | `tests/test_api_claim_detail_and_sanad.py::test_returns_200_with_correct_body` |
+| | `tests/test_api_claim_detail_and_sanad.py::test_cross_tenant_read_blocked` |
+| | `tests/test_api_claim_detail_and_sanad.py::test_claim_not_found_returns_404` |
+| **Phase Gate** | Phase 6.2 |
+| **Evidence Artifact** | ClaimResponse with claim_id, corroboration, defect_ids, verdict |
+| **Implementation Status** | ✅ Exists |
+
+---
+
+### 13.3 Sanad Chain API
+
+| Attribute | Value |
+|-----------|-------|
+| **Requirement ID** | FE-003 |
+| **Requirement** | GET /v1/claims/{claimId}/sanad returns transmission chain with deterministic ordering |
+| **Source Doc** | Implementation Plan §Phase 6.2; Roadmap §6.2 |
+| **Source Section** | "Frontend Backend Contracts — Sanad Chain API" |
+| **Enforcing Component** | `src/idis/api/routes/claims.py` — get_claim_sanad() |
+| **Secondary Enforcement** | `src/idis/api/policy.py` — getClaimSanad RBAC rule |
+| **Tests** | `tests/test_api_claim_detail_and_sanad.py::test_returns_200_with_chain_structure` |
+| | `tests/test_api_claim_detail_and_sanad.py::test_stable_ordering_for_transmission_chain` |
+| | `tests/test_api_claim_detail_and_sanad.py::test_cross_tenant_read_blocked` |
+| **Phase Gate** | Phase 6.2 |
+| **Evidence Artifact** | SanadResponse with transmission_chain sorted by node_id |
+| **Implementation Status** | ✅ Exists |
+
+**Determinism Guarantee:**
+| Aspect | Rule |
+|--------|------|
+| Transmission chain ordering | Sorted by `node_id` (lexicographic) |
+| Multiple calls | Identical JSON response |
+| No randomness | No uuid4/datetime.now in response path |

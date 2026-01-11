@@ -170,6 +170,30 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /v1/deals/{dealId}/truth-dashboard:
+    get:
+      tags: [Deals]
+      summary: Get truth dashboard for a deal
+      description: >
+        Returns aggregated claim statistics and paginated claims for the deal's truth dashboard.
+        Provides summary counts by grade and verdict, fatal defect count, and claims list.
+      operationId: getDealTruthDashboard
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Truth dashboard data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TruthDashboard"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /v1/deals/{dealId}/documents:
     get:
       tags: [Documents]
@@ -1304,3 +1328,48 @@ components:
           type: array
           items: { $ref: "#/components/schemas/AuditEvent" }
         next_cursor: { type: string, nullable: true }
+
+    TruthDashboardSummary:
+      type: object
+      required: [total_claims, by_grade, by_verdict, fatal_defects]
+      properties:
+        total_claims:
+          type: integer
+          minimum: 0
+          description: Total number of claims for this deal
+        by_grade:
+          type: object
+          required: [A, B, C, D]
+          properties:
+            A: { type: integer, minimum: 0 }
+            B: { type: integer, minimum: 0 }
+            C: { type: integer, minimum: 0 }
+            D: { type: integer, minimum: 0 }
+          description: Count of claims by Sanad grade
+        by_verdict:
+          type: object
+          required: [VERIFIED, INFLATED, CONTRADICTED, UNVERIFIED, SUBJECTIVE]
+          properties:
+            VERIFIED: { type: integer, minimum: 0 }
+            INFLATED: { type: integer, minimum: 0 }
+            CONTRADICTED: { type: integer, minimum: 0 }
+            UNVERIFIED: { type: integer, minimum: 0 }
+            SUBJECTIVE: { type: integer, minimum: 0 }
+          description: Count of claims by verdict
+        fatal_defects:
+          type: integer
+          minimum: 0
+          description: Count of fatal defects affecting claims in this deal
+
+    TruthDashboard:
+      type: object
+      required: [deal_id, summary, claims]
+      properties:
+        deal_id:
+          type: string
+          format: uuid
+          description: UUID of the deal
+        summary:
+          $ref: "#/components/schemas/TruthDashboardSummary"
+        claims:
+          $ref: "#/components/schemas/PaginatedClaimList"

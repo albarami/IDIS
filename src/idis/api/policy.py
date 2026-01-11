@@ -94,6 +94,9 @@ POLICY_RULES: dict[str, PolicyRule] = {
     "createDeal": PolicyRule(allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=False),
     "getDeal": PolicyRule(allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=True),
     "updateDeal": PolicyRule(allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=True),
+    "getDealTruthDashboard": PolicyRule(
+        allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=True
+    ),
     "listDealDocuments": PolicyRule(
         allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=True
     ),

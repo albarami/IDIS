@@ -483,6 +483,43 @@ CREATE POLICY tenant_isolation ON audit_events
 SET LOCAL idis.tenant_id = '00000000-0000-0000-0000-000000000001';
 ```
 
+### Neo4j Aura (Graph Database for Sanad Chains)
+
+For complex Sanad chain traversal and relationship queries, IDIS optionally integrates with Neo4j Aura as a graph database layer.
+
+#### Connection Configuration
+
+Neo4j Aura uses encrypted connection URIs with the `neo4j+s://` scheme. The official Neo4j Python driver supports this natively.
+
+**Environment Variables:**
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `NEO4J_URI` | Aura connection URI (encrypted) | `neo4j+s://xxxxxxxx.databases.neo4j.io` |
+| `NEO4J_USERNAME` | Database username | `neo4j` |
+| `NEO4J_PASSWORD` | Database password | (from Aura console) |
+
+**Driver Pattern:**
+
+```python
+from neo4j import GraphDatabase
+
+driver = GraphDatabase.driver(
+    uri=os.environ["NEO4J_URI"],
+    auth=(os.environ["NEO4J_USERNAME"], os.environ["NEO4J_PASSWORD"]),
+)
+
+# Verify connectivity
+driver.verify_connectivity()
+```
+
+#### Security Notes
+
+- **Never commit credentials**: All Neo4j credentials must be in `.env` (gitignored)
+- **Use encrypted URIs**: Always use `neo4j+s://` (TLS) for Aura connections
+- **Tenant isolation**: Apply tenant_id filtering in all Cypher queries
+- **Reference**: See `.env.example` for configuration template
+
 ---
 
 ## 8. Sanad Methodology Engine

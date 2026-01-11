@@ -514,6 +514,52 @@ Exit criteria:
 - [x] DOCX export returns bytes beginning with PK
 - [x] Exports include audit appendix section
 
+#### Phase 6.2 — Frontend Backend Contracts ✅ COMPLETE
+
+**Implemented (2026-01-11):**
+
+Backend API contracts for frontend Truth Dashboard and Claim/Sanad views.
+
+1. **Truth Dashboard API**
+   - `GET /v1/deals/{dealId}/truth-dashboard`
+   - Returns aggregated claim statistics (by grade, by verdict, fatal defects count)
+   - Paginated claims list with stable ordering (sorted by claim_id)
+   - OpenAPI operationId: `getDealTruthDashboard`
+
+2. **Claim Detail API**
+   - `GET /v1/claims/{claimId}`
+   - Returns full claim body with corroboration, defect_ids, materiality
+   - Tenant isolation enforced (404 for cross-tenant reads)
+   - OpenAPI operationId: `getClaim`
+
+3. **Sanad Chain API**
+   - `GET /v1/claims/{claimId}/sanad`
+   - Returns transmission chain with deterministic node ordering (by node_id)
+   - Computed grade, corroboration_level, independent_chain_count
+   - OpenAPI operationId: `getClaimSanad`
+
+**Modules:**
+- `src/idis/api/routes/claims.py` — route handlers for all three endpoints
+- `openapi/IDIS_OpenAPI_v6_3.yaml` — TruthDashboard, TruthDashboardSummary schemas
+
+**RBAC Policy:**
+- `getDealTruthDashboard` — ALL_ROLES, read-only, deal-scoped
+- `getClaim` — ALL_ROLES, read-only
+- `getClaimSanad` — ALL_ROLES, read-only
+
+**Tests:**
+- `tests/test_api_truth_dashboard.py` — schema validation, counts, determinism, tenant isolation
+- `tests/test_api_claim_detail_and_sanad.py` — claim detail, sanad chain ordering, RBAC
+
+**Acceptance (Phase 6.2):**
+- [x] Truth Dashboard returns correct schema with summary and claims
+- [x] Summary counts match seeded data (by_grade, by_verdict, fatal_defects)
+- [x] Stable ordering: two calls produce identical JSON
+- [x] Cross-tenant access returns 404 (no info leak)
+- [x] Sanad chain transmission_chain sorted by node_id
+- [x] RBAC enforced for all endpoints
+- [x] OpenAPI validation passes for all responses
+
 ---
 
 ### Phase 6.5 — Pattern Matching & Deal Outcome Analysis (Weeks 28–30) — SPEC ONLY

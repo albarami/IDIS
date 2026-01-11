@@ -4,9 +4,22 @@ Phase 3.1: Ingestion Gate storage primitives.
 Phase 4.1: Deterministic calculation models.
 Phase 5.1: Debate orchestration models.
 Phase 5.2: Canonical MuhasabahRecord with nested structures.
+Phase POST-5.2: ValueStruct type hierarchy for typed values.
 """
 
 from idis.models.calc_sanad import CalcSanad, GradeExplanationEntry, SanadGrade
+from idis.models.claim import (
+    CalcLoopGuard,
+    CalcLoopGuardError,
+    Claim,
+    ClaimAction,
+    ClaimClass,
+    ClaimType,
+    ClaimVerdict,
+    Corroboration,
+    CorroborationStatus,
+    Materiality,
+)
 from idis.models.debate import (
     AgentOutput,
     ArbiterDecision,
@@ -34,14 +47,41 @@ from idis.models.muhasabah_record import (
     Uncertainty,
     muhasabah_to_validator_dict,
 )
+from idis.models.value_structs import (
+    CountValue,
+    Currency,
+    DateValue,
+    MonetaryValue,
+    PercentageValue,
+    RangeValue,
+    SemanticTag,
+    TextValue,
+    TimeWindow,
+    ValueStruct,
+    ValueStructType,
+    parse_value_struct,
+    value_struct_to_dict,
+)
 
 __all__ = [
     "AgentOutput",
     "ArbiterDecision",
     "CalcInputs",
+    "CalcLoopGuard",
+    "CalcLoopGuardError",
     "CalcOutput",
     "CalcSanad",
     "CalcType",
+    "Claim",
+    "ClaimAction",
+    "ClaimClass",
+    "ClaimType",
+    "ClaimVerdict",
+    "Corroboration",
+    "CorroborationStatus",
+    "CountValue",
+    "Currency",
+    "DateValue",
     "DebateConfig",
     "DebateMessage",
     "DebateRole",
@@ -55,14 +95,25 @@ __all__ = [
     "FalsifiabilityTest",
     "GradeExplanationEntry",
     "ImpactLevel",
+    "Materiality",
+    "MonetaryValue",
     "MuhasabahRecord",
     "MuhasabahRecordCanonical",
     "ParseStatus",
+    "PercentageValue",
     "PositionSnapshot",
+    "RangeValue",
     "SanadGrade",
+    "SemanticTag",
     "SpanLocator",
     "SpanType",
     "StopReason",
+    "TextValue",
+    "TimeWindow",
     "Uncertainty",
+    "ValueStruct",
+    "ValueStructType",
     "muhasabah_to_validator_dict",
+    "parse_value_struct",
+    "value_struct_to_dict",
 ]

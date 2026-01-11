@@ -1,0 +1,210 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://idis.example.com/schemas/value_struct.schema.json",
+  "title": "ValueStruct",
+  "description": "Typed value structures for claims and calculations. Uses discriminator 'type' field.",
+  "oneOf": [
+    { "$ref": "#/$defs/MonetaryValue" },
+    { "$ref": "#/$defs/PercentageValue" },
+    { "$ref": "#/$defs/CountValue" },
+    { "$ref": "#/$defs/DateValue" },
+    { "$ref": "#/$defs/RangeValue" },
+    { "$ref": "#/$defs/TextValue" }
+  ],
+  "$defs": {
+    "Currency": {
+      "type": "string",
+      "enum": ["USD", "EUR", "GBP", "CHF", "JPY", "CNY", "AED", "SAR", "QAR", "SGD", "HKD", "INR", "BRL", "CAD", "AUD"],
+      "description": "ISO 4217 currency codes"
+    },
+    "TimeWindow": {
+      "type": "object",
+      "required": ["label"],
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": "string",
+          "description": "Human-readable label (e.g., 'FY2024', 'Q1 2025')"
+        },
+        "start_date": {
+          "type": ["string", "null"],
+          "format": "date",
+          "description": "Start of time window"
+        },
+        "end_date": {
+          "type": ["string", "null"],
+          "format": "date",
+          "description": "End of time window"
+        }
+      }
+    },
+    "SemanticTag": {
+      "type": "string",
+      "enum": ["company_name", "founder_name", "product_name", "market_segment", "competitor", "investor", "location", "industry", "other"],
+      "description": "Semantic tags for text values"
+    },
+    "MonetaryValue": {
+      "type": "object",
+      "required": ["type", "amount", "currency"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "monetary"
+        },
+        "amount": {
+          "type": ["number", "string"],
+          "description": "Monetary amount (Decimal as string for precision)"
+        },
+        "currency": {
+          "$ref": "#/$defs/Currency"
+        },
+        "as_of": {
+          "type": ["string", "null"],
+          "format": "date",
+          "description": "Point-in-time for the value"
+        },
+        "time_window": {
+          "oneOf": [
+            { "$ref": "#/$defs/TimeWindow" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "PercentageValue": {
+      "type": "object",
+      "required": ["type", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "percentage"
+        },
+        "value": {
+          "type": ["number", "string"],
+          "minimum": 0,
+          "description": "Percentage as decimal (0.25 = 25%)"
+        },
+        "allow_overflow": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, allows values > 1.0 for growth rates"
+        },
+        "as_of": {
+          "type": ["string", "null"],
+          "format": "date",
+          "description": "Point-in-time for the value"
+        },
+        "time_window": {
+          "oneOf": [
+            { "$ref": "#/$defs/TimeWindow" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "CountValue": {
+      "type": "object",
+      "required": ["type", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "count"
+        },
+        "value": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Non-negative integer count"
+        },
+        "unit": {
+          "type": ["string", "null"],
+          "description": "Unit label (e.g., 'users', 'employees')"
+        },
+        "as_of": {
+          "type": ["string", "null"],
+          "format": "date",
+          "description": "Point-in-time for the value"
+        }
+      }
+    },
+    "DateValue": {
+      "type": "object",
+      "required": ["type", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "date"
+        },
+        "value": {
+          "type": "string",
+          "format": "date",
+          "description": "ISO date value"
+        },
+        "label": {
+          "type": ["string", "null"],
+          "description": "Semantic label (e.g., 'founded', 'exit')"
+        }
+      }
+    },
+    "RangeValue": {
+      "type": "object",
+      "required": ["type", "unit"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "range"
+        },
+        "min_value": {
+          "type": ["number", "string", "null"],
+          "description": "Minimum value (inclusive)"
+        },
+        "max_value": {
+          "type": ["number", "string", "null"],
+          "description": "Maximum value (inclusive)"
+        },
+        "unit": {
+          "type": "string",
+          "description": "Unit for the range"
+        },
+        "currency": {
+          "oneOf": [
+            { "$ref": "#/$defs/Currency" },
+            { "type": "null" }
+          ]
+        },
+        "as_of": {
+          "type": ["string", "null"],
+          "format": "date",
+          "description": "Point-in-time for the range"
+        },
+        "time_window": {
+          "oneOf": [
+            { "$ref": "#/$defs/TimeWindow" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "TextValue": {
+      "type": "object",
+      "required": ["type", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "text"
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Text content"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SemanticTag"
+          },
+          "description": "Semantic tags for the text"
+        }
+      }
+    }
+  }
+}

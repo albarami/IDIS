@@ -71,6 +71,111 @@ FACTUAL_PATTERNS = [
 FACTUAL_REGEXES = [re.compile(p, re.IGNORECASE) for p in FACTUAL_PATTERNS]
 
 
+# =============================================================================
+# SEMANTIC RULE LIBRARY (Phase POST-5.2)
+# =============================================================================
+# Subject-predicate patterns for semantic factual assertion detection.
+# These patterns are deterministic (rules only, no external models).
+# Format: (subject_pattern, predicate_pattern, description)
+
+SEMANTIC_SUBJECT_PREDICATES: list[tuple[str, str, str]] = [
+    # Company performance predicates
+    (
+        r"\b(?:company|startup|firm|business)\b",
+        r"\b(?:achieved|reached|hit|exceeded|generated|reported)\b",
+        "company_achievement",
+    ),
+    (
+        r"\b(?:revenue|ARR|MRR|sales)\b",
+        r"\b(?:grew|increased|decreased|declined|reached|exceeded)\b",
+        "revenue_change",
+    ),
+    (
+        r"\b(?:company|startup|we|they)\b",
+        r"\b(?:raised|secured|closed)\b.*\b(?:funding|round|capital)\b",
+        "funding_event",
+    ),
+    # Metric predicates
+    (
+        r"\b(?:gross\s+margin|GM|margin)\b",
+        r"\b(?:is|was|stands\s+at|improved\s+to)\b",
+        "margin_state",
+    ),
+    (
+        r"\b(?:churn|retention|NRR)\b",
+        r"\b(?:is|was|improved|decreased|stands\s+at)\b",
+        "retention_metric",
+    ),
+    (r"\b(?:CAC|LTV|payback)\b", r"\b(?:is|was|equals|improved)\b", "unit_economics"),
+    # Market predicates
+    (
+        r"\b(?:TAM|SAM|SOM|market)\b",
+        r"\b(?:is|was|estimated\s+at|valued\s+at|represents)\b",
+        "market_size",
+    ),
+    (r"\b(?:market\s+share|share)\b", r"\b(?:is|was|reached|grew\s+to)\b", "market_share"),
+    # Team predicates
+    (
+        r"\b(?:team|headcount|employees|staff)\b",
+        r"\b(?:grew|increased|expanded|consists\s+of|numbers)\b",
+        "team_growth",
+    ),
+    (
+        r"\b(?:founder|CEO|CTO|CFO)\b",
+        r"\b(?:previously|formerly|worked\s+at|founded|built)\b",
+        "founder_background",
+    ),
+    # Customer predicates
+    (
+        r"\b(?:customers|clients|users|subscribers)\b",
+        r"\b(?:grew|increased|reached|exceeded|number)\b",
+        "customer_growth",
+    ),
+    (
+        r"\b(?:DAU|MAU|WAU|active\s+users)\b",
+        r"\b(?:is|was|reached|exceeded|grew)\b",
+        "engagement_metric",
+    ),
+    # Valuation predicates
+    (
+        r"\b(?:valuation|pre-money|post-money)\b",
+        r"\b(?:is|was|valued\s+at|set\s+at)\b",
+        "valuation_claim",
+    ),
+    (r"\b(?:multiple|ratio)\b", r"\b(?:is|was|equals|stands\s+at)\b", "multiple_claim"),
+    # Timeline predicates
+    (
+        r"\b(?:company|startup|business)\b",
+        r"\b(?:founded|started|launched|incorporated)\s+(?:in|on)\b",
+        "founding_date",
+    ),
+    (
+        r"\b(?:product|platform|service)\b",
+        r"\b(?:launched|released|went\s+live)\s+(?:in|on)\b",
+        "launch_date",
+    ),
+    # Competitive predicates
+    (r"\b(?:competitor|competition)\b", r"\b(?:has|have|holds|controls)\b", "competitive_position"),
+    (r"\b(?:we|company|startup)\b", r"\b(?:outperform|beat|lead|dominate)\b", "competitive_claim"),
+]
+
+# Compile semantic patterns
+SEMANTIC_RULES: list[tuple[re.Pattern[str], re.Pattern[str], str]] = [
+    (re.compile(subj, re.IGNORECASE), re.compile(pred, re.IGNORECASE), desc)
+    for subj, pred, desc in SEMANTIC_SUBJECT_PREDICATES
+]
+
+
+@dataclass
+class SemanticMatch:
+    """A semantic pattern match (subject + predicate)."""
+
+    subject: str
+    predicate: str
+    rule_name: str
+    position: int
+
+
 @dataclass
 class FactualAssertion:
     """A detected factual assertion in text."""
@@ -117,9 +222,55 @@ class NoFreeFactsValidator:
     }
     """
 
-    def __init__(self) -> None:
-        """Initialize the validator."""
-        pass
+    def __init__(self, enable_semantic_rules: bool = True) -> None:
+        """Initialize the validator.
+
+        Args:
+            enable_semantic_rules: If True, enable semantic subject-predicate
+                pattern matching in addition to regex patterns. Defaults to True.
+        """
+        self._enable_semantic_rules = enable_semantic_rules
+
+    def _extract_semantic_matches(self, text: str) -> list[SemanticMatch]:
+        """Extract semantic subject-predicate pattern matches from text.
+
+        Phase POST-5.2: Semantic rule library for enhanced factual detection.
+        Uses deterministic rules only (no external models).
+
+        Args:
+            text: Text to analyze.
+
+        Returns:
+            List of semantic matches found.
+        """
+        if not self._enable_semantic_rules:
+            return []
+
+        matches: list[SemanticMatch] = []
+        seen_positions: set[int] = set()
+
+        for subj_pattern, pred_pattern, rule_name in SEMANTIC_RULES:
+            # Find subject matches
+            for subj_match in subj_pattern.finditer(text):
+                subj_end = subj_match.end()
+                # Look for predicate within 50 characters after subject
+                search_window = text[subj_end : subj_end + 100]
+                pred_match = pred_pattern.search(search_window)
+
+                if pred_match:
+                    pos = subj_match.start()
+                    if pos not in seen_positions:
+                        seen_positions.add(pos)
+                        matches.append(
+                            SemanticMatch(
+                                subject=subj_match.group(),
+                                predicate=pred_match.group(),
+                                rule_name=rule_name,
+                                position=pos,
+                            )
+                        )
+
+        return sorted(matches, key=lambda m: m.position)
 
     def _extract_factual_assertions(self, text: str) -> list[FactualAssertion]:
         """Extract potential factual assertions from text using heuristic patterns.
@@ -202,10 +353,29 @@ class NoFreeFactsValidator:
         - Numeric values (%, $, years, metrics)
         - Explicit fact markers ("the fact is", etc.)
         - Finance cues (raised, funding, Series A/B, valuation)
+        - Semantic subject-predicate patterns (Phase POST-5.2)
 
         Returns list of detected factual assertions (empty if none found).
         """
-        return self._extract_factual_assertions(text)
+        # Get regex-based assertions
+        assertions = self._extract_factual_assertions(text)
+
+        # Get semantic matches and convert to FactualAssertion format
+        semantic_matches = self._extract_semantic_matches(text)
+        seen_positions = {a.position for a in assertions}
+
+        for match in semantic_matches:
+            if match.position not in seen_positions:
+                seen_positions.add(match.position)
+                assertions.append(
+                    FactualAssertion(
+                        text=f"{match.subject} {match.predicate}",
+                        position=match.position,
+                        pattern_matched=f"semantic:{match.rule_name}",
+                    )
+                )
+
+        return sorted(assertions, key=lambda a: a.position)
 
     def _validate_section(self, section: dict[str, Any], index: int) -> list[ValidationError]:
         """Validate a single section for No-Free-Facts compliance.

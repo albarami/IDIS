@@ -398,6 +398,140 @@ Exit criteria:
 
 ---
 
+### Phase 6.5 — Pattern Matching & Deal Outcome Analysis (Weeks 28–30) — SPEC ONLY
+
+> **Note:** This phase is documented for future implementation. No code is implemented yet.
+
+#### Overview
+
+Pattern matching enables IDIS to identify similar historical deals and predict outcomes based on comparable company characteristics. This phase introduces:
+
+- **DealOutcome**: Structured outcome data for historical deals
+- **SimilarityFeature**: Feature vectors for deal comparison
+- **PatternMatch**: Similarity scoring and match results
+
+#### Data Models (Specification)
+
+**DealOutcome** — Outcome record for a historical deal:
+```python
+class DealOutcome(BaseModel):
+    outcome_id: str           # UUID
+    tenant_id: str            # Tenant isolation
+    deal_id: str              # Reference to Deal
+    outcome_type: OutcomeType # INVESTED | PASSED | EXITED | WRITTEN_OFF
+    investment_date: date | None
+    exit_date: date | None
+    irr: Decimal | None       # Internal Rate of Return (if exited)
+    moic: Decimal | None      # Multiple on Invested Capital (if exited)
+    holding_period_months: int | None
+    exit_type: ExitType | None  # IPO | M&A | SECONDARY | WRITE_OFF
+    notes: str | None
+    created_at: datetime
+    updated_at: datetime
+```
+
+**SimilarityFeature** — Feature vector for deal comparison:
+```python
+class SimilarityFeature(BaseModel):
+    feature_id: str           # UUID
+    tenant_id: str
+    deal_id: str
+    # Company characteristics
+    sector: str               # Primary sector (e.g., "fintech", "healthtech")
+    sub_sector: str | None    # Sub-sector refinement
+    stage: str                # Seed | Series A | Series B | Growth
+    geography: str            # Primary market geography
+    # Financial metrics (normalized)
+    revenue_range: RangeValue | None
+    arr_growth_rate: PercentageValue | None
+    gross_margin: PercentageValue | None
+    burn_rate: MonetaryValue | None
+    runway_months: int | None
+    # Team metrics
+    team_size: CountValue | None
+    founder_experience_score: Decimal | None  # 0-1 composite
+    # Market metrics
+    tam_estimate: MonetaryValue | None
+    market_growth_rate: PercentageValue | None
+    # Computed embedding (optional, for ML similarity)
+    embedding_vector: list[float] | None
+    embedding_model_version: str | None
+    created_at: datetime
+    updated_at: datetime
+```
+
+**PatternMatch** — Similarity match result:
+```python
+class PatternMatch(BaseModel):
+    match_id: str             # UUID
+    tenant_id: str
+    target_deal_id: str       # Deal being analyzed
+    matched_deal_ids: list[str]  # Historical deals matched
+    similarity_scores: dict[str, Decimal]  # deal_id -> score (0-1)
+    pattern_confidence: Decimal  # Overall confidence (0-1)
+    match_method: MatchMethod  # FEATURE_VECTOR | EMBEDDING | HYBRID
+    feature_weights: dict[str, Decimal]  # Feature importance weights
+    outcome_distribution: dict[str, int]  # OutcomeType -> count
+    predicted_outcome: OutcomeType | None
+    prediction_confidence: Decimal | None
+    created_at: datetime
+    analyst_reviewed: bool
+    reviewed_by: str | None
+    review_notes: str | None
+```
+
+#### JSON Schema (Documentation Example)
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://idis.example.com/schemas/pattern_match.schema.json",
+  "title": "PatternMatch",
+  "type": "object",
+  "required": ["match_id", "tenant_id", "target_deal_id", "matched_deal_ids", "similarity_scores", "pattern_confidence", "match_method"],
+  "properties": {
+    "match_id": {"type": "string", "format": "uuid"},
+    "tenant_id": {"type": "string", "format": "uuid"},
+    "target_deal_id": {"type": "string", "format": "uuid"},
+    "matched_deal_ids": {"type": "array", "items": {"type": "string", "format": "uuid"}},
+    "similarity_scores": {"type": "object", "additionalProperties": {"type": "number", "minimum": 0, "maximum": 1}},
+    "pattern_confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    "match_method": {"type": "string", "enum": ["FEATURE_VECTOR", "EMBEDDING", "HYBRID"]},
+    "predicted_outcome": {"type": ["string", "null"], "enum": ["INVESTED", "PASSED", "EXITED", "WRITTEN_OFF", null]}
+  }
+}
+```
+
+#### Implementation Roadmap
+
+| Week | Deliverable |
+|------|-------------|
+| 28 | DealOutcome model + schema + migrations |
+| 28 | SimilarityFeature model + feature extraction pipeline |
+| 29 | PatternMatch model + basic feature-vector matching |
+| 29 | UI: Similar deals panel in deal view |
+| 30 | Embedding-based similarity (optional, requires vector DB) |
+| 30 | Pattern match confidence calibration + tests |
+
+#### Expected Tests
+
+| Test File | Description |
+|-----------|-------------|
+| `tests/test_deal_outcome.py` | DealOutcome CRUD and validation |
+| `tests/test_similarity_feature.py` | Feature extraction and normalization |
+| `tests/test_pattern_match.py` | Similarity scoring and ranking |
+| `tests/test_pattern_match_integration.py` | End-to-end matching pipeline |
+
+#### Trust Invariants for Pattern Matching
+
+1. **Tenant Isolation**: Pattern matches only consider deals within same tenant
+2. **Audit Trail**: All pattern matches logged with full feature inputs
+3. **Human Review Gate**: Predictions marked `analyst_reviewed=False` until reviewed
+4. **Confidence Thresholds**: Matches below 0.6 confidence flagged for review
+5. **No Outcome Leakage**: Target deal outcome (if known) excluded from similarity
+
+---
+
 ### Phase 7 — Enterprise Hardening (Weeks 29–40)
 
 Implement:

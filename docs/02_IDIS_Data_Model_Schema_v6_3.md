@@ -468,6 +468,119 @@ Store computed `corroboration_status` on the `Sanad` node.
 
 ---
 
+## 5.4 ValueStruct Type Hierarchy (Phase POST-5.2)
+
+ValueStruct provides typed value structures for claims and calculations, replacing untyped dict with validated types.
+
+### Type Variants
+
+| Type | Description | Key Fields |
+|------|-------------|------------|
+| **MonetaryValue** | Currency amounts | `amount` (Decimal), `currency` (ISO 4217) |
+| **PercentageValue** | Percentages (0-1) | `value` (Decimal), `allow_overflow` (for growth rates) |
+| **CountValue** | Integer counts | `value` (int), `unit` (optional label) |
+| **DateValue** | ISO dates | `value` (date), `label` (semantic meaning) |
+| **RangeValue** | Min/max ranges | `min_value`, `max_value`, `unit` |
+| **TextValue** | Text with tags | `value` (string), `tags` (semantic labels) |
+
+### Usage Rules
+
+1. **Decimal Precision**: All monetary and percentage values use `Decimal` for deterministic arithmetic
+2. **Currency Required**: MonetaryValue requires valid ISO 4217 currency code
+3. **Percentage Bounds**: Default 0-1 range; use `allow_overflow=True` for growth rates >100%
+4. **Range Validation**: At least one of min/max required; min cannot exceed max
+5. **Type Discrimination**: All ValueStruct variants have `type` field for JSON discrimination
+
+### JSON Schema Reference
+
+See `schemas/value_struct.schema.json` for full JSON Schema definition.
+
+---
+
+## 5.5 Claim Type and Calc Loop Guardrail (Phase POST-5.2)
+
+Claims are typed as PRIMARY or DERIVED to prevent calculation loops.
+
+### claim_type Field
+
+| Value | Description | Can Trigger Calc? |
+|-------|-------------|-------------------|
+| `PRIMARY` | Extracted from source documents | ✅ Yes |
+| `DERIVED` | Created by calc output | ❌ No (loop guard) |
+
+### Calc Loop Guardrail Rules
+
+1. Only PRIMARY claims can trigger automated calculation runs
+2. DERIVED claims are created by calc output but cannot auto-trigger more calcs
+3. DERIVED claims track `source_calc_id` for provenance
+4. Explicit override (`allow_derived=True`) permitted for human-triggered recalcs
+
+### Enforcement
+
+- `CalcLoopGuard.validate_calc_trigger()` — raises `CalcLoopGuardError` for derived claims
+- `CalcLoopGuard.filter_triggerable()` — returns only PRIMARY claims
+- Calc engine should use guardrail before processing claims
+
+---
+
+## 5.6 Graph-DB + Postgres Dual-Write Consistency (Phase POST-5.2)
+
+Saga pattern ensures Postgres and Graph DB writes are consistent.
+
+### Saga Pattern
+
+1. **SagaStep**: Individual write operation with compensation action
+2. **DualWriteSagaExecutor**: Orchestrates multi-store writes
+3. **Compensation**: On failure, all completed steps are rolled back in reverse order
+
+### Fail-Closed Semantics
+
+- Any step failure triggers compensation for all completed steps
+- Compensation failures are logged but saga reports overall failure
+- No partial writes left in inconsistent state
+
+### Usage
+
+```python
+saga = create_claim_dual_write_saga(
+    saga_id="claim-saga-001",
+    postgres_insert=...,
+    postgres_delete=...,
+    graph_insert=...,
+    graph_delete=...,
+)
+result = saga.execute({"claim": claim_data})
+if not result.is_success:
+    raise DualWriteConsistencyError(result)
+```
+
+---
+
+## 5.7 No-Free-Facts Semantic Extensions (Phase POST-5.2)
+
+Enhanced factual assertion detection using semantic subject-predicate patterns.
+
+### Semantic Rule Library
+
+In addition to regex patterns, the validator detects factual assertions via subject-predicate patterns:
+
+| Pattern Category | Example Subject | Example Predicate |
+|-----------------|-----------------|-------------------|
+| Company Achievement | company, startup | achieved, reached, exceeded |
+| Revenue Change | revenue, ARR | grew, increased, declined |
+| Funding Event | company, we | raised, secured, closed |
+| Market Size | TAM, SAM, market | estimated at, valued at |
+| Team Growth | team, headcount | grew, expanded, numbers |
+| Valuation Claim | valuation, pre-money | valued at, set at |
+
+### Determinism
+
+- All patterns are static regex rules (no ML models)
+- Same input always produces same detection results
+- Rules can be extended without breaking determinism
+
+---
+
 ## 6. Enumerations (Canonical)
 
 ### 6.1 Public Grades

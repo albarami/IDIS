@@ -601,3 +601,68 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | 2026-01-10 | 1.4 | Cascade | Added Phase 4.2 Extraction Confidence Gate (FC-001 updated); test_extraction_gate.py::test_low_confidence_blocked implemented |
 | 2026-01-10 | 1.5 | Cascade | Added Phase 5.1 LangGraph Orchestration Core traceability (DB-001 through DB-004); added debate tests to test coverage matrix |
 | 2026-01-11 | 1.6 | Cascade | Added Phase 5.2 Muḥāsabah Gate traceability (MUH-002); updated MUH-001 with gate enforcement; added test_muhasabah_gate.py and test_debate_muhasabah_integration.py to test coverage matrix |
+| 2026-01-11 | 1.7 | Cascade | Added Phase POST-5.2 Architecture Hardening: ValueStruct types (VS-001), Claim types & calc loop guardrail (CLT-001), NFF semantic extensions (NFF-002), Graph-Postgres saga (DW-001), Pattern matching spec (PM-001) |
+
+---
+
+## 11) Phase POST-5.2 Traceability (Architecture Hardening)
+
+### 11.1 ValueStruct Type Hierarchy
+
+| Attribute | Value |
+|-----------|-------|
+| **Requirement ID** | VS-001 |
+| **Requirement** | Typed value structures for claims/calcs replacing untyped dict |
+| **Source Doc** | Data Model §5.4 |
+| **Enforcing Component** | `src/idis/models/value_structs.py` |
+| **Tests** | `tests/test_value_structs.py`, `tests/test_calc_value_types_integration.py` |
+| **Phase Gate** | POST-5.2 |
+| **Implementation Status** | ✅ Exists |
+
+### 11.2 Claim Type & Calc Loop Guardrail
+
+| Attribute | Value |
+|-----------|-------|
+| **Requirement ID** | CLT-001 |
+| **Requirement** | PRIMARY vs DERIVED claim typing; derived claims cannot auto-trigger calcs |
+| **Source Doc** | Data Model §5.5 |
+| **Enforcing Component** | `src/idis/models/claim.py` — CalcLoopGuard |
+| **Tests** | `tests/test_claim_type_enforcement.py`, `tests/test_calc_loop_guardrail.py` |
+| **Phase Gate** | POST-5.2 |
+| **Implementation Status** | ✅ Exists |
+
+### 11.3 No-Free-Facts Semantic Extensions
+
+| Attribute | Value |
+|-----------|-------|
+| **Requirement ID** | NFF-002 |
+| **Requirement** | Semantic subject-predicate patterns for enhanced factual detection |
+| **Source Doc** | Data Model §5.7 |
+| **Enforcing Component** | `src/idis/validators/no_free_facts.py` — SEMANTIC_RULES |
+| **Tests** | `tests/test_no_free_facts_semantic_cases.py` |
+| **Phase Gate** | POST-5.2 |
+| **Implementation Status** | ✅ Exists |
+
+### 11.4 Graph-Postgres Dual-Write Consistency
+
+| Attribute | Value |
+|-----------|-------|
+| **Requirement ID** | DW-001 |
+| **Requirement** | Saga pattern for Postgres + Graph DB consistency with compensation |
+| **Source Doc** | Data Model §5.6 |
+| **Enforcing Component** | `src/idis/persistence/saga.py` — DualWriteSagaExecutor |
+| **Tests** | `tests/test_graph_postgres_consistency_saga.py` |
+| **Phase Gate** | POST-5.2 |
+| **Implementation Status** | ✅ Exists |
+
+### 11.5 Pattern Matching (Spec Only)
+
+| Attribute | Value |
+|-----------|-------|
+| **Requirement ID** | PM-001 |
+| **Requirement** | DealOutcome, SimilarityFeature, PatternMatch models for deal comparison |
+| **Source Doc** | Implementation Plan §Phase 6.5 |
+| **Enforcing Component** | N/A (spec only) |
+| **Tests** | Planned: `test_deal_outcome.py`, `test_similarity_feature.py`, `test_pattern_match.py` |
+| **Phase Gate** | Phase 6.5 (future) |
+| **Implementation Status** | ⏳ Spec documented, implementation pending |

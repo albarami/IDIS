@@ -146,11 +146,11 @@ class Claim(BaseModel):
         description="Calc ID that produced this claim (for DERIVED claims only)",
     )
     created_by: str | None = Field(default=None, description="Actor UUID who created this claim")
-    created_at: datetime = Field(
-        default_factory=lambda: datetime.now(), description="Record creation timestamp"
+    created_at: datetime | None = Field(
+        default=None, description="Record creation timestamp (caller must provide)"
     )
-    updated_at: datetime = Field(
-        default_factory=lambda: datetime.now(), description="Record update timestamp"
+    updated_at: datetime | None = Field(
+        default=None, description="Record update timestamp (caller must provide)"
     )
 
     def can_trigger_calc(self) -> bool:

@@ -128,9 +128,13 @@ class TestDeliverableValidator:
         assert result.passed is True
         assert len(result.violations) == 0
 
-    def test_subjective_fact_skips_validation(self) -> None:
-        """Test that subjective facts skip No-Free-Facts validation."""
-        subjective_fact = DeliverableFact(
+    def test_subjective_fact_with_factual_true_requires_refs(self) -> None:
+        """Test that is_subjective does NOT bypass validation when is_factual=True.
+
+        DG-DET-001 Hard Gate: is_factual=True MUST have refs, regardless of is_subjective.
+        If content is truly subjective and shouldn't need refs, set is_factual=False.
+        """
+        subjective_but_factual = DeliverableFact(
             text="We believe the market opportunity is significant with $50B TAM.",
             claim_refs=[],
             calc_refs=[],
@@ -141,7 +145,7 @@ class TestDeliverableValidator:
         section = DeliverableSection(
             section_id="section-subj",
             title="Subjective Section",
-            facts=[subjective_fact],
+            facts=[subjective_but_factual],
             is_subjective=False,
         )
 
@@ -164,7 +168,55 @@ class TestDeliverableValidator:
                 section_id="missing",
                 title="Missing Info",
                 facts=[],
-                is_subjective=True,
+            ),
+            audit_appendix=appendix,
+            generated_at="2026-01-11T12:00:00Z",
+        )
+
+        result = validate_deliverable_no_free_facts(snapshot, raise_on_failure=False)
+        assert result.passed is False
+        assert len(result.violations) == 1
+        assert result.violations[0].code == "NO_FREE_FACTS_UNREFERENCED_FACT"
+
+    def test_non_factual_subjective_fact_allowed_without_refs(self) -> None:
+        """Test that is_factual=False facts can have empty refs (correct approach).
+
+        If content is truly subjective/opinion, set is_factual=False.
+        """
+        subjective_opinion = DeliverableFact(
+            text="We believe the market opportunity is significant.",
+            claim_refs=[],
+            calc_refs=[],
+            is_factual=False,
+            is_subjective=True,
+        )
+
+        section = DeliverableSection(
+            section_id="section-subj",
+            title="Subjective Section",
+            facts=[subjective_opinion],
+            is_subjective=False,
+        )
+
+        appendix = AuditAppendix(
+            entries=[],
+            generated_at="2026-01-11T12:00:00Z",
+            deal_id="deal-subj",
+            tenant_id="tenant-001",
+        )
+
+        snapshot = ScreeningSnapshot(
+            deliverable_id="snap-subj",
+            tenant_id="tenant-001",
+            deal_id="deal-subj",
+            deal_name="Subjective Corp",
+            summary_section=section,
+            key_metrics_section=DeliverableSection(section_id="metrics", title="Metrics", facts=[]),
+            red_flags_section=DeliverableSection(section_id="flags", title="Red Flags", facts=[]),
+            missing_info_section=DeliverableSection(
+                section_id="missing",
+                title="Missing Info",
+                facts=[],
             ),
             audit_appendix=appendix,
             generated_at="2026-01-11T12:00:00Z",
@@ -173,9 +225,12 @@ class TestDeliverableValidator:
         result = validate_deliverable_no_free_facts(snapshot, raise_on_failure=False)
         assert result.passed is True
 
-    def test_subjective_section_skips_all_facts(self) -> None:
-        """Test that all facts in a subjective section skip validation."""
-        fact_in_subjective_section = DeliverableFact(
+    def test_subjective_section_does_not_bypass_factual_validation(self) -> None:
+        """Test that section.is_subjective does NOT bypass validation for factual facts.
+
+        DG-DET-001 Hard Gate: section-level subjectivity cannot bypass per-fact is_factual check.
+        """
+        factual_in_subjective_section = DeliverableFact(
             text="Revenue is $100M.",
             claim_refs=[],
             calc_refs=[],
@@ -186,7 +241,7 @@ class TestDeliverableValidator:
         subjective_section = DeliverableSection(
             section_id="section-all-subj",
             title="All Subjective Section",
-            facts=[fact_in_subjective_section],
+            facts=[factual_in_subjective_section],
             is_subjective=True,
         )
 
@@ -215,14 +270,15 @@ class TestDeliverableValidator:
                 section_id="missing",
                 title="Missing Info",
                 facts=[],
-                is_subjective=True,
             ),
             audit_appendix=appendix,
             generated_at="2026-01-11T12:00:00Z",
         )
 
         result = validate_deliverable_no_free_facts(snapshot, raise_on_failure=False)
-        assert result.passed is True
+        assert result.passed is False
+        assert len(result.violations) == 1
+        assert result.violations[0].code == "NO_FREE_FACTS_UNREFERENCED_FACT"
 
     def test_multiple_violations_collected(self) -> None:
         """Test that multiple violations are collected in result."""

@@ -85,15 +85,12 @@ class DeliverableValidator:
     ) -> list[ValidationError]:
         """Validate a single DeliverableFact for No-Free-Facts compliance.
 
-        Rules:
-        1. If is_subjective=True, skip validation
-        2. If is_factual=True, must have non-empty claim_refs or calc_refs
-        3. If is_factual=False but text looks factual, warn (but don't fail)
+        Rules (HARD GATE - DG-DET-001):
+        1. If is_factual=True, MUST have non-empty claim_refs or calc_refs
+        2. is_subjective does NOT bypass this rule when is_factual=True
+        3. Only is_factual=False facts can have empty refs
         """
         errors: list[ValidationError] = []
-
-        if getattr(fact, "is_subjective", False):
-            return errors
 
         is_factual = getattr(fact, "is_factual", True)
         claim_refs = getattr(fact, "claim_refs", []) or []
@@ -124,15 +121,12 @@ class DeliverableValidator:
     ) -> list[ValidationError]:
         """Validate a DeliverableSection for No-Free-Facts compliance.
 
-        Rules:
-        1. If section.is_subjective=True, skip all facts
-        2. Each fact is validated independently
+        Rules (HARD GATE - DG-DET-001):
+        1. section.is_subjective does NOT bypass fact validation
+        2. Each fact with is_factual=True is validated independently
         3. Narrative is validated using No-Free-Facts heuristics
         """
         errors: list[ValidationError] = []
-
-        if getattr(section, "is_subjective", False):
-            return errors
 
         facts = getattr(section, "facts", []) or []
         for i, fact in enumerate(facts):

@@ -403,6 +403,11 @@ class DeliverableExporter:
         - [Content_Types].xml
         - _rels/.rels
         - word/document.xml
+
+        DG-DET-001: Byte-deterministic output:
+        - Fixed timestamp (1980-01-01 00:00:00) for all entries
+        - Stable entry order (sorted by name)
+        - No time-dependent metadata
         """
         import zipfile
 
@@ -441,11 +446,20 @@ class DeliverableExporter:
     </w:body>
 </w:document>""".encode()
 
+        entries: dict[str, bytes] = {
+            "[Content_Types].xml": content_types,
+            "_rels/.rels": rels,
+            "word/document.xml": document,
+        }
+
+        fixed_datetime = (1980, 1, 1, 0, 0, 0)
+
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("[Content_Types].xml", content_types)
-            zf.writestr("_rels/.rels", rels)
-            zf.writestr("word/document.xml", document)
+            for entry_name in sorted(entries.keys()):
+                info = zipfile.ZipInfo(filename=entry_name, date_time=fixed_datetime)
+                info.compress_type = zipfile.ZIP_DEFLATED
+                zf.writestr(info, entries[entry_name])
 
         return buffer.getvalue()
 

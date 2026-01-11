@@ -345,3 +345,105 @@ class TestExporterDeterminism:
         text2 = exporter._render_text(snapshot2)
 
         assert text1 == text2
+
+    def test_docx_export_is_deterministic_bytes(self) -> None:
+        """Test that DOCX export produces identical bytes for same input.
+
+        DG-DET-001: Validates byte-level determinism:
+        - Fixed ZIP timestamps
+        - Stable entry ordering
+        - No time-dependent metadata
+        """
+
+        def create_snapshot() -> ScreeningSnapshotBuilder:
+            builder = ScreeningSnapshotBuilder(
+                deliverable_id="snap-docx-det",
+                tenant_id="tenant-001",
+                deal_id="deal-docx-det",
+                deal_name="DOCX Determinism Corp",
+                generated_at="2026-01-11T12:00:00Z",
+            )
+            builder.add_summary_fact(text="Revenue is $10M.", claim_refs=["claim-001"])
+            builder.add_metric_fact(text="Growth is 50%.", claim_refs=["claim-002"])
+            builder.add_red_flag_fact(text="Customer concentration.", claim_refs=["claim-003"])
+            builder.add_missing_info(text="Cap table missing.")
+            return builder
+
+        snapshot = create_snapshot().build()
+
+        result1 = export_to_docx(
+            deliverable=snapshot,
+            export_timestamp="2026-01-11T12:00:00Z",
+            validate=True,
+        )
+
+        result2 = export_to_docx(
+            deliverable=snapshot,
+            export_timestamp="2026-01-11T12:00:00Z",
+            validate=True,
+        )
+
+        assert result1.content_bytes == result2.content_bytes
+        assert len(result1.content_bytes) > 0
+        assert result1.content_bytes.startswith(b"PK")
+
+
+class TestMemoExportValidation:
+    """Red-team tests for IC Memo export validation."""
+
+    def test_memo_export_fails_on_unreferenced_fact(self) -> None:
+        """Test that IC Memo export fails when a factual fact has no refs.
+
+        DG-DET-001 Red-team test: Validates fail-closed behavior for IC Memo.
+        """
+        builder = ICMemoBuilder(
+            deliverable_id="memo-fail-export",
+            tenant_id="tenant-001",
+            deal_id="deal-fail-export",
+            deal_name="Fail Export Memo Corp",
+            generated_at="2026-01-11T12:00:00Z",
+        )
+
+        builder.add_executive_summary_fact(
+            text="Valid executive summary fact.",
+            claim_refs=["claim-001"],
+        )
+        builder.add_company_overview_fact(
+            text="Valid company overview.",
+            claim_refs=["claim-002"],
+        )
+        builder.add_market_analysis_fact(
+            text="Market is growing at 20%.",
+            claim_refs=[],
+        )
+        builder.add_financials_fact(
+            text="Revenue is $10M.",
+            claim_refs=["claim-003"],
+        )
+        builder.add_team_assessment_fact(
+            text="Strong team.",
+            claim_refs=["claim-004"],
+        )
+        builder.add_risks_fact(
+            text="Competition risk.",
+            claim_refs=["claim-005"],
+        )
+        builder.add_recommendation_fact(
+            text="Recommend investment.",
+            claim_refs=["claim-006"],
+        )
+        builder.add_truth_dashboard_fact(
+            text="Truth dashboard summary.",
+            claim_refs=["claim-007"],
+        )
+
+        memo = builder.build()
+
+        with pytest.raises(DeliverableExportError) as exc_info:
+            export_to_docx(
+                deliverable=memo,
+                export_timestamp="2026-01-11T12:00:00Z",
+                validate=True,
+            )
+
+        assert exc_info.value.code == "VALIDATION_FAILED"

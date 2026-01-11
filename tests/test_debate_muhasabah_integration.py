@@ -85,6 +85,44 @@ def _make_invalid_muhasabah_overconfident(
     )
 
 
+def _make_valid_muhasabah_for_nff_test(
+    agent_id: str,
+    output_id: str,
+) -> MuhasabahRecord:
+    """Create a fully valid MuhasabahRecord for No-Free-Facts boundary test.
+
+    This record is valid per Muhasabah rules:
+    - Has supported_claim_ids (non-empty)
+    - Has proper falsifiability_tests structure
+    - Has proper uncertainties structure
+    - Confidence below threshold (no uncertainty requirement)
+    """
+    return MuhasabahRecord(
+        record_id="00000000-0000-0000-0000-000000000203",
+        agent_id=agent_id,
+        output_id=output_id,
+        supported_claim_ids=["00000000-0000-0000-0000-000000000100"],
+        supported_calc_ids=[],
+        falsifiability_tests=[
+            {
+                "test_description": "Verify claim source validity",
+                "required_evidence": "Source document audit",
+                "pass_fail_rule": "Source must be traceable",
+            }
+        ],
+        uncertainties=[
+            {
+                "uncertainty": "Data currency risk",
+                "impact": "MEDIUM",
+                "mitigation": "Refresh data quarterly",
+            }
+        ],
+        confidence=0.70,  # Below 0.80 threshold
+        failure_modes=["stale_data"],
+        timestamp=datetime(2026, 1, 10, 12, 0, 0),
+    )
+
+
 class ValidRoleRunner(RoleRunnerProtocol):
     """A role runner that produces valid outputs with proper MuhasabahRecord."""
 
@@ -217,6 +255,73 @@ class InvalidRoleRunnerOverconfident(RoleRunnerProtocol):
             content={
                 "text": "Highly confident analysis.",
                 "is_subjective": False,
+            },
+            muhasabah=muhasabah,
+            round_number=state.round_number,
+            timestamp=datetime(2026, 1, 10, 12, 0, 0),
+        )
+
+        return RoleResult(
+            outputs=[output],
+            messages=[],
+        )
+
+
+class NoFreeFactsViolationRunner(RoleRunnerProtocol):
+    """A role runner with VALID Muhasabah but No-Free-Facts violation at output boundary.
+
+    This tests the specific case where:
+    - MuhasabahRecord is fully valid (has claim_ids, proper structure)
+    - BUT the output content has explicit sections with is_factual=true
+      and empty referenced_claim_ids, triggering No-Free-Facts rejection.
+
+    This proves No-Free-Facts enforcement is independent of Muhasabah validity.
+    """
+
+    def __init__(self, role: DebateRole = DebateRole.ADVOCATE) -> None:
+        self._role = role
+        self._agent_id = f"{role.value}-nff-violation"
+        self.run_count = 0
+
+    @property
+    def role(self) -> DebateRole:
+        """The debate role this runner implements."""
+        return self._role
+
+    @property
+    def agent_id(self) -> str:
+        """Unique identifier for this agent instance."""
+        return self._agent_id
+
+    def run(self, state: DebateState) -> RoleResult:
+        """Produce output with valid Muhasabah but No-Free-Facts violation."""
+        self.run_count += 1
+        role_hex = self._role.value[:8].encode().hex()[:12].ljust(12, "0")
+        agent_id = f"00000000-0000-0000-0000-{role_hex}"
+        output_id = f"00000000-0000-0000-0004-{self.run_count:012x}"
+
+        # Valid Muhasabah record (passes Muhasabah validation)
+        muhasabah = _make_valid_muhasabah_for_nff_test(agent_id=agent_id, output_id=output_id)
+
+        # Content with explicit sections that trigger No-Free-Facts violation:
+        # - is_factual=true means this section asserts facts
+        # - referenced_claim_ids=[] means no evidence backing
+        # - The text contains factual patterns ($5M revenue)
+        output = AgentOutput(
+            output_id=output_id,
+            agent_id=agent_id,
+            role=self.role,
+            output_type="analysis",
+            content={
+                "sections": [
+                    {
+                        "text": "The company raised $5M in Series A funding.",
+                        "is_factual": True,
+                        "is_subjective": False,
+                        "referenced_claim_ids": [],  # Empty - No-Free-Facts violation
+                        "referenced_calc_ids": [],
+                    }
+                ],
             },
             muhasabah=muhasabah,
             round_number=state.round_number,
@@ -380,6 +485,54 @@ class TestOrchestratorMuhasabahGateIntegration:
         assert final_state.stop_reason == StopReason.CRITICAL_DEFECT
         gate_failure = orchestrator.get_gate_failure()
         assert gate_failure is not None
+
+    def test_no_free_facts_blocks_even_when_muhasabah_valid(self) -> None:
+        """No-Free-Facts violation blocks output even when MuhasabahRecord is valid.
+
+        This is the critical Phase 5.2 integration test proving that:
+        1. MuhasabahRecord validation and No-Free-Facts validation are INDEPENDENT
+        2. A valid MuhasabahRecord does NOT excuse a No-Free-Facts violation
+        3. The gate blocks at the output boundary with the correct error code
+
+        The test uses a role runner that produces:
+        - A fully valid MuhasabahRecord (has claim_ids, proper structure)
+        - Content with explicit factual sections lacking local claim references
+
+        Expected: CRITICAL_DEFECT with NO_FREE_FACTS_UNREFERENCED_FACT error.
+        """
+        # Role runner with valid Muhasabah but No-Free-Facts violation in content
+        role_runners = RoleRunners(
+            advocate=NoFreeFactsViolationRunner(DebateRole.ADVOCATE),
+            sanad_breaker=ValidRoleRunner(DebateRole.SANAD_BREAKER),
+            contradiction_finder=ValidRoleRunner(DebateRole.CONTRADICTION_FINDER),
+            risk_officer=ValidRoleRunner(DebateRole.RISK_OFFICER),
+            arbiter=ValidRoleRunner(DebateRole.ARBITER),
+        )
+
+        config = DebateConfig(max_rounds=1)
+        orchestrator = DebateOrchestrator(
+            config=config,
+            role_runners=role_runners,
+        )
+
+        initial_state = _make_initial_state()
+        final_state = orchestrator.run(initial_state)
+
+        # MUST stop with CRITICAL_DEFECT
+        assert final_state.stop_reason == StopReason.CRITICAL_DEFECT
+
+        # MUST have a gate failure
+        gate_failure = orchestrator.get_gate_failure()
+        assert gate_failure is not None
+        assert not gate_failure.decision.allowed
+
+        # MUST be a No-Free-Facts violation (not Muhasabah validation failure)
+        # Check for the specific No-Free-Facts error code
+        error_codes = [e.code for e in gate_failure.decision.errors]
+        assert any(
+            code in ("NO_FREE_FACTS_UNREFERENCED_FACT", "NO_FREE_FACTS_VIOLATION")
+            for code in error_codes
+        ), f"Expected No-Free-Facts error code, got: {error_codes}"
 
 
 class TestOrchestratorMuhasabahNodeValidation:

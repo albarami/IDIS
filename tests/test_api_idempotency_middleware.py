@@ -9,7 +9,6 @@ D) Fail closed when store is unusable (only when header is present)
 
 import json
 import uuid
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,9 +16,8 @@ from fastapi.testclient import TestClient
 from idis.api.auth import IDIS_API_KEYS_ENV
 from idis.api.main import create_app
 from idis.api.routes.deals import clear_deals_store
-from idis.audit.sink import JsonlFileAuditSink
+from idis.audit.sink import InMemoryAuditSink
 from idis.idempotency.store import (
-    IDIS_IDEMPOTENCY_DB_PATH_ENV,
     SqliteIdempotencyStore,
 )
 
@@ -110,21 +108,16 @@ def api_keys_config_multi(
 @pytest.fixture
 def client_with_idempotency(
     api_keys_config_single: dict[str, dict[str, str]],
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> TestClient:
-    """Create test client with idempotency store configured."""
+    """Create test client with idempotency store configured (in-memory, disk-safe)."""
     clear_deals_store()
 
-    audit_path = tmp_path / "audit.jsonl"
-    idem_path = tmp_path / "idem.sqlite3"
-
     monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys_config_single))
-    monkeypatch.setenv("IDIS_AUDIT_LOG_PATH", str(audit_path))
-    monkeypatch.setenv(IDIS_IDEMPOTENCY_DB_PATH_ENV, str(idem_path))
 
-    audit_sink = JsonlFileAuditSink(file_path=str(audit_path))
-    idem_store = SqliteIdempotencyStore(db_path=str(idem_path))
+    # Use in-memory stores for disk-safe testing
+    audit_sink = InMemoryAuditSink()
+    idem_store = SqliteIdempotencyStore(in_memory=True)
 
     app = create_app(audit_sink=audit_sink, idempotency_store=idem_store)
     return TestClient(app)
@@ -133,46 +126,52 @@ def client_with_idempotency(
 @pytest.fixture
 def client_multi_tenant(
     api_keys_config_multi: dict[str, dict[str, str]],
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> TestClient:
-    """Create test client with two tenants configured."""
+    """Create test client with two tenants configured (in-memory, disk-safe)."""
     clear_deals_store()
 
-    audit_path = tmp_path / "audit.jsonl"
-    idem_path = tmp_path / "idem.sqlite3"
-
     monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys_config_multi))
-    monkeypatch.setenv("IDIS_AUDIT_LOG_PATH", str(audit_path))
-    monkeypatch.setenv(IDIS_IDEMPOTENCY_DB_PATH_ENV, str(idem_path))
 
-    audit_sink = JsonlFileAuditSink(file_path=str(audit_path))
-    idem_store = SqliteIdempotencyStore(db_path=str(idem_path))
+    # Use in-memory stores for disk-safe testing
+    audit_sink = InMemoryAuditSink()
+    idem_store = SqliteIdempotencyStore(in_memory=True)
 
     app = create_app(audit_sink=audit_sink, idempotency_store=idem_store)
     return TestClient(app)
 
 
+class BrokenIdempotencyStore:
+    """Test-only store that fails on all operations (simulates unavailable store)."""
+
+    def get(self, scope_key: object) -> None:
+        """Fail on get."""
+        from idis.idempotency.store import IdempotencyStoreError
+
+        raise IdempotencyStoreError("Simulated store unavailable")
+
+    def put(self, scope_key: object, record: object) -> None:
+        """Fail on put."""
+        from idis.idempotency.store import IdempotencyStoreError
+
+        raise IdempotencyStoreError("Simulated store unavailable")
+
+
 @pytest.fixture
 def client_with_broken_store(
     api_keys_config_single: dict[str, dict[str, str]],
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> TestClient:
-    """Create test client with idempotency store path pointing to a directory."""
+    """Create test client with broken idempotency store (fails on all operations)."""
     clear_deals_store()
 
-    audit_path = tmp_path / "audit.jsonl"
-    idem_dir = tmp_path / "idem_dir"
-    idem_dir.mkdir(parents=True, exist_ok=True)
-
     monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys_config_single))
-    monkeypatch.setenv("IDIS_AUDIT_LOG_PATH", str(audit_path))
-    monkeypatch.setenv(IDIS_IDEMPOTENCY_DB_PATH_ENV, str(idem_dir))
 
-    audit_sink = JsonlFileAuditSink(file_path=str(audit_path))
+    # Use in-memory audit sink and broken store for disk-safe testing
+    audit_sink = InMemoryAuditSink()
+    broken_store = BrokenIdempotencyStore()
 
-    app = create_app(audit_sink=audit_sink, idempotency_store=None)
+    app = create_app(audit_sink=audit_sink, idempotency_store=broken_store)
     return TestClient(app)
 
 
@@ -774,23 +773,18 @@ class TestActorIsolation:
     def client_same_tenant_different_actors(
         self,
         api_keys_config_same_tenant_different_actors: dict[str, dict[str, str]],
-        tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> TestClient:
-        """Create test client with same tenant but different actors."""
+        """Create test client with same tenant but different actors (in-memory)."""
         clear_deals_store()
-
-        audit_path = tmp_path / "audit.jsonl"
-        idem_path = tmp_path / "idem.sqlite3"
 
         monkeypatch.setenv(
             IDIS_API_KEYS_ENV, json.dumps(api_keys_config_same_tenant_different_actors)
         )
-        monkeypatch.setenv("IDIS_AUDIT_LOG_PATH", str(audit_path))
-        monkeypatch.setenv(IDIS_IDEMPOTENCY_DB_PATH_ENV, str(idem_path))
 
-        audit_sink = JsonlFileAuditSink(file_path=str(audit_path))
-        idem_store = SqliteIdempotencyStore(db_path=str(idem_path))
+        # Use in-memory stores for disk-safe testing
+        audit_sink = InMemoryAuditSink()
+        idem_store = SqliteIdempotencyStore(in_memory=True)
 
         app = create_app(audit_sink=audit_sink, idempotency_store=idem_store)
         return TestClient(app)
@@ -867,6 +861,23 @@ class TestActorIsolation:
         assert response_actor2.headers.get("X-IDIS-Idempotency-Replay") is None
 
 
+class FailingIdempotencyStore:
+    """Test-only store that fails on put operations."""
+
+    def __init__(self) -> None:
+        self._records: dict[tuple, object] = {}
+
+    def get(self, scope_key: object) -> None:
+        """Return None (no record found)."""
+        return None
+
+    def put(self, scope_key: object, record: object) -> None:
+        """Always fail on put."""
+        from idis.idempotency.store import IdempotencyStoreError
+
+        raise IdempotencyStoreError("Simulated store put failure")
+
+
 class TestStorePutFailure:
     """Test F: store.put failure returns 500 IDEMPOTENCY_STORE_FAILED."""
 
@@ -874,33 +885,20 @@ class TestStorePutFailure:
     def client_with_readonly_store(
         self,
         api_keys_config_single: dict[str, dict[str, str]],
-        tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> TestClient:
-        """Create test client with store that will fail on put."""
-        import os
-
+        """Create test client with store that will fail on put (in-memory)."""
         clear_deals_store()
 
-        audit_path = tmp_path / "audit.jsonl"
-        idem_path = tmp_path / "idem_readonly.sqlite3"
-
-        idem_store = SqliteIdempotencyStore(db_path=str(idem_path))
-        idem_store._get_connection()
-
-        os.chmod(str(idem_path), 0o444)
-
         monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys_config_single))
-        monkeypatch.setenv("IDIS_AUDIT_LOG_PATH", str(audit_path))
-        monkeypatch.setenv(IDIS_IDEMPOTENCY_DB_PATH_ENV, str(idem_path))
 
-        audit_sink = JsonlFileAuditSink(file_path=str(audit_path))
+        # Use in-memory audit sink and a failing store for put operations
+        audit_sink = InMemoryAuditSink()
+        failing_store = FailingIdempotencyStore()
 
-        app = create_app(audit_sink=audit_sink, idempotency_store=idem_store)
+        app = create_app(audit_sink=audit_sink, idempotency_store=failing_store)
 
-        yield TestClient(app)
-
-        os.chmod(str(idem_path), 0o644)
+        return TestClient(app)
 
     def test_store_put_failure_returns_500(
         self, client_with_readonly_store: TestClient, api_key_a: str

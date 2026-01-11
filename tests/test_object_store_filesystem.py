@@ -104,9 +104,10 @@ class TestRoundtrip:
         assert result.body == b""
 
     def test_large_content(self, store: Any, tenant_a: str) -> None:
-        """Should handle larger content (1MB)."""
+        """Should handle larger content (64KB - reduced for disk-safe testing)."""
         key = "test/large.bin"
-        data = os.urandom(1024 * 1024)
+        # Use 64KB instead of 1MB for disk-safe testing
+        data = os.urandom(64 * 1024)
 
         metadata = store.put(tenant_a, key, data)
 

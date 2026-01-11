@@ -127,6 +127,40 @@ class JsonlFileAuditSink:
             raise AuditSinkError(f"Failed to write audit event to {self._file_path}: {e}") from e
 
 
+class InMemoryAuditSink:
+    """In-memory audit sink for testing (no disk writes).
+
+    Stores emitted events in a list for later inspection.
+    Thread-safe for concurrent test usage.
+    """
+
+    def __init__(self) -> None:
+        """Initialize the in-memory sink."""
+        self._events: list[dict[str, Any]] = []
+
+    def emit(self, event: dict[str, Any]) -> None:
+        """Emit an audit event to memory.
+
+        Args:
+            event: Validated audit event dict
+        """
+        # Serialize and deserialize to ensure JSON compatibility
+        try:
+            line = json.dumps(event, sort_keys=True, separators=(",", ":"))
+            self._events.append(json.loads(line))
+        except (TypeError, ValueError) as e:
+            raise AuditSinkError(f"Failed to serialize audit event: {e}") from e
+
+    @property
+    def events(self) -> list[dict[str, Any]]:
+        """Return all emitted events."""
+        return list(self._events)
+
+    def clear(self) -> None:
+        """Clear all stored events."""
+        self._events.clear()
+
+
 def get_audit_sink() -> AuditSink:
     """Factory function to get the configured audit sink.
 

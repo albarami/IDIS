@@ -113,23 +113,35 @@ class SqliteIdempotencyStore:
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
 
-    def __init__(self, db_path: str | None = None) -> None:
+    def __init__(self, db_path: str | None = None, in_memory: bool = False) -> None:
         """Initialize the idempotency store.
 
         Args:
             db_path: Path to SQLite database file. If None, uses environment
                 variable IDIS_IDEMPOTENCY_DB_PATH or default path.
+            in_memory: If True, use shared in-memory database (for tests).
+                When True, db_path is ignored and a shared memory URI is used.
 
         Raises:
             IdempotencyStoreError: If database cannot be initialized.
         """
-        if db_path is None:
+        self._in_memory = in_memory
+        if in_memory:
+            # Use shared in-memory database with unique name per instance
+            self._db_path = ":memory:"
+            self._use_uri = False
+        elif db_path is None:
             db_path = os.environ.get(IDIS_IDEMPOTENCY_DB_PATH_ENV, DEFAULT_IDEMPOTENCY_DB_PATH)
+            self._db_path = db_path
+            self._use_uri = False
+        else:
+            self._db_path = db_path
+            self._use_uri = False
 
-        self._db_path = db_path
         self._local = threading.local()
         self._initialized = False
         self._init_lock = threading.Lock()
+        self._shared_conn: sqlite3.Connection | None = None
 
     def _get_connection(self) -> sqlite3.Connection:
         """Get or create a thread-local database connection.
@@ -145,6 +157,10 @@ class SqliteIdempotencyStore:
                 if not self._initialized:
                     self._ensure_database()
                     self._initialized = True
+
+        # For in-memory mode, use the shared connection
+        if self._in_memory and self._shared_conn is not None:
+            return self._shared_conn
 
         conn = getattr(self._local, "conn", None)
         if conn is None:
@@ -164,6 +180,16 @@ class SqliteIdempotencyStore:
             IdempotencyStoreError: If database cannot be created.
         """
         try:
+            if self._in_memory:
+                # For in-memory mode, create a shared connection and keep it alive
+                conn = sqlite3.connect(":memory:", check_same_thread=False)
+                conn.row_factory = sqlite3.Row
+                conn.execute(self._CREATE_TABLE_SQL)
+                conn.commit()
+                self._shared_conn = conn
+                logger.info("Initialized in-memory idempotency store")
+                return
+
             db_path = Path(self._db_path)
 
             if db_path.is_dir():

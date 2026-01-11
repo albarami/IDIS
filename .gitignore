@@ -37,9 +37,13 @@ build/
 # IDE
 .idea/
 .vscode/
+.claude/
 *.swp
 *.swo
 *~
+
+# Windows special files
+nul
 
 # OS
 .DS_Store

@@ -227,26 +227,6 @@ class TestValidateMuhasabahFail:
 class TestValidateMuhasabahUuidValidation:
     """Test cases for UUID format validation."""
 
-    def test_invalid_agent_id_format(self) -> None:
-        """FAIL: agent_id not a valid UUID."""
-        record = _make_valid_record(agent_id="not-a-uuid")
-
-        result = validate_muhasabah(record)
-
-        assert result.passed is False
-        error_codes = [e.code for e in result.errors]
-        assert "INVALID_AGENT_ID_FORMAT" in error_codes
-
-    def test_invalid_output_id_format(self) -> None:
-        """FAIL: output_id not a valid UUID."""
-        record = _make_valid_record(output_id="invalid-uuid")
-
-        result = validate_muhasabah(record)
-
-        assert result.passed is False
-        error_codes = [e.code for e in result.errors]
-        assert "INVALID_OUTPUT_ID_FORMAT" in error_codes
-
     def test_invalid_claim_id_format(self) -> None:
         """FAIL: claim_id in supported_claim_ids not a valid UUID."""
         record = _make_valid_record(

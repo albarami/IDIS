@@ -95,6 +95,10 @@ class MuhasabahRecord(BaseModel):
     confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score")
     failure_modes: list[str] = Field(default_factory=list, description="Identified failure modes")
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+    is_subjective: bool = Field(
+        default=False,
+        description="If True, output contains no factual assertions requiring claim refs",
+    )
 
 
 class AgentOutput(BaseModel):

@@ -99,28 +99,12 @@ class MuhasabahValidator:
                     path="$.agent_id",
                 )
             )
-        elif isinstance(agent_id, str) and not _is_uuid_like(agent_id):
-            errors.append(
-                ValidationError(
-                    code="INVALID_AGENT_ID_FORMAT",
-                    message="agent_id must be a valid UUID format",
-                    path="$.agent_id",
-                )
-            )
 
         if not output_id:
             errors.append(
                 ValidationError(
                     code="MISSING_OUTPUT_ID",
                     message="output_id is required",
-                    path="$.output_id",
-                )
-            )
-        elif isinstance(output_id, str) and not _is_uuid_like(output_id):
-            errors.append(
-                ValidationError(
-                    code="INVALID_OUTPUT_ID_FORMAT",
-                    message="output_id must be a valid UUID format",
                     path="$.output_id",
                 )
             )

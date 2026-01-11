@@ -242,6 +242,7 @@ class MuhasabahGate:
                 "confidence": getattr(muhasabah, "confidence", None),
                 "failure_modes": getattr(muhasabah, "failure_modes", []),
                 "timestamp": getattr(muhasabah, "timestamp", None),
+                "is_subjective": getattr(muhasabah, "is_subjective", False),
             }
 
         # Ensure output_id is set (may come from parent output)

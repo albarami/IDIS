@@ -262,7 +262,6 @@ class TestOrchestratorMuhasabahGateIntegration:
         orchestrator = DebateOrchestrator(
             config=config,
             role_runners=role_runners,
-            enforce_muhasabah=True,
         )
 
         initial_state = _make_initial_state()
@@ -305,7 +304,6 @@ class TestOrchestratorMuhasabahGateIntegration:
         orchestrator = DebateOrchestrator(
             config=config,
             role_runners=role_runners,
-            enforce_muhasabah=True,
         )
 
         initial_state = _make_initial_state()
@@ -337,7 +335,6 @@ class TestOrchestratorMuhasabahGateIntegration:
         orchestrator = DebateOrchestrator(
             config=config,
             role_runners=role_runners,
-            enforce_muhasabah=True,
         )
 
         initial_state = _make_initial_state()
@@ -354,9 +351,13 @@ class TestOrchestratorMuhasabahGateIntegration:
         # Should have visited the muhasabah_validate_all node
         assert "muhasabah_validate_all" in final_state.nodes_visited
 
-    def test_orchestrator_skips_gate_when_disabled(self) -> None:
-        """Orchestrator skips gate when enforce_muhasabah=False."""
-        # Invalid role runner that would normally fail
+    def test_gate_cannot_be_bypassed(self) -> None:
+        """Gate is ALWAYS enforced - there is no bypass path.
+
+        This test proves that there is no supported way to disable the gate.
+        Invalid outputs always cause CRITICAL_DEFECT, regardless of configuration.
+        """
+        # Invalid role runner that will fail the gate
         role_runners = RoleRunners(
             advocate=InvalidRoleRunnerNoClaims(DebateRole.ADVOCATE),
             sanad_breaker=ValidRoleRunner(DebateRole.SANAD_BREAKER),
@@ -366,21 +367,19 @@ class TestOrchestratorMuhasabahGateIntegration:
         )
 
         config = DebateConfig(max_rounds=1)
+        # No bypass parameter exists - gate is always on
         orchestrator = DebateOrchestrator(
             config=config,
             role_runners=role_runners,
-            enforce_muhasabah=False,  # Disabled
         )
 
         initial_state = _make_initial_state()
         final_state = orchestrator.run(initial_state)
 
-        # Should NOT have gate failure since gate is disabled
+        # Gate MUST block invalid outputs - no bypass possible
+        assert final_state.stop_reason == StopReason.CRITICAL_DEFECT
         gate_failure = orchestrator.get_gate_failure()
-        assert gate_failure is None
-
-        # Should have agent outputs (even invalid ones pass through)
-        assert len(final_state.agent_outputs) > 0
+        assert gate_failure is not None
 
 
 class TestOrchestratorMuhasabahNodeValidation:
@@ -400,7 +399,6 @@ class TestOrchestratorMuhasabahNodeValidation:
         orchestrator = DebateOrchestrator(
             config=config,
             role_runners=role_runners,
-            enforce_muhasabah=True,
         )
 
         initial_state = _make_initial_state()
@@ -448,7 +446,6 @@ class TestDeterministicGateBehavior:
             orchestrator = DebateOrchestrator(
                 config=config,
                 role_runners=role_runners,
-                enforce_muhasabah=True,
             )
 
             initial_state = _make_initial_state()

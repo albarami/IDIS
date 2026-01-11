@@ -90,23 +90,21 @@ class DebateOrchestrator:
         self,
         config: DebateConfig | None = None,
         role_runners: RoleRunners | None = None,
-        *,
-        enforce_muhasabah: bool = False,
     ) -> None:
         """Initialize orchestrator.
 
         Args:
             config: Debate configuration. Uses defaults if not provided.
             role_runners: Injected role runners. Uses defaults if not provided.
-            enforce_muhasabah: If True, enforce Muḥāsabah gate on all outputs.
-                              Defaults to False for backward compatibility.
-                              Production usage SHOULD set this to True.
+
+        Note:
+            Muḥāsabah + No-Free-Facts gate is ALWAYS enforced at the output
+            boundary. There is no bypass. This is a hard trust invariant.
         """
         self.config = config or DebateConfig()
         self.runners = role_runners or RoleRunners()
         self.stop_checker = StopConditionChecker(self.config)
-        self.enforce_muhasabah = enforce_muhasabah
-        self._muhasabah_gate = MuhasabahGate() if enforce_muhasabah else None
+        self._muhasabah_gate = MuhasabahGate()
         self._graph: Any | None = None
         self._gate_failure: MuhasabahGateError | None = None
 
@@ -219,7 +217,7 @@ class DebateOrchestrator:
             validated_outputs = []
             for output in result.outputs:
                 gate_decision = self._enforce_gate_on_output(output, state)
-                if gate_decision is not None and not gate_decision.allowed:
+                if not gate_decision.allowed:
                     # Gate failed - halt the run deterministically
                     # Set stop_reason to CRITICAL_DEFECT and record the failure
                     updates["stop_reason"] = StopReason.CRITICAL_DEFECT
@@ -241,15 +239,15 @@ class DebateOrchestrator:
 
         return state.model_copy(update=updates)
 
-    def _enforce_gate_on_output(self, output: Any, state: DebateState) -> GateDecision | None:
+    def _enforce_gate_on_output(self, output: Any, state: DebateState) -> GateDecision:
         """Enforce Muḥāsabah gate on a single output.
 
-        Returns:
-            GateDecision if gate is enforced, None if gate is disabled.
-        """
-        if not self.enforce_muhasabah or self._muhasabah_gate is None:
-            return None
+        This gate is ALWAYS enforced - there is no bypass path.
+        Fail-closed: any validation failure halts the run.
 
+        Returns:
+            GateDecision with allowed/rejected status.
+        """
         context = {
             "tenant_id": state.tenant_id,
             "deal_id": state.deal_id,
@@ -356,23 +354,22 @@ class DebateOrchestrator:
             updates["stop_reason"] = StopReason.CRITICAL_DEFECT
             return state.model_copy(update=updates)
 
-        # Phase 5.2: Re-validate all outputs as final check
-        if self.enforce_muhasabah and self._muhasabah_gate is not None:
-            for output in state.agent_outputs:
-                decision = self._enforce_gate_on_output(output, state)
-                if decision is not None and not decision.allowed:
-                    # Found an invalid output - this should not happen if gate
-                    # was enforced at output boundary, but we fail closed anyway
-                    updates["stop_reason"] = StopReason.CRITICAL_DEFECT
-                    self._gate_failure = MuhasabahGateError(
-                        message=(
-                            f"Muḥāsabah gate rejected output in final validation: {output.agent_id}"
-                        ),
-                        decision=decision,
-                        output_id=output.output_id,
-                        agent_id=output.agent_id,
-                    )
-                    break
+        # Phase 5.2: Re-validate all outputs as final check (always-on gate)
+        for output in state.agent_outputs:
+            decision = self._enforce_gate_on_output(output, state)
+            if not decision.allowed:
+                # Found an invalid output - this should not happen if gate
+                # was enforced at output boundary, but we fail closed anyway
+                updates["stop_reason"] = StopReason.CRITICAL_DEFECT
+                self._gate_failure = MuhasabahGateError(
+                    message=(
+                        f"Muḥāsabah gate rejected output in final validation: {output.agent_id}"
+                    ),
+                    decision=decision,
+                    output_id=output.output_id,
+                    agent_id=output.agent_id,
+                )
+                break
 
         return state.model_copy(update=updates)
 

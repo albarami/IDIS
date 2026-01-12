@@ -174,7 +174,11 @@ def _get_claim_response(claim_data: dict[str, Any]) -> ClaimResponse:
     )
 
 
-@router.get("/deals/{deal_id}/truth-dashboard", response_model=TruthDashboard)
+@router.get(
+    "/deals/{deal_id}/truth-dashboard",
+    response_model=TruthDashboard,
+    response_model_exclude_none=True,
+)
 def get_deal_truth_dashboard(
     deal_id: str,
     tenant_ctx: RequireTenantContext,
@@ -261,7 +265,11 @@ def get_deal_truth_dashboard(
     )
 
 
-@router.get("/claims/{claim_id}", response_model=ClaimResponse)
+@router.get(
+    "/claims/{claim_id}",
+    response_model=ClaimResponse,
+    response_model_exclude_none=True,
+)
 def get_claim(
     claim_id: str,
     tenant_ctx: RequireTenantContext,
@@ -289,7 +297,11 @@ def get_claim(
     return _get_claim_response(claim_data)
 
 
-@router.get("/claims/{claim_id}/sanad", response_model=SanadResponse)
+@router.get(
+    "/claims/{claim_id}/sanad",
+    response_model=SanadResponse,
+    response_model_exclude_none=True,
+)
 def get_claim_sanad(
     claim_id: str,
     tenant_ctx: RequireTenantContext,

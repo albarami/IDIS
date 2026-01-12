@@ -387,6 +387,68 @@ class TestTruthDashboardEndpoint:
             os.environ.pop("IDIS_API_KEYS_JSON", None)
             os.environ.pop("IDIS_AUDIT_LOG_PATH", None)
 
+    def test_claims_without_value_omit_value_field(self, tmp_path: Path) -> None:
+        """Claims without value should omit 'value' field entirely (not null)."""
+        tenant_id = str(uuid.uuid4())
+        deal_id = str(uuid.uuid4())
+        audit_log_path = tmp_path / "audit.jsonl"
+
+        os.environ["IDIS_API_KEYS_JSON"] = _make_api_keys_json(tenant_id)
+        os.environ["IDIS_AUDIT_LOG_PATH"] = str(audit_log_path)
+
+        try:
+            _seed_deal(tenant_id, deal_id)
+
+            seed_claim(
+                {
+                    "claim_id": str(uuid.uuid4()),
+                    "tenant_id": tenant_id,
+                    "deal_id": deal_id,
+                    "claim_class": "TRACTION",
+                    "claim_text": "User growth is strong",
+                    "claim_grade": "B",
+                    "claim_verdict": "VERIFIED",
+                    "claim_action": "NONE",
+                    "sanad_id": None,
+                    "value": None,
+                    "corroboration": {"level": "AHAD", "independent_chain_count": 1},
+                    "defect_ids": [],
+                    "materiality": "MEDIUM",
+                    "ic_bound": False,
+                    "created_at": "2026-01-10T00:00:00Z",
+                }
+            )
+
+            sink = JsonlFileAuditSink(file_path=str(audit_log_path))
+            app = create_app(audit_sink=sink)
+            client = TestClient(app, raise_server_exceptions=False)
+
+            response = client.get(
+                f"/v1/deals/{deal_id}/truth-dashboard",
+                headers={"X-IDIS-API-Key": "test-api-key"},
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+
+            assert len(data["claims"]["items"]) == 1, "Expected 1 claim"
+            claim_item = data["claims"]["items"][0]
+
+            assert "value" not in claim_item, (
+                "Claim.value must be omitted when None (not serialized as null) "
+                "per OpenAPI spec where value is optional but not nullable"
+            )
+
+            for claim in data["claims"]["items"]:
+                if "value" in claim:
+                    assert claim["value"] is not None, (
+                        "If value key is present, it must not be null"
+                    )
+
+        finally:
+            os.environ.pop("IDIS_API_KEYS_JSON", None)
+            os.environ.pop("IDIS_AUDIT_LOG_PATH", None)
+
 
 class TestTruthDashboardRBAC:
     """Test RBAC enforcement for truth dashboard endpoint."""

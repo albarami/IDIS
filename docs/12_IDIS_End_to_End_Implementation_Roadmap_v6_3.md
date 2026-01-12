@@ -186,11 +186,11 @@ Example: feat(phase-1): implement PDF parser with span generation
 | PPTX parser | `src/idis/parsers/pptx.py` | ✅ | `test_pptx_parser.py` |
 | Parser registry | `src/idis/parsers/registry.py` | ✅ | `test_parser_registry.py` |
 
-#### Task 1.3: Ingestion Service ⏳ NOT STARTED
-| Deliverable | Module | Status |
-|-------------|--------|--------|
-| Ingestion service | `src/idis/services/ingestion/service.py` | ⏳ |
-| Span generator | `src/idis/services/ingestion/span_generator.py` | ⏳ |
+#### Task 1.3: Ingestion Service ✅ COMPLETE
+| Deliverable | Module | Status | Test |
+|-------------|--------|--------|------|
+| Ingestion service | `src/idis/services/ingestion/service.py` | ✅ | `test_ingestion_service.py` |
+| Span generator | `src/idis/services/ingestion/span_generator.py` | ✅ | `test_ingestion_service.py` |
 
 #### Task 1.4: Document API Endpoints ⏳ NOT STARTED
 | Deliverable | OpenAPI Operation | Status |

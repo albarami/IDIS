@@ -11,6 +11,7 @@ __pycache__/
 
 # Testing
 .pytest_cache/
+.tmp/
 .coverage
 htmlcov/
 .tox/

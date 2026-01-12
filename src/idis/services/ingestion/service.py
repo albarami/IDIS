@@ -14,7 +14,7 @@ Requirements per v6.3:
 - Audit completeness: emit required audit events
 - SHA256 integrity tracking
 - Fail closed: no unhandled exceptions, structured errors
-- No placeholders or fake paths
+- No stub implementations or synthetic paths
 """
 
 from __future__ import annotations

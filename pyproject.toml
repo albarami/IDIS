@@ -38,6 +38,7 @@ dev = [
     "pre-commit>=3.6.0",
     "reportlab>=4.0.0",
     "openpyxl>=3.1.0",
+    "types-openpyxl>=3.1.0.0",
     "py-make>=0.1.1",
 ]
 
@@ -112,6 +113,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["opentelemetry.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["google.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

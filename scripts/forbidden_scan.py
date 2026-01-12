@@ -67,6 +67,7 @@ ALLOWLIST_PATTERNS: list[re.Pattern[str]] = [
 
 EXCLUDED_DIRS: set[str] = {
     ".git",
+    ".tmp",
     "__pycache__",
     ".pytest_cache",
     ".mypy_cache",

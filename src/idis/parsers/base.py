@@ -114,7 +114,7 @@ class ParseResult:
         warnings: Non-fatal issues encountered during parsing.
     """
 
-    doc_type: Literal["PDF", "XLSX"]
+    doc_type: Literal["PDF", "XLSX", "DOCX", "PPTX", "UNKNOWN"]
     success: bool
     spans: list[SpanDraft] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)

@@ -20,7 +20,9 @@ from idis.parsers.base import (
     ParseLimits,
     ParseResult,
 )
+from idis.parsers.docx import parse_docx
 from idis.parsers.pdf import parse_pdf
+from idis.parsers.pptx import parse_pptx
 from idis.parsers.xlsx import parse_xlsx
 
 PDF_MAGIC = b"%PDF-"
@@ -32,21 +34,36 @@ def _is_pdf(data: bytes) -> bool:
     return data[:5] == PDF_MAGIC
 
 
-def _is_xlsx(data: bytes) -> bool:
-    """Check if data is a valid XLSX (ZIP with xl/workbook.xml).
+def _detect_zip_format(data: bytes) -> str | None:
+    """Detect Office Open XML format from ZIP contents.
 
-    XLSX files are ZIP archives containing xl/workbook.xml.
-    We verify both the ZIP signature and the presence of the workbook.
+    Args:
+        data: Raw file bytes (must start with ZIP magic).
+
+    Returns:
+        Format string ("XLSX", "DOCX", "PPTX") or None if not recognized.
+
+    Detection order:
+        1. XLSX: contains xl/workbook.xml
+        2. DOCX: contains word/document.xml
+        3. PPTX: contains ppt/presentation.xml
     """
     if len(data) < 4 or data[:4] != ZIP_MAGIC:
-        return False
+        return None
 
     try:
         with zipfile.ZipFile(BytesIO(data), "r") as zf:
             names = zf.namelist()
-            return "xl/workbook.xml" in names
+            if "xl/workbook.xml" in names:
+                return "XLSX"
+            if "word/document.xml" in names:
+                return "DOCX"
+            if "ppt/presentation.xml" in names:
+                return "PPTX"
     except (zipfile.BadZipFile, Exception):
-        return False
+        return None
+
+    return None
 
 
 def detect_format(data: bytes) -> str | None:
@@ -56,16 +73,21 @@ def detect_format(data: bytes) -> str | None:
         data: Raw file bytes.
 
     Returns:
-        Format string ("PDF", "XLSX") or None if unknown.
+        Format string ("PDF", "XLSX", "DOCX", "PPTX") or None if unknown.
 
     Detection priority:
         1. PDF: %PDF- magic bytes
         2. XLSX: ZIP with xl/workbook.xml
+        3. DOCX: ZIP with word/document.xml
+        4. PPTX: ZIP with ppt/presentation.xml
     """
     if _is_pdf(data):
         return "PDF"
-    if _is_xlsx(data):
-        return "XLSX"
+
+    zip_format = _detect_zip_format(data)
+    if zip_format:
+        return zip_format
+
     return None
 
 
@@ -89,6 +111,7 @@ def parse_bytes(
 
     Behavior:
         - Format detection is based on magic bytes, not filename/mime.
+        - Empty bytes return UNSUPPORTED_FORMAT with doc_type UNKNOWN.
         - Unsupported formats return success=False with UNSUPPORTED_FORMAT error.
         - Never raises exceptions; all failures captured in result.
     """
@@ -97,11 +120,11 @@ def parse_bytes(
 
     if len(data) == 0:
         return ParseResult(
-            doc_type="PDF",  # Arbitrary default for error case
+            doc_type="UNKNOWN",
             success=False,
             errors=[
                 ParseError(
-                    code=ParseErrorCode.CORRUPTED_FILE,
+                    code=ParseErrorCode.UNSUPPORTED_FORMAT,
                     message="Empty file",
                     details={"filename": filename, "mime_type": mime_type},
                 )
@@ -116,8 +139,14 @@ def parse_bytes(
     if detected_format == "XLSX":
         return parse_xlsx(data, limits=limits)
 
+    if detected_format == "DOCX":
+        return parse_docx(data, limits=limits)
+
+    if detected_format == "PPTX":
+        return parse_pptx(data, limits=limits)
+
     return ParseResult(
-        doc_type="PDF",  # Arbitrary default for error case
+        doc_type="UNKNOWN",
         success=False,
         errors=[
             ParseError(

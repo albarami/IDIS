@@ -18,6 +18,10 @@ from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Any
 
+from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
+from openpyxl.utils.exceptions import InvalidFileException
+
 from idis.parsers.base import (
     ParseError,
     ParseErrorCode,
@@ -25,10 +29,6 @@ from idis.parsers.base import (
     ParseResult,
     SpanDraft,
 )
-
-from openpyxl import load_workbook
-from openpyxl.utils import get_column_letter
-from openpyxl.utils.exceptions import InvalidFileException
 
 
 def _compute_content_hash(text: str) -> str:

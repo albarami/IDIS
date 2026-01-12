@@ -161,7 +161,7 @@ Example: feat(phase-1): implement PDF parser with span generation
 
 ---
 
-### Phase 1 — Ingestion & Parsing 🔴 BLOCKER (Partially Complete)
+### Phase 1 — Ingestion & Parsing � IN PROGRESS
 
 **Scope:** Ingest deal room artifacts into canonical Document + Span objects.
 
@@ -177,14 +177,14 @@ Example: feat(phase-1): implement PDF parser with span generation
 | DocumentArtifact model | `models/document_artifact.py` | ✅ | — |
 | DB migration | `persistence/migrations/versions/0004_*` | ✅ | — |
 
-#### Task 1.2: Document Parsing ⏳ NOT STARTED
-| Deliverable | Module | Status |
-|-------------|--------|--------|
-| PDF parser | `src/idis/parsers/pdf.py` | ⏳ |
-| XLSX parser | `src/idis/parsers/xlsx.py` | ⏳ |
-| DOCX parser | `src/idis/parsers/docx.py` | ⏳ |
-| PPTX parser | `src/idis/parsers/pptx.py` | ⏳ |
-| Parser registry | `src/idis/parsers/registry.py` | ⏳ |
+#### Task 1.2: Document Parsing ✅ COMPLETE
+| Deliverable | Module | Status | Test |
+|-------------|--------|--------|------|
+| PDF parser | `src/idis/parsers/pdf.py` | ✅ | `test_pdf_parser.py` |
+| XLSX parser | `src/idis/parsers/xlsx.py` | ✅ | `test_xlsx_parser.py` |
+| DOCX parser | `src/idis/parsers/docx.py` | ✅ | `test_docx_parser.py` |
+| PPTX parser | `src/idis/parsers/pptx.py` | ✅ | `test_pptx_parser.py` |
+| Parser registry | `src/idis/parsers/registry.py` | ✅ | `test_parser_registry.py` |
 
 #### Task 1.3: Ingestion Service ⏳ NOT STARTED
 | Deliverable | Module | Status |
@@ -209,31 +209,37 @@ Example: feat(phase-1): implement PDF parser with span generation
 | Test File | Coverage | Status |
 |-----------|----------|--------|
 | `test_object_store_filesystem.py` | Storage primitives | ✅ |
-| `test_pdf_parser.py` | PDF parsing + span gen | ⏳ |
-| `test_xlsx_parser.py` | XLSX parsing + cell locators | ⏳ |
-| `test_parser_registry.py` | Format detection | ⏳ |
+| `test_pdf_parser.py` | PDF parsing + span gen | ✅ |
+| `test_xlsx_parser.py` | XLSX parsing + cell locators | ✅ |
+| `test_docx_parser.py` | DOCX parsing + paragraph locators | ✅ |
+| `test_pptx_parser.py` | PPTX parsing + slide locators | ✅ |
+| `test_parser_registry.py` | Format detection | ✅ |
 | `test_ingestion_service.py` | E2E ingestion flow | ⏳ |
 | `test_api_documents.py` | API endpoints | ⏳ |
 
-**Git Commits (Planned):**
+**Git Commits:**
 ```
-feat(phase-1): implement PDF parser with span generation
-feat(phase-1): implement XLSX parser with cell locators
-feat(phase-1): implement parser registry with format detection
-feat(phase-1): implement ingestion service coordinator
-feat(phase-1): add document API endpoints
-test(phase-1): add parser and ingestion test coverage
-docs(phase-1): update roadmap with Phase 1 completion
+feat(phase-1): implement PDF parser with span generation ✅
+feat(phase-1): implement XLSX parser with cell locators ✅
+feat(phase-1): implement DOCX parser with paragraph locators ✅
+feat(phase-1): implement PPTX parser with slide locators ✅
+feat(phase-1): implement parser registry with format detection ✅
+chore(phase-1): close gate failures (forbidden scan, return-true, mypy) ✅
+feat(phase-1): implement ingestion service coordinator ⏳
+feat(phase-1): add document API endpoints ⏳
+docs(phase-1): update roadmap with Phase 1 completion ⏳
 ```
 
 **Exit Criteria:**
 - [x] Object storage abstraction working
-- [ ] PDF parser: 95%+ parse success on GDBS sample set
-- [ ] XLSX parser: 95%+ parse success on GDBS sample set
-- [ ] Spans have stable locators (page/line/cell)
+- [x] PDF parser: 95%+ parse success on GDBS sample set
+- [x] XLSX parser: 95%+ parse success on GDBS sample set
+- [x] DOCX parser: paragraph + table cell extraction
+- [x] PPTX parser: slide/shape/table extraction
+- [x] Spans have stable locators (page/line/cell/paragraph/slide)
 - [ ] Audit events emitted for ingestion
 - [ ] Document API endpoints functional
-- [ ] Gate 0 passes (lint, type, tests)
+- [x] Gate 0 passes (lint, type, tests)
 
 ---
 

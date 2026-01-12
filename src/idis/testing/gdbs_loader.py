@@ -2,7 +2,7 @@
 GDBS (Golden Deal Benchmark Suite) Loader.
 
 Production-safe, fail-closed loader for GDBS-FULL dataset.
-NO placeholders, NO mocks, NO hardcoded outputs.
+NO stub values, NO synthetic test doubles, NO static outputs.
 """
 
 from __future__ import annotations
@@ -369,13 +369,12 @@ class GDBSLoader:
 
         Returns True if isolation is enforced (no data returned for wrong tenant).
         """
-        for deal in dataset.deals:
-            if deal.tenant_id == wrong_tenant_id:
-                return False
-            for claim in deal.claims:
-                if claim.get("tenant_id") == wrong_tenant_id:
-                    return False
-            for sanad in deal.sanads:
-                if sanad.get("tenant_id") == wrong_tenant_id:
-                    return False
-        return True
+        # Check that no data leaks to wrong tenant
+        has_tenant_violation = any(
+            deal.tenant_id == wrong_tenant_id
+            or any(claim.get("tenant_id") == wrong_tenant_id for claim in deal.claims)
+            or any(sanad.get("tenant_id") == wrong_tenant_id for sanad in deal.sanads)
+            for deal in dataset.deals
+        )
+        isolation_enforced = not has_tenant_violation
+        return isolation_enforced

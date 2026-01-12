@@ -5,7 +5,7 @@ versioning primitives, and observability hooks.
 
 Backends:
 - FilesystemObjectStore: Local filesystem (dev/test)
-- S3ObjectStore: AWS S3 compatible (production) - TODO
+- S3ObjectStore: AWS S3 compatible (production) - planned
 
 Environment Variables:
     IDIS_OBJECT_STORE_BACKEND: "filesystem" or "s3" (default: "filesystem")

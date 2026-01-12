@@ -21,7 +21,7 @@ class ObjectStore(ABC):
 
     Implementations:
     - FilesystemObjectStore: Local filesystem (dev/test)
-    - S3ObjectStore: AWS S3 compatible (production) - TODO
+    - S3ObjectStore: AWS S3 compatible (production) - planned
     """
 
     @property

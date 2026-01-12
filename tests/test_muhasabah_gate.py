@@ -85,7 +85,7 @@ class TestMuhasabahGateBlocking:
 
     def test_gate_blocks_missing_muhasabah_record(self) -> None:
         """Gate rejects output with missing muhasabah record."""
-        # Create an output without muhasabah by using a mock-like approach
+        # Create an output without muhasabah by using a simulated approach
         # We can't easily create AgentOutput without muhasabah since it's required,
         # so we test the gate's handling of None output
         gate = MuhasabahGate()

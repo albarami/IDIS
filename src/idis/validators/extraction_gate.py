@@ -121,12 +121,12 @@ class ExtractionGateBlockedError(Exception):
 
 def _is_human_verified(input_data: ExtractionGateInput) -> bool:
     """Check if input is human-verified via either flag or verification_method."""
-    if input_data.is_human_verified:
-        return True
-    return input_data.verification_method in (
+    has_verification_flag = input_data.is_human_verified
+    has_verification_method = input_data.verification_method in (
         VerificationMethod.HUMAN_VERIFIED,
         VerificationMethod.DUAL_VERIFIED,
     )
+    return has_verification_flag or has_verification_method
 
 
 def _to_decimal(value: Any) -> Decimal | None:

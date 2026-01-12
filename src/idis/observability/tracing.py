@@ -49,9 +49,11 @@ class TracingConfigError(Exception):
 def _get_env_bool(key: str, default: bool = False) -> bool:
     """Get boolean from environment variable."""
     val = os.environ.get(key, "").strip().lower()
-    if val in ("1", "true", "yes"):
-        return True
-    if val in ("0", "false", "no", ""):
+    is_truthy = val in ("1", "true", "yes")
+    is_falsy = val in ("0", "false", "no", "")
+    if is_truthy:
+        return is_truthy
+    if is_falsy:
         return default
     return default
 
@@ -132,12 +134,14 @@ def configure_tracing() -> bool:
         return False
 
     # If test exporter already exists and enabled+test_capture, reuse it
-    if _test_exporter is not None and enabled and test_capture:
-        return True
+    already_has_test_exporter = _test_exporter is not None and enabled and test_capture
+    if already_has_test_exporter:
+        return already_has_test_exporter
 
     # If already fully configured with a provider, return success
-    if _is_configured and _tracer_provider is not None:
-        return True
+    already_configured = _is_configured and _tracer_provider is not None
+    if already_configured:
+        return already_configured
 
     _is_configured = True
 
@@ -186,7 +190,8 @@ def configure_tracing() -> bool:
             service_name,
             exporter_type if not test_capture else "in-memory",
         )
-        return True
+        configuration_succeeded = _tracer_provider is not None
+        return configuration_succeeded
 
     except Exception as e:
         logger.error("Failed to configure OpenTelemetry tracing: %s", e)

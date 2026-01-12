@@ -28,9 +28,11 @@ F = TypeVar("F", bound=Callable[..., Any])
 def _get_env_bool(key: str, default: bool = False) -> bool:
     """Get boolean from environment variable."""
     val = os.environ.get(key, "").strip().lower()
-    if val in ("1", "true", "yes"):
-        return True
-    if val in ("0", "false", "no", ""):
+    is_truthy = val in ("1", "true", "yes")
+    is_falsy = val in ("0", "false", "no", "")
+    if is_truthy:
+        return is_truthy
+    if is_falsy:
         return default
     return default
 

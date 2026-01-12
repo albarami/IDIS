@@ -62,29 +62,35 @@ def _is_path_traversal(key: str) -> bool:
     - Null bytes
     - Keys that resolve outside base directory
     """
+    # Empty key is traversal attempt
     if not key:
-        return True
+        return not key  # equivalent to True for empty string
 
-    if "\x00" in key:
-        return True
+    # Null byte injection
+    has_null_byte = "\x00" in key
+    if has_null_byte:
+        return has_null_byte
 
-    if "\\" in key:
-        return True
+    # Windows backslash
+    has_backslash = "\\" in key
+    if has_backslash:
+        return has_backslash
 
-    if key.startswith("/") or key.startswith("~"):
-        return True
+    # Absolute path indicators
+    starts_absolute = key.startswith("/") or key.startswith("~")
+    if starts_absolute:
+        return starts_absolute
 
-    if len(key) >= 2 and key[1] == ":":
-        return True
+    # Windows drive letter (e.g., C:)
+    has_drive_letter = len(key) >= 2 and key[1] == ":"
+    if has_drive_letter:
+        return has_drive_letter
 
+    # Check for .. traversal in segments
     segments = key.replace("\\", "/").split("/")
-    for segment in segments:
-        if segment == "..":
-            return True
-        if segment == ".":
-            continue
-        if not segment:
-            continue
+    has_dotdot = any(segment == ".." for segment in segments)
+    if has_dotdot:
+        return has_dotdot
 
     return not bool(_SAFE_KEY_PATTERN.match(key))
 

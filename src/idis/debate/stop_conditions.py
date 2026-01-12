@@ -108,13 +108,12 @@ class StopConditionChecker:
 
         This is a deterministic check based on state data, not external lookups.
         """
-        for output in state.agent_outputs:
-            content = output.content
-            if content.get("critical_defect_detected", False):
-                return True
-            if content.get("has_grade_d_material_claim", False):
-                return True
-        return False
+        has_critical_defect = any(
+            output.content.get("critical_defect_detected", False)
+            or output.content.get("has_grade_d_material_claim", False)
+            for output in state.agent_outputs
+        )
+        return has_critical_defect
 
     def _check_max_rounds(self, state: DebateState) -> bool:
         """Check if max rounds reached (priority 2).

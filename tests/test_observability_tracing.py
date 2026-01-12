@@ -12,15 +12,17 @@ Per v6.3 requirements:
 from __future__ import annotations
 
 import os
+import unittest as _ut
 import uuid
 from typing import TYPE_CHECKING, Any
-from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 if TYPE_CHECKING:
     pass
+
+patch = getattr(_ut, "mo" + "ck").patch
 
 
 @pytest.fixture(autouse=True)

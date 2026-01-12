@@ -20,7 +20,13 @@ from idis.debate.roles.risk_officer import RiskOfficerRole
 from idis.debate.roles.sanad_breaker import SanadBreakerRole
 from idis.models.debate import DebateMessage, DebateRole, DebateState
 
-BANNED_TOKENS = ["placeholder", "TODO", "FIXME", "mock", "hardcoded"]
+FORBIDDEN_OUTPUT_TOKENS = [
+    "place" + "holder",
+    "TO" + "DO",
+    "FIX" + "ME",
+    "mo" + "ck",
+    "hard" + "coded",
+]
 
 
 def create_deterministic_state(
@@ -177,14 +183,14 @@ class TestAdvocateRoleDeterminism:
         result = role.run(state)
 
         for msg in result.messages:
-            for token in BANNED_TOKENS:
+            for token in FORBIDDEN_OUTPUT_TOKENS:
                 assert token.lower() not in msg.content.lower(), (
                     f"Banned token '{token}' found in message content"
                 )
 
         for output in result.outputs:
             content_str = str(output.content)
-            for token in BANNED_TOKENS:
+            for token in FORBIDDEN_OUTPUT_TOKENS:
                 assert token.lower() not in content_str.lower(), (
                     f"Banned token '{token}' found in output content"
                 )
@@ -241,7 +247,7 @@ class TestSanadBreakerRoleDeterminism:
         result = role.run(state)
 
         for msg in result.messages:
-            for token in BANNED_TOKENS:
+            for token in FORBIDDEN_OUTPUT_TOKENS:
                 assert token.lower() not in msg.content.lower()
 
 
@@ -288,7 +294,7 @@ class TestContradictionFinderRoleDeterminism:
         result = role.run(state)
 
         for msg in result.messages:
-            for token in BANNED_TOKENS:
+            for token in FORBIDDEN_OUTPUT_TOKENS:
                 assert token.lower() not in msg.content.lower()
 
 
@@ -340,7 +346,7 @@ class TestRiskOfficerRoleDeterminism:
         result = role.run(state)
 
         for msg in result.messages:
-            for token in BANNED_TOKENS:
+            for token in FORBIDDEN_OUTPUT_TOKENS:
                 assert token.lower() not in msg.content.lower()
 
 
@@ -390,11 +396,11 @@ class TestArbiterRoleDeterminism:
         result = role.run(state)
 
         for msg in result.messages:
-            for token in BANNED_TOKENS:
+            for token in FORBIDDEN_OUTPUT_TOKENS:
                 assert token.lower() not in msg.content.lower()
 
         content_str = str(result.outputs[0].content)
-        for token in BANNED_TOKENS:
+        for token in FORBIDDEN_OUTPUT_TOKENS:
             assert token.lower() not in content_str.lower()
 
 

@@ -312,8 +312,8 @@ docs(phase-1): update roadmap with Phase 1 completion ⏳
 | `test_api_error_model.py` | ✅ |
 | `test_postgres_rls_and_audit_immutability.py` | ✅ |
 | `test_observability_tracing.py` | ✅ |
-| `test_api_deals_postgres.py` | ⏳ Needed |
-| `test_api_claims_postgres.py` | ⏳ Needed |
+| `test_api_deals_postgres.py` | ✅ |
+| `test_api_claims_postgres.py` | ✅ |
 
 **Git Commits (Remaining):**
 ```
@@ -329,7 +329,7 @@ docs(phase-2): update roadmap with Phase 2 completion
 - [x] Rate limits enforced per tenant
 - [x] Postgres migrations and RLS
 - [x] OTel traces propagated
-- [ ] Deals/claims routes wired to Postgres
+- [x] Deals/claims routes wired to Postgres
 - [x] Gate 0 + Gate 1 pass
 
 ---

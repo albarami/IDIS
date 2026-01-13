@@ -182,11 +182,7 @@ class Sanad(BaseModel):
 
             # Check deal_id consistency when both are present
             defect_deal = getattr(defect, "deal_id", None)
-            if (
-                self.deal_id is not None
-                and defect_deal is not None
-                and defect_deal != self.deal_id
-            ):
+            if self.deal_id is not None and defect_deal is not None and defect_deal != self.deal_id:
                 raise ValueError(
                     f"defects[{idx}]: deal_id mismatch (defect deal differs from sanad deal)"
                 )

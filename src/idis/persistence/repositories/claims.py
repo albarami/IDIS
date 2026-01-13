@@ -73,9 +73,9 @@ class ClaimsRepository:
                     ic_bound, created_at, updated_at
                 ) VALUES (
                     :claim_id, :tenant_id, :deal_id, :claim_class, :claim_text,
-                    :predicate, :value::jsonb, :sanad_id, :claim_grade, :corroboration::jsonb,
-                    :claim_verdict, :claim_action, :defect_ids::jsonb, :materiality,
-                    :ic_bound, :created_at, NULL
+                    :predicate, CAST(:value AS JSONB), :sanad_id, :claim_grade,
+                    CAST(:corroboration AS JSONB), :claim_verdict, :claim_action,
+                    CAST(:defect_ids AS JSONB), :materiality, :ic_bound, :created_at, NULL
                 )
                 """
             ),
@@ -273,8 +273,9 @@ class SanadsRepository:
                     created_at, updated_at
                 ) VALUES (
                     :sanad_id, :tenant_id, :claim_id, :deal_id, :primary_evidence_id,
-                    :corroborating_evidence_ids::jsonb, :transmission_chain::jsonb,
-                    :computed::jsonb, :created_at, NULL
+                    CAST(:corroborating_evidence_ids AS JSONB),
+                    CAST(:transmission_chain AS JSONB),
+                    CAST(:computed AS JSONB), :created_at, NULL
                 )
                 """
             ),

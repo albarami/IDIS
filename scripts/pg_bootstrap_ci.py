@@ -328,7 +328,15 @@ def verify_tables_exist(db_url: str) -> None:
     print("Verifying required tables exist...")
     url = _normalize_url_for_psycopg2(db_url)
 
-    required_tables = ["deals", "audit_events", "idempotency_records", "alembic_version"]
+    required_tables = [
+        "deals",
+        "claims",
+        "sanads",
+        "defects",
+        "audit_events",
+        "idempotency_records",
+        "alembic_version",
+    ]
 
     conn = psycopg2.connect(url)
     cur = conn.cursor()

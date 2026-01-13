@@ -81,7 +81,7 @@ class DealsRepository:
                     stage, tags, created_at, updated_at
                 ) VALUES (
                     :deal_id, :tenant_id, :name, :company_name, :status,
-                    :stage, :tags::jsonb, :created_at, NULL
+                    :stage, CAST(:tags AS JSONB), :created_at, NULL
                 )
                 """
             ),

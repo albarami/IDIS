@@ -292,13 +292,13 @@ docs(phase-1): update roadmap with Phase 1 completion ⏳
 | OTel instrumentation | `observability/tracing.py` | ✅ | `test_observability_tracing.py` |
 | Tracing middleware | `api/middleware/tracing.py` | ✅ | `test_observability_tracing.py` |
 
-#### Task 2.11: Route Postgres Wiring ⏳ NOT COMPLETE
-| Deliverable | Module | Status |
-|-------------|--------|--------|
-| Deals route → Postgres | `api/routes/deals.py` | ⏳ In-memory |
-| Claims route → Postgres | `api/routes/claims.py` | ⏳ In-memory |
+#### Task 2.11: Route Postgres Wiring ✅ COMPLETE
+| Deliverable | Module | Status | Test |
+|-------------|--------|--------|------|
+| Deals route → Postgres | `api/routes/deals.py` | ✅ | `test_api_deals_postgres.py` |
+| Claims route → Postgres | `api/routes/claims.py` | ✅ | `test_api_claims_postgres.py` |
 
-**Gap:** Routes exist but use in-memory stores. Need to wire to Postgres via saga.
+**Implemented (2026-01-13):** Routes use `DealsRepository` and `ClaimsRepository` when Postgres configured via `DBTransactionMiddleware`. RLS enforces tenant isolation.
 
 **Testing Requirements:**
 | Test File | Status |
@@ -315,12 +315,9 @@ docs(phase-1): update roadmap with Phase 1 completion ⏳
 | `test_api_deals_postgres.py` | ✅ |
 | `test_api_claims_postgres.py` | ✅ |
 
-**Git Commits (Remaining):**
+**Git Commits (Completed):**
 ```
-feat(phase-2): wire deals route to Postgres persistence
-feat(phase-2): wire claims route to Postgres persistence  
-test(phase-2): add Postgres persistence tests for routes
-docs(phase-2): update roadmap with Phase 2 completion
+test(phase-2): add Postgres persistence tests for deals and claims routes ✅
 ```
 
 **Exit Criteria:**

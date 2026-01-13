@@ -156,6 +156,43 @@ class Sanad(BaseModel):
             raise ValueError("dhabt_score must be between 0 and 1")
         return self
 
+    @model_validator(mode="after")
+    def validate_defect_tenant_consistency(self) -> Sanad:
+        """Validate nested defects have consistent tenant_id and deal_id.
+
+        Enforces tenant isolation invariant:
+        - Each defect's tenant_id must match the Sanad's tenant_id
+        - If both Sanad and defect have deal_id, they must match
+
+        Fails closed on any unexpected type or missing attribute.
+        """
+        for idx, defect in enumerate(self.defects):
+            # Fail closed: verify defect is the expected type
+            if not hasattr(defect, "tenant_id") or not hasattr(defect, "deal_id"):
+                raise ValueError(
+                    f"defects[{idx}]: invalid defect structure, missing required attributes"
+                )
+
+            # Check tenant_id consistency
+            defect_tenant = getattr(defect, "tenant_id", None)
+            if defect_tenant is not None and defect_tenant != self.tenant_id:
+                raise ValueError(
+                    f"defects[{idx}]: tenant_id mismatch (defect tenant differs from sanad tenant)"
+                )
+
+            # Check deal_id consistency when both are present
+            defect_deal = getattr(defect, "deal_id", None)
+            if (
+                self.deal_id is not None
+                and defect_deal is not None
+                and defect_deal != self.deal_id
+            ):
+                raise ValueError(
+                    f"defects[{idx}]: deal_id mismatch (defect deal differs from sanad deal)"
+                )
+
+        return self
+
     def to_canonical_dict(self) -> dict[str, Any]:
         """Convert to canonical dictionary with stable key ordering.
 

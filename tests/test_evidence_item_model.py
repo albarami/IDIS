@@ -33,7 +33,9 @@ class TestEvidenceItemSchemaAlignment:
         )
 
         validator = SchemaValidator()
-        result = validator.validate("evidence_item", evidence.model_dump(mode="json", exclude_none=True))
+        result = validator.validate(
+            "evidence_item", evidence.model_dump(mode="json", exclude_none=True)
+        )
         assert result.passed, f"Expected pass but got errors: {result.errors}"
 
     def test_fully_populated_instance_passes_schema(self) -> None:
@@ -56,7 +58,9 @@ class TestEvidenceItemSchemaAlignment:
         )
 
         validator = SchemaValidator()
-        result = validator.validate("evidence_item", evidence.model_dump(mode="json", exclude_none=True))
+        result = validator.validate(
+            "evidence_item", evidence.model_dump(mode="json", exclude_none=True)
+        )
         assert result.passed, f"Expected pass but got errors: {result.errors}"
 
 

@@ -5,6 +5,7 @@ Phase 3.3: Tests for Sanad Pydantic model.
 
 from __future__ import annotations
 
+import copy
 from datetime import UTC, datetime
 
 import pytest
@@ -27,6 +28,7 @@ from idis.models.transmission_node import (
     NodeType,
     TransmissionNode,
 )
+from idis.validators import SchemaValidator
 
 
 def make_transmission_node(
@@ -46,10 +48,14 @@ def make_transmission_node(
 
 def make_defect(
     defect_id: str = "550e8400-e29b-41d4-a716-446655440200",
+    tenant_id: str | None = None,
+    deal_id: str | None = None,
 ) -> Defect:
-    """Helper to create a valid Defect."""
+    """Helper to create a valid Defect with optional tenant/deal IDs."""
     return Defect(
         defect_id=defect_id,
+        tenant_id=tenant_id,
+        deal_id=deal_id,
         defect_type=DefectType.BROKEN_CHAIN,
         severity=DefectSeverity.MINOR,
         description="Minor chain issue",
@@ -61,16 +67,10 @@ def make_defect(
 
 
 class TestSanadSchemaAlignment:
-    """Tests proving Sanad model structure aligns with schema expectations.
+    """Tests proving Sanad validates against sanad.schema.json with $ref resolution."""
 
-    Note: JSON schema validation is not used here because sanad.schema.json
-    contains $ref to external URLs that cannot be resolved locally.
-    The nested TransmissionNode and Defect types are validated by their own
-    schema alignment tests. This test class validates model structure.
-    """
-
-    def test_minimal_valid_instance_structure(self) -> None:
-        """Minimal valid Sanad has correct structure."""
+    def test_sanad_validates_against_schema_minimal(self) -> None:
+        """Minimal valid Sanad passes JSON schema validation including $ref."""
         sanad = Sanad(
             sanad_id="550e8400-e29b-41d4-a716-446655440000",
             tenant_id="550e8400-e29b-41d4-a716-446655440001",
@@ -82,25 +82,28 @@ class TestSanadSchemaAlignment:
             transmission_chain=[make_transmission_node()],
         )
 
-        # Verify all required fields are present
+        validator = SchemaValidator()
         data = sanad.model_dump(mode="json", exclude_none=True)
-        assert data["sanad_id"] == "550e8400-e29b-41d4-a716-446655440000"
-        assert data["tenant_id"] == "550e8400-e29b-41d4-a716-446655440001"
-        assert data["claim_id"] == "550e8400-e29b-41d4-a716-446655440002"
-        assert data["primary_evidence_id"] == "550e8400-e29b-41d4-a716-446655440003"
-        assert data["extraction_confidence"] == 0.95
-        assert data["corroboration_status"] == "NONE"
-        assert data["sanad_grade"] == "A"
-        assert len(data["transmission_chain"]) == 1
+        result = validator.validate("sanad", data)
+        assert result.passed, f"Schema validation failed: {result.errors}"
 
-    def test_fully_populated_instance_structure(self) -> None:
-        """Fully populated Sanad has correct structure."""
+        # Negative assertion: removing a required field causes schema rejection
+        invalid_data = copy.deepcopy(data)
+        del invalid_data["transmission_chain"]
+        result_invalid = validator.validate("sanad", invalid_data)
+        assert not result_invalid.passed, "Schema should reject missing transmission_chain"
+
+    def test_sanad_validates_against_schema_full(self) -> None:
+        """Fully populated Sanad passes JSON schema validation with nested $ref types."""
         now = datetime.now(UTC)
+        tenant_id = "550e8400-e29b-41d4-a716-446655440001"
+        deal_id = "550e8400-e29b-41d4-a716-446655440010"
+
         sanad = Sanad(
             sanad_id="550e8400-e29b-41d4-a716-446655440000",
-            tenant_id="550e8400-e29b-41d4-a716-446655440001",
+            tenant_id=tenant_id,
             claim_id="550e8400-e29b-41d4-a716-446655440002",
-            deal_id="550e8400-e29b-41d4-a716-446655440010",
+            deal_id=deal_id,
             primary_evidence_id="550e8400-e29b-41d4-a716-446655440003",
             corroborating_evidence_ids=[
                 "550e8400-e29b-41d4-a716-446655440004",
@@ -119,21 +122,67 @@ class TestSanadSchemaAlignment:
                 make_transmission_node("node-2", NodeType.EXTRACT),
                 make_transmission_node("node-3", NodeType.NORMALIZE),
             ],
-            defects=[make_defect()],
+            defects=[make_defect(tenant_id=tenant_id, deal_id=deal_id)],
             created_at=now,
             updated_at=now,
         )
 
-        # Verify structure
+        validator = SchemaValidator()
         data = sanad.model_dump(mode="json", exclude_none=True)
-        assert data["deal_id"] == "550e8400-e29b-41d4-a716-446655440010"
-        assert len(data["corroborating_evidence_ids"]) == 2
-        assert data["dhabt_score"] == 0.88
-        assert data["corroboration_status"] == "MUTAWATIR"
-        assert data["sanad_grade"] == "B"
-        assert len(data["grade_explanation"]) == 2
-        assert len(data["transmission_chain"]) == 3
-        assert len(data["defects"]) == 1
+        result = validator.validate("sanad", data)
+        assert result.passed, f"Schema validation failed: {result.errors}"
+
+        # Negative assertion: invalid enum value causes schema rejection
+        invalid_data = copy.deepcopy(data)
+        invalid_data["sanad_grade"] = "X"
+        result_invalid = validator.validate("sanad", invalid_data)
+        assert not result_invalid.passed, "Schema should reject invalid sanad_grade enum"
+
+    def test_schema_validates_nested_transmission_node_ref(self) -> None:
+        """Sanad schema correctly validates nested TransmissionNode via $ref."""
+        sanad = Sanad(
+            sanad_id="550e8400-e29b-41d4-a716-446655440000",
+            tenant_id="550e8400-e29b-41d4-a716-446655440001",
+            claim_id="550e8400-e29b-41d4-a716-446655440002",
+            primary_evidence_id="550e8400-e29b-41d4-a716-446655440003",
+            extraction_confidence=0.95,
+            corroboration_status=CorroborationStatus.NONE,
+            sanad_grade=SanadGrade.A,
+            transmission_chain=[make_transmission_node()],
+        )
+
+        validator = SchemaValidator()
+        data = sanad.model_dump(mode="json", exclude_none=True)
+
+        # Mutate nested TransmissionNode to have invalid node_type
+        invalid_data = copy.deepcopy(data)
+        invalid_data["transmission_chain"][0]["node_type"] = "INVALID_TYPE"
+        result = validator.validate("sanad", invalid_data)
+        assert not result.passed, "Schema should reject invalid node_type in transmission_chain"
+
+    def test_schema_validates_nested_defect_ref(self) -> None:
+        """Sanad schema correctly validates nested Defect via $ref."""
+        tenant_id = "550e8400-e29b-41d4-a716-446655440001"
+        sanad = Sanad(
+            sanad_id="550e8400-e29b-41d4-a716-446655440000",
+            tenant_id=tenant_id,
+            claim_id="550e8400-e29b-41d4-a716-446655440002",
+            primary_evidence_id="550e8400-e29b-41d4-a716-446655440003",
+            extraction_confidence=0.95,
+            corroboration_status=CorroborationStatus.NONE,
+            sanad_grade=SanadGrade.A,
+            transmission_chain=[make_transmission_node()],
+            defects=[make_defect(tenant_id=tenant_id)],
+        )
+
+        validator = SchemaValidator()
+        data = sanad.model_dump(mode="json", exclude_none=True)
+
+        # Mutate nested Defect to have invalid defect_type
+        invalid_data = copy.deepcopy(data)
+        invalid_data["defects"][0]["defect_type"] = "INVALID_DEFECT"
+        result = validator.validate("sanad", invalid_data)
+        assert not result.passed, "Schema should reject invalid defect_type in defects"
 
 
 class TestSanadFailClosed:
@@ -264,6 +313,137 @@ class TestSanadFailClosed:
                 sanad_grade=SanadGrade.A,
                 transmission_chain=[make_transmission_node()],
             )
+
+
+class TestSanadTenantConsistency:
+    """Tests proving tenant/deal isolation enforcement for nested defects."""
+
+    def test_defect_with_matching_tenant_id_accepted(self) -> None:
+        """Defect with matching tenant_id is accepted."""
+        tenant_id = "550e8400-e29b-41d4-a716-446655440001"
+        sanad = Sanad(
+            sanad_id="550e8400-e29b-41d4-a716-446655440000",
+            tenant_id=tenant_id,
+            claim_id="550e8400-e29b-41d4-a716-446655440002",
+            primary_evidence_id="550e8400-e29b-41d4-a716-446655440003",
+            extraction_confidence=0.95,
+            corroboration_status=CorroborationStatus.NONE,
+            sanad_grade=SanadGrade.A,
+            transmission_chain=[make_transmission_node()],
+            defects=[make_defect(tenant_id=tenant_id)],
+        )
+        assert len(sanad.defects) == 1
+        assert sanad.defects[0].tenant_id == tenant_id
+
+    def test_defect_with_mismatched_tenant_id_rejected(self) -> None:
+        """Defect with mismatched tenant_id is rejected (tenant isolation)."""
+        with pytest.raises(ValidationError) as exc_info:
+            Sanad(
+                sanad_id="550e8400-e29b-41d4-a716-446655440000",
+                tenant_id="550e8400-e29b-41d4-a716-446655440001",
+                claim_id="550e8400-e29b-41d4-a716-446655440002",
+                primary_evidence_id="550e8400-e29b-41d4-a716-446655440003",
+                extraction_confidence=0.95,
+                corroboration_status=CorroborationStatus.NONE,
+                sanad_grade=SanadGrade.A,
+                transmission_chain=[make_transmission_node()],
+                defects=[make_defect(tenant_id="different-tenant-id")],
+            )
+
+        assert "tenant_id mismatch" in str(exc_info.value).lower()
+
+    def test_defect_with_matching_deal_id_accepted(self) -> None:
+        """Defect with matching deal_id is accepted when both present."""
+        tenant_id = "550e8400-e29b-41d4-a716-446655440001"
+        deal_id = "550e8400-e29b-41d4-a716-446655440010"
+        sanad = Sanad(
+            sanad_id="550e8400-e29b-41d4-a716-446655440000",
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            claim_id="550e8400-e29b-41d4-a716-446655440002",
+            primary_evidence_id="550e8400-e29b-41d4-a716-446655440003",
+            extraction_confidence=0.95,
+            corroboration_status=CorroborationStatus.NONE,
+            sanad_grade=SanadGrade.A,
+            transmission_chain=[make_transmission_node()],
+            defects=[make_defect(tenant_id=tenant_id, deal_id=deal_id)],
+        )
+        assert len(sanad.defects) == 1
+        assert sanad.defects[0].deal_id == deal_id
+
+    def test_defect_with_mismatched_deal_id_rejected(self) -> None:
+        """Defect with mismatched deal_id is rejected when both present."""
+        tenant_id = "550e8400-e29b-41d4-a716-446655440001"
+        with pytest.raises(ValidationError) as exc_info:
+            Sanad(
+                sanad_id="550e8400-e29b-41d4-a716-446655440000",
+                tenant_id=tenant_id,
+                deal_id="550e8400-e29b-41d4-a716-446655440010",
+                claim_id="550e8400-e29b-41d4-a716-446655440002",
+                primary_evidence_id="550e8400-e29b-41d4-a716-446655440003",
+                extraction_confidence=0.95,
+                corroboration_status=CorroborationStatus.NONE,
+                sanad_grade=SanadGrade.A,
+                transmission_chain=[make_transmission_node()],
+                defects=[make_defect(tenant_id=tenant_id, deal_id="different-deal-id")],
+            )
+
+        assert "deal_id mismatch" in str(exc_info.value).lower()
+
+    def test_defect_with_none_tenant_id_accepted(self) -> None:
+        """Defect with None tenant_id is accepted (no mismatch possible)."""
+        sanad = Sanad(
+            sanad_id="550e8400-e29b-41d4-a716-446655440000",
+            tenant_id="550e8400-e29b-41d4-a716-446655440001",
+            claim_id="550e8400-e29b-41d4-a716-446655440002",
+            primary_evidence_id="550e8400-e29b-41d4-a716-446655440003",
+            extraction_confidence=0.95,
+            corroboration_status=CorroborationStatus.NONE,
+            sanad_grade=SanadGrade.A,
+            transmission_chain=[make_transmission_node()],
+            defects=[make_defect(tenant_id=None)],
+        )
+        assert len(sanad.defects) == 1
+
+    def test_defect_deal_id_mismatch_only_when_both_present(self) -> None:
+        """Deal ID mismatch only enforced when both Sanad and Defect have deal_id."""
+        tenant_id = "550e8400-e29b-41d4-a716-446655440001"
+        # Sanad has deal_id, Defect has None - should be accepted
+        sanad = Sanad(
+            sanad_id="550e8400-e29b-41d4-a716-446655440000",
+            tenant_id=tenant_id,
+            deal_id="550e8400-e29b-41d4-a716-446655440010",
+            claim_id="550e8400-e29b-41d4-a716-446655440002",
+            primary_evidence_id="550e8400-e29b-41d4-a716-446655440003",
+            extraction_confidence=0.95,
+            corroboration_status=CorroborationStatus.NONE,
+            sanad_grade=SanadGrade.A,
+            transmission_chain=[make_transmission_node()],
+            defects=[make_defect(tenant_id=tenant_id, deal_id=None)],
+        )
+        assert len(sanad.defects) == 1
+
+    def test_multiple_defects_all_must_match_tenant(self) -> None:
+        """All defects must have matching tenant_id."""
+        tenant_id = "550e8400-e29b-41d4-a716-446655440001"
+        with pytest.raises(ValidationError) as exc_info:
+            Sanad(
+                sanad_id="550e8400-e29b-41d4-a716-446655440000",
+                tenant_id=tenant_id,
+                claim_id="550e8400-e29b-41d4-a716-446655440002",
+                primary_evidence_id="550e8400-e29b-41d4-a716-446655440003",
+                extraction_confidence=0.95,
+                corroboration_status=CorroborationStatus.NONE,
+                sanad_grade=SanadGrade.A,
+                transmission_chain=[make_transmission_node()],
+                defects=[
+                    make_defect(defect_id="defect-1", tenant_id=tenant_id),
+                    make_defect(defect_id="defect-2", tenant_id="wrong-tenant"),
+                ],
+            )
+
+        assert "defects[1]" in str(exc_info.value)
+        assert "tenant_id mismatch" in str(exc_info.value).lower()
 
 
 class TestSanadDeterminism:

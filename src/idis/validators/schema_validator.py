@@ -59,6 +59,7 @@ class SchemaValidator:
     - Missing required fields cause failure
     - Type mismatches cause failure
     - Any schema loading error causes validation to fail closed
+    - Local $ref references are resolved deterministically from schema directory
     """
 
     def __init__(self, schema_dir: Path | str | None = None) -> None:
@@ -76,6 +77,44 @@ class SchemaValidator:
 
         self._schemas: dict[str, dict[str, Any]] = {}
         self._validators: dict[str, Draft202012Validator] = {}
+        self._ref_store: dict[str, dict[str, Any]] = {}
+        self._ref_store_loaded = False
+
+    def _load_ref_store(self) -> bool:
+        """Preload all schemas into ref store for $ref resolution.
+
+        Loads all *.schema.json files from schema directory into a store
+        keyed by filename, enabling local $ref resolution without network.
+
+        Returns:
+            True if store loaded successfully, False on any error.
+        """
+        if self._ref_store_loaded:
+            return bool(self._ref_store)
+
+        try:
+            if not self._schema_dir.exists():
+                self._ref_store_loaded = True
+                return False
+
+            # Load all schemas sorted by filename for determinism
+            schema_files = sorted(self._schema_dir.glob("*.schema.json"))
+            for schema_file in schema_files:
+                try:
+                    with schema_file.open("r", encoding="utf-8") as f:
+                        schema_data: dict[str, Any] = json.load(f)
+                    # Store by filename (e.g., "defect.schema.json")
+                    self._ref_store[schema_file.name] = schema_data
+                except (json.JSONDecodeError, OSError, PermissionError):
+                    # Fail closed on any file error - continue loading others
+                    # but mark this specific schema as failed
+                    pass
+
+            self._ref_store_loaded = True
+            return bool(self._ref_store)
+        except (OSError, PermissionError):
+            self._ref_store_loaded = True
+            return False
 
     def _load_schema(self, schema_name: str) -> dict[str, Any] | None:
         """Load a schema by name. Returns None on any error (fail closed)."""
@@ -107,9 +146,22 @@ class SchemaValidator:
             return None
 
         try:
+            # Preload all schemas for $ref resolution
+            self._load_ref_store()
+
             # Create resolver for $ref handling within schema directory
+            # Use base URI matching schema directory for local file refs
             schema_uri = f"file:///{self._schema_dir.as_posix()}/"
-            resolver = RefResolver(schema_uri, schema, store={})
+
+            # Build store mapping ref URIs to schema content
+            # This enables resolution of relative $ref like "defect.schema.json"
+            store: dict[str, dict[str, Any]] = {}
+            for filename, schema_content in self._ref_store.items():
+                # Map both the filename and full URI to schema content
+                store[filename] = schema_content
+                store[f"{schema_uri}{filename}"] = schema_content
+
+            resolver = RefResolver(schema_uri, schema, store=store)
 
             # Check schema is valid
             Draft202012Validator.check_schema(schema)

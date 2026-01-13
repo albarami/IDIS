@@ -312,7 +312,7 @@ class InMemoryDealsRepository:
         if deal is None or deal.get("tenant_id") != self._tenant_id:
             return False
         del _in_memory_store[deal_id]
-        return True
+        return deal_id not in _in_memory_store
 
 
 def clear_in_memory_store() -> None:

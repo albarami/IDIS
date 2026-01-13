@@ -163,6 +163,7 @@ class TestCreateDealDocument:
             json={
                 "doc_type": "PITCH_DECK",
                 "title": "Q4 Pitch Deck",
+                "auto_ingest": False,
             },
         )
 
@@ -182,6 +183,7 @@ class TestCreateDealDocument:
                 "doc_type": "FINANCIAL_MODEL",
                 "title": "Financial Model v2",
                 "source_system": "DocSend",
+                "auto_ingest": False,
             },
         )
 
@@ -289,7 +291,7 @@ class TestListDealDocuments:
                 "X-IDIS-API-Key": api_key_a,
                 "Content-Type": "application/json",
             },
-            json={"doc_type": "PITCH_DECK", "title": "Doc 1"},
+            json={"doc_type": "PITCH_DECK", "title": "Doc 1", "auto_ingest": False},
         )
 
         client_single_tenant.post(
@@ -298,7 +300,7 @@ class TestListDealDocuments:
                 "X-IDIS-API-Key": api_key_a,
                 "Content-Type": "application/json",
             },
-            json={"doc_type": "FINANCIAL_MODEL", "title": "Doc 2"},
+            json={"doc_type": "FINANCIAL_MODEL", "title": "Doc 2", "auto_ingest": False},
         )
 
         response = client_single_tenant.get(
@@ -321,7 +323,7 @@ class TestListDealDocuments:
                     "X-IDIS-API-Key": api_key_a,
                     "Content-Type": "application/json",
                 },
-                json={"doc_type": "OTHER", "title": f"Doc {i}"},
+                json={"doc_type": "OTHER", "title": f"Doc {i}", "auto_ingest": False},
             )
 
         response = client_single_tenant.get(
@@ -349,7 +351,7 @@ class TestPagination:
                     "X-IDIS-API-Key": api_key_a,
                     "Content-Type": "application/json",
                 },
-                json={"doc_type": "OTHER", "title": f"Paginated Doc {i}"},
+                json={"doc_type": "OTHER", "title": f"Paginated Doc {i}", "auto_ingest": False},
             )
 
         response = client_single_tenant.get(
@@ -375,7 +377,7 @@ class TestPagination:
                     "X-IDIS-API-Key": api_key_a,
                     "Content-Type": "application/json",
                 },
-                json={"doc_type": "OTHER", "title": f"Page Doc {i}"},
+                json={"doc_type": "OTHER", "title": f"Page Doc {i}", "auto_ingest": False},
             )
             doc_ids.append(resp.json()["doc_id"])
 
@@ -422,7 +424,7 @@ class TestTenantIsolation:
                 "X-IDIS-API-Key": api_key_a,
                 "Content-Type": "application/json",
             },
-            json={"doc_type": "PITCH_DECK", "title": "Tenant A Only"},
+            json={"doc_type": "PITCH_DECK", "title": "Tenant A Only", "auto_ingest": False},
         )
 
         response_a = client_multi_tenant.get(
@@ -607,7 +609,7 @@ class TestIdempotency:
     ) -> None:
         """Same Idempotency-Key returns identical response (via middleware)."""
         idempotency_key = f"idem_{uuid.uuid4().hex[:8]}"
-        payload = {"doc_type": "PITCH_DECK", "title": "Idempotent Doc"}
+        payload = {"doc_type": "PITCH_DECK", "title": "Idempotent Doc", "auto_ingest": False}
 
         response1 = client_single_tenant.post(
             f"/v1/deals/{deal_id}/documents",
@@ -646,7 +648,7 @@ class TestIdempotency:
                 "Content-Type": "application/json",
                 "Idempotency-Key": idempotency_key,
             },
-            json={"doc_type": "PITCH_DECK", "title": "Original Title"},
+            json={"doc_type": "PITCH_DECK", "title": "Original Title", "auto_ingest": False},
         )
 
         response2 = client_single_tenant.post(
@@ -656,7 +658,7 @@ class TestIdempotency:
                 "Content-Type": "application/json",
                 "Idempotency-Key": idempotency_key,
             },
-            json={"doc_type": "PITCH_DECK", "title": "Different Title"},
+            json={"doc_type": "PITCH_DECK", "title": "Different Title", "auto_ingest": False},
         )
 
         assert response1.status_code == 201
@@ -739,7 +741,7 @@ class TestAuditEvents:
                 "X-IDIS-API-Key": api_key_a,
                 "Content-Type": "application/json",
             },
-            json={"doc_type": "PITCH_DECK", "title": "Audit Test Doc"},
+            json={"doc_type": "PITCH_DECK", "title": "Audit Test Doc", "auto_ingest": False},
         )
 
         events = audit_sink.events
@@ -809,7 +811,7 @@ class TestRequestIdHeader:
                 "X-IDIS-API-Key": api_key_a,
                 "Content-Type": "application/json",
             },
-            json={"doc_type": "PITCH_DECK", "title": "Request ID Test"},
+            json={"doc_type": "PITCH_DECK", "title": "Request ID Test", "auto_ingest": False},
         )
 
         assert "X-Request-Id" in response.headers
@@ -856,3 +858,233 @@ class TestRequestIdHeader:
         )
 
         assert "X-Request-Id" in ingest_resp.headers
+
+
+class TestFailClosedIngestion:
+    """Test fail-closed behavior when ingestion_service is unavailable.
+
+    These tests verify that:
+    - Ingestion never reports SUCCEEDED without SHA256 validation
+    - auto_ingest=true returns 400 when ingestion_service is unset
+    - ingest endpoint returns 202 with FAILED status when service unavailable
+    """
+
+    def test_ingest_fails_closed_when_service_unavailable(
+        self,
+        api_keys_config_single: dict[str, dict[str, str]],
+        api_key_a: str,
+        deal_id: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """POST /v1/documents/{docId}/ingest returns 202 FAILED without ingestion_service."""
+        clear_deals_store()
+        clear_document_store()
+
+        monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys_config_single))
+
+        audit_sink = InMemoryAuditSink()
+        idem_store = SqliteIdempotencyStore(in_memory=True)
+        app = create_app(audit_sink=audit_sink, idempotency_store=idem_store)
+        client = TestClient(app)
+
+        create_resp = client.post(
+            f"/v1/deals/{deal_id}/documents",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/json",
+            },
+            json={
+                "doc_type": "PITCH_DECK",
+                "title": "Fail Closed Test",
+                "uri": "idis://bucket/file.pdf",
+                "auto_ingest": False,
+            },
+        )
+        assert create_resp.status_code == 201
+        doc_id = create_resp.json()["doc_id"]
+
+        ingest_resp = client.post(
+            f"/v1/documents/{doc_id}/ingest",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/json",
+            },
+            json={},
+        )
+
+        assert ingest_resp.status_code == 202
+        run_ref = ingest_resp.json()
+        assert run_ref["status"] == "FAILED"
+        assert "run_id" in run_ref
+
+    def test_ingest_emits_failed_audit_when_service_unavailable(
+        self,
+        api_keys_config_single: dict[str, dict[str, str]],
+        api_key_a: str,
+        deal_id: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Ingestion emits document.ingestion.failed when service unavailable."""
+        clear_deals_store()
+        clear_document_store()
+
+        monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys_config_single))
+
+        audit_sink = InMemoryAuditSink()
+        idem_store = SqliteIdempotencyStore(in_memory=True)
+        app = create_app(audit_sink=audit_sink, idempotency_store=idem_store)
+        client = TestClient(app)
+
+        create_resp = client.post(
+            f"/v1/deals/{deal_id}/documents",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/json",
+            },
+            json={
+                "doc_type": "PITCH_DECK",
+                "title": "Audit Fail Test",
+                "uri": "idis://bucket/file.pdf",
+                "auto_ingest": False,
+            },
+        )
+        doc_id = create_resp.json()["doc_id"]
+
+        client.post(
+            f"/v1/documents/{doc_id}/ingest",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/json",
+            },
+            json={},
+        )
+
+        events = audit_sink.events
+        ingestion_events = [e for e in events if e.get("event_type") == "document.ingestion.failed"]
+        assert len(ingestion_events) >= 1
+
+        event = ingestion_events[0]
+        assert "error" in event.get("payload", {})
+
+    def test_auto_ingest_returns_400_when_service_unavailable(
+        self,
+        api_keys_config_single: dict[str, dict[str, str]],
+        api_key_a: str,
+        deal_id: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """POST with auto_ingest=true returns 400 when ingestion_service unset."""
+        clear_deals_store()
+        clear_document_store()
+
+        monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys_config_single))
+
+        audit_sink = InMemoryAuditSink()
+        idem_store = SqliteIdempotencyStore(in_memory=True)
+        app = create_app(audit_sink=audit_sink, idempotency_store=idem_store)
+        client = TestClient(app)
+
+        response = client.post(
+            f"/v1/deals/{deal_id}/documents",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/json",
+            },
+            json={
+                "doc_type": "PITCH_DECK",
+                "title": "Auto Ingest Fail",
+                "uri": "idis://bucket/file.pdf",
+                "auto_ingest": True,
+            },
+        )
+
+        assert response.status_code == 400
+        error = response.json()
+        assert error.get("code") == "SERVICE_UNAVAILABLE"
+        assert "ingestion service unavailable" in error.get("message", "").lower()
+
+    def test_auto_ingest_false_succeeds_without_ingestion_service(
+        self,
+        api_keys_config_single: dict[str, dict[str, str]],
+        api_key_a: str,
+        deal_id: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """POST with auto_ingest=false succeeds even without ingestion_service."""
+        clear_deals_store()
+        clear_document_store()
+
+        monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys_config_single))
+
+        audit_sink = InMemoryAuditSink()
+        idem_store = SqliteIdempotencyStore(in_memory=True)
+        app = create_app(audit_sink=audit_sink, idempotency_store=idem_store)
+        client = TestClient(app)
+
+        response = client.post(
+            f"/v1/deals/{deal_id}/documents",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/json",
+            },
+            json={
+                "doc_type": "PITCH_DECK",
+                "title": "No Auto Ingest",
+                "uri": "idis://bucket/file.pdf",
+                "auto_ingest": False,
+            },
+        )
+
+        assert response.status_code == 201
+
+    def test_no_succeeded_without_sha256_validation(
+        self,
+        api_keys_config_single: dict[str, dict[str, str]],
+        api_key_a: str,
+        deal_id: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Verify ingestion never reports SUCCEEDED without SHA256 validation.
+
+        This is a regression test for the fail-closed invariant: no "SUCCEEDED"
+        status can be returned unless bytes were actually ingested and integrity
+        was validated via server-computed SHA256.
+        """
+        clear_deals_store()
+        clear_document_store()
+
+        monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys_config_single))
+
+        audit_sink = InMemoryAuditSink()
+        idem_store = SqliteIdempotencyStore(in_memory=True)
+        app = create_app(audit_sink=audit_sink, idempotency_store=idem_store)
+        client = TestClient(app)
+
+        create_resp = client.post(
+            f"/v1/deals/{deal_id}/documents",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/json",
+            },
+            json={
+                "doc_type": "PITCH_DECK",
+                "title": "SHA256 Regression Test",
+                "uri": "idis://bucket/file.pdf",
+                "sha256": "a" * 64,
+                "auto_ingest": False,
+            },
+        )
+        doc_id = create_resp.json()["doc_id"]
+
+        ingest_resp = client.post(
+            f"/v1/documents/{doc_id}/ingest",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/json",
+            },
+            json={},
+        )
+
+        assert ingest_resp.status_code == 202
+        run_ref = ingest_resp.json()
+        assert run_ref["status"] != "SUCCEEDED"

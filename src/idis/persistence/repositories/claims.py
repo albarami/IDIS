@@ -535,7 +535,7 @@ class InMemoryClaimsRepository:
         if claim is None or claim.get("tenant_id") != self._tenant_id:
             return False
         del _claims_in_memory_store[claim_id]
-        return True
+        return claim_id not in _claims_in_memory_store
 
 
 class InMemorySanadsRepository:

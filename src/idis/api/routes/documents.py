@@ -473,6 +473,19 @@ def create_deal_document(
             },
         )
 
+    if request_body.auto_ingest:
+        ingestion_service = getattr(request.app.state, "ingestion_service", None)
+        if ingestion_service is None:
+            raise IdisHttpError(
+                status_code=400,
+                code="SERVICE_UNAVAILABLE",
+                message=(
+                    "Cannot create document with auto_ingest=true: "
+                    "ingestion service unavailable"
+                ),
+                details={"auto_ingest": request_body.auto_ingest},
+            )
+
     doc_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     version_id = str(uuid.uuid4())[:12]
@@ -692,7 +705,7 @@ def ingest_document(
         tenant_id=tenant_ctx.tenant_id,
         run_id=run_id,
         doc_id=doc_id,
-        status=RunStatus.SUCCEEDED.value,
+        status=RunStatus.FAILED.value,
     )
     _emit_ingestion_audit(
         request=request,
@@ -700,7 +713,8 @@ def ingest_document(
         doc_id=doc_id,
         deal_id=artifact["deal_id"],
         run_id=run_id,
-        status=RunStatus.SUCCEEDED.value,
+        status=RunStatus.FAILED.value,
         idempotency_key=idempotency_key,
+        error_message="Ingestion service unavailable: cannot validate SHA256 integrity",
     )
     return RunRef(run_id=run["run_id"], status=run["status"])

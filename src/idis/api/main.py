@@ -95,6 +95,8 @@ def create_app(
         version=IDIS_VERSION,
     )
 
+    app.state.audit_sink = audit_sink
+
     configure_tracing()
     instrument_httpx()
 

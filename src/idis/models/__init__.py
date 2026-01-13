@@ -1,6 +1,7 @@
 """IDIS Domain Models — Pydantic models for persistence entities.
 
 Phase 3.1: Ingestion Gate storage primitives.
+Phase 3.3: Sanad Trust Framework models (EvidenceItem, TransmissionNode, Sanad, Defect).
 Phase 4.1: Deterministic calculation models.
 Phase 5.1: Debate orchestration models.
 Phase 5.2: Canonical MuhasabahRecord with nested structures.
@@ -8,7 +9,8 @@ Phase POST-5.2: ValueStruct type hierarchy for typed values.
 Phase 6.1: Evidence-linked deliverables models.
 """
 
-from idis.models.calc_sanad import CalcSanad, GradeExplanationEntry, SanadGrade
+from idis.models.calc_sanad import CalcSanad, GradeExplanationEntry
+from idis.models.calc_sanad import SanadGrade as CalcSanadGrade
 from idis.models.claim import (
     CalcLoopGuard,
     CalcLoopGuardError,
@@ -32,6 +34,13 @@ from idis.models.debate import (
     PositionSnapshot,
     StopReason,
 )
+from idis.models.defect import (
+    CureProtocol,
+    Defect,
+    DefectSeverity,
+    DefectStatus,
+    DefectType,
+)
 from idis.models.deliverables import (
     AuditAppendix,
     AuditAppendixEntry,
@@ -54,12 +63,31 @@ from idis.models.deterministic_calculation import (
 from idis.models.document import Document, DocumentType, ParseStatus
 from idis.models.document_artifact import DocType, DocumentArtifact
 from idis.models.document_span import DocumentSpan, SpanLocator, SpanType
+from idis.models.evidence_item import (
+    EvidenceItem,
+    SourceGrade,
+    SourceSubgrade,
+    VerificationStatus,
+)
 from idis.models.muhasabah_record import (
     FalsifiabilityTest,
     ImpactLevel,
     MuhasabahRecordCanonical,
     Uncertainty,
     muhasabah_to_validator_dict,
+)
+from idis.models.sanad import (
+    CorroborationStatus as SanadCorroborationStatus,
+)
+from idis.models.sanad import (
+    Sanad,
+    SanadGrade,
+)
+from idis.models.transmission_node import (
+    ActorType,
+    NodeType,
+    TransmissionNode,
+    VerificationMethod,
 )
 from idis.models.value_structs import (
     CountValue,
@@ -78,6 +106,7 @@ from idis.models.value_structs import (
 )
 
 __all__ = [
+    "ActorType",
     "AgentOutput",
     "ArbiterDecision",
     "AuditAppendix",
@@ -87,6 +116,7 @@ __all__ = [
     "CalcLoopGuardError",
     "CalcOutput",
     "CalcSanad",
+    "CalcSanadGrade",
     "CalcType",
     "Claim",
     "ClaimAction",
@@ -96,12 +126,17 @@ __all__ = [
     "Corroboration",
     "CorroborationStatus",
     "CountValue",
+    "CureProtocol",
     "Currency",
     "DateValue",
     "DebateConfig",
     "DebateMessage",
     "DebateRole",
     "DebateState",
+    "Defect",
+    "DefectSeverity",
+    "DefectStatus",
+    "DefectType",
     "DeliverableExportFormat",
     "DeliverableExportRequest",
     "DeliverableExportResult",
@@ -114,6 +149,7 @@ __all__ = [
     "DocumentArtifact",
     "DocumentSpan",
     "DocumentType",
+    "EvidenceItem",
     "FalsifiabilityTest",
     "GradeExplanationEntry",
     "ICMemo",
@@ -122,22 +158,30 @@ __all__ = [
     "MonetaryValue",
     "MuhasabahRecord",
     "MuhasabahRecordCanonical",
+    "NodeType",
     "ParseStatus",
     "PercentageValue",
     "PositionSnapshot",
     "RangeValue",
     "RefType",
+    "Sanad",
+    "SanadCorroborationStatus",
     "SanadGrade",
     "ScreeningSnapshot",
     "SemanticTag",
+    "SourceGrade",
+    "SourceSubgrade",
     "SpanLocator",
     "SpanType",
     "StopReason",
     "TextValue",
     "TimeWindow",
+    "TransmissionNode",
     "Uncertainty",
     "ValueStruct",
     "ValueStructType",
+    "VerificationMethod",
+    "VerificationStatus",
     "muhasabah_to_validator_dict",
     "parse_value_struct",
     "value_struct_to_dict",

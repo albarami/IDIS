@@ -480,8 +480,7 @@ def create_deal_document(
                 status_code=400,
                 code="SERVICE_UNAVAILABLE",
                 message=(
-                    "Cannot create document with auto_ingest=true: "
-                    "ingestion service unavailable"
+                    "Cannot create document with auto_ingest=true: ingestion service unavailable"
                 ),
                 details={"auto_ingest": request_body.auto_ingest},
             )

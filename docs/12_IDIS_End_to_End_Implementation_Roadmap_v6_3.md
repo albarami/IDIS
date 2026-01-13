@@ -356,15 +356,15 @@ docs(phase-2): update roadmap with Phase 2 completion
 
 **Gap:** Truth dashboard endpoint exists but uses in-memory store. No extraction pipeline.
 
-#### Task 3.3: Sanad/Evidence/Defect Models 🔴 NOT COMPLETE
-| Deliverable | Module | Status |
-|-------------|--------|--------|
-| EvidenceItem model | `src/idis/models/evidence_item.py` | ⏳ (schema only) |
-| Sanad model | `src/idis/models/sanad.py` | ⏳ (schema only) |
-| TransmissionNode model | `src/idis/models/transmission_node.py` | ⏳ (schema only) |
-| Defect model | `src/idis/models/defect.py` | ⏳ (schema only) |
+#### Task 3.3: Sanad/Evidence/Defect Models ✅ COMPLETE
+| Deliverable | Module | Status | Test |
+|-------------|--------|--------|------|
+| EvidenceItem model | `src/idis/models/evidence_item.py` | ✅ | `test_evidence_item_model.py` |
+| Sanad model | `src/idis/models/sanad.py` | ✅ | `test_sanad_model.py` |
+| TransmissionNode model | `src/idis/models/transmission_node.py` | ✅ | `test_transmission_node_model.py` |
+| Defect model | `src/idis/models/defect.py` | ✅ | `test_defect_model.py` |
 
-**Note:** JSON schemas exist in `/schemas/` but Pydantic models not created.
+**Implemented (2026-01-13):** All Pydantic models with fail-closed validation, deterministic canonicalization, and stable hashing.
 
 #### Task 3.4: Sanad/Defect Services + API ⏳ NOT COMPLETE
 | Deliverable | Module | Status |
@@ -397,9 +397,10 @@ docs(phase-2): update roadmap with Phase 2 completion
 | `test_sanad_integrity.py` | ✅ |
 | `test_no_free_facts.py` | ✅ |
 | `test_claim_type_enforcement.py` | ✅ |
-| `test_evidence_item_model.py` | ⏳ Needed |
-| `test_sanad_model.py` | ⏳ Needed |
-| `test_defect_model.py` | ⏳ Needed |
+| `test_evidence_item_model.py` | ✅ |
+| `test_transmission_node_model.py` | ✅ |
+| `test_sanad_model.py` | ✅ |
+| `test_defect_model.py` | ✅ |
 | `test_claim_service.py` | ⏳ Needed |
 | `test_extraction_service.py` | ⏳ Needed |
 | `test_api_sanad.py` | ⏳ Needed |

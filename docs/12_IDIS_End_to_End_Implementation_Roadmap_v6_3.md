@@ -318,6 +318,7 @@ docs(phase-1): update roadmap with Phase 1 completion ⏳
 **Git Commits (Completed):**
 ```
 test(phase-2): add Postgres persistence tests for deals and claims routes ✅
+feat(phase-2): complete Task 2.11 claims Postgres wiring and API-level Postgres tests ✅
 ```
 
 **Exit Criteria:**

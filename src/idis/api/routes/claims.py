@@ -18,9 +18,12 @@ from pydantic import BaseModel, Field
 
 from idis.api.auth import RequireTenantContext
 from idis.persistence.repositories.claims import (
-    _claims_in_memory_store,
-    _defects_in_memory_store,
-    _sanad_in_memory_store,
+    ClaimsRepository,
+    DefectsRepository,
+    InMemoryClaimsRepository,
+    InMemoryDefectsRepository,
+    InMemorySanadsRepository,
+    SanadsRepository,
     clear_all_claims_stores,
     seed_claim_in_memory,
     seed_defect_in_memory,
@@ -147,9 +150,52 @@ class SanadResponse(BaseModel):
     computed: SanadComputed
 
 
-_claims_store = _claims_in_memory_store
-_sanad_store = _sanad_in_memory_store
-_defects_store = _defects_in_memory_store
+class CreateClaimRequest(BaseModel):
+    """Request model for creating a claim per OpenAPI spec."""
+
+    claim_class: str
+    claim_text: str
+    predicate: str | None = None
+    value: Quantity | None = None
+    evidence_ids: list[str] = Field(default_factory=list)
+    materiality: str = "MEDIUM"
+    ic_bound: bool = False
+
+
+def _get_claims_repository(
+    request: Request,
+    tenant_id: str,
+) -> ClaimsRepository | InMemoryClaimsRepository:
+    """Get claims repository based on DB availability.
+
+    Uses Postgres repository when db_conn is available, in-memory fallback otherwise.
+    """
+    db_conn = getattr(request.state, "db_conn", None)
+    if db_conn is not None:
+        return ClaimsRepository(db_conn, tenant_id)
+    return InMemoryClaimsRepository(tenant_id)
+
+
+def _get_sanads_repository(
+    request: Request,
+    tenant_id: str,
+) -> SanadsRepository | InMemorySanadsRepository:
+    """Get sanads repository based on DB availability."""
+    db_conn = getattr(request.state, "db_conn", None)
+    if db_conn is not None:
+        return SanadsRepository(db_conn, tenant_id)
+    return InMemorySanadsRepository(tenant_id)
+
+
+def _get_defects_repository(
+    request: Request,
+    tenant_id: str,
+) -> DefectsRepository | InMemoryDefectsRepository:
+    """Get defects repository based on DB availability."""
+    db_conn = getattr(request.state, "db_conn", None)
+    if db_conn is not None:
+        return DefectsRepository(db_conn, tenant_id)
+    return InMemoryDefectsRepository(tenant_id)
 
 
 def _get_claim_response(claim_data: dict[str, Any]) -> ClaimResponse:
@@ -230,13 +276,10 @@ def get_deal_truth_dashboard(
     if deal_data is None:
         raise HTTPException(status_code=404, detail="Deal not found")
 
-    tenant_deal_claims = [
-        c
-        for c in _claims_store.values()
-        if c.get("tenant_id") == tenant_ctx.tenant_id and c.get("deal_id") == deal_id
-    ]
+    claims_repo = _get_claims_repository(request, tenant_ctx.tenant_id)
+    defects_repo = _get_defects_repository(request, tenant_ctx.tenant_id)
 
-    tenant_deal_claims.sort(key=lambda c: c["claim_id"])
+    tenant_deal_claims, _ = claims_repo.list_by_deal(deal_id, limit=1000)
 
     by_grade = TruthDashboardSummaryByGrade()
     by_verdict = TruthDashboardSummaryByVerdict()
@@ -267,7 +310,7 @@ def get_deal_truth_dashboard(
             by_verdict.SUBJECTIVE += 1
 
         for defect_id in claim.get("defect_ids", []):
-            defect = _defects_store.get(defect_id)
+            defect = defects_repo.get(defect_id)
             if defect and defect.get("severity") == "FATAL":
                 fatal_defects += 1
 
@@ -288,18 +331,133 @@ def get_deal_truth_dashboard(
 
 
 @router.get(
+    "/deals/{deal_id}/claims",
+    response_model=PaginatedClaimList,
+    response_model_exclude_none=True,
+)
+def list_deal_claims(
+    deal_id: str,
+    request: Request,
+    tenant_ctx: RequireTenantContext,
+    limit: int = 50,
+    cursor: str | None = None,
+) -> PaginatedClaimList:
+    """List claims for a deal.
+
+    Args:
+        deal_id: UUID of the deal.
+        request: FastAPI request for DB connection access.
+        tenant_ctx: Injected tenant context from auth dependency.
+        limit: Maximum number of claims to return.
+        cursor: Pagination cursor.
+
+    Returns:
+        Paginated list of claims.
+
+    Raises:
+        HTTPException: 404 if deal not found.
+    """
+    from idis.persistence.repositories.deals import (
+        DealsRepository,
+        InMemoryDealsRepository,
+    )
+
+    db_conn = getattr(request.state, "db_conn", None)
+    deals_repo: DealsRepository | InMemoryDealsRepository
+    if db_conn is not None:
+        deals_repo = DealsRepository(db_conn, tenant_ctx.tenant_id)
+    else:
+        deals_repo = InMemoryDealsRepository(tenant_ctx.tenant_id)
+
+    deal_data = deals_repo.get(deal_id)
+    if deal_data is None:
+        raise HTTPException(status_code=404, detail="Deal not found")
+
+    claims_repo = _get_claims_repository(request, tenant_ctx.tenant_id)
+    claims, next_cursor = claims_repo.list_by_deal(deal_id, limit=limit, cursor=cursor)
+
+    claim_responses = [_get_claim_response(c) for c in claims]
+    return PaginatedClaimList(items=claim_responses, next_cursor=next_cursor)
+
+
+@router.post(
+    "/deals/{deal_id}/claims",
+    response_model=ClaimResponse,
+    response_model_exclude_none=True,
+    status_code=201,
+)
+def create_claim(
+    deal_id: str,
+    request: Request,
+    tenant_ctx: RequireTenantContext,
+    body: CreateClaimRequest,
+) -> ClaimResponse:
+    """Create a claim for a deal.
+
+    Args:
+        deal_id: UUID of the deal.
+        request: FastAPI request for DB connection access.
+        tenant_ctx: Injected tenant context from auth dependency.
+        body: Claim creation request.
+
+    Returns:
+        Created claim.
+
+    Raises:
+        HTTPException: 404 if deal not found.
+    """
+    import uuid
+
+    from idis.persistence.repositories.deals import (
+        DealsRepository,
+        InMemoryDealsRepository,
+    )
+
+    db_conn = getattr(request.state, "db_conn", None)
+    deals_repo: DealsRepository | InMemoryDealsRepository
+    if db_conn is not None:
+        deals_repo = DealsRepository(db_conn, tenant_ctx.tenant_id)
+    else:
+        deals_repo = InMemoryDealsRepository(tenant_ctx.tenant_id)
+
+    deal_data = deals_repo.get(deal_id)
+    if deal_data is None:
+        raise HTTPException(status_code=404, detail="Deal not found")
+
+    claims_repo = _get_claims_repository(request, tenant_ctx.tenant_id)
+
+    claim_id = str(uuid.uuid4())
+    value_dict = body.value.model_dump() if body.value else None
+
+    claim_data = claims_repo.create(
+        claim_id=claim_id,
+        deal_id=deal_id,
+        claim_class=body.claim_class,
+        claim_text=body.claim_text,
+        predicate=body.predicate,
+        value=value_dict,
+        materiality=body.materiality,
+        ic_bound=body.ic_bound,
+    )
+
+    return _get_claim_response(claim_data)
+
+
+@router.get(
     "/claims/{claim_id}",
     response_model=ClaimResponse,
     response_model_exclude_none=True,
 )
 def get_claim(
     claim_id: str,
+    request: Request,
     tenant_ctx: RequireTenantContext,
 ) -> ClaimResponse:
     """Get a claim by ID.
 
     Args:
         claim_id: UUID of the claim to retrieve.
+        request: FastAPI request for DB connection access.
         tenant_ctx: Injected tenant context from auth dependency.
 
     Returns:
@@ -308,12 +466,10 @@ def get_claim(
     Raises:
         HTTPException: 404 if claim not found or belongs to different tenant.
     """
-    claim_data = _claims_store.get(claim_id)
+    claims_repo = _get_claims_repository(request, tenant_ctx.tenant_id)
+    claim_data = claims_repo.get(claim_id)
 
     if claim_data is None:
-        raise HTTPException(status_code=404, detail="Claim not found")
-
-    if claim_data.get("tenant_id") != tenant_ctx.tenant_id:
         raise HTTPException(status_code=404, detail="Claim not found")
 
     return _get_claim_response(claim_data)
@@ -326,6 +482,7 @@ def get_claim(
 )
 def get_claim_sanad(
     claim_id: str,
+    request: Request,
     tenant_ctx: RequireTenantContext,
 ) -> SanadResponse:
     """Get Sanad chain for a claim.
@@ -334,6 +491,7 @@ def get_claim_sanad(
 
     Args:
         claim_id: UUID of the claim.
+        request: FastAPI request for DB connection access.
         tenant_ctx: Injected tenant context from auth dependency.
 
     Returns:
@@ -342,23 +500,20 @@ def get_claim_sanad(
     Raises:
         HTTPException: 404 if claim or sanad not found, or belongs to different tenant.
     """
-    claim_data = _claims_store.get(claim_id)
+    claims_repo = _get_claims_repository(request, tenant_ctx.tenant_id)
+    sanads_repo = _get_sanads_repository(request, tenant_ctx.tenant_id)
+
+    claim_data = claims_repo.get(claim_id)
 
     if claim_data is None:
-        raise HTTPException(status_code=404, detail="Claim not found")
-
-    if claim_data.get("tenant_id") != tenant_ctx.tenant_id:
         raise HTTPException(status_code=404, detail="Claim not found")
 
     sanad_id = claim_data.get("sanad_id")
     if not sanad_id:
         raise HTTPException(status_code=404, detail="Sanad not found for claim")
 
-    sanad_data = _sanad_store.get(sanad_id)
+    sanad_data = sanads_repo.get(sanad_id)
     if sanad_data is None:
-        raise HTTPException(status_code=404, detail="Sanad not found")
-
-    if sanad_data.get("tenant_id") != tenant_ctx.tenant_id:
         raise HTTPException(status_code=404, detail="Sanad not found")
 
     transmission_chain = sanad_data.get("transmission_chain", [])

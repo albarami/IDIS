@@ -544,3 +544,261 @@ class TestSanadsRepositoryPostgres:
             result = repo_b.get(sanad_id)
 
         assert result is None, "Tenant B should not see tenant A's sanad"
+
+
+class TestClaimsAPIPostgresReadPath:
+    """Tests proving Claims API reads from Postgres via HTTP endpoints."""
+
+    def test_api_reads_claim_inserted_into_postgres(
+        self,
+        app_engine: Engine,
+        clean_tables: None,
+        client_with_postgres: TestClient,
+    ) -> None:
+        """GET /v1/claims/{claim_id} returns claim inserted directly into Postgres.
+
+        This proves the API route is reading from Postgres, not in-memory.
+        """
+        deal_id = str(uuid.uuid4())
+        claim_id = str(uuid.uuid4())
+
+        with app_engine.begin() as conn:
+            set_tenant_local(conn, TENANT_A_ID)
+            _create_deal_in_postgres(conn, TENANT_A_ID, deal_id)
+            _create_claim_in_postgres(
+                conn,
+                TENANT_A_ID,
+                claim_id,
+                deal_id,
+                claim_text="API Postgres Read Test Claim",
+                claim_grade="A",
+                claim_verdict="VERIFIED",
+            )
+
+        response = client_with_postgres.get(
+            f"/v1/claims/{claim_id}",
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+        )
+
+        assert response.status_code == 200, (
+            f"Expected 200, got {response.status_code}: {response.text}"
+        )
+        body = response.json()
+        assert body["claim_id"] == claim_id
+        assert body["claim_text"] == "API Postgres Read Test Claim"
+        assert body["claim_grade"] == "A"
+        assert body["claim_verdict"] == "VERIFIED"
+
+    def test_api_list_claims_returns_postgres_data(
+        self,
+        app_engine: Engine,
+        clean_tables: None,
+        client_with_postgres: TestClient,
+    ) -> None:
+        """GET /v1/deals/{deal_id}/claims returns claims from Postgres."""
+        deal_id = str(uuid.uuid4())
+        claim_ids = [str(uuid.uuid4()) for _ in range(3)]
+
+        with app_engine.begin() as conn:
+            set_tenant_local(conn, TENANT_A_ID)
+            _create_deal_in_postgres(conn, TENANT_A_ID, deal_id)
+            for i, claim_id in enumerate(claim_ids):
+                _create_claim_in_postgres(
+                    conn,
+                    TENANT_A_ID,
+                    claim_id,
+                    deal_id,
+                    claim_text=f"Claim {i}",
+                )
+
+        response = client_with_postgres.get(
+            f"/v1/deals/{deal_id}/claims",
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert len(body["items"]) == 3
+        returned_ids = {item["claim_id"] for item in body["items"]}
+        assert returned_ids == set(claim_ids)
+
+
+class TestClaimsAPIPostgresWritePath:
+    """Tests proving Claims API writes to Postgres via HTTP endpoints."""
+
+    def test_api_creates_claim_in_postgres(
+        self,
+        app_engine: Engine,
+        clean_tables: None,
+        client_with_postgres: TestClient,
+    ) -> None:
+        """POST /v1/deals/{deal_id}/claims creates claim that exists in Postgres.
+
+        This proves the write path is DB-backed.
+        """
+        deal_id = str(uuid.uuid4())
+
+        with app_engine.begin() as conn:
+            set_tenant_local(conn, TENANT_A_ID)
+            _create_deal_in_postgres(conn, TENANT_A_ID, deal_id)
+
+        response = client_with_postgres.post(
+            f"/v1/deals/{deal_id}/claims",
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+            json={
+                "claim_class": "QUANTITATIVE",
+                "claim_text": "API Created Claim for Postgres Test",
+                "materiality": "HIGH",
+            },
+        )
+
+        assert response.status_code == 201, (
+            f"Expected 201, got {response.status_code}: {response.text}"
+        )
+        body = response.json()
+        created_claim_id = body["claim_id"]
+
+        with app_engine.begin() as conn:
+            set_tenant_local(conn, TENANT_A_ID)
+            result = conn.execute(
+                text(
+                    "SELECT claim_id, tenant_id, claim_text, materiality "
+                    "FROM claims WHERE claim_id = :claim_id"
+                ),
+                {"claim_id": created_claim_id},
+            ).fetchone()
+
+        assert result is not None, "Claim should exist in Postgres"
+        assert str(result.claim_id) == created_claim_id
+        assert str(result.tenant_id) == TENANT_A_ID
+        assert result.claim_text == "API Created Claim for Postgres Test"
+        assert result.materiality == "HIGH"
+
+
+class TestClaimsAPITenantIsolation:
+    """Tests proving RLS tenant isolation via Claims API endpoints."""
+
+    def test_cross_tenant_get_returns_404(
+        self,
+        app_engine: Engine,
+        clean_tables: None,
+        client_with_postgres: TestClient,
+    ) -> None:
+        """Claim created under tenant A returns 404 when queried as tenant B.
+
+        This proves RLS blocks cross-tenant reads at the API level.
+        """
+        deal_id = str(uuid.uuid4())
+        claim_id = str(uuid.uuid4())
+
+        with app_engine.begin() as conn:
+            set_tenant_local(conn, TENANT_A_ID)
+            _create_deal_in_postgres(conn, TENANT_A_ID, deal_id)
+            _create_claim_in_postgres(
+                conn,
+                TENANT_A_ID,
+                claim_id,
+                deal_id,
+                claim_text="Tenant A Secret Claim",
+            )
+
+        response = client_with_postgres.get(
+            f"/v1/claims/{claim_id}",
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_B},
+        )
+
+        assert response.status_code == 404
+        body = response.json()
+        assert "not found" in body.get("detail", "").lower()
+
+    def test_cross_tenant_list_returns_empty(
+        self,
+        app_engine: Engine,
+        clean_tables: None,
+        client_with_postgres: TestClient,
+    ) -> None:
+        """Claims created under tenant A are not visible in tenant B's list.
+
+        This proves RLS isolation on list operations via API.
+        """
+        deal_id_a = str(uuid.uuid4())
+        deal_id_b = str(uuid.uuid4())
+
+        with app_engine.begin() as conn:
+            set_tenant_local(conn, TENANT_A_ID)
+            _create_deal_in_postgres(conn, TENANT_A_ID, deal_id_a)
+            for i in range(3):
+                _create_claim_in_postgres(
+                    conn,
+                    TENANT_A_ID,
+                    str(uuid.uuid4()),
+                    deal_id_a,
+                    claim_text=f"Tenant A Claim {i}",
+                )
+
+        with app_engine.begin() as conn:
+            set_tenant_local(conn, TENANT_B_ID)
+            _create_deal_in_postgres(conn, TENANT_B_ID, deal_id_b)
+
+        response = client_with_postgres.get(
+            f"/v1/deals/{deal_id_b}/claims",
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_B},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert len(body["items"]) == 0, "Tenant B should see no claims"
+
+    def test_tenant_sees_only_own_claims_via_api(
+        self,
+        app_engine: Engine,
+        clean_tables: None,
+        client_with_postgres: TestClient,
+    ) -> None:
+        """Each tenant sees only their own claims via API list endpoint."""
+        deal_id_a = str(uuid.uuid4())
+        deal_id_b = str(uuid.uuid4())
+        claim_id_a = str(uuid.uuid4())
+        claim_id_b = str(uuid.uuid4())
+
+        with app_engine.begin() as conn:
+            set_tenant_local(conn, TENANT_A_ID)
+            _create_deal_in_postgres(conn, TENANT_A_ID, deal_id_a)
+            _create_claim_in_postgres(
+                conn,
+                TENANT_A_ID,
+                claim_id_a,
+                deal_id_a,
+                claim_text="Tenant A Only",
+            )
+
+        with app_engine.begin() as conn:
+            set_tenant_local(conn, TENANT_B_ID)
+            _create_deal_in_postgres(conn, TENANT_B_ID, deal_id_b)
+            _create_claim_in_postgres(
+                conn,
+                TENANT_B_ID,
+                claim_id_b,
+                deal_id_b,
+                claim_text="Tenant B Only",
+            )
+
+        response_a = client_with_postgres.get(
+            f"/v1/deals/{deal_id_a}/claims",
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+        )
+        assert response_a.status_code == 200
+        items_a = response_a.json()["items"]
+        assert len(items_a) == 1
+        assert items_a[0]["claim_id"] == claim_id_a
+        assert items_a[0]["claim_text"] == "Tenant A Only"
+
+        response_b = client_with_postgres.get(
+            f"/v1/deals/{deal_id_b}/claims",
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_B},
+        )
+        assert response_b.status_code == 200
+        items_b = response_b.json()["items"]
+        assert len(items_b) == 1
+        assert items_b[0]["claim_id"] == claim_id_b
+        assert items_b[0]["claim_text"] == "Tenant B Only"

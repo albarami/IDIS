@@ -28,8 +28,8 @@ from idis.api.routes.claims import (
     seed_sanad,
 )
 from idis.api.routes.deals import clear_deals_store
-from idis.persistence.repositories.deals import _in_memory_store as _deals_store
 from idis.audit.sink import JsonlFileAuditSink
+from idis.persistence.repositories.deals import _in_memory_store as _deals_store
 
 
 def _make_api_keys_json(

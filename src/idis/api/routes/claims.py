@@ -6,6 +6,7 @@ Provides:
 - GET /v1/claims/{claimId}/sanad (Sanad Chain)
 
 Phase 6.2: Frontend backend contracts implementation.
+Supports both Postgres persistence (when configured) and in-memory fallback.
 """
 
 from __future__ import annotations
@@ -16,6 +17,15 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from idis.api.auth import RequireTenantContext
+from idis.persistence.repositories.claims import (
+    _claims_in_memory_store,
+    _defects_in_memory_store,
+    _sanad_in_memory_store,
+    clear_all_claims_stores,
+    seed_claim_in_memory,
+    seed_defect_in_memory,
+    seed_sanad_in_memory,
+)
 
 router = APIRouter(prefix="/v1", tags=["Claims"])
 
@@ -137,9 +147,9 @@ class SanadResponse(BaseModel):
     computed: SanadComputed
 
 
-_claims_store: dict[str, dict[str, Any]] = {}
-_sanad_store: dict[str, dict[str, Any]] = {}
-_defects_store: dict[str, dict[str, Any]] = {}
+_claims_store = _claims_in_memory_store
+_sanad_store = _sanad_in_memory_store
+_defects_store = _defects_in_memory_store
 
 
 def _get_claim_response(claim_data: dict[str, Any]) -> ClaimResponse:
@@ -377,36 +387,40 @@ def get_claim_sanad(
 
 def seed_claim(claim_data: dict[str, Any]) -> None:
     """Seed a claim into the store. For testing only."""
-    _claims_store[claim_data["claim_id"]] = claim_data
+    seed_claim_in_memory(claim_data)
 
 
 def seed_sanad(sanad_data: dict[str, Any]) -> None:
     """Seed a sanad into the store. For testing only."""
-    _sanad_store[sanad_data["sanad_id"]] = sanad_data
+    seed_sanad_in_memory(sanad_data)
 
 
 def seed_defect(defect_data: dict[str, Any]) -> None:
     """Seed a defect into the store. For testing only."""
-    _defects_store[defect_data["defect_id"]] = defect_data
+    seed_defect_in_memory(defect_data)
 
 
 def clear_claims_store() -> None:
     """Clear the in-memory claims store. For testing only."""
-    _claims_store.clear()
+    from idis.persistence.repositories.claims import clear_claims_in_memory_store
+
+    clear_claims_in_memory_store()
 
 
 def clear_sanad_store() -> None:
     """Clear the in-memory sanad store. For testing only."""
-    _sanad_store.clear()
+    from idis.persistence.repositories.claims import clear_sanad_in_memory_store
+
+    clear_sanad_in_memory_store()
 
 
 def clear_defects_store() -> None:
     """Clear the in-memory defects store. For testing only."""
-    _defects_store.clear()
+    from idis.persistence.repositories.claims import clear_defects_in_memory_store
+
+    clear_defects_in_memory_store()
 
 
 def clear_all_stores() -> None:
     """Clear all in-memory stores. For testing only."""
-    clear_claims_store()
-    clear_sanad_store()
-    clear_defects_store()
+    clear_all_claims_stores()

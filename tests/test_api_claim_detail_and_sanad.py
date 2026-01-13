@@ -27,7 +27,8 @@ from idis.api.routes.claims import (
     seed_claim,
     seed_sanad,
 )
-from idis.api.routes.deals import _deals_store, clear_deals_store
+from idis.api.routes.deals import clear_deals_store
+from idis.persistence.repositories.deals import _in_memory_store as _deals_store
 from idis.audit.sink import JsonlFileAuditSink
 
 

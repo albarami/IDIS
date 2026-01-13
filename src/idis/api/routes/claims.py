@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from idis.api.auth import RequireTenantContext
@@ -181,6 +181,7 @@ def _get_claim_response(claim_data: dict[str, Any]) -> ClaimResponse:
 )
 def get_deal_truth_dashboard(
     deal_id: str,
+    request: Request,
     tenant_ctx: RequireTenantContext,
     limit: int = 50,
     cursor: str | None = None,
@@ -192,6 +193,7 @@ def get_deal_truth_dashboard(
 
     Args:
         deal_id: UUID of the deal.
+        request: FastAPI request for DB connection access.
         tenant_ctx: Injected tenant context from auth dependency.
         limit: Maximum number of claims to return.
         cursor: Pagination cursor (not implemented yet).
@@ -202,10 +204,20 @@ def get_deal_truth_dashboard(
     Raises:
         HTTPException: 404 if deal not found or belongs to different tenant.
     """
-    from idis.api.routes.deals import _deals_store
+    from idis.persistence.repositories.deals import (
+        DealsRepository,
+        InMemoryDealsRepository,
+    )
 
-    deal_data = _deals_store.get(deal_id)
-    if deal_data is None or deal_data.get("tenant_id") != tenant_ctx.tenant_id:
+    db_conn = getattr(request.state, "db_conn", None)
+    deals_repo: DealsRepository | InMemoryDealsRepository
+    if db_conn is not None:
+        deals_repo = DealsRepository(db_conn, tenant_ctx.tenant_id)
+    else:
+        deals_repo = InMemoryDealsRepository(tenant_ctx.tenant_id)
+
+    deal_data = deals_repo.get(deal_id)
+    if deal_data is None:
         raise HTTPException(status_code=404, detail="Deal not found")
 
     tenant_deal_claims = [

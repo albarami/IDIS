@@ -458,18 +458,20 @@ def create_deal_document(
     Raises:
         IdisHttpError: 400 if auto_ingest=true with unsupported URI scheme.
     """
-    if request_body.auto_ingest and request_body.uri and not _is_uri_scheme_allowed(
-        request_body.uri
+    if (
+        request_body.auto_ingest
+        and request_body.uri
+        and not _is_uri_scheme_allowed(request_body.uri)
     ):
         raise IdisHttpError(
-                status_code=400,
-                code="BAD_REQUEST",
-                message="Unsupported URI scheme for auto-ingestion",
-                details={
-                    "uri": request_body.uri,
-                    "allowed_schemes": list(ALLOWED_URI_SCHEMES),
-                },
-            )
+            status_code=400,
+            code="BAD_REQUEST",
+            message="Unsupported URI scheme for auto-ingestion",
+            details={
+                "uri": request_body.uri,
+                "allowed_schemes": list(ALLOWED_URI_SCHEMES),
+            },
+        )
 
     doc_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
@@ -615,8 +617,7 @@ def ingest_document(
                             status=RunStatus.FAILED.value,
                         )
                         sha256_err = (
-                            f"SHA256 mismatch: expected {expected_sha256}, "
-                            f"got {actual_sha256}"
+                            f"SHA256 mismatch: expected {expected_sha256}, got {actual_sha256}"
                         )
                         _emit_ingestion_audit(
                             request=request,

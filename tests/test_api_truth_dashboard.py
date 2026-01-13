@@ -23,7 +23,8 @@ from fastapi.testclient import TestClient
 from idis.api.main import create_app
 from idis.api.policy import Role
 from idis.api.routes.claims import clear_all_stores, seed_claim, seed_defect
-from idis.api.routes.deals import _deals_store, clear_deals_store
+from idis.api.routes.deals import clear_deals_store
+from idis.persistence.repositories.deals import _in_memory_store as _deals_store
 from idis.audit.sink import JsonlFileAuditSink
 
 

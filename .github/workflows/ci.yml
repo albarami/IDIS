@@ -88,7 +88,9 @@ jobs:
         env:
           IDIS_REQUIRE_POSTGRES: "1"
         run: |
-          pytest tests/test_postgres_rls_and_audit_immutability.py tests/test_api_deals_postgres.py tests/test_api_claims_postgres.py -v --junitxml=postgres_integration_pytest.xml 2>&1 | tee postgres_integration_pytest.log
+          echo "=== Postgres Integration Tests (IDIS_REQUIRE_POSTGRES=1) ==="
+          echo "Test files: test_postgres_rls_and_audit_immutability.py, test_api_deals_postgres.py, test_api_claims_postgres.py, test_postgres_break_attempts.py"
+          pytest tests/test_postgres_rls_and_audit_immutability.py tests/test_api_deals_postgres.py tests/test_api_claims_postgres.py tests/test_postgres_break_attempts.py -v --junitxml=postgres_integration_pytest.xml 2>&1 | tee postgres_integration_pytest.log
           exit ${PIPESTATUS[0]}
 
       - name: Upload bootstrap log artifact

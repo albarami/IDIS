@@ -18,17 +18,31 @@ The script will:
     4. Execute the Postgres integration test suite
     5. Tear down the container (even on failure)
     6. Exit with pytest's exit code
+
+Timeouts:
+    - Docker health check: 10 seconds
+    - Container start: 30 seconds
+    - PostgreSQL readiness: 60 seconds (30 retries x 2s)
+    - Bootstrap: 120 seconds
+    - Test execution: 600 seconds (10 minutes)
+
+Exit codes:
+    0 - All tests passed
+    1 - Test failures or runtime errors
+    2 - Docker not available or unhealthy
 """
 
 from __future__ import annotations
 
 import os
+import re
 import socket
 import subprocess
 import sys
 import time
 from collections.abc import Generator
 from contextlib import contextmanager
+from pathlib import Path
 
 CONTAINER_NAME = "idis-postgres-integration-test"
 POSTGRES_IMAGE = "postgres:16"
@@ -39,6 +53,15 @@ POSTGRES_DB = "postgres"
 APP_USER = "idis_app"
 APP_PASSWORD = "idis_app_pw"
 TEST_DB = "idis_test"
+
+TIMEOUT_DOCKER_INFO = 10
+TIMEOUT_CONTAINER_START = 30
+TIMEOUT_CONTAINER_STOP = 15
+TIMEOUT_PG_READY_TOTAL = 60
+TIMEOUT_BOOTSTRAP = 120
+TIMEOUT_TESTS = 600
+
+ARTIFACTS_DIR = Path("artifacts/postgres_integration")
 
 
 def log(msg: str) -> None:
@@ -64,17 +87,47 @@ def run_cmd(
     return result
 
 
-def is_docker_available() -> bool:
-    """Check if Docker is available."""
+def redact_credentials(text: str) -> str:
+    """Redact credentials from URLs in log output."""
+    return re.sub(r"://[^:]+:[^@]+@", "://***:***@", text)
+
+
+def ensure_artifacts_dir() -> None:
+    """Create artifacts directory if it doesn't exist."""
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def write_artifact(name: str, content: str) -> None:
+    """Write content to an artifact file with credentials redacted."""
+    ensure_artifacts_dir()
+    artifact_path = ARTIFACTS_DIR / name
+    artifact_path.write_text(redact_credentials(content), encoding="utf-8")
+    log(f"Artifact written: {artifact_path}")
+
+
+def check_docker_health() -> bool:
+    """Check if Docker daemon is available and responding within timeout.
+
+    Returns True if Docker is healthy, False otherwise.
+    Exits with code 2 if Docker times out (indicates hang condition).
+    """
     try:
         result = subprocess.run(
             ["docker", "info"],
             capture_output=True,
             text=True,
+            timeout=TIMEOUT_DOCKER_INFO,
         )
         return result.returncode == 0
+    except subprocess.TimeoutExpired:
+        log(
+            f"ERROR: Docker not responding within {TIMEOUT_DOCKER_INFO}s. "
+            "Start Docker Desktop or ensure dockerd is running."
+        )
+        sys.exit(2)
     except FileNotFoundError:
-        return False
+        log("ERROR: Docker executable not found. Please install Docker.")
+        sys.exit(2)
 
 
 def is_port_open(host: str, port: int, timeout: float = 1.0) -> bool:
@@ -88,71 +141,106 @@ def is_port_open(host: str, port: int, timeout: float = 1.0) -> bool:
 
 def container_exists(name: str) -> bool:
     """Check if a Docker container exists (running or stopped)."""
-    result = subprocess.run(
-        ["docker", "container", "inspect", name],
-        capture_output=True,
-    )
-    return result.returncode == 0
+    try:
+        result = subprocess.run(
+            ["docker", "container", "inspect", name],
+            capture_output=True,
+            timeout=TIMEOUT_DOCKER_INFO,
+        )
+        return result.returncode == 0
+    except subprocess.TimeoutExpired:
+        return False
 
 
 def stop_and_remove_container(name: str) -> None:
     """Stop and remove a Docker container if it exists."""
     if container_exists(name):
         log(f"Stopping and removing existing container: {name}")
-        subprocess.run(["docker", "stop", name], capture_output=True)
-        subprocess.run(["docker", "rm", name], capture_output=True)
+        try:
+            subprocess.run(
+                ["docker", "stop", name],
+                capture_output=True,
+                timeout=TIMEOUT_CONTAINER_STOP,
+            )
+        except subprocess.TimeoutExpired:
+            log(f"Warning: docker stop timed out for {name}, forcing removal")
+        try:
+            subprocess.run(
+                ["docker", "rm", "-f", name],
+                capture_output=True,
+                timeout=TIMEOUT_CONTAINER_STOP,
+            )
+        except subprocess.TimeoutExpired:
+            log(f"Warning: docker rm timed out for {name}")
 
 
 def start_postgres_container() -> None:
-    """Start the PostgreSQL Docker container."""
+    """Start the PostgreSQL Docker container with timeout."""
     log(f"Starting PostgreSQL container on port {POSTGRES_PORT}...")
-    run_cmd(
-        [
-            "docker",
-            "run",
-            "--name",
-            CONTAINER_NAME,
-            "-d",
-            "-p",
-            f"{POSTGRES_PORT}:5432",
-            "-e",
-            f"POSTGRES_USER={POSTGRES_USER}",
-            "-e",
-            f"POSTGRES_PASSWORD={POSTGRES_PASSWORD}",
-            "-e",
-            f"POSTGRES_DB={POSTGRES_DB}",
-            POSTGRES_IMAGE,
-        ]
+    try:
+        result = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--name",
+                CONTAINER_NAME,
+                "-d",
+                "-p",
+                f"{POSTGRES_PORT}:5432",
+                "-e",
+                f"POSTGRES_USER={POSTGRES_USER}",
+                "-e",
+                f"POSTGRES_PASSWORD={POSTGRES_PASSWORD}",
+                "-e",
+                f"POSTGRES_DB={POSTGRES_DB}",
+                POSTGRES_IMAGE,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT_CONTAINER_START,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to start container: {result.stderr}")
+        log(f"Container started: {result.stdout.strip()[:12]}")
+    except subprocess.TimeoutExpired as err:
+        raise RuntimeError(
+            f"Container start timed out after {TIMEOUT_CONTAINER_START}s"
+        ) from err
+
+
+def wait_for_postgres(host: str, port: int, max_retries: int = 30, delay: float = 2.0) -> None:
+    """Wait for PostgreSQL to be ready to accept connections with timeout."""
+    log(f"Waiting for PostgreSQL at {host}:{port} (max {max_retries * delay}s)...")
+    for attempt in range(max_retries):
+        if is_port_open(host, port):
+            try:
+                result = subprocess.run(
+                    [
+                        "docker",
+                        "exec",
+                        CONTAINER_NAME,
+                        "pg_isready",
+                        "-U",
+                        POSTGRES_USER,
+                    ],
+                    capture_output=True,
+                    timeout=5,
+                )
+                if result.returncode == 0:
+                    log("PostgreSQL is ready")
+                    return
+            except subprocess.TimeoutExpired:
+                pass
+        if attempt < max_retries - 1:
+            time.sleep(delay)
+    raise RuntimeError(
+        f"PostgreSQL not ready after {max_retries} attempts ({max_retries * delay}s)"
     )
 
 
-def wait_for_postgres(host: str, port: int, max_retries: int = 30, delay: float = 1.0) -> None:
-    """Wait for PostgreSQL to be ready to accept connections."""
-    log(f"Waiting for PostgreSQL at {host}:{port}...")
-    for attempt in range(max_retries):
-        if is_port_open(host, port):
-            result = subprocess.run(
-                [
-                    "docker",
-                    "exec",
-                    CONTAINER_NAME,
-                    "pg_isready",
-                    "-U",
-                    POSTGRES_USER,
-                ],
-                capture_output=True,
-            )
-            if result.returncode == 0:
-                log("PostgreSQL is ready")
-                return
-        if attempt < max_retries - 1:
-            time.sleep(delay)
-    raise RuntimeError(f"PostgreSQL not ready after {max_retries} attempts")
-
-
 def run_bootstrap() -> None:
-    """Run the CI bootstrap script to set up the database."""
-    log("Running CI bootstrap...")
+    """Run the CI bootstrap script to set up the database with timeout."""
+    log(f"Running CI bootstrap (timeout: {TIMEOUT_BOOTSTRAP}s)...")
 
     env = os.environ.copy()
     env["IDIS_PG_HOST"] = "127.0.0.1"
@@ -163,19 +251,31 @@ def run_bootstrap() -> None:
     env["IDIS_PG_APP_USER"] = APP_USER
     env["IDIS_PG_APP_PASSWORD"] = APP_PASSWORD
 
-    result = subprocess.run(
-        [sys.executable, "scripts/pg_bootstrap_ci.py"],
-        env=env,
-        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"Bootstrap failed with exit code {result.returncode}")
-    log("Bootstrap completed successfully")
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    try:
+        result = subprocess.run(
+            [sys.executable, "scripts/pg_bootstrap_ci.py"],
+            env=env,
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT_BOOTSTRAP,
+        )
+        output = f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+        write_artifact("bootstrap.log", output)
+
+        if result.returncode != 0:
+            log(f"Bootstrap STDERR: {result.stderr}")
+            raise RuntimeError(f"Bootstrap failed with exit code {result.returncode}")
+        log("Bootstrap completed successfully")
+    except subprocess.TimeoutExpired as err:
+        raise RuntimeError(f"Bootstrap timed out after {TIMEOUT_BOOTSTRAP}s") from err
 
 
 def run_integration_tests() -> int:
-    """Run the Postgres integration tests and return the exit code."""
-    log("Running Postgres integration tests...")
+    """Run the Postgres integration tests and return the exit code with timeout."""
+    log(f"Running Postgres integration tests (timeout: {TIMEOUT_TESTS}s)...")
+    log("IDIS_REQUIRE_POSTGRES=1 (tests will NOT be skipped)")
 
     admin_url = (
         f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@127.0.0.1:{POSTGRES_PORT}/{TEST_DB}"
@@ -191,14 +291,32 @@ def run_integration_tests() -> int:
         "tests/test_api_deals_postgres.py",
         "tests/test_api_claims_postgres.py",
         "tests/test_postgres_rls_and_audit_immutability.py",
+        "tests/test_postgres_break_attempts.py",
     ]
 
-    result = subprocess.run(
-        [sys.executable, "-m", "pytest", "-v"] + test_files,
-        env=env,
-        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    )
-    return result.returncode
+    log(f"Test files: {', '.join(test_files)}")
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest", "-v", "--tb=short"] + test_files,
+            env=env,
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT_TESTS,
+        )
+        output = f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+        write_artifact("pytest.log", output)
+
+        print(result.stdout, flush=True)
+        if result.stderr:
+            print(result.stderr, file=sys.stderr, flush=True)
+
+        return result.returncode
+    except subprocess.TimeoutExpired:
+        log(f"ERROR: Tests timed out after {TIMEOUT_TESTS}s")
+        return 1
 
 
 @contextmanager
@@ -221,9 +339,9 @@ def main() -> int:
     log("IDIS Local Postgres Integration Test Runner")
     log("=" * 60)
 
-    if not is_docker_available():
+    if not check_docker_health():
         log("ERROR: Docker is not available. Please install and start Docker.")
-        return 1
+        return 2
 
     try:
         with postgres_container():

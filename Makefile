@@ -1,4 +1,4 @@
-.PHONY: format lint typecheck test forbidden-scan check install dev clean
+.PHONY: format lint typecheck test forbidden-scan check install dev clean postgres-integration
 
 format:
 	ruff format .
@@ -14,6 +14,9 @@ test:
 
 forbidden-scan:
 	python scripts/forbidden_scan.py
+
+postgres-integration:
+	python scripts/run_postgres_integration_local.py
 
 check: format lint typecheck test forbidden-scan
 	@echo "All checks passed."

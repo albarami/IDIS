@@ -13,6 +13,7 @@ if "%1"=="typecheck" goto typecheck
 if "%1"=="test" goto test
 if "%1"=="check" goto check
 if "%1"=="forbidden_scan" goto forbidden_scan
+if "%1"=="postgres_integration" goto postgres_integration
 
 echo Unknown target: %1
 goto help
@@ -50,6 +51,13 @@ echo === Running: python scripts/forbidden_scan.py ===
 python scripts/forbidden_scan.py
 if errorlevel 1 exit /b 1
 echo === Forbidden scan complete ===
+goto end
+
+:postgres_integration
+echo === Running: python scripts/run_postgres_integration_local.py ===
+python scripts/run_postgres_integration_local.py
+if errorlevel 1 exit /b 1
+echo === Postgres integration tests complete ===
 goto end
 
 :check
@@ -103,6 +111,7 @@ echo   typecheck     Run mypy type checking
 echo   test          Run pytest test suite
 echo   check         Run all checks (format + lint + typecheck + test)
 echo   forbidden_scan  Run forbidden pattern scanner
+echo   postgres_integration  Run Postgres integration tests locally (requires Docker)
 echo   help          Show this help message
 echo.
 echo On Linux/macOS, use GNU Make with the Makefile.

@@ -198,8 +198,8 @@ def _create_claim_in_postgres(
                 materiality, ic_bound, created_at
             ) VALUES (
                 :claim_id, :tenant_id, :deal_id, :claim_class, :claim_text,
-                :claim_grade, :corroboration::jsonb, :claim_verdict, :claim_action,
-                :materiality, :ic_bound, :created_at
+                :claim_grade, CAST(:corroboration AS JSONB), :claim_verdict,
+                :claim_action, :materiality, :ic_bound, :created_at
             )
             """
         ),

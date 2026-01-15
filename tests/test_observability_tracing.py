@@ -12,7 +12,6 @@ Per v6.3 requirements:
 from __future__ import annotations
 
 import os
-import unittest.mock
 import uuid
 from typing import TYPE_CHECKING, Any
 
@@ -21,8 +20,6 @@ from fastapi.testclient import TestClient
 
 if TYPE_CHECKING:
     pass
-
-patch = unittest.mock.patch
 
 
 @pytest.fixture(autouse=True)
@@ -96,7 +93,7 @@ class TestTracingConfiguration:
 
         assert result1 == result2, "configure_tracing should be idempotent"
 
-    def test_require_otel_fails_closed(self) -> None:
+    def test_require_otel_fails_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """IDIS_REQUIRE_OTEL=1 should fail startup if tracing init fails."""
         os.environ["IDIS_OTEL_ENABLED"] = "1"
         os.environ["IDIS_REQUIRE_OTEL"] = "1"
@@ -105,18 +102,22 @@ class TestTracingConfiguration:
 
         reset_tracing()
 
-        with patch(
-            "opentelemetry.sdk.trace.TracerProvider",
-            side_effect=Exception("Simulated init failure"),
-        ):
-            from idis.observability import tracing
+        # Create a callable that raises an exception when called
+        def failing_tracer_provider(*args: Any, **kwargs: Any) -> None:
+            raise Exception("Simulated init failure")
 
-            tracing._is_configured = False
+        import opentelemetry.sdk.trace as otel_trace
 
-            with pytest.raises(TracingConfigError) as exc_info:
-                tracing.configure_tracing()
+        monkeypatch.setattr(otel_trace, "TracerProvider", failing_tracer_provider)
 
-            assert "configuration failed" in str(exc_info.value).lower()
+        from idis.observability import tracing
+
+        tracing._is_configured = False
+
+        with pytest.raises(TracingConfigError) as exc_info:
+            tracing.configure_tracing()
+
+        assert "configuration failed" in str(exc_info.value).lower()
 
     def test_service_name_configurable(self) -> None:
         """Service name should be configurable via IDIS_OTEL_SERVICE_NAME."""

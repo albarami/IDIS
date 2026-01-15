@@ -61,22 +61,26 @@ echo === Postgres integration tests complete ===
 goto end
 
 :check
-echo === Running full check: format + lint + typecheck + test ===
+echo === Running full check: format + lint + typecheck + test + forbidden_scan ===
 echo.
-echo --- Step 1/4: Format ---
+echo --- Step 1/5: Format ---
 call :format_internal
 if errorlevel 1 exit /b 1
 
-echo --- Step 2/4: Lint ---
+echo --- Step 2/5: Lint ---
 call :lint_internal
 if errorlevel 1 exit /b 1
 
-echo --- Step 3/4: Typecheck ---
+echo --- Step 3/5: Typecheck ---
 call :typecheck_internal
 if errorlevel 1 exit /b 1
 
-echo --- Step 4/4: Test ---
+echo --- Step 4/5: Test ---
 call :test_internal
+if errorlevel 1 exit /b 1
+
+echo --- Step 5/5: Forbidden Scan ---
+call :forbidden_scan_internal
 if errorlevel 1 exit /b 1
 
 echo.
@@ -97,6 +101,10 @@ exit /b %errorlevel%
 
 :test_internal
 python -m pytest
+exit /b %errorlevel%
+
+:forbidden_scan_internal
+python scripts/forbidden_scan.py
 exit /b %errorlevel%
 
 :help

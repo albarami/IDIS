@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Forbidden pattern scanner for IDIS repository.
 
-Scans the repository for common secret patterns, private keys, and
-accidental credentials. Exits non-zero if any matches are found.
+Scans the repository for common secret patterns, private keys,
+accidental credentials, and banned development tokens. Exits non-zero if any matches are found.
 
 Usage:
     python scripts/forbidden_scan.py [--verbose]
@@ -11,6 +11,8 @@ Patterns detected:
 - Private keys (BEGIN PRIVATE KEY, BEGIN RSA PRIVATE KEY, etc.)
 - API keys (OpenAI sk-, AWS keys, Slack tokens)
 - Password assignments (password=, passwd=, PGPASSWORD=)
+- Banned development tokens (TODO, FIXME, placeholder, mock, hardcoded)
+- Unsafe SQL patterns (::jsonb casts)
 - Other sensitive patterns
 
 Security:
@@ -26,7 +28,8 @@ import sys
 from pathlib import Path
 from typing import NamedTuple
 
-FORBIDDEN_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+# Secret patterns - high severity
+SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         "PRIVATE_KEY_HEADER",
         re.compile(r"-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY", re.IGNORECASE),
@@ -56,6 +59,25 @@ FORBIDDEN_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ),
     ("BEARER_TOKEN", re.compile(r"Bearer\s+[a-zA-Z0-9_\-\.]{40,}")),
 ]
+
+# Banned development tokens - must not appear in src/ or tests/
+BANNED_TOKEN_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("BANNED_TODO", re.compile(r"\bTODO\b", re.IGNORECASE)),
+    ("BANNED_FIXME", re.compile(r"\bFIXME\b", re.IGNORECASE)),
+    ("BANNED_PLACEHOLDER", re.compile(r"\bplaceholder\b", re.IGNORECASE)),
+    ("BANNED_MOCK", re.compile(r"\bmock\b", re.IGNORECASE)),
+    ("BANNED_HARDCODED", re.compile(r"\bhardcoded\b", re.IGNORECASE)),
+]
+
+# Unsafe SQL patterns
+SQL_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("UNSAFE_JSONB_CAST", re.compile(r":\w+::jsonb")),
+]
+
+# Combined patterns for scanning
+FORBIDDEN_PATTERNS: list[tuple[str, re.Pattern[str]]] = (
+    SECRET_PATTERNS + BANNED_TOKEN_PATTERNS + SQL_PATTERNS
+)
 
 ALLOWLIST_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"get_env(?:_optional)?\s*\("),
@@ -126,7 +148,17 @@ def should_skip_path(path: Path) -> bool:
     return path.suffix.lower() in BINARY_EXTENSIONS
 
 
-def scan_file(file_path: Path) -> list[Match]:
+def is_in_code_directory(path: Path, repo_root: Path) -> bool:
+    """Check if path is in src/ or tests/ directories."""
+    try:
+        rel_path = path.relative_to(repo_root)
+        parts = rel_path.parts
+        return len(parts) > 0 and parts[0] in ("src", "tests")
+    except ValueError:
+        return False
+
+
+def scan_file(file_path: Path, repo_root: Path) -> list[Match]:
     """Scan a single file for forbidden patterns."""
     matches: list[Match] = []
 
@@ -135,6 +167,15 @@ def scan_file(file_path: Path) -> list[Match]:
     except (OSError, UnicodeDecodeError):
         return matches
 
+    # Determine which patterns to apply
+    in_code_dir = is_in_code_directory(file_path, repo_root)
+
+    # Apply banned token and SQL patterns only to src/ and tests/
+    patterns_to_check = SECRET_PATTERNS[:]
+    if in_code_dir:
+        patterns_to_check.extend(BANNED_TOKEN_PATTERNS)
+        patterns_to_check.extend(SQL_PATTERNS)
+
     lines = content.splitlines()
     for line_num, line in enumerate(lines, start=1):
         if line.strip().startswith("#") and "example" in line.lower():
@@ -142,7 +183,7 @@ def scan_file(file_path: Path) -> list[Match]:
         if "REDACTED" in line or "[REDACTED]" in line:
             continue
 
-        for pattern_name, pattern in FORBIDDEN_PATTERNS:
+        for pattern_name, pattern in patterns_to_check:
             if pattern.search(line):
                 matches.append(Match(str(file_path), line_num, pattern_name))
                 break
@@ -163,7 +204,7 @@ def scan_repository(repo_root: Path, verbose: bool = False) -> list[Match]:
         if verbose:
             print(f"Scanning: {path}", file=sys.stderr)
 
-        file_matches = scan_file(path)
+        file_matches = scan_file(path, repo_root)
         all_matches.extend(file_matches)
 
     return all_matches

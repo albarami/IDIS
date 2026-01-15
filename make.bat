@@ -33,8 +33,8 @@ echo === Lint complete ===
 goto end
 
 :typecheck
-echo === Running: mypy src/idis --ignore-missing-imports ===
-python -m mypy src/idis --ignore-missing-imports
+echo === Running: mypy src ===
+python -m mypy src
 if errorlevel 1 exit /b 1
 echo === Typecheck complete ===
 goto end
@@ -96,7 +96,7 @@ ruff check .
 exit /b %errorlevel%
 
 :typecheck_internal
-python -m mypy src/idis --ignore-missing-imports
+python -m mypy src
 exit /b %errorlevel%
 
 :test_internal

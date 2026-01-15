@@ -203,9 +203,7 @@ def start_postgres_container() -> None:
             raise RuntimeError(f"Failed to start container: {result.stderr}")
         log(f"Container started: {result.stdout.strip()[:12]}")
     except subprocess.TimeoutExpired as err:
-        raise RuntimeError(
-            f"Container start timed out after {TIMEOUT_CONTAINER_START}s"
-        ) from err
+        raise RuntimeError(f"Container start timed out after {TIMEOUT_CONTAINER_START}s") from err
 
 
 def wait_for_postgres(host: str, port: int, max_retries: int = 30, delay: float = 2.0) -> None:

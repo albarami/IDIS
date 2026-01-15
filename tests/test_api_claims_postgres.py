@@ -646,7 +646,7 @@ class TestClaimsAPIPostgresWritePath:
             f"/v1/deals/{deal_id}/claims",
             headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
             json={
-                "claim_class": "QUANTITATIVE",
+                "claim_class": "FINANCIAL",
                 "claim_text": "API Created Claim for Postgres Test",
                 "materiality": "HIGH",
             },
@@ -709,7 +709,7 @@ class TestClaimsAPITenantIsolation:
 
         assert response.status_code == 404
         body = response.json()
-        assert "not found" in body.get("detail", "").lower()
+        assert "not found" in body.get("message", "").lower()
 
     def test_cross_tenant_list_returns_empty(
         self,

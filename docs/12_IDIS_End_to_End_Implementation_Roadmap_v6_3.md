@@ -321,6 +321,15 @@ test(phase-2): add Postgres persistence tests for deals and claims routes ✅
 feat(phase-2): complete Task 2.11 claims Postgres wiring and API-level Postgres tests ✅
 ```
 
+**Verification Evidence (2026-01-15):**
+- Command: `.\make.bat postgres_integration`
+- All tests executed **non-skipped** with `IDIS_REQUIRE_POSTGRES=1`
+- Suites executed (72 passed):
+  - `test_api_deals_postgres.py`
+  - `test_api_claims_postgres.py`
+  - `test_postgres_rls_and_audit_immutability.py`
+  - `test_postgres_break_attempts.py`
+
 **Exit Criteria:**
 - [x] RBAC deny-by-default enforced
 - [x] Idempotency 409 on payload mismatch
@@ -329,6 +338,7 @@ feat(phase-2): complete Task 2.11 claims Postgres wiring and API-level Postgres 
 - [x] OTel traces propagated
 - [x] Deals/claims routes wired to Postgres
 - [x] Gate 0 + Gate 1 pass
+- [x] Postgres integration verified against real DB
 
 ---
 

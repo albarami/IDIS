@@ -306,7 +306,7 @@ class TestInjectionSafety:
         second_claim_response = client_with_postgres.post(
             f"/v1/deals/{deal_id}/claims",
             json={
-                "claim_class": "OPERATIONAL",
+                "claim_class": "OTHER",
                 "claim_text": "Claim after injection attempt",
                 "materiality": "LOW",
                 "ic_bound": False,

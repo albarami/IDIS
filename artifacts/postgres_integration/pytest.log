@@ -1,0 +1,101 @@
+STDOUT:
+============================= test session starts =============================
+platform win32 -- Python 3.12.0, pytest-8.3.3, pluggy-1.6.0 -- C:\Users\User\AppData\Local\Programs\Python\Python312\python.exe
+cachedir: .pytest_cache
+hypothesis profile 'default' -> database=DirectoryBasedExampleDatabase(WindowsPath('D:/IDIS/.hypothesis/examples'))
+benchmark: 5.1.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+Using --randomly-seed=1447298156
+rootdir: D:\IDIS
+configfile: pyproject.toml
+plugins: anyio-4.11.0, hypothesis-6.124.9, asyncio-0.24.0, benchmark-5.1.0, cov-6.0.0, env-1.1.3, mock-3.14.0, randomly-3.16.0, redis-3.1.3, timeout-2.3.1, xdist-3.6.1, typeguard-4.3.0
+asyncio: mode=Mode.STRICT, default_loop_scope=None
+collecting ... collected 72 items
+
+tests/test_postgres_break_attempts.py::TestInjectionSafety::test_injection_string_stored_as_data PASSED [  1%]
+tests/test_postgres_break_attempts.py::TestJSONBRoundTrip::test_deeply_nested_corroboration_round_trips PASSED [  2%]
+tests/test_postgres_break_attempts.py::TestTenantIsolationBreakAttempts::test_tenant_isolation_no_cross_tenant_modification PASSED [  4%]
+tests/test_postgres_break_attempts.py::TestTenantIsolationBreakAttempts::test_cross_tenant_list_returns_empty_not_filtered PASSED [  5%]
+tests/test_postgres_break_attempts.py::TestTenantIsolationBreakAttempts::test_cross_tenant_get_returns_404_not_forbidden PASSED [  6%]
+tests/test_api_deals_postgres.py::TestDealsAPIPostgresWritePath::test_api_creates_deal_in_postgres PASSED [  8%]
+tests/test_api_deals_postgres.py::TestDealsAPITenantIsolation::test_cross_tenant_get_returns_404 PASSED [  9%]
+tests/test_api_deals_postgres.py::TestDealsAPITenantIsolation::test_tenant_sees_only_own_deals PASSED [ 11%]
+tests/test_api_deals_postgres.py::TestDealsAPITenantIsolation::test_cross_tenant_list_returns_empty PASSED [ 12%]
+tests/test_api_deals_postgres.py::TestDealsAPIPostgresReadPath::test_api_reads_deal_inserted_directly_into_postgres PASSED [ 13%]
+tests/test_api_deals_postgres.py::TestDealsAPIPostgresReadPath::test_api_list_deals_returns_postgres_data PASSED [ 15%]
+tests/test_postgres_rls_and_audit_immutability.py::TestDocumentArtifactsRLS::test_document_artifacts_rls_blocks_mismatched_tenant_insert PASSED [ 16%]
+tests/test_postgres_rls_and_audit_immutability.py::TestDocumentArtifactsRLS::test_document_artifacts_same_tenant_read_allowed PASSED [ 18%]
+tests/test_postgres_rls_and_audit_immutability.py::TestDocumentArtifactsRLS::test_document_artifacts_insert_blocked_without_tenant_context PASSED [ 19%]
+tests/test_postgres_rls_and_audit_immutability.py::TestDocumentArtifactsRLS::test_document_artifacts_cross_tenant_read_blocked PASSED [ 20%]
+tests/test_postgres_rls_and_audit_immutability.py::TestDocumentArtifactsRLS::test_document_artifacts_fail_closed_without_tenant_context PASSED [ 22%]
+tests/test_postgres_rls_and_audit_immutability.py::TestAuditImmutability::test_audit_insert_allowed PASSED [ 23%]
+tests/test_postgres_rls_and_audit_immutability.py::TestAuditImmutability::test_audit_delete_blocked_by_trigger PASSED [ 25%]
+tests/test_postgres_rls_and_audit_immutability.py::TestAuditImmutability::test_audit_update_blocked_by_trigger PASSED [ 26%]
+tests/test_postgres_rls_and_audit_immutability.py::TestRLSTenantIsolation::test_rls_blocks_insert_without_tenant_context PASSED [ 27%]
+tests/test_postgres_rls_and_audit_immutability.py::TestRLSTenantIsolation::test_rls_blocks_cross_tenant_insert_mismatch PASSED [ 29%]
+tests/test_postgres_rls_and_audit_immutability.py::TestRLSTenantIsolation::test_rls_allows_same_tenant_reads PASSED [ 30%]
+tests/test_postgres_rls_and_audit_immutability.py::TestRLSTenantIsolation::test_rls_fails_closed_without_tenant_context PASSED [ 31%]
+tests/test_postgres_rls_and_audit_immutability.py::TestRLSTenantIsolation::test_rls_blocks_cross_tenant_reads PASSED [ 33%]
+tests/test_postgres_rls_and_audit_immutability.py::TestAppRoleSecurity::test_app_role_is_not_superuser PASSED [ 34%]
+tests/test_postgres_rls_and_audit_immutability.py::TestCalcSanadsRLS::test_calc_sanads_cross_tenant_read_blocked PASSED [ 36%]
+tests/test_postgres_rls_and_audit_immutability.py::TestCalcSanadsRLS::test_calc_sanads_fail_closed_without_tenant_context PASSED [ 37%]
+tests/test_postgres_rls_and_audit_immutability.py::TestCalcSanadsRLS::test_calc_sanads_same_tenant_read_allowed PASSED [ 38%]
+tests/test_postgres_rls_and_audit_immutability.py::TestCalcSanadsRLS::test_calc_sanads_insert_blocked_without_tenant_context PASSED [ 40%]
+tests/test_postgres_rls_and_audit_immutability.py::TestCalcSanadsRLS::test_calc_sanads_rls_blocks_mismatched_tenant_insert PASSED [ 41%]
+tests/test_postgres_rls_and_audit_immutability.py::TestWebhookDeliveryAttemptsRLS::test_delivery_attempts_same_tenant_read_allowed PASSED [ 43%]
+tests/test_postgres_rls_and_audit_immutability.py::TestWebhookDeliveryAttemptsRLS::test_delivery_attempts_rls_blocks_mismatched_tenant_insert PASSED [ 44%]
+tests/test_postgres_rls_and_audit_immutability.py::TestWebhookDeliveryAttemptsRLS::test_delivery_attempts_fail_closed_without_tenant_context PASSED [ 45%]
+tests/test_postgres_rls_and_audit_immutability.py::TestWebhookDeliveryAttemptsRLS::test_delivery_attempts_cross_tenant_read_blocked PASSED [ 47%]
+tests/test_postgres_rls_and_audit_immutability.py::TestWebhookDeliveryAttemptsRLS::test_delivery_attempts_insert_blocked_without_tenant_context PASSED [ 48%]
+tests/test_postgres_rls_and_audit_immutability.py::TestPostgresAuditSink::test_postgres_audit_sink_emit_in_tx PASSED [ 50%]
+tests/test_postgres_rls_and_audit_immutability.py::TestDocumentSpansRLS::test_document_spans_insert_blocked_without_tenant_context PASSED [ 51%]
+tests/test_postgres_rls_and_audit_immutability.py::TestDocumentSpansRLS::test_document_spans_fail_closed_without_tenant_context PASSED [ 52%]
+tests/test_postgres_rls_and_audit_immutability.py::TestDocumentSpansRLS::test_document_spans_same_tenant_read_allowed PASSED [ 54%]
+tests/test_postgres_rls_and_audit_immutability.py::TestDocumentSpansRLS::test_document_spans_rls_blocks_mismatched_tenant_insert PASSED [ 55%]
+tests/test_postgres_rls_and_audit_immutability.py::TestDocumentSpansRLS::test_document_spans_cross_tenant_read_blocked PASSED [ 56%]
+tests/test_postgres_rls_and_audit_immutability.py::TestIdempotencyRecordsRLS::test_idempotency_rls_blocks_cross_tenant PASSED [ 58%]
+tests/test_postgres_rls_and_audit_immutability.py::TestWebhooksRLS::test_webhooks_cross_tenant_read_blocked PASSED [ 59%]
+tests/test_postgres_rls_and_audit_immutability.py::TestWebhooksRLS::test_webhooks_insert_blocked_without_tenant_context PASSED [ 61%]
+tests/test_postgres_rls_and_audit_immutability.py::TestWebhooksRLS::test_webhooks_same_tenant_read_allowed PASSED [ 62%]
+tests/test_postgres_rls_and_audit_immutability.py::TestWebhooksRLS::test_webhooks_fail_closed_without_tenant_context PASSED [ 63%]
+tests/test_postgres_rls_and_audit_immutability.py::TestDeterministicCalculationsRLS::test_deterministic_calculations_insert_blocked_without_tenant_context PASSED [ 65%]
+tests/test_postgres_rls_and_audit_immutability.py::TestDeterministicCalculationsRLS::test_deterministic_calculations_rls_blocks_mismatched_tenant_insert PASSED [ 66%]
+tests/test_postgres_rls_and_audit_immutability.py::TestDeterministicCalculationsRLS::test_deterministic_calculations_same_tenant_read_allowed PASSED [ 68%]
+tests/test_postgres_rls_and_audit_immutability.py::TestDeterministicCalculationsRLS::test_deterministic_calculations_cross_tenant_read_blocked PASSED [ 69%]
+tests/test_postgres_rls_and_audit_immutability.py::TestDeterministicCalculationsRLS::test_deterministic_calculations_fail_closed_without_tenant_context PASSED [ 70%]
+tests/test_postgres_rls_and_audit_immutability.py::TestPostgresIdempotencyStore::test_postgres_idempotency_store_cross_tenant_blocked PASSED [ 72%]
+tests/test_postgres_rls_and_audit_immutability.py::TestPostgresIdempotencyStore::test_postgres_idempotency_store_get_put PASSED [ 73%]
+tests/test_postgres_rls_and_audit_immutability.py::TestDocumentsRLS::test_documents_fail_closed_without_tenant_context PASSED [ 75%]
+tests/test_postgres_rls_and_audit_immutability.py::TestDocumentsRLS::test_documents_cross_tenant_read_blocked PASSED [ 76%]
+tests/test_postgres_rls_and_audit_immutability.py::TestDocumentsRLS::test_documents_rls_blocks_mismatched_tenant_insert PASSED [ 77%]
+tests/test_postgres_rls_and_audit_immutability.py::TestDocumentsRLS::test_documents_same_tenant_read_allowed PASSED [ 79%]
+tests/test_postgres_rls_and_audit_immutability.py::TestDocumentsRLS::test_documents_insert_blocked_without_tenant_context PASSED [ 80%]
+tests/test_api_claims_postgres.py::TestClaimsRepositoryPostgresWritePath::test_claims_repository_creates_in_postgres PASSED [ 81%]
+tests/test_api_claims_postgres.py::TestClaimsAPIPostgresWritePath::test_api_creates_claim_in_postgres PASSED [ 83%]
+tests/test_api_claims_postgres.py::TestClaimsAPITenantIsolation::test_cross_tenant_list_returns_empty PASSED [ 84%]
+tests/test_api_claims_postgres.py::TestClaimsAPITenantIsolation::test_cross_tenant_get_returns_404 PASSED [ 86%]
+tests/test_api_claims_postgres.py::TestClaimsAPITenantIsolation::test_tenant_sees_only_own_claims_via_api PASSED [ 87%]
+tests/test_api_claims_postgres.py::TestClaimsAPIPostgresReadPath::test_api_reads_claim_inserted_into_postgres PASSED [ 88%]
+tests/test_api_claims_postgres.py::TestClaimsAPIPostgresReadPath::test_api_list_claims_returns_postgres_data PASSED [ 90%]
+tests/test_api_claims_postgres.py::TestSanadsRepositoryPostgres::test_sanads_cross_tenant_isolation PASSED [ 91%]
+tests/test_api_claims_postgres.py::TestSanadsRepositoryPostgres::test_sanads_repository_creates_and_reads_from_postgres PASSED [ 93%]
+tests/test_api_claims_postgres.py::TestClaimsRepositoryPostgresReadPath::test_claims_repository_list_by_deal_from_postgres PASSED [ 94%]
+tests/test_api_claims_postgres.py::TestClaimsRepositoryPostgresReadPath::test_claims_repository_reads_from_postgres PASSED [ 95%]
+tests/test_api_claims_postgres.py::TestClaimsRepositoryTenantIsolation::test_cross_tenant_claim_get_returns_none PASSED [ 97%]
+tests/test_api_claims_postgres.py::TestClaimsRepositoryTenantIsolation::test_cross_tenant_list_by_deal_returns_empty PASSED [ 98%]
+tests/test_api_claims_postgres.py::TestClaimsRepositoryTenantIsolation::test_tenant_sees_only_own_claims PASSED [100%]
+
+============================== warnings summary ===============================
+src\idis\validators\schema_validator.py:15
+src\idis\validators\schema_validator.py:15
+  D:\IDIS\src\idis\validators\schema_validator.py:15: DeprecationWarning: jsonschema.RefResolver is deprecated as of v4.18.0, in favor of the https://github.com/python-jsonschema/referencing library, which provides more compliant referencing behavior as well as more flexible APIs for customization. A future release will remove RefResolver. Please file a feature request (on referencing) if you are missing an API for the kind of customization you need.
+    from jsonschema import Draft202012Validator, RefResolver
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================= 72 passed, 2 warnings in 54.39s =======================
+
+
+STDERR:
+C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\site-packages\pytest_asyncio\plugin.py:208: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))

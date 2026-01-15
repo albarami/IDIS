@@ -12,7 +12,7 @@ Per v6.3 requirements:
 from __future__ import annotations
 
 import os
-import unittest as _ut
+import unittest.mock
 import uuid
 from typing import TYPE_CHECKING, Any
 
@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 if TYPE_CHECKING:
     pass
 
-patch = getattr(_ut, "mo" + "ck").patch
+patch = unittest.mock.patch
 
 
 @pytest.fixture(autouse=True)

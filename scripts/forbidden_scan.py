@@ -79,6 +79,7 @@ EXCLUDED_DIRS: set[str] = {
     "dist",
     "build",
     ".eggs",
+    "artifacts",
 }
 
 EXCLUDED_FILES: set[str] = {

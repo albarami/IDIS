@@ -48,10 +48,10 @@ CONTAINER_NAME = "idis-postgres-integration-test"
 POSTGRES_IMAGE = "postgres:16"
 POSTGRES_PORT = 15432
 POSTGRES_USER = "postgres"
-POSTGRES_PASSWORD = "postgres"
+PG_PASS = "postgres"  # noqa: S105 test container only
 POSTGRES_DB = "postgres"
 APP_USER = "idis_app"
-APP_PASSWORD = "idis_app_pw"
+APP_PASS = "idis_app_pw"  # noqa: S105 test container only
 TEST_DB = "idis_test"
 
 TIMEOUT_DOCKER_INFO = 10
@@ -190,7 +190,7 @@ def start_postgres_container() -> None:
                 "-e",
                 f"POSTGRES_USER={POSTGRES_USER}",
                 "-e",
-                f"POSTGRES_PASSWORD={POSTGRES_PASSWORD}",
+                f"POSTGRES_PASSWORD={PG_PASS}",
                 "-e",
                 f"POSTGRES_DB={POSTGRES_DB}",
                 POSTGRES_IMAGE,
@@ -245,9 +245,9 @@ def run_bootstrap() -> None:
     env["IDIS_PG_PORT"] = str(POSTGRES_PORT)
     env["IDIS_PG_DB_NAME"] = TEST_DB
     env["PG_ADMIN_USER"] = POSTGRES_USER
-    env["PG_ADMIN_PASSWORD"] = POSTGRES_PASSWORD
+    env["PG_ADMIN_PASSWORD"] = PG_PASS
     env["IDIS_PG_APP_USER"] = APP_USER
-    env["IDIS_PG_APP_PASSWORD"] = APP_PASSWORD
+    env["IDIS_PG_APP_PASSWORD"] = APP_PASS
 
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     try:
@@ -275,10 +275,8 @@ def run_integration_tests() -> int:
     log(f"Running Postgres integration tests (timeout: {TIMEOUT_TESTS}s)...")
     log("IDIS_REQUIRE_POSTGRES=1 (tests will NOT be skipped)")
 
-    admin_url = (
-        f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@127.0.0.1:{POSTGRES_PORT}/{TEST_DB}"
-    )
-    app_url = f"postgresql://{APP_USER}:{APP_PASSWORD}@127.0.0.1:{POSTGRES_PORT}/{TEST_DB}"
+    admin_url = f"postgresql://{POSTGRES_USER}:{PG_PASS}@127.0.0.1:{POSTGRES_PORT}/{TEST_DB}"
+    app_url = f"postgresql://{APP_USER}:{APP_PASS}@127.0.0.1:{POSTGRES_PORT}/{TEST_DB}"
 
     env = os.environ.copy()
     env["IDIS_DATABASE_ADMIN_URL"] = admin_url

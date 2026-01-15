@@ -64,3 +64,6 @@ var/idempotency/
 
 # Red-team / verification temp artifacts (never commit)
 var/_tmp_idem_check/
+
+# Local runner artifacts (never commit)
+artifacts/

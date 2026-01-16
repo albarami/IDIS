@@ -374,13 +374,15 @@ feat(phase-2): complete Task 2.11 claims Postgres wiring and API-level Postgres 
 
 **Implemented (2026-01-13):** All Pydantic models with fail-closed validation, deterministic canonicalization, and stable hashing.
 
-#### Task 3.4: Sanad/Defect Services + API ⏳ NOT COMPLETE
+#### Task 3.4: Sanad/Defect Services + API ✅ COMPLETE
 | Deliverable | Module | Status |
 |-------------|--------|--------|
-| Sanad service (CRUD) | `src/idis/services/sanad/service.py` | ⏳ |
-| Defect service (CRUD) | `src/idis/services/defects/service.py` | ⏳ |
-| Sanad API endpoints | `src/idis/api/routes/sanad.py` | ⏳ |
-| Defect API endpoints | `src/idis/api/routes/defects.py` | ⏳ |
+| Sanad service (CRUD) | `src/idis/services/sanad/service.py` | ✅ |
+| Defect service (CRUD) | `src/idis/services/defects/service.py` | ✅ |
+| Sanad API endpoints | `src/idis/api/routes/sanad.py` | ✅ |
+| Defect API endpoints | `src/idis/api/routes/defects.py` | ✅ |
+
+**Implemented (2026-01-16):** Full Sanad/Defect services and API with audit correlation, sanad integrity validation (fail-closed), defect state machine (OPEN→WAIVED/CURED only), tenant-isolated list endpoints, and claim create/update audit correlation.
 
 #### Task 3.5: Sanad Methodology v2 ✅ COMPLETE
 
@@ -409,10 +411,10 @@ feat(phase-2): complete Task 2.11 claims Postgres wiring and API-level Postgres 
 | `test_transmission_node_model.py` | ✅ |
 | `test_sanad_model.py` | ✅ |
 | `test_defect_model.py` | ✅ |
-| `test_claim_service.py` | ⏳ Needed |
-| `test_extraction_service.py` | ⏳ Needed |
-| `test_api_sanad.py` | ⏳ Needed |
-| `test_api_defects.py` | ⏳ Needed |
+| `test_claim_service.py` | ✅ |
+| `test_extraction_service.py` | ✅ |
+| `test_api_sanad.py` | ✅ |
+| `test_api_defects.py` | ✅ |
 
 **Git Commits (Remaining):**
 ```
@@ -439,13 +441,13 @@ docs(phase-3): update roadmap with Phase 3 completion
 **Exit Criteria:**
 - [x] Grade algorithm unit-tested with worked examples
 - [x] Sanad methodology v2 implemented
-- [ ] EvidenceItem, Sanad, TransmissionNode, Defect models created
-- [ ] Claim extraction service functional
-- [ ] Sanad/Defect services with Postgres persistence
-- [ ] API endpoints for Sanad/Defect CRUD
-- [ ] 100% claims have Sanad objects
-- [ ] Defect waiver workflow operational
-- [ ] Gate 2 (Sanad≥95%, defect recall≥90%)
+- [x] EvidenceItem, Sanad, TransmissionNode, Defect models created
+- [x] Claim extraction service functional
+- [x] Sanad/Defect services with Postgres persistence
+- [x] API endpoints for Sanad/Defect CRUD
+- [x] 100% claims have Sanad objects (GDBS dataset: 100 deals, all claims have Sanads)
+- [x] Defect waiver workflow operational
+- [x] Gate 2 (Sanad≥95%, defect recall≥90%) — validated via GDBS adversarial deals
 
 ---
 

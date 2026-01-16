@@ -385,6 +385,7 @@ def list_deal_claims(
     response_model=ClaimResponse,
     response_model_exclude_none=True,
     status_code=201,
+    operation_id="createClaim",
 )
 def create_claim(
     deal_id: str,
@@ -393,6 +394,9 @@ def create_claim(
     body: CreateClaimRequest,
 ) -> ClaimResponse:
     """Create a claim for a deal.
+
+    All claim mutations go through ClaimService to enforce invariants
+    (No-Free-Facts, tenant isolation, audit events).
 
     Args:
         deal_id: UUID of the deal.
@@ -404,13 +408,15 @@ def create_claim(
         Created claim.
 
     Raises:
-        HTTPException: 404 if deal not found.
+        HTTPException: 404 if deal not found, 400 if validation fails.
     """
-    import uuid
-
     from idis.persistence.repositories.deals import (
         DealsRepository,
         InMemoryDealsRepository,
+    )
+    from idis.services.claims.service import (
+        CreateClaimInput,
+        NoFreeFactsViolationError,
     )
 
     db_conn = getattr(request.state, "db_conn", None)
@@ -424,13 +430,11 @@ def create_claim(
     if deal_data is None:
         raise HTTPException(status_code=404, detail="Deal not found")
 
-    claims_repo = _get_claims_repository(request, tenant_ctx.tenant_id)
-
-    claim_id = str(uuid.uuid4())
+    service = _get_claim_service(request, tenant_ctx.tenant_id)
     value_dict = body.value.model_dump() if body.value else None
+    request_id = getattr(request.state, "request_id", None)
 
-    claim_data = claims_repo.create(
-        claim_id=claim_id,
+    create_input = CreateClaimInput(
         deal_id=deal_id,
         claim_class=body.claim_class,
         claim_text=body.claim_text,
@@ -438,7 +442,13 @@ def create_claim(
         value=value_dict,
         materiality=body.materiality,
         ic_bound=body.ic_bound,
+        request_id=request_id,
     )
+
+    try:
+        claim_data = service.create(create_input)
+    except NoFreeFactsViolationError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
 
     return _get_claim_response(claim_data)
 
@@ -538,6 +548,94 @@ def get_claim_sanad(
         transmission_chain=nodes,
         computed=computed,
     )
+
+
+class UpdateClaimRequest(BaseModel):
+    """Request model for updating a claim per OpenAPI spec."""
+
+    claim_text: str | None = None
+    claim_grade: str | None = None
+    claim_verdict: str | None = None
+    claim_action: str | None = None
+    defect_ids: list[str] | None = None
+    materiality: str | None = None
+    ic_bound: bool | None = None
+    sanad_id: str | None = None
+    corroboration: Corroboration | None = None
+
+
+def _get_claim_service(
+    request: Request,
+    tenant_id: str,
+) -> Any:
+    """Get ClaimService instance based on DB availability."""
+    from idis.services.claims.service import ClaimService
+
+    db_conn = getattr(request.state, "db_conn", None)
+    return ClaimService(tenant_id=tenant_id, db_conn=db_conn)
+
+
+@router.patch(
+    "/claims/{claim_id}",
+    response_model=ClaimResponse,
+    response_model_exclude_none=True,
+    operation_id="updateClaim",
+)
+def update_claim(
+    claim_id: str,
+    request: Request,
+    tenant_ctx: RequireTenantContext,
+    body: UpdateClaimRequest,
+) -> ClaimResponse:
+    """Update a claim by ID (PATCH per OpenAPI v6.3).
+
+    Args:
+        claim_id: UUID of the claim to update.
+        request: FastAPI request for DB connection access.
+        tenant_ctx: Injected tenant context from auth dependency.
+        body: Claim update request.
+
+    Returns:
+        Updated claim.
+
+    Raises:
+        HTTPException: 404 if claim not found, 400 if No-Free-Facts violation.
+    """
+    from idis.services.claims.service import (
+        ClaimNotFoundError,
+        NoFreeFactsViolationError,
+        UpdateClaimInput,
+    )
+
+    service = _get_claim_service(request, tenant_ctx.tenant_id)
+
+    corroboration_dict = None
+    if body.corroboration:
+        corroboration_dict = body.corroboration.model_dump()
+
+    request_id = getattr(request.state, "request_id", None)
+
+    update_input = UpdateClaimInput(
+        claim_text=body.claim_text,
+        claim_grade=body.claim_grade,
+        claim_verdict=body.claim_verdict,
+        claim_action=body.claim_action,
+        defect_ids=body.defect_ids,
+        materiality=body.materiality,
+        ic_bound=body.ic_bound,
+        sanad_id=body.sanad_id,
+        corroboration=corroboration_dict,
+        request_id=request_id,
+    )
+
+    try:
+        claim_data = service.update(claim_id, update_input)
+    except ClaimNotFoundError:
+        raise HTTPException(status_code=404, detail="Claim not found") from None
+    except NoFreeFactsViolationError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+
+    return _get_claim_response(claim_data)
 
 
 def seed_claim(claim_data: dict[str, Any]) -> None:

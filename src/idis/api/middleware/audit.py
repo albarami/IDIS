@@ -207,13 +207,37 @@ class AuditMiddleware(BaseHTTPMiddleware):
         operation_id = getattr(request.state, "openapi_operation_id", None)
 
         if operation_id is None or operation_id not in OPERATION_ID_TO_EVENT_TYPE:
+            # operation_id is missing - this is an unsupported/unknown operation.
+            # If the response already indicates an error (status >= 400), the request
+            # was rejected by OpenAPI validation or another layer. Do not attempt
+            # audit emission - just return the existing error response unchanged.
+            # This prevents leaking internal audit details for unsupported methods.
+            if response.status_code >= 400:
+                return response
+
+            # If status < 400 but operation_id is missing, a mutation succeeded
+            # without an auditable operationId. This is dangerous - fail closed.
+            logger.error(
+                "Mutation succeeded without auditable operation_id: %s %s -> %d",
+                method,
+                path,
+                response.status_code,
+                extra={"request_id": request_id},
+            )
             return _build_error_response(
                 "AUDIT_EMIT_FAILED",
-                "Cannot emit audit event: unknown or missing operation_id",
+                "Audit required for mutation but operation not auditable",
                 request_id,
             )
 
         event_type, severity, resource_type = OPERATION_ID_TO_EVENT_TYPE[operation_id]
+
+        # For 4xx client error responses, no mutation occurred (request was rejected
+        # due to validation, not found, etc.). Skip audit - nothing to record.
+        # Only audit successful mutations (2xx) and potentially 5xx (where mutation
+        # may have occurred before the error).
+        if 400 <= response.status_code < 500:
+            return response
 
         audit_event = _build_audit_event(
             request=request,

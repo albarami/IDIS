@@ -45,16 +45,14 @@ def _make_api_keys_json(
 class TestAuditMiddlewareEmission:
     """Test A: Audit emitted on authenticated mutating /v1 request."""
 
-    def test_audit_emitted_on_invalid_json_request(self, tmp_path: Path) -> None:
-        """Verify audit event is emitted even when request body is invalid JSON.
+    def test_no_audit_for_client_error_response(self, tmp_path: Path) -> None:
+        """Verify NO audit event is emitted for 4xx client error responses.
 
-        Test scenario:
-        - POST /v1/deals with valid API key
-        - Body is invalid JSON: "{"
-        - Expect 400 INVALID_JSON response
-        - Audit log file has exactly 1 line
-        - Parsed event passes validate_audit_event
-        - Event contains correct tenant_id, request_id, status_code, event_type, body hash
+        For 4xx responses, no mutation occurred (request was rejected due to
+        validation, not found, etc.). Audit should be skipped since there's
+        nothing to record - no state change happened.
+
+        This also prevents leaking internal audit errors for failed requests.
         """
         tenant_id = str(uuid.uuid4())
         audit_log_path = tmp_path / "audit.jsonl"
@@ -79,29 +77,16 @@ class TestAuditMiddlewareEmission:
                 content=invalid_body,
             )
 
+            # Request should fail with 400 (invalid JSON)
             assert response.status_code == 400
             response_json = response.json()
             assert response_json["code"] == "INVALID_JSON"
 
-            assert audit_log_path.exists(), "Audit log file should exist"
-
-            lines = audit_log_path.read_text().strip().split("\n")
-            assert len(lines) == 1, f"Expected exactly 1 audit line, got {len(lines)}"
-
-            event = json.loads(lines[0])
-
-            validation_result = validate_audit_event(event)
-            assert validation_result.passed, (
-                f"Audit event validation failed: {[e.code for e in validation_result.errors]}"
-            )
-
-            assert event["tenant_id"] == tenant_id
-            assert event["request"]["request_id"] == request_id
-            assert event["request"]["status_code"] == 400
-            assert event["event_type"] == "deal.created"
-
-            expected_hash = f"sha256:{hashlib.sha256(invalid_body.encode()).hexdigest()}"
-            assert expected_hash in event["payload"]["hashes"]
+            # No audit should be emitted for 4xx responses
+            # (no mutation occurred, nothing to audit)
+            if audit_log_path.exists():
+                content = audit_log_path.read_text().strip()
+                assert content == "", "No audit should be emitted for 4xx responses"
 
         finally:
             os.environ.pop("IDIS_API_KEYS_JSON", None)
@@ -156,14 +141,18 @@ class TestAuditMiddlewareEmission:
 class TestAuditMiddlewareFailClosed:
     """Test B: Fail closed if sink write fails."""
 
-    def test_fail_closed_on_sink_write_failure(self, tmp_path: Path) -> None:
-        """Verify 500 AUDIT_EMIT_FAILED when sink cannot write.
+    def test_fail_closed_on_sink_write_failure_for_success(self, tmp_path: Path) -> None:
+        """Verify 500 AUDIT_EMIT_FAILED when sink cannot write for successful mutation.
 
         Test scenario:
         - Set IDIS_AUDIT_LOG_PATH to a directory (not a file)
-        - POST /v1/deals with valid key and invalid JSON
+        - POST /v1/deals with valid key and VALID JSON (to get 2xx response)
         - Expect 500 Error JSON with code="AUDIT_EMIT_FAILED"
         - No stack trace leakage in response
+
+        Note: For 4xx responses, no audit is attempted (no mutation occurred),
+        so sink failure wouldn't be triggered. This test uses valid JSON to
+        trigger an actual mutation attempt that would need auditing.
         """
         tenant_id = str(uuid.uuid4())
         bad_sink_path = tmp_path / "not_a_file_but_a_dir"
@@ -177,15 +166,17 @@ class TestAuditMiddlewareFailClosed:
             app = create_app(audit_sink=sink)
             client = TestClient(app, raise_server_exceptions=False)
 
+            # Use valid JSON to trigger a mutation that would need auditing
             response = client.post(
                 "/v1/deals",
                 headers={
                     "X-IDIS-API-Key": "test-api-key-12345",
                     "Content-Type": "application/json",
                 },
-                content="{",
+                json={"name": "Test Deal", "company_name": "Acme Corp"},
             )
 
+            # The mutation should succeed (201) but audit sink fails → 500
             assert response.status_code == 500
             response_json = response.json()
             assert response_json["code"] == "AUDIT_EMIT_FAILED"

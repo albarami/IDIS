@@ -338,7 +338,7 @@ class TestTenantIsolationBreakAttempts:
                 "claim_class": "FINANCIAL",
                 "claim_text": "Tenant A secret claim",
                 "materiality": "HIGH",
-                "ic_bound": True,
+                "ic_bound": False,
             },
             headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
         )

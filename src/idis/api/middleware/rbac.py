@@ -68,12 +68,14 @@ class RBACMiddleware(BaseHTTPMiddleware):
                 path,
                 extra={"request_id": request_id},
             )
+            # Use generic error message to avoid leaking internal details
+            # about operation_id or OpenAPI validation internals
             return make_error_response_no_request(
                 code="RBAC_DENIED",
-                message="Authorization check failed: unknown operation",
+                message="Method not allowed for this resource",
                 http_status=403,
                 request_id=request_id,
-                details={"reason": "missing_operation_id", "path": path},
+                details=None,
             )
 
         resource_ctx = self._extract_resource_context(request)

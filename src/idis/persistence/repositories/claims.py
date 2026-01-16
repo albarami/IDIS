@@ -58,6 +58,7 @@ class ClaimsRepository:
         defect_ids: list[str] | None = None,
         materiality: str = "MEDIUM",
         ic_bound: bool = False,
+        primary_span_id: str | None = None,
     ) -> dict[str, Any]:
         """Create a new claim."""
         now = datetime.now(UTC)
@@ -70,12 +71,13 @@ class ClaimsRepository:
                     claim_id, tenant_id, deal_id, claim_class, claim_text,
                     predicate, value, sanad_id, claim_grade, corroboration,
                     claim_verdict, claim_action, defect_ids, materiality,
-                    ic_bound, created_at, updated_at
+                    ic_bound, primary_span_id, created_at, updated_at
                 ) VALUES (
                     :claim_id, :tenant_id, :deal_id, :claim_class, :claim_text,
                     :predicate, CAST(:value AS JSONB), :sanad_id, :claim_grade,
                     CAST(:corroboration AS JSONB), :claim_verdict, :claim_action,
-                    CAST(:defect_ids AS JSONB), :materiality, :ic_bound, :created_at, NULL
+                    CAST(:defect_ids AS JSONB), :materiality, :ic_bound,
+                    :primary_span_id, :created_at, NULL
                 )
                 """
             ),
@@ -95,6 +97,7 @@ class ClaimsRepository:
                 "defect_ids": json.dumps(defect_ids or []),
                 "materiality": materiality,
                 "ic_bound": ic_bound,
+                "primary_span_id": primary_span_id,
                 "created_at": now,
             },
         )
@@ -115,6 +118,7 @@ class ClaimsRepository:
             "defect_ids": defect_ids or [],
             "materiality": materiality,
             "ic_bound": ic_bound,
+            "primary_span_id": primary_span_id,
             "created_at": now.isoformat().replace("+00:00", "Z"),
             "updated_at": None,
         }
@@ -127,7 +131,7 @@ class ClaimsRepository:
                 SELECT claim_id, tenant_id, deal_id, claim_class, claim_text,
                        predicate, value, sanad_id, claim_grade, corroboration,
                        claim_verdict, claim_action, defect_ids, materiality,
-                       ic_bound, created_at, updated_at
+                       ic_bound, primary_span_id, created_at, updated_at
                 FROM claims
                 WHERE claim_id = :claim_id
                 """
@@ -156,7 +160,7 @@ class ClaimsRepository:
                     SELECT claim_id, tenant_id, deal_id, claim_class, claim_text,
                            predicate, value, sanad_id, claim_grade, corroboration,
                            claim_verdict, claim_action, defect_ids, materiality,
-                           ic_bound, created_at, updated_at
+                           ic_bound, primary_span_id, created_at, updated_at
                     FROM claims
                     WHERE deal_id = :deal_id AND claim_id > :cursor
                     ORDER BY claim_id
@@ -172,7 +176,7 @@ class ClaimsRepository:
                     SELECT claim_id, tenant_id, deal_id, claim_class, claim_text,
                            predicate, value, sanad_id, claim_grade, corroboration,
                            claim_verdict, claim_action, defect_ids, materiality,
-                           ic_bound, created_at, updated_at
+                           ic_bound, primary_span_id, created_at, updated_at
                     FROM claims
                     WHERE deal_id = :deal_id
                     ORDER BY claim_id
@@ -220,6 +224,8 @@ class ClaimsRepository:
         if isinstance(defect_ids, str):
             defect_ids = json.loads(defect_ids)
 
+        primary_span_id = getattr(row, "primary_span_id", None)
+
         return {
             "claim_id": str(row.claim_id),
             "tenant_id": str(row.tenant_id),
@@ -236,6 +242,7 @@ class ClaimsRepository:
             "defect_ids": defect_ids or [],
             "materiality": row.materiality,
             "ic_bound": row.ic_bound,
+            "primary_span_id": str(primary_span_id) if primary_span_id else None,
             "created_at": created_at,
             "updated_at": updated_at,
         }
@@ -469,6 +476,7 @@ class InMemoryClaimsRepository:
         defect_ids: list[str] | None = None,
         materiality: str = "MEDIUM",
         ic_bound: bool = False,
+        primary_span_id: str | None = None,
     ) -> dict[str, Any]:
         """Create a new claim in memory."""
         now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
@@ -490,6 +498,7 @@ class InMemoryClaimsRepository:
             "defect_ids": defect_ids or [],
             "materiality": materiality,
             "ic_bound": ic_bound,
+            "primary_span_id": primary_span_id,
             "created_at": now,
             "updated_at": None,
         }

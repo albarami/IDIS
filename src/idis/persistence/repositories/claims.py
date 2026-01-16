@@ -352,6 +352,106 @@ class SanadsRepository:
 
         return self._row_to_dict(result)
 
+    def update(
+        self,
+        sanad_id: str,
+        *,
+        corroborating_evidence_ids: list[str] | None = None,
+        transmission_chain: list[dict[str, Any]] | None = None,
+        computed: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Update an existing sanad."""
+        existing = self.get(sanad_id)
+        if existing is None:
+            return None
+
+        now = datetime.now(UTC)
+        new_corr = (
+            corroborating_evidence_ids
+            if corroborating_evidence_ids is not None
+            else existing["corroborating_evidence_ids"]
+        )
+        new_chain = (
+            transmission_chain if transmission_chain is not None else existing["transmission_chain"]
+        )
+        new_computed = computed if computed is not None else existing["computed"]
+
+        self._conn.execute(
+            text(
+                """
+                UPDATE sanads SET
+                    corroborating_evidence_ids = CAST(:corroborating_evidence_ids AS JSONB),
+                    transmission_chain = CAST(:transmission_chain AS JSONB),
+                    computed = CAST(:computed AS JSONB),
+                    updated_at = :updated_at
+                WHERE sanad_id = :sanad_id
+                """
+            ),
+            {
+                "sanad_id": sanad_id,
+                "corroborating_evidence_ids": json.dumps(new_corr),
+                "transmission_chain": json.dumps(new_chain),
+                "computed": json.dumps(new_computed),
+                "updated_at": now,
+            },
+        )
+
+        return {
+            **existing,
+            "corroborating_evidence_ids": new_corr,
+            "transmission_chain": new_chain,
+            "computed": new_computed,
+            "updated_at": now.isoformat().replace("+00:00", "Z"),
+        }
+
+    def list_by_deal(
+        self,
+        deal_id: str,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """List sanads for a deal."""
+        effective_limit = min(max(1, limit), 200)
+
+        if cursor:
+            result = self._conn.execute(
+                text(
+                    """
+                    SELECT sanad_id, tenant_id, claim_id, deal_id, primary_evidence_id,
+                           corroborating_evidence_ids, transmission_chain, computed,
+                           created_at, updated_at
+                    FROM sanads
+                    WHERE deal_id = :deal_id AND sanad_id > :cursor
+                    ORDER BY sanad_id
+                    LIMIT :limit
+                    """
+                ),
+                {"deal_id": deal_id, "cursor": cursor, "limit": effective_limit + 1},
+            ).fetchall()
+        else:
+            result = self._conn.execute(
+                text(
+                    """
+                    SELECT sanad_id, tenant_id, claim_id, deal_id, primary_evidence_id,
+                           corroborating_evidence_ids, transmission_chain, computed,
+                           created_at, updated_at
+                    FROM sanads
+                    WHERE deal_id = :deal_id
+                    ORDER BY sanad_id
+                    LIMIT :limit
+                    """
+                ),
+                {"deal_id": deal_id, "limit": effective_limit + 1},
+            ).fetchall()
+
+        sanads = [self._row_to_dict(row) for row in result[:effective_limit]]
+
+        next_cursor = None
+        if len(result) > effective_limit:
+            next_cursor = sanads[-1]["sanad_id"]
+
+        return sanads, next_cursor
+
     def _row_to_dict(self, row: Any) -> dict[str, Any]:
         """Convert database row to dict."""
         created_at = row.created_at
@@ -397,13 +497,88 @@ class DefectsRepository:
         self._tenant_id = tenant_id
         set_tenant_local(conn, tenant_id)
 
+    def create(
+        self,
+        *,
+        defect_id: str,
+        claim_id: str | None,
+        deal_id: str | None,
+        defect_type: str,
+        severity: str,
+        description: str,
+        cure_protocol: str,
+        status: str = "OPEN",
+        waiver_reason: str | None = None,
+        waived_by: str | None = None,
+        cured_by: str | None = None,
+        cured_reason: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a new defect."""
+        now = datetime.now(UTC)
+
+        self._conn.execute(
+            text(
+                """
+                INSERT INTO defects (
+                    defect_id, tenant_id, claim_id, deal_id, defect_type, severity,
+                    description, cure_protocol, status, waiver_reason, waived_by,
+                    cured_by, cured_reason, waived, waived_at, cured_at,
+                    created_at, updated_at
+                ) VALUES (
+                    :defect_id, :tenant_id, :claim_id, :deal_id, :defect_type, :severity,
+                    :description, :cure_protocol, :status, :waiver_reason, :waived_by,
+                    :cured_by, :cured_reason, :waived, NULL, NULL, :created_at, NULL
+                )
+                """
+            ),
+            {
+                "defect_id": defect_id,
+                "tenant_id": self._tenant_id,
+                "claim_id": claim_id,
+                "deal_id": deal_id,
+                "defect_type": defect_type,
+                "severity": severity,
+                "description": description,
+                "cure_protocol": cure_protocol,
+                "status": status,
+                "waiver_reason": waiver_reason,
+                "waived_by": waived_by,
+                "cured_by": cured_by,
+                "cured_reason": cured_reason,
+                "waived": False,
+                "created_at": now,
+            },
+        )
+
+        return {
+            "defect_id": defect_id,
+            "tenant_id": self._tenant_id,
+            "claim_id": claim_id,
+            "deal_id": deal_id,
+            "defect_type": defect_type,
+            "severity": severity,
+            "description": description,
+            "cure_protocol": cure_protocol,
+            "status": status,
+            "waiver_reason": waiver_reason,
+            "waived_by": waived_by,
+            "cured_by": cured_by,
+            "cured_reason": cured_reason,
+            "waived": False,
+            "waived_at": None,
+            "cured_at": None,
+            "created_at": now.isoformat().replace("+00:00", "Z"),
+            "updated_at": None,
+        }
+
     def get(self, defect_id: str) -> dict[str, Any] | None:
         """Get a defect by ID."""
         result = self._conn.execute(
             text(
                 """
-                SELECT defect_id, tenant_id, claim_id, defect_type, severity,
-                       description, cure_protocol, waived, waived_by, waived_at,
+                SELECT defect_id, tenant_id, claim_id, deal_id, defect_type, severity,
+                       description, cure_protocol, status, waiver_reason, waived_by,
+                       cured_by, cured_reason, waived, waived_at, cured_at,
                        created_at, updated_at
                 FROM defects
                 WHERE defect_id = :defect_id
@@ -417,6 +592,203 @@ class DefectsRepository:
 
         return self._row_to_dict(result)
 
+    def list_by_claim(
+        self,
+        claim_id: str,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """List defects for a claim."""
+        effective_limit = min(max(1, limit), 200)
+
+        if cursor:
+            result = self._conn.execute(
+                text(
+                    """
+                    SELECT defect_id, tenant_id, claim_id, deal_id, defect_type, severity,
+                           description, cure_protocol, status, waiver_reason, waived_by,
+                           cured_by, cured_reason, waived, waived_at, cured_at,
+                           created_at, updated_at
+                    FROM defects
+                    WHERE claim_id = :claim_id AND defect_id > :cursor
+                    ORDER BY defect_id
+                    LIMIT :limit
+                    """
+                ),
+                {"claim_id": claim_id, "cursor": cursor, "limit": effective_limit + 1},
+            ).fetchall()
+        else:
+            result = self._conn.execute(
+                text(
+                    """
+                    SELECT defect_id, tenant_id, claim_id, deal_id, defect_type, severity,
+                           description, cure_protocol, status, waiver_reason, waived_by,
+                           cured_by, cured_reason, waived, waived_at, cured_at,
+                           created_at, updated_at
+                    FROM defects
+                    WHERE claim_id = :claim_id
+                    ORDER BY defect_id
+                    LIMIT :limit
+                    """
+                ),
+                {"claim_id": claim_id, "limit": effective_limit + 1},
+            ).fetchall()
+
+        defects = [self._row_to_dict(row) for row in result[:effective_limit]]
+
+        next_cursor = None
+        if len(result) > effective_limit:
+            next_cursor = defects[-1]["defect_id"]
+
+        return defects, next_cursor
+
+    def list_by_deal(
+        self,
+        deal_id: str,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """List defects for a deal."""
+        effective_limit = min(max(1, limit), 200)
+
+        if cursor:
+            result = self._conn.execute(
+                text(
+                    """
+                    SELECT defect_id, tenant_id, claim_id, deal_id, defect_type, severity,
+                           description, cure_protocol, status, waiver_reason, waived_by,
+                           cured_by, cured_reason, waived, waived_at, cured_at,
+                           created_at, updated_at
+                    FROM defects
+                    WHERE deal_id = :deal_id AND defect_id > :cursor
+                    ORDER BY defect_id
+                    LIMIT :limit
+                    """
+                ),
+                {"deal_id": deal_id, "cursor": cursor, "limit": effective_limit + 1},
+            ).fetchall()
+        else:
+            result = self._conn.execute(
+                text(
+                    """
+                    SELECT defect_id, tenant_id, claim_id, deal_id, defect_type, severity,
+                           description, cure_protocol, status, waiver_reason, waived_by,
+                           cured_by, cured_reason, waived, waived_at, cured_at,
+                           created_at, updated_at
+                    FROM defects
+                    WHERE deal_id = :deal_id
+                    ORDER BY defect_id
+                    LIMIT :limit
+                    """
+                ),
+                {"deal_id": deal_id, "limit": effective_limit + 1},
+            ).fetchall()
+
+        defects = [self._row_to_dict(row) for row in result[:effective_limit]]
+
+        next_cursor = None
+        if len(result) > effective_limit:
+            next_cursor = defects[-1]["defect_id"]
+
+        return defects, next_cursor
+
+    def update(
+        self,
+        defect_id: str,
+        *,
+        description: str | None = None,
+        status: str | None = None,
+        waiver_reason: str | None = None,
+        waived_by: str | None = None,
+        cured_by: str | None = None,
+        cured_reason: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Update an existing defect."""
+        existing = self.get(defect_id)
+        if existing is None:
+            return None
+
+        now = datetime.now(UTC)
+        new_desc = description if description is not None else existing["description"]
+        new_status = status if status is not None else existing["status"]
+        new_waiver_reason = (
+            waiver_reason if waiver_reason is not None else existing.get("waiver_reason")
+        )
+        new_waived_by = waived_by if waived_by is not None else existing.get("waived_by")
+        new_cured_by = cured_by if cured_by is not None else existing.get("cured_by")
+        new_cured_reason = (
+            cured_reason if cured_reason is not None else existing.get("cured_reason")
+        )
+        new_waived = new_status == "WAIVED"
+        new_waived_at = (
+            now
+            if new_status == "WAIVED" and not existing.get("waived")
+            else existing.get("waived_at")
+        )
+        new_cured_at = (
+            now
+            if new_status == "CURED" and existing.get("status") != "CURED"
+            else existing.get("cured_at")
+        )
+
+        self._conn.execute(
+            text(
+                """
+                UPDATE defects SET
+                    description = :description,
+                    status = :status,
+                    waiver_reason = :waiver_reason,
+                    waived_by = :waived_by,
+                    cured_by = :cured_by,
+                    cured_reason = :cured_reason,
+                    waived = :waived,
+                    waived_at = :waived_at,
+                    cured_at = :cured_at,
+                    updated_at = :updated_at
+                WHERE defect_id = :defect_id
+                """
+            ),
+            {
+                "defect_id": defect_id,
+                "description": new_desc,
+                "status": new_status,
+                "waiver_reason": new_waiver_reason,
+                "waived_by": new_waived_by,
+                "cured_by": new_cured_by,
+                "cured_reason": new_cured_reason,
+                "waived": new_waived,
+                "waived_at": new_waived_at if isinstance(new_waived_at, datetime) else None,
+                "cured_at": new_cured_at if isinstance(new_cured_at, datetime) else None,
+                "updated_at": now,
+            },
+        )
+
+        waived_at_str = None
+        if isinstance(new_waived_at, datetime):
+            waived_at_str = new_waived_at.isoformat().replace("+00:00", "Z")
+        elif isinstance(new_waived_at, str):
+            waived_at_str = new_waived_at
+
+        cured_at_str = None
+        if isinstance(new_cured_at, datetime):
+            cured_at_str = new_cured_at.isoformat().replace("+00:00", "Z")
+        elif isinstance(new_cured_at, str):
+            cured_at_str = new_cured_at
+
+        return {
+            **existing,
+            "description": new_desc,
+            "status": new_status,
+            "waiver_reason": new_waiver_reason,
+            "waived_by": new_waived_by,
+            "cured_by": new_cured_by,
+            "cured_reason": new_cured_reason,
+            "waived": new_waived,
+            "waived_at": waived_at_str,
+            "cured_at": cured_at_str,
+            "updated_at": now.isoformat().replace("+00:00", "Z"),
+        }
+
     def _row_to_dict(self, row: Any) -> dict[str, Any]:
         """Convert database row to dict."""
         created_at = row.created_at
@@ -427,21 +799,33 @@ class DefectsRepository:
         if updated_at is not None and hasattr(updated_at, "isoformat"):
             updated_at = updated_at.isoformat().replace("+00:00", "Z")
 
-        waived_at = row.waived_at
+        waived_at = getattr(row, "waived_at", None)
         if waived_at is not None and hasattr(waived_at, "isoformat"):
             waived_at = waived_at.isoformat().replace("+00:00", "Z")
+
+        cured_at = getattr(row, "cured_at", None)
+        if cured_at is not None and hasattr(cured_at, "isoformat"):
+            cured_at = cured_at.isoformat().replace("+00:00", "Z")
 
         return {
             "defect_id": str(row.defect_id),
             "tenant_id": str(row.tenant_id),
             "claim_id": str(row.claim_id) if row.claim_id else None,
+            "deal_id": str(getattr(row, "deal_id", None))
+            if getattr(row, "deal_id", None)
+            else None,
             "defect_type": row.defect_type,
             "severity": row.severity,
             "description": row.description,
             "cure_protocol": row.cure_protocol,
-            "waived": row.waived,
-            "waived_by": row.waived_by,
+            "status": getattr(row, "status", "OPEN"),
+            "waiver_reason": getattr(row, "waiver_reason", None),
+            "waived_by": getattr(row, "waived_by", None),
+            "cured_by": getattr(row, "cured_by", None),
+            "cured_reason": getattr(row, "cured_reason", None),
+            "waived": getattr(row, "waived", False),
             "waived_at": waived_at,
+            "cured_at": cured_at,
             "created_at": created_at,
             "updated_at": updated_at,
         }
@@ -555,6 +939,34 @@ class InMemorySanadsRepository:
         """Initialize with tenant context."""
         self._tenant_id = tenant_id
 
+    def create(
+        self,
+        *,
+        sanad_id: str,
+        claim_id: str,
+        deal_id: str,
+        primary_evidence_id: str,
+        corroborating_evidence_ids: list[str] | None = None,
+        transmission_chain: list[dict[str, Any]] | None = None,
+        computed: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Create a new sanad in memory."""
+        now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        sanad = {
+            "sanad_id": sanad_id,
+            "tenant_id": self._tenant_id,
+            "claim_id": claim_id,
+            "deal_id": deal_id,
+            "primary_evidence_id": primary_evidence_id,
+            "corroborating_evidence_ids": corroborating_evidence_ids or [],
+            "transmission_chain": transmission_chain or [],
+            "computed": computed or {},
+            "created_at": now,
+            "updated_at": None,
+        }
+        _sanad_in_memory_store[sanad_id] = sanad
+        return sanad
+
     def get(self, sanad_id: str) -> dict[str, Any] | None:
         """Get a sanad by ID from memory."""
         sanad = _sanad_in_memory_store.get(sanad_id)
@@ -569,6 +981,57 @@ class InMemorySanadsRepository:
                 return sanad
         return None
 
+    def update(
+        self,
+        sanad_id: str,
+        *,
+        corroborating_evidence_ids: list[str] | None = None,
+        transmission_chain: list[dict[str, Any]] | None = None,
+        computed: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Update an existing sanad in memory."""
+        existing = self.get(sanad_id)
+        if existing is None:
+            return None
+
+        now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        if corroborating_evidence_ids is not None:
+            existing["corroborating_evidence_ids"] = corroborating_evidence_ids
+        if transmission_chain is not None:
+            existing["transmission_chain"] = transmission_chain
+        if computed is not None:
+            existing["computed"] = computed
+        existing["updated_at"] = now
+
+        _sanad_in_memory_store[sanad_id] = existing
+        return existing
+
+    def list_by_deal(
+        self,
+        deal_id: str,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """List sanads for a deal from memory."""
+        sanads = [
+            s
+            for s in _sanad_in_memory_store.values()
+            if s.get("tenant_id") == self._tenant_id and s.get("deal_id") == deal_id
+        ]
+        sanads.sort(key=lambda x: x["sanad_id"])
+
+        if cursor:
+            sanads = [s for s in sanads if s["sanad_id"] > cursor]
+
+        effective_limit = min(max(1, limit), 200)
+        items = sanads[:effective_limit]
+
+        next_cursor = None
+        if len(sanads) > effective_limit:
+            next_cursor = items[-1]["sanad_id"]
+
+        return items, next_cursor
+
 
 class InMemoryDefectsRepository:
     """In-memory fallback repository for defects."""
@@ -577,12 +1040,144 @@ class InMemoryDefectsRepository:
         """Initialize with tenant context."""
         self._tenant_id = tenant_id
 
+    def create(
+        self,
+        *,
+        defect_id: str,
+        claim_id: str | None,
+        deal_id: str | None,
+        defect_type: str,
+        severity: str,
+        description: str,
+        cure_protocol: str,
+        status: str = "OPEN",
+        waiver_reason: str | None = None,
+        waived_by: str | None = None,
+        cured_by: str | None = None,
+        cured_reason: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a new defect in memory."""
+        now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        defect = {
+            "defect_id": defect_id,
+            "tenant_id": self._tenant_id,
+            "claim_id": claim_id,
+            "deal_id": deal_id,
+            "defect_type": defect_type,
+            "severity": severity,
+            "description": description,
+            "cure_protocol": cure_protocol,
+            "status": status,
+            "waiver_reason": waiver_reason,
+            "waived_by": waived_by,
+            "cured_by": cured_by,
+            "cured_reason": cured_reason,
+            "waived": False,
+            "waived_at": None,
+            "cured_at": None,
+            "created_at": now,
+            "updated_at": None,
+        }
+        _defects_in_memory_store[defect_id] = defect
+        return defect
+
     def get(self, defect_id: str) -> dict[str, Any] | None:
         """Get a defect by ID from memory."""
         defect = _defects_in_memory_store.get(defect_id)
         if defect is None or defect.get("tenant_id") != self._tenant_id:
             return None
         return defect
+
+    def list_by_claim(
+        self,
+        claim_id: str,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """List defects for a claim from memory."""
+        defects = [
+            d
+            for d in _defects_in_memory_store.values()
+            if d.get("tenant_id") == self._tenant_id and d.get("claim_id") == claim_id
+        ]
+        defects.sort(key=lambda x: x["defect_id"])
+
+        if cursor:
+            defects = [d for d in defects if d["defect_id"] > cursor]
+
+        effective_limit = min(max(1, limit), 200)
+        items = defects[:effective_limit]
+
+        next_cursor = None
+        if len(defects) > effective_limit:
+            next_cursor = items[-1]["defect_id"]
+
+        return items, next_cursor
+
+    def list_by_deal(
+        self,
+        deal_id: str,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """List defects for a deal from memory."""
+        defects = [
+            d
+            for d in _defects_in_memory_store.values()
+            if d.get("tenant_id") == self._tenant_id and d.get("deal_id") == deal_id
+        ]
+        defects.sort(key=lambda x: x["defect_id"])
+
+        if cursor:
+            defects = [d for d in defects if d["defect_id"] > cursor]
+
+        effective_limit = min(max(1, limit), 200)
+        items = defects[:effective_limit]
+
+        next_cursor = None
+        if len(defects) > effective_limit:
+            next_cursor = items[-1]["defect_id"]
+
+        return items, next_cursor
+
+    def update(
+        self,
+        defect_id: str,
+        *,
+        description: str | None = None,
+        status: str | None = None,
+        waiver_reason: str | None = None,
+        waived_by: str | None = None,
+        cured_by: str | None = None,
+        cured_reason: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Update an existing defect in memory."""
+        existing = self.get(defect_id)
+        if existing is None:
+            return None
+
+        now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        if description is not None:
+            existing["description"] = description
+        if status is not None:
+            existing["status"] = status
+            if status == "WAIVED" and not existing.get("waived"):
+                existing["waived"] = True
+                existing["waived_at"] = now
+            if status == "CURED" and existing.get("status") != "CURED":
+                existing["cured_at"] = now
+        if waiver_reason is not None:
+            existing["waiver_reason"] = waiver_reason
+        if waived_by is not None:
+            existing["waived_by"] = waived_by
+        if cured_by is not None:
+            existing["cured_by"] = cured_by
+        if cured_reason is not None:
+            existing["cured_reason"] = cured_reason
+        existing["updated_at"] = now
+
+        _defects_in_memory_store[defect_id] = existing
+        return existing
 
 
 def clear_claims_in_memory_store() -> None:

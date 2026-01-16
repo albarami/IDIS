@@ -423,6 +423,240 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+    post:
+      tags: [Defects]
+      summary: Create a defect for a deal
+      operationId: createDefect
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDefectRequest"
+      responses:
+        "201":
+          description: Created defect
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Defect"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/claims/{claimId}/defects:
+    get:
+      tags: [Defects]
+      summary: List defects for a claim
+      operationId: listClaimDefects
+      parameters:
+        - $ref: "#/components/parameters/ClaimId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Defect list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedDefectList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/defects/{defect_id}:
+    get:
+      tags: [Defects]
+      summary: Get defect by ID
+      operationId: getDefect
+      parameters:
+        - $ref: "#/components/parameters/DefectId"
+      responses:
+        "200":
+          description: Defect details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Defect"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/defects/{defect_id}/waive:
+    post:
+      tags: [Defects]
+      summary: Waive a defect with actor and reason
+      operationId: waiveDefect
+      parameters:
+        - $ref: "#/components/parameters/DefectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WaiveDefectRequest"
+      responses:
+        "200":
+          description: Waived defect
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Defect"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/defects/{defect_id}/cure:
+    post:
+      tags: [Defects]
+      summary: Cure a defect with actor and reason
+      operationId: cureDefect
+      parameters:
+        - $ref: "#/components/parameters/DefectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CureDefectRequest"
+      responses:
+        "200":
+          description: Cured defect
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Defect"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/deals/{dealId}/sanads:
+    get:
+      tags: [Sanad]
+      summary: List sanads for a deal
+      operationId: listDealSanads
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Sanad list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedSanadList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      tags: [Sanad]
+      summary: Create a sanad for a deal
+      operationId: createSanad
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSanadRequest"
+      responses:
+        "201":
+          description: Created sanad
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Sanad"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/sanads/{sanad_id}:
+    get:
+      tags: [Sanad]
+      summary: Get sanad by ID
+      operationId: getSanad
+      parameters:
+        - $ref: "#/components/parameters/SanadId"
+      responses:
+        "200":
+          description: Sanad details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Sanad"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Sanad]
+      summary: Update a sanad
+      operationId: updateSanad
+      parameters:
+        - $ref: "#/components/parameters/SanadId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSanadRequest"
+      responses:
+        "200":
+          description: Updated sanad
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Sanad"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/sanads/{sanad_id}/corroboration:
+    post:
+      tags: [Sanad]
+      summary: Set corroboration for a sanad and re-compute grade
+      operationId: setSanadCorroboration
+      parameters:
+        - $ref: "#/components/parameters/SanadId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetCorroborationRequest"
+      responses:
+        "200":
+          description: Updated sanad with new grade
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Sanad"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
   /v1/deals/{dealId}/calcs:
     get:
@@ -779,6 +1013,16 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    DefectId:
+      name: defect_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    SanadId:
+      name: sanad_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
     Limit:
       name: limit
       in: query
@@ -1069,10 +1313,12 @@ components:
 
     Defect:
       type: object
-      required: [defect_id, deal_id, defect_type, severity, description, created_at]
+      required: [defect_id, tenant_id, defect_type, severity, description, cure_protocol, status, created_at]
       properties:
         defect_id: { type: string, format: uuid }
-        deal_id: { type: string, format: uuid }
+        tenant_id: { type: string, format: uuid }
+        claim_id: { type: string, format: uuid, nullable: true }
+        deal_id: { type: string, format: uuid, nullable: true }
         defect_type:
           type: string
           enum:
@@ -1092,10 +1338,84 @@ components:
             - IMPLAUSIBILITY_REQUIRES_PROOF
         severity: { $ref: "#/components/schemas/DefectSeverity" }
         description: { type: string }
+        cure_protocol: { type: string }
+        status: { type: string, enum: [OPEN, CURED, WAIVED] }
+        waiver_reason: { type: string, nullable: true }
+        waived_by: { type: string, nullable: true }
+        waived_at: { type: string, format: date-time, nullable: true }
+        cured_by: { type: string, nullable: true }
+        cured_reason: { type: string, nullable: true }
+        cured_at: { type: string, format: date-time, nullable: true }
         affected_claim_ids:
           type: array
           items: { type: string, format: uuid }
         created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time, nullable: true }
+
+    CreateDefectRequest:
+      type: object
+      required: [defect_type, description, cure_protocol]
+      properties:
+        claim_id: { type: string, format: uuid }
+        defect_type: { type: string }
+        severity: { type: string }
+        description: { type: string, minLength: 1 }
+        cure_protocol: { type: string }
+
+    WaiveDefectRequest:
+      type: object
+      required: [actor, reason]
+      properties:
+        actor: { type: string, minLength: 1 }
+        reason: { type: string, minLength: 1 }
+
+    CureDefectRequest:
+      type: object
+      required: [actor, reason]
+      properties:
+        actor: { type: string, minLength: 1 }
+        reason: { type: string, minLength: 1 }
+
+    CreateSanadRequest:
+      type: object
+      required: [claim_id, primary_evidence_id]
+      properties:
+        claim_id: { type: string, format: uuid }
+        primary_evidence_id: { type: string, format: uuid }
+        corroborating_evidence_ids:
+          type: array
+          items: { type: string, format: uuid }
+        transmission_chain:
+          type: array
+          items: { $ref: "#/components/schemas/TransmissionNode" }
+        extraction_confidence: { type: number, minimum: 0, maximum: 1, default: 0.9 }
+
+    UpdateSanadRequest:
+      type: object
+      properties:
+        corroborating_evidence_ids:
+          type: array
+          items: { type: string, format: uuid }
+        transmission_chain:
+          type: array
+          items: { $ref: "#/components/schemas/TransmissionNode" }
+
+    SetCorroborationRequest:
+      type: object
+      required: [corroborating_evidence_ids]
+      properties:
+        corroborating_evidence_ids:
+          type: array
+          items: { type: string, format: uuid }
+
+    PaginatedSanadList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Sanad" }
+        next_cursor: { type: string, nullable: true }
 
     RunRef:
       type: object

@@ -111,7 +111,25 @@ POLICY_RULES: dict[str, PolicyRule] = {
     "getClaim": PolicyRule(allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=False),
     "updateClaim": PolicyRule(allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=False),
     "getClaimSanad": PolicyRule(allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=False),
+    "getSanad": PolicyRule(allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=False),
+    "listDealSanads": PolicyRule(allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=True),
+    "createSanad": PolicyRule(allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=True),
+    "updateSanad": PolicyRule(allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=False),
+    "setSanadCorroboration": PolicyRule(
+        allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=False
+    ),
+    "getDefect": PolicyRule(allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=False),
     "listDealDefects": PolicyRule(allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=True),
+    "listClaimDefects": PolicyRule(
+        allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=False
+    ),
+    "createDefect": PolicyRule(allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=True),
+    "waiveDefect": PolicyRule(
+        allowed_roles=frozenset({Role.PARTNER.value, Role.ADMIN.value}),
+        is_mutation=True,
+        is_deal_scoped=False,
+    ),
+    "cureDefect": PolicyRule(allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=False),
     "listDealCalcs": PolicyRule(allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=True),
     "runCalc": PolicyRule(allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=True),
     "startRun": PolicyRule(allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=True),

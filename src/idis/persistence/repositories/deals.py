@@ -320,6 +320,16 @@ def clear_in_memory_store() -> None:
     _in_memory_store.clear()
 
 
+def clear_deals_in_memory_store() -> None:
+    """Clear the in-memory deals store. For testing only. Alias for clear_in_memory_store."""
+    _in_memory_store.clear()
+
+
+def seed_deal_in_memory(deal_data: dict[str, Any]) -> None:
+    """Seed a deal into the in-memory store. For testing only."""
+    _in_memory_store[deal_data["deal_id"]] = deal_data
+
+
 def get_deals_repository(
     conn: Connection | None,
     tenant_id: str,

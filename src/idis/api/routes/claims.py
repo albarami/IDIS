@@ -450,6 +450,9 @@ def create_claim(
     except NoFreeFactsViolationError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
 
+    # Set audit resource_id for middleware correlation
+    request.state.audit_resource_id = claim_data["claim_id"]
+
     return _get_claim_response(claim_data)
 
 
@@ -627,6 +630,9 @@ def update_claim(
         corroboration=corroboration_dict,
         request_id=request_id,
     )
+
+    # Set audit resource_id from path param for middleware correlation
+    request.state.audit_resource_id = claim_id
 
     try:
         claim_data = service.update(claim_id, update_input)

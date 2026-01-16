@@ -24,9 +24,14 @@ from idis.api.middleware.tracing import TracingEnrichmentMiddleware
 from idis.api.routes.audit import router as audit_router
 from idis.api.routes.claims import router as claims_router
 from idis.api.routes.deals import router as deals_router
+from idis.api.routes.debate import router as debate_router
 from idis.api.routes.defects import router as defects_router
+from idis.api.routes.deliverables import router as deliverables_router
 from idis.api.routes.documents import router as documents_router
 from idis.api.routes.health import router as health_router
+from idis.api.routes.human_gates import router as human_gates_router
+from idis.api.routes.overrides import router as overrides_router
+from idis.api.routes.runs import router as runs_router
 from idis.api.routes.sanad import router as sanad_router
 from idis.api.routes.tenancy import router as tenancy_router
 from idis.api.routes.webhooks import router as webhooks_router
@@ -132,5 +137,10 @@ def create_app(
     app.include_router(defects_router)
     app.include_router(webhooks_router)
     app.include_router(audit_router)
+    app.include_router(runs_router)
+    app.include_router(debate_router)
+    app.include_router(deliverables_router)
+    app.include_router(human_gates_router)
+    app.include_router(overrides_router)
 
     return app

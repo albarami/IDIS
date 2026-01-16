@@ -567,20 +567,20 @@ docs(phase-3): update roadmap with Phase 3 completion
 | Deliverable NFF validator | `validators/deliverable.py` | ✅ | `test_deliverable_no_free_facts.py` |
 | Deliverables models | `models/deliverables.py` | ✅ | — |
 
-#### Task 6.2: Backend API Contracts ⚠️ PARTIALLY COMPLETE
+#### Task 6.2: Backend API Contracts ✅ COMPLETE
 | Deliverable | API | Status | Test |
 |-------------|-----|--------|------|
 | Truth Dashboard API | `/v1/deals/{id}/truth-dashboard` | ✅ | `test_api_truth_dashboard.py` |
 | Claim Detail API | `/v1/claims/{id}` | ✅ | `test_api_claim_detail_and_sanad.py` |
 | Sanad Chain API | `/v1/claims/{id}/sanad` | ✅ | `test_api_claim_detail_and_sanad.py` |
-| Deliverables API | `/v1/deals/{id}/deliverables` | ⏳ | ⏳ |
-| Runs API | `/v1/runs/*` | ⏳ | ⏳ |
-| Debate API | `/v1/debates/*` | ⏳ | ⏳ |
-| Human Gates API | `/v1/human-gates/*` | ⏳ | ⏳ |
-| Overrides API | `/v1/overrides/*` | ⏳ | ⏳ |
+| Deliverables API | `/v1/deals/{id}/deliverables` | ✅ | `test_api_deliverables.py` |
+| Runs API | `/v1/deals/{id}/runs`, `/v1/runs/{id}` | ✅ | `test_api_runs.py` |
+| Debate API | `/v1/deals/{id}/debate`, `/v1/debate/{id}` | ✅ | `test_api_debate.py` |
+| Human Gates API | `/v1/deals/{id}/human-gates` | ✅ | `test_api_human_gates.py` |
+| Overrides API | `/v1/deals/{id}/overrides` | ✅ | `test_api_overrides.py` |
 | Audit Query API | `/v1/audit/events` | ✅ | `test_api_audit_events.py`, `test_api_audit_events_postgres.py` |
 
-**Gap:** Many OpenAPI-defined endpoints not yet implemented.
+**All core OpenAPI endpoints implemented with tenant isolation, idempotency, and audit coverage.**
 
 #### Task 6.3: Frontend UI ⏳ NOT STARTED
 | Deliverable | Status |
@@ -601,9 +601,11 @@ docs(phase-3): update roadmap with Phase 3 completion
 | `test_api_claim_detail_and_sanad.py` | ✅ |
 | `test_api_audit_events.py` | ✅ |
 | `test_api_audit_events_postgres.py` | ✅ |
-| `test_api_deliverables.py` | ⏳ Needed |
-| `test_api_runs.py` | ⏳ Needed |
-| `test_api_debate.py` | ⏳ Needed |
+| `test_api_deliverables.py` | ✅ |
+| `test_api_runs.py` | ✅ |
+| `test_api_debate.py` | ✅ |
+| `test_api_human_gates.py` | ✅ |
+| `test_api_overrides.py` | ✅ |
 
 **Git Commits (Remaining):**
 ```
@@ -620,7 +622,7 @@ docs(phase-6): update roadmap with Phase 6 completion
 **Exit Criteria:**
 - [x] Deliverables generator produces valid PDFs
 - [x] Every fact linked to claim/calc
-- [ ] All OpenAPI-defined endpoints implemented
+- [x] All OpenAPI-defined endpoints implemented
 - [ ] Frontend UI operational
 - [ ] Gate 3 (GDBS-F pass≥95%)
 

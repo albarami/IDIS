@@ -98,10 +98,10 @@ class TestDebateAPIHappyPath:
         uuid.UUID(body["run_id"])
 
     def test_start_debate_with_defaults(self, client: TestClient, deal_id: str) -> None:
-        """POST /v1/deals/{dealId}/debate works with empty body (defaults)."""
+        """POST /v1/deals/{dealId}/debate works with only required field (max_rounds defaults)."""
         response = client.post(
             f"/v1/deals/{deal_id}/debate",
-            json={},
+            json={"protocol_version": "v1"},
             headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
         )
 
@@ -137,7 +137,7 @@ class TestDebateAPITenantIsolation:
         """GET /v1/debate/{debateId} returns 404 for cross-tenant access."""
         create_resp = client.post(
             f"/v1/deals/{deal_id}/debate",
-            json={},
+            json={"protocol_version": "v1"},
             headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
         )
         debate_id = create_resp.json()["run_id"]
@@ -153,11 +153,24 @@ class TestDebateAPITenantIsolation:
 class TestDebateAPIValidation:
     """Test validation scenarios for Debate API."""
 
+    def test_empty_body_returns_400(self, client: TestClient, deal_id: str) -> None:
+        """POST with empty body returns 400 (protocol_version required)."""
+        response = client.post(
+            f"/v1/deals/{deal_id}/debate",
+            json={},
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+        )
+
+        assert response.status_code == 400
+        body = response.json()
+        assert body["code"] == "INVALID_REQUEST"
+        assert "request_id" in body
+
     def test_invalid_max_rounds_returns_400(self, client: TestClient, deal_id: str) -> None:
         """POST with invalid max_rounds returns 400."""
         response = client.post(
             f"/v1/deals/{deal_id}/debate",
-            json={"max_rounds": 100},
+            json={"protocol_version": "v1", "max_rounds": 100},
             headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
         )
 
@@ -169,7 +182,7 @@ class TestDebateAPIValidation:
         """POST with max_rounds=0 returns 400."""
         response = client.post(
             f"/v1/deals/{deal_id}/debate",
-            json={"max_rounds": 0},
+            json={"protocol_version": "v1", "max_rounds": 0},
             headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
         )
 
@@ -198,7 +211,7 @@ class TestDebateAPIAuditCorrelation:
         request_id = str(uuid.uuid4())
         response = client.post(
             f"/v1/deals/{deal_id}/debate",
-            json={},
+            json={"protocol_version": "v1"},
             headers={
                 "X-IDIS-API-Key": API_KEY_TENANT_A,
                 "X-Request-ID": request_id,
@@ -259,7 +272,7 @@ class TestDebateAPIIdempotency:
 
         resp1 = client.post(
             f"/v1/deals/{deal_id}/debate",
-            json={"max_rounds": 3},
+            json={"protocol_version": "v1", "max_rounds": 3},
             headers={
                 "X-IDIS-API-Key": API_KEY_TENANT_A,
                 "Idempotency-Key": idem_key,
@@ -267,7 +280,7 @@ class TestDebateAPIIdempotency:
         )
         resp2 = client.post(
             f"/v1/deals/{deal_id}/debate",
-            json={"max_rounds": 5},
+            json={"protocol_version": "v1", "max_rounds": 5},
             headers={
                 "X-IDIS-API-Key": API_KEY_TENANT_A,
                 "Idempotency-Key": idem_key,

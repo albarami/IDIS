@@ -25,7 +25,7 @@ _IN_MEMORY_DEBATES: dict[str, dict[str, Any]] = {}
 class StartDebateRequest(BaseModel):
     """Request body for POST /v1/deals/{dealId}/debate."""
 
-    protocol_version: str = "v1"
+    protocol_version: str
     max_rounds: int = 5
 
 
@@ -132,7 +132,7 @@ def _deal_exists_in_postgres(conn: Any, deal_id: str) -> bool:
 
 
 def _validate_start_debate_body(body: dict[str, Any] | None) -> StartDebateRequest:
-    """Validate start debate request body, returning 400 for invalid fields."""
+    """Validate start debate request body, returning 400 for invalid/missing fields."""
     if body is None:
         body = {}
     if not isinstance(body, dict):
@@ -141,7 +141,19 @@ def _validate_start_debate_body(body: dict[str, Any] | None) -> StartDebateReque
             code="INVALID_REQUEST",
             message="Request body must be a JSON object",
         )
-    protocol_version = body.get("protocol_version", "v1")
+    if "protocol_version" not in body:
+        raise IdisHttpError(
+            status_code=400,
+            code="INVALID_REQUEST",
+            message="Missing required field: protocol_version",
+        )
+    protocol_version = body.get("protocol_version")
+    if not isinstance(protocol_version, str) or not protocol_version:
+        raise IdisHttpError(
+            status_code=400,
+            code="INVALID_REQUEST",
+            message="protocol_version must be a non-empty string",
+        )
     max_rounds = body.get("max_rounds", 5)
     if not isinstance(max_rounds, int) or max_rounds < 1 or max_rounds > 10:
         raise IdisHttpError(

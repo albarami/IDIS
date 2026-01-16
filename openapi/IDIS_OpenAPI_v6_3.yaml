@@ -1447,8 +1447,9 @@ components:
 
     StartDebateRequest:
       type: object
+      required: [protocol_version]
       properties:
-        protocol_version: { type: string, default: "v1" }
+        protocol_version: { type: string }
         max_rounds: { type: integer, minimum: 1, maximum: 10, default: 5 }
 
     DebateSession:

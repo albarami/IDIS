@@ -20,6 +20,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from idis.api.errors import IdisHttpError
 
 if TYPE_CHECKING:
@@ -181,8 +183,21 @@ class PostgresAuditQueryRepository:
             """
         )
 
-        result = self._conn.execute(query, params)
-        rows = result.fetchall()
+        try:
+            result = self._conn.execute(query, params)
+            rows = result.fetchall()
+        except SQLAlchemyError as e:
+            logger.exception(
+                "Audit query backend error (tenant_id=%s): %s",
+                self._tenant_id,
+                type(e).__name__,
+            )
+            raise IdisHttpError(
+                status_code=500,
+                code="AUDIT_STORE_UNAVAILABLE",
+                message="Audit store unavailable",
+                details=None,
+            ) from e
 
         items: list[AuditEventItem] = []
         for row in rows[:limit]:

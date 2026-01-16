@@ -458,3 +458,43 @@ class TestAuditEventsPostgresWritePath:
         event_types = [row.event_type for row in result]
         has_deal_event = any("deal" in et.lower() or "create" in et.lower() for et in event_types)
         assert has_deal_event or len(result) >= 1, "Expected deal-related audit event"
+
+
+class TestAuditEventsPostgresFailClosed:
+    """Tests proving fail-closed behavior when Postgres backend is degraded."""
+
+    def test_missing_audit_table_returns_500_not_crash(
+        self,
+        admin_engine: Engine,
+        migrated_db: None,
+        client_with_postgres: TestClient,
+    ) -> None:
+        """When audit_events table is missing, returns 500 with safe error (no crash).
+
+        This proves the endpoint fails closed with a structured error when the
+        database is misconfigured or the table is missing.
+        """
+        with admin_engine.begin() as conn:
+            conn.execute(text("ALTER TABLE audit_events RENAME TO audit_events_tmp"))
+
+        try:
+            response = client_with_postgres.get(
+                "/v1/audit/events",
+                headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+            )
+
+            assert response.status_code == 500, (
+                f"Expected 500 for missing table, got {response.status_code}"
+            )
+
+            body = response.json()
+            assert body["code"] == "AUDIT_STORE_UNAVAILABLE"
+            assert "request_id" in body
+
+            response_text = response.text.lower()
+            assert "audit_events" not in response_text, "Response should not leak table name"
+            assert "programming" not in response_text, "Response should not leak exception type"
+
+        finally:
+            with admin_engine.begin() as conn:
+                conn.execute(text("ALTER TABLE audit_events_tmp RENAME TO audit_events"))

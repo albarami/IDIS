@@ -20,6 +20,7 @@ from idis.audit.query import (
     AuditEventsPage,
     JsonlAuditQueryRepository,
     PostgresAuditQueryRepository,
+    _validate_limit,
 )
 from idis.audit.sink import AUDIT_LOG_PATH_ENV, DEFAULT_AUDIT_LOG_PATH
 
@@ -118,7 +119,7 @@ def _query_audit_events(
 def list_audit_events(
     request: Request,
     tenant_ctx: RequireTenantContext,
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=50),
     cursor: str | None = Query(default=None),
     dealId: str | None = Query(default=None, alias="dealId"),
     eventType: str | None = Query(default=None, alias="eventType"),
@@ -143,13 +144,14 @@ def list_audit_events(
     Returns:
         Paginated list of audit events belonging to the tenant.
     """
+    validated_limit = _validate_limit(limit)
     after_dt = _parse_datetime(after)
     before_dt = _parse_datetime(before)
 
     page = _query_audit_events(
         request=request,
         tenant_id=tenant_ctx.tenant_id,
-        limit=limit,
+        limit=validated_limit,
         cursor=cursor,
         deal_id=dealId,
         event_type=eventType,

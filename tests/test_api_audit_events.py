@@ -358,7 +358,25 @@ class TestAuditEventsPagination:
             headers={"X-IDIS-API-Key": API_KEY_TENANT_A_ADMIN},
         )
 
-        assert response.status_code == 422 or response.status_code == 400
+        assert response.status_code == 400
+        body = response.json()
+        assert body["code"] == "INVALID_LIMIT"
+        assert "request_id" in body
+
+    def test_limit_zero_returns_400(
+        self,
+        client_with_audit_sink: TestClient,
+    ) -> None:
+        """Limit = 0 returns 400 error (fail-closed)."""
+        response = client_with_audit_sink.get(
+            "/v1/audit/events?limit=0",
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A_ADMIN},
+        )
+
+        assert response.status_code == 400
+        body = response.json()
+        assert body["code"] == "INVALID_LIMIT"
+        assert "request_id" in body
 
 
 class TestAuditEventsRBAC:

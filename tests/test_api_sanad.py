@@ -131,7 +131,7 @@ class TestGetSanad:
                 "transmission_chain": [
                     {
                         "node_id": str(uuid.uuid4()),
-                        "node_type": "EXTRACTION",
+                        "node_type": "EXTRACT",
                         "actor_type": "SYSTEM",
                         "actor_id": "extractor",
                         "input_refs": [],
@@ -225,13 +225,16 @@ class TestListDealSanads:
         assert data["items"] == []
         assert data.get("next_cursor") is None
 
-    def test_list_sanads_returns_404_for_nonexistent_deal(self, client: TestClient) -> None:
-        """GET returns 404 for nonexistent deal."""
+    def test_list_sanads_returns_200_empty_for_nonexistent_deal(self, client: TestClient) -> None:
+        """GET returns 200 empty for nonexistent deal (tenant isolation - no existence leak)."""
         response = client.get(
             f"/v1/deals/{uuid.uuid4()}/sanads",
             headers={"X-IDIS-API-Key": TENANT_A_KEY},
         )
-        assert response.status_code == 404
+        # Per TI-001 tenant isolation: return 200 empty, not 404
+        assert response.status_code == 200
+        data = response.json()
+        assert data["items"] == []
 
 
 class TestCreateSanad:
@@ -316,7 +319,7 @@ class TestUpdateSanad:
                 "transmission_chain": [
                     {
                         "node_id": str(uuid.uuid4()),
-                        "node_type": "EXTRACTION",
+                        "node_type": "EXTRACT",
                         "actor_type": "SYSTEM",
                         "actor_id": "extractor",
                         "input_refs": [],
@@ -387,7 +390,7 @@ class TestSetCorroboration:
                 "transmission_chain": [
                     {
                         "node_id": str(uuid.uuid4()),
-                        "node_type": "EXTRACTION",
+                        "node_type": "EXTRACT",
                         "actor_type": "SYSTEM",
                         "actor_id": "extractor",
                         "input_refs": [],

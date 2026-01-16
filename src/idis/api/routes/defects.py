@@ -24,6 +24,7 @@ from idis.services.defects.service import (
     CureDefectInput,
     DefectNotFoundError,
     DefectService,
+    InvalidStateTransitionError,
     WaiveDefectInput,
     WaiverRequiresActorReasonError,
 )
@@ -162,6 +163,9 @@ def list_deal_defects(
 ) -> PaginatedDefectList:
     """List defects for a deal.
 
+    Tenant isolation: Returns 200 empty for cross-tenant or nonexistent deals
+    to avoid existence leaks per TI-001 traceability.
+
     Args:
         deal_id: UUID of the deal.
         request: FastAPI request for DB connection access.
@@ -170,24 +174,10 @@ def list_deal_defects(
         cursor: Pagination cursor.
 
     Returns:
-        Paginated list of defects. Returns empty list for cross-tenant deals.
+        Paginated list of defects. Empty list if deal not found or cross-tenant.
     """
-    from idis.persistence.repositories.deals import (
-        DealsRepository,
-        InMemoryDealsRepository,
-    )
-
-    db_conn = getattr(request.state, "db_conn", None)
-    deals_repo: DealsRepository | InMemoryDealsRepository
-    if db_conn is not None:
-        deals_repo = DealsRepository(db_conn, tenant_ctx.tenant_id)
-    else:
-        deals_repo = InMemoryDealsRepository(tenant_ctx.tenant_id)
-
-    deal_data = deals_repo.get(deal_id)
-    if deal_data is None:
-        raise HTTPException(status_code=404, detail="Deal not found")
-
+    # Tenant-isolated list: query by (tenant_id, deal_id)
+    # If no rows, return 200 empty - no existence leak
     service = _get_defect_service(request, tenant_ctx.tenant_id)
     defects, next_cursor = service.list_by_deal(deal_id, limit=limit, cursor=cursor)
 
@@ -287,6 +277,10 @@ def create_defect(
         raise HTTPException(status_code=400, detail=str(e)) from None
 
     defect_data = service.create(input_data)
+
+    # Set audit resource_id for middleware correlation
+    request.state.audit_resource_id = defect_data["defect_id"]
+
     return _to_defect_response(defect_data)
 
 
@@ -319,6 +313,9 @@ def waive_defect(
     Raises:
         HTTPException: 404 if defect not found, 400 if actor/reason missing.
     """
+    # Set audit resource_id from path param for middleware correlation
+    request.state.audit_resource_id = defect_id
+
     service = _get_defect_service(request, tenant_ctx.tenant_id)
     request_id = getattr(request.state, "request_id", None)
 
@@ -334,6 +331,16 @@ def waive_defect(
         raise HTTPException(status_code=404, detail="Defect not found") from None
     except WaiverRequiresActorReasonError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
+    except InvalidStateTransitionError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "DEFECT_INVALID_STATE_TRANSITION",
+                "message": str(e),
+                "current_status": e.current_status,
+                "target_status": e.target_status,
+            },
+        ) from None
 
     return _to_defect_response(defect_data)
 
@@ -367,6 +374,9 @@ def cure_defect(
     Raises:
         HTTPException: 404 if defect not found, 400 if actor/reason missing.
     """
+    # Set audit resource_id from path param for middleware correlation
+    request.state.audit_resource_id = defect_id
+
     service = _get_defect_service(request, tenant_ctx.tenant_id)
     request_id = getattr(request.state, "request_id", None)
 
@@ -382,5 +392,15 @@ def cure_defect(
         raise HTTPException(status_code=404, detail="Defect not found") from None
     except WaiverRequiresActorReasonError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
+    except InvalidStateTransitionError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "DEFECT_INVALID_STATE_TRANSITION",
+                "message": str(e),
+                "current_status": e.current_status,
+                "target_status": e.target_status,
+            },
+        ) from None
 
     return _to_defect_response(defect_data)

@@ -91,6 +91,9 @@ def create_deal(
         tags=request_body.tags,
     )
 
+    # Set audit resource_id for middleware correlation
+    request.state.audit_resource_id = deal_id
+
     return Deal(
         deal_id=deal_data["deal_id"],
         name=deal_data["name"],

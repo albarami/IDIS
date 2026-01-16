@@ -24,6 +24,7 @@ from idis.persistence.repositories.claims import (
     InMemorySanadsRepository,
     SanadsRepository,
 )
+from idis.validators.sanad_integrity import validate_sanad_integrity
 
 if TYPE_CHECKING:
     from sqlalchemy import Connection
@@ -53,6 +54,28 @@ class SanadIntegrityError(SanadServiceError):
         self.sanad_id = sanad_id
         self.errors = errors
         super().__init__(f"Sanad {sanad_id} integrity failed: {'; '.join(errors)}")
+
+
+def _build_integrity_validation_sanad(
+    sanad_id: str,
+    claim_id: str,
+    primary_evidence_id: str,
+    transmission_chain: list[dict[str, Any]],
+    computed: dict[str, Any],
+    extraction_confidence: float,
+    defects: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build a sanad dict for integrity validation."""
+    return {
+        "sanad_id": sanad_id,
+        "claim_id": claim_id,
+        "primary_evidence_id": primary_evidence_id,
+        "transmission_chain": transmission_chain,
+        "extraction_confidence": extraction_confidence,
+        "corroboration_status": computed.get("corroboration_level", "NONE"),
+        "sanad_grade": computed.get("grade", "D"),
+        "defects": defects,
+    }
 
 
 class CreateSanadInput(BaseModel):
@@ -254,10 +277,11 @@ class SanadService:
 
         transmission_chain = input_data.transmission_chain
         if not transmission_chain:
+            # Use valid node_type and actor_type per sanad_integrity validator
             transmission_chain = [
                 {
                     "node_id": str(uuid.uuid4()),
-                    "node_type": "EXTRACTION",
+                    "node_type": "EXTRACT",
                     "actor_type": "SYSTEM",
                     "actor_id": "idis_extractor",
                     "input_refs": [{"evidence_id": input_data.primary_evidence_id}],
@@ -273,6 +297,33 @@ class SanadService:
             corroborating_count=len(input_data.corroborating_evidence_ids),
         )
 
+        # Build validation object and run integrity check
+        validation_sanad = _build_integrity_validation_sanad(
+            sanad_id=sanad_id,
+            claim_id=input_data.claim_id,
+            primary_evidence_id=input_data.primary_evidence_id,
+            transmission_chain=transmission_chain,
+            computed=computed,
+            extraction_confidence=input_data.extraction_confidence,
+            defects=defects,
+        )
+
+        integrity_result = validate_sanad_integrity(validation_sanad)
+        if not integrity_result.passed:
+            # Emit sanad.integrity.failed (CRITICAL) and fail closed
+            error_messages = [e.message for e in integrity_result.errors]
+            self._emit_audit_event(
+                event_type="sanad.integrity.failed",
+                sanad_id=sanad_id,
+                severity="CRITICAL",
+                details={
+                    "claim_id": input_data.claim_id,
+                    "errors": error_messages,
+                },
+                request_id=input_data.request_id,
+            )
+            raise SanadIntegrityError(sanad_id, error_messages)
+
         sanad_data = self._sanads_repo.create(
             sanad_id=sanad_id,
             claim_id=input_data.claim_id,
@@ -282,6 +333,9 @@ class SanadService:
             transmission_chain=transmission_chain,
             computed=computed,
         )
+
+        # Ensure defects list is included in returned sanad (SAN-001 requirement)
+        sanad_data["defects"] = defects
 
         self._emit_audit_event(
             event_type="sanad.created",

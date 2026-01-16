@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from idis.api.auth import RequireTenantContext
 from idis.services.sanad.service import (
     CreateSanadInput,
+    SanadIntegrityError,
     SanadNotFoundError,
     SanadService,
     UpdateSanadInput,
@@ -202,6 +203,9 @@ def list_deal_sanads(
 ) -> PaginatedSanadList:
     """List sanads for a deal.
 
+    Tenant isolation: Returns 200 empty for cross-tenant or nonexistent deals
+    to avoid existence leaks per TI-001 traceability.
+
     Args:
         deal_id: UUID of the deal.
         request: FastAPI request for DB connection access.
@@ -210,24 +214,10 @@ def list_deal_sanads(
         cursor: Pagination cursor.
 
     Returns:
-        Paginated list of sanads.
+        Paginated list of sanads. Empty list if deal not found or cross-tenant.
     """
-    from idis.persistence.repositories.deals import (
-        DealsRepository,
-        InMemoryDealsRepository,
-    )
-
-    db_conn = getattr(request.state, "db_conn", None)
-    deals_repo: DealsRepository | InMemoryDealsRepository
-    if db_conn is not None:
-        deals_repo = DealsRepository(db_conn, tenant_ctx.tenant_id)
-    else:
-        deals_repo = InMemoryDealsRepository(tenant_ctx.tenant_id)
-
-    deal_data = deals_repo.get(deal_id)
-    if deal_data is None:
-        raise HTTPException(status_code=404, detail="Deal not found")
-
+    # Tenant-isolated list: query by (tenant_id, deal_id)
+    # If no rows, return 200 empty - no existence leak
     service = _get_sanad_service(request, tenant_ctx.tenant_id)
     sanads, next_cursor = service.list_by_deal(deal_id, limit=limit, cursor=cursor)
 
@@ -293,7 +283,26 @@ def create_sanad(
         request_id=request_id,
     )
 
-    sanad_data = service.create(input_data)
+    try:
+        sanad_data = service.create(input_data)
+    except SanadIntegrityError as e:
+        # Set audit override for sanad.integrity.failed (CRITICAL)
+        request.state.audit_resource_id = e.sanad_id
+        request.state.audit_event_type_override = "sanad.integrity.failed"
+        request.state.audit_severity_override = "CRITICAL"
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "SANAD_INTEGRITY_FAILED",
+                "message": str(e),
+                "sanad_id": e.sanad_id,
+                "errors": e.errors,
+            },
+        ) from None
+
+    # Set audit resource_id for middleware correlation
+    request.state.audit_resource_id = sanad_data["sanad_id"]
+
     return _to_sanad_response(sanad_data)
 
 
@@ -323,6 +332,9 @@ def update_sanad(
     Raises:
         HTTPException: 404 if sanad not found.
     """
+    # Set audit resource_id from path param for middleware correlation
+    request.state.audit_resource_id = sanad_id
+
     service = _get_sanad_service(request, tenant_ctx.tenant_id)
     request_id = getattr(request.state, "request_id", None)
 
@@ -370,6 +382,9 @@ def set_sanad_corroboration(
     Raises:
         HTTPException: 404 if sanad not found.
     """
+    # Set audit resource_id from path param for middleware correlation
+    request.state.audit_resource_id = sanad_id
+
     service = _get_sanad_service(request, tenant_ctx.tenant_id)
     request_id = getattr(request.state, "request_id", None)
 

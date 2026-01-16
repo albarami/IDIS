@@ -82,7 +82,7 @@ def _build_audit_event(
     event_type: str,
     severity: str,
     resource_type: str,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     """Build a v6.3-compliant AuditEvent dict.
 
     Args:
@@ -119,7 +119,32 @@ def _build_audit_event(
     if body_sha256:
         hashes.append(body_sha256)
 
-    resource_id = str(uuid.uuid4())
+    # Priority for resource_id:
+    # 1) request.state.audit_resource_id (set by route/service)
+    # 2) Fail closed if missing for successful mutations
+    resource_id = getattr(request.state, "audit_resource_id", None)
+    if resource_id is None:
+        # For successful mutations (2xx/3xx), we MUST have a real resource_id
+        # Fail closed rather than fabricate an ID
+        if response.status_code < 400:
+            logger.error(
+                "Audit resource_id missing for successful mutation: %s %s -> %d",
+                request.method,
+                request.url.path,
+                response.status_code,
+            )
+            # Return None to signal fail-closed to caller
+            return None
+        # For error responses, use fallback value (event may still be useful for debugging)
+        resource_id = "unknown"
+
+    # Check for event type override (e.g., sanad.integrity.failed)
+    event_type_override = getattr(request.state, "audit_event_type_override", None)
+    severity_override = getattr(request.state, "audit_severity_override", None)
+    if event_type_override:
+        event_type = event_type_override
+    if severity_override:
+        severity = severity_override
 
     event: dict[str, Any] = {
         "event_id": str(uuid.uuid4()),
@@ -206,6 +231,10 @@ class AuditMiddleware(BaseHTTPMiddleware):
 
         response = await call_next(request)
 
+        # Skip audit for idempotency replay - already audited on first request
+        if response.headers.get("X-IDIS-Idempotency-Replay") == "true":
+            return response
+
         tenant_ctx = getattr(request.state, "tenant_context", None)
         if tenant_ctx is None:
             return response
@@ -252,6 +281,14 @@ class AuditMiddleware(BaseHTTPMiddleware):
             severity=severity,
             resource_type=resource_type,
         )
+
+        # _build_audit_event returns None if resource_id is missing for successful mutation
+        if audit_event is None:
+            return _build_error_response(
+                "AUDIT_EMIT_FAILED",
+                "Audit resource_id missing for mutation - fail closed",
+                request_id,
+            )
 
         validation_result = validate_audit_event(audit_event)
         if not validation_result.passed:

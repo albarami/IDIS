@@ -53,6 +53,19 @@ class WaiverRequiresActorReasonError(DefectServiceError):
         super().__init__(f"Defect {defect_id} waiver/cure requires {missing}")
 
 
+class InvalidStateTransitionError(DefectServiceError):
+    """Raised when an invalid defect state transition is attempted."""
+
+    def __init__(self, defect_id: str, current_status: str, target_status: str) -> None:
+        self.defect_id = defect_id
+        self.current_status = current_status
+        self.target_status = target_status
+        super().__init__(
+            f"Defect {defect_id} invalid state transition: {current_status} -> {target_status}. "
+            f"Only OPEN -> WAIVED or OPEN -> CURED is allowed."
+        )
+
+
 FATAL_DEFECT_TYPES = frozenset({"BROKEN_CHAIN", "CONCEALMENT", "CIRCULARITY"})
 MAJOR_DEFECT_TYPES = frozenset(
     {
@@ -324,6 +337,11 @@ class DefectService:
         if existing is None:
             raise DefectNotFoundError(defect_id, self._tenant_id)
 
+        # Enforce state transition: only OPEN -> WAIVED is allowed
+        current_status = existing.get("status", "OPEN")
+        if current_status != "OPEN":
+            raise InvalidStateTransitionError(defect_id, current_status, "WAIVED")
+
         updated = self._defects_repo.update(
             defect_id,
             status="WAIVED",
@@ -367,6 +385,11 @@ class DefectService:
         existing = self._defects_repo.get(defect_id)
         if existing is None:
             raise DefectNotFoundError(defect_id, self._tenant_id)
+
+        # Enforce state transition: only OPEN -> CURED is allowed
+        current_status = existing.get("status", "OPEN")
+        if current_status != "OPEN":
+            raise InvalidStateTransitionError(defect_id, current_status, "CURED")
 
         updated = self._defects_repo.update(
             defect_id,

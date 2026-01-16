@@ -184,13 +184,16 @@ class TestListDealDefects:
         data = response.json()
         assert data["items"] == []
 
-    def test_list_defects_returns_404_for_nonexistent_deal(self, client: TestClient) -> None:
-        """GET returns 404 for nonexistent deal."""
+    def test_list_defects_returns_200_empty_for_nonexistent_deal(self, client: TestClient) -> None:
+        """GET returns 200 empty for nonexistent deal (tenant isolation - no existence leak)."""
         response = client.get(
             f"/v1/deals/{uuid.uuid4()}/defects",
             headers={"X-IDIS-API-Key": TENANT_A_KEY},
         )
-        assert response.status_code == 404
+        # Per TI-001 tenant isolation: return 200 empty, not 404
+        assert response.status_code == 200
+        data = response.json()
+        assert data["items"] == []
 
 
 class TestCreateDefect:
@@ -424,3 +427,115 @@ class TestCureDefect:
             },
         )
         assert response.status_code == 404
+
+
+class TestDefectStateTransitions:
+    """Tests for defect state machine enforcement per DEF-001."""
+
+    def test_waive_already_waived_returns_409(self, client: TestClient) -> None:
+        """Waiving an already WAIVED defect returns 409 Conflict."""
+        defect_id = str(uuid.uuid4())
+
+        seed_defect_in_memory(
+            {
+                "defect_id": defect_id,
+                "tenant_id": TENANT_A_ID,
+                "claim_id": str(uuid.uuid4()),
+                "deal_id": str(uuid.uuid4()),
+                "defect_type": "INCONSISTENCY",
+                "severity": "MAJOR",
+                "description": "Test defect",
+                "cure_protocol": "HUMAN_ARBITRATION",
+                "status": "WAIVED",
+                "waived_by": "someone@example.com",
+                "waiver_reason": "Previously waived",
+                "created_at": "2026-01-10T00:00:00Z",
+            }
+        )
+
+        response = client.post(
+            f"/v1/defects/{defect_id}/waive",
+            headers={"X-IDIS-API-Key": TENANT_A_KEY},
+            json={
+                "actor": "partner@example.com",
+                "reason": "Try to waive again",
+            },
+        )
+
+        assert response.status_code == 409
+        data = response.json()
+        # Error response contains the transition info in the message
+        assert "DEFECT_INVALID_STATE_TRANSITION" in data.get("message", str(data))
+        assert "WAIVED" in data.get("message", str(data))
+
+    def test_cure_already_cured_returns_409(self, client: TestClient) -> None:
+        """Curing an already CURED defect returns 409 Conflict."""
+        defect_id = str(uuid.uuid4())
+
+        seed_defect_in_memory(
+            {
+                "defect_id": defect_id,
+                "tenant_id": TENANT_A_ID,
+                "claim_id": str(uuid.uuid4()),
+                "deal_id": str(uuid.uuid4()),
+                "defect_type": "STALENESS",
+                "severity": "MINOR",
+                "description": "Test defect",
+                "cure_protocol": "REQUEST_SOURCE",
+                "status": "CURED",
+                "cured_by": "someone@example.com",
+                "cured_reason": "Previously cured",
+                "created_at": "2026-01-10T00:00:00Z",
+            }
+        )
+
+        response = client.post(
+            f"/v1/defects/{defect_id}/cure",
+            headers={"X-IDIS-API-Key": TENANT_A_KEY},
+            json={
+                "actor": "analyst@example.com",
+                "reason": "Try to cure again",
+            },
+        )
+
+        assert response.status_code == 409
+        data = response.json()
+        # Error response contains the transition info in the message
+        assert "DEFECT_INVALID_STATE_TRANSITION" in data.get("message", str(data))
+        assert "CURED" in data.get("message", str(data))
+
+    def test_waive_cured_defect_returns_409(self, client: TestClient) -> None:
+        """Waiving a CURED defect returns 409 Conflict."""
+        defect_id = str(uuid.uuid4())
+
+        seed_defect_in_memory(
+            {
+                "defect_id": defect_id,
+                "tenant_id": TENANT_A_ID,
+                "claim_id": str(uuid.uuid4()),
+                "deal_id": str(uuid.uuid4()),
+                "defect_type": "STALENESS",
+                "severity": "MINOR",
+                "description": "Test defect",
+                "cure_protocol": "REQUEST_SOURCE",
+                "status": "CURED",
+                "cured_by": "someone@example.com",
+                "cured_reason": "Previously cured",
+                "created_at": "2026-01-10T00:00:00Z",
+            }
+        )
+
+        response = client.post(
+            f"/v1/defects/{defect_id}/waive",
+            headers={"X-IDIS-API-Key": TENANT_A_KEY},
+            json={
+                "actor": "partner@example.com",
+                "reason": "Try to waive cured defect",
+            },
+        )
+
+        assert response.status_code == 409
+        data = response.json()
+        # Error response contains the transition info in the message
+        assert "DEFECT_INVALID_STATE_TRANSITION" in data.get("message", str(data))
+        assert "CURED" in data.get("message", str(data))

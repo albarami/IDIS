@@ -67,12 +67,13 @@ class TestSanadCoverage:
         tenant_id = str(uuid.uuid4())
         service = SanadService(tenant_id=tenant_id)
 
+        # Use valid node_type and actor_type per sanad_integrity validator
         auditor_chain = [
             {
                 "node_id": str(uuid.uuid4()),
-                "node_type": "AUDITOR",
-                "actor_type": "EXTERNAL",
-                "actor_id": "kpmg",
+                "node_type": "HUMAN_VERIFY",
+                "actor_type": "HUMAN",
+                "actor_id": "kpmg_auditor",
                 "input_refs": [],
                 "output_refs": [],
                 "timestamp": "2026-01-10T00:00:00Z",
@@ -141,6 +142,24 @@ class TestSanadCoverage:
         assert "actor_type" in node
         assert "actor_id" in node
         assert "timestamp" in node
+
+    def test_sanad_includes_defects_list(self) -> None:
+        """Sanad must include defects list field (possibly empty) per SAN-001."""
+        tenant_id = str(uuid.uuid4())
+        service = SanadService(tenant_id=tenant_id)
+
+        input_data = CreateSanadInput(
+            claim_id=str(uuid.uuid4()),
+            deal_id=str(uuid.uuid4()),
+            primary_evidence_id=str(uuid.uuid4()),
+            extraction_confidence=0.95,
+        )
+
+        sanad = service.create(input_data)
+
+        # SAN-001: Sanad must have defects field and it must be a list
+        assert "defects" in sanad, "Sanad must include 'defects' key"
+        assert isinstance(sanad["defects"], list), "defects must be a list"
 
     def test_sanad_corroboration_level_computed(self) -> None:
         """Corroboration level computed from evidence count."""

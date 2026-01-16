@@ -503,6 +503,9 @@ def create_deal_document(
         metadata=request_body.metadata,
     )
 
+    # Set audit resource_id for middleware correlation
+    request.state.audit_resource_id = doc_id
+
     _emit_document_created_audit(
         request=request,
         tenant_id=tenant_ctx.tenant_id,
@@ -560,6 +563,9 @@ def ingest_document(
     Raises:
         IdisHttpError: 404 if document not found in tenant scope.
     """
+    # Set audit resource_id from path param for middleware correlation
+    request.state.audit_resource_id = doc_id
+
     artifact = _document_store.get_artifact(tenant_ctx.tenant_id, doc_id)
     if artifact is None:
         raise IdisHttpError(

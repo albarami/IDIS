@@ -11,10 +11,11 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel
 
 from idis.api.auth import RequireTenantContext
+from idis.api.errors import IdisHttpError
 
 router = APIRouter(prefix="/v1", tags=["Deliverables"])
 
@@ -160,6 +161,23 @@ def _deal_exists_in_postgres(conn: Any, deal_id: str) -> bool:
     return result.fetchone() is not None
 
 
+def _validate_cursor(cursor: str | None) -> str | None:
+    """Validate cursor format. Returns cursor if valid, raises 400 if invalid."""
+    if cursor is None:
+        return None
+    try:
+        from datetime import datetime
+
+        datetime.fromisoformat(cursor.replace("Z", "+00:00"))
+        return cursor
+    except (ValueError, AttributeError):
+        raise IdisHttpError(
+            status_code=400,
+            code="INVALID_CURSOR",
+            message="Invalid cursor format",
+        ) from None
+
+
 @router.get("/deals/{deal_id}/deliverables", response_model=PaginatedDeliverableList)
 def list_deliverables(
     deal_id: str,
@@ -181,18 +199,20 @@ def list_deliverables(
         Paginated list of deliverables.
     """
     if limit < 1 or limit > 200:
-        from idis.api.errors import IdisHttpError
-
         raise IdisHttpError(
             status_code=400,
             code="INVALID_LIMIT",
             message="limit must be between 1 and 200",
         )
 
+    validated_cursor = _validate_cursor(cursor)
+
     db_conn = getattr(request.state, "db_conn", None)
 
     if db_conn is not None:
-        items, next_cursor = _list_deliverables_from_postgres(db_conn, deal_id, limit, cursor)
+        items, next_cursor = _list_deliverables_from_postgres(
+            db_conn, deal_id, limit, validated_cursor
+        )
     else:
         all_items = [
             d
@@ -219,10 +239,37 @@ def list_deliverables(
     )
 
 
+def _validate_generate_deliverable_body(body: dict[str, Any] | None) -> GenerateDeliverableRequest:
+    """Validate generate deliverable request body, returning 400 for missing required fields."""
+    if body is None or not isinstance(body, dict):
+        raise IdisHttpError(
+            status_code=400,
+            code="INVALID_REQUEST",
+            message="Request body is required",
+        )
+    if "deliverable_type" not in body:
+        raise IdisHttpError(
+            status_code=400,
+            code="INVALID_REQUEST",
+            message="Missing required field: deliverable_type",
+            details={"missing_fields": ["deliverable_type"]},
+        )
+    format_ = body.get("format", "PDF")
+    if format_ not in ("PDF", "DOCX", "JSON"):
+        raise IdisHttpError(
+            status_code=400,
+            code="INVALID_REQUEST",
+            message="Invalid format; must be PDF, DOCX, or JSON",
+        )
+    return GenerateDeliverableRequest(
+        deliverable_type=body["deliverable_type"],
+        format=format_,
+    )
+
+
 @router.post("/deals/{deal_id}/deliverables", response_model=RunRef, status_code=202)
-def generate_deliverable(
+async def generate_deliverable(
     deal_id: str,
-    request_body: GenerateDeliverableRequest,
     request: Request,
     tenant_ctx: RequireTenantContext,
 ) -> RunRef:
@@ -230,18 +277,20 @@ def generate_deliverable(
 
     Args:
         deal_id: UUID of the deal.
-        request_body: Deliverable request with type and format.
-        request: FastAPI request for DB connection access.
+        request: FastAPI request for DB connection and body access.
         tenant_ctx: Injected tenant context from auth dependency.
 
     Returns:
         RunRef with deliverable_id (as run_id) and initial status.
 
     Raises:
-        HTTPException: 400 if invalid format, 404 if deal not found.
+        IdisHttpError: 400 if invalid/missing fields, 404 if deal not found.
     """
-    if request_body.format not in ("PDF", "DOCX", "JSON"):
-        raise HTTPException(status_code=400, detail="Invalid format; must be PDF, DOCX, or JSON")
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    request_body = _validate_generate_deliverable_body(body)
 
     deliverable_id = str(uuid.uuid4())
     db_conn = getattr(request.state, "db_conn", None)
@@ -249,7 +298,7 @@ def generate_deliverable(
 
     if db_conn is not None:
         if not _deal_exists_in_postgres(db_conn, deal_id):
-            raise HTTPException(status_code=404, detail="Deal not found")
+            raise IdisHttpError(status_code=404, code="NOT_FOUND", message="Deal not found")
 
         deliverable_data = _create_deliverable_in_postgres(
             conn=db_conn,

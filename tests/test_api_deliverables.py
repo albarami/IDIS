@@ -156,15 +156,17 @@ class TestDeliverablesAPITenantIsolation:
 class TestDeliverablesAPIValidation:
     """Test validation scenarios for Deliverables API."""
 
-    def test_invalid_format_returns_400(self, client: TestClient, deal_id: str) -> None:
-        """POST with invalid format returns 400."""
+    def test_invalid_format_returns_422(self, client: TestClient, deal_id: str) -> None:
+        """POST with invalid format returns 422 (schema mismatch)."""
         response = client.post(
             f"/v1/deals/{deal_id}/deliverables",
             json={"deliverable_type": "SNAPSHOT", "format": "INVALID"},
             headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
         )
 
-        assert response.status_code in (400, 422)  # 422 for Pydantic validation
+        assert response.status_code == 422
+        body = response.json()
+        assert body["code"] == "INVALID_REQUEST"
 
     def test_limit_out_of_range_returns_400(self, client: TestClient, deal_id: str) -> None:
         """GET with limit > 200 returns 400."""
@@ -187,6 +189,31 @@ class TestDeliverablesAPIValidation:
         assert response.status_code == 400
         body = response.json()
         assert body["code"] == "INVALID_LIMIT"
+
+    def test_missing_deliverable_type_returns_400(self, client: TestClient, deal_id: str) -> None:
+        """POST with missing deliverable_type field returns 400."""
+        response = client.post(
+            f"/v1/deals/{deal_id}/deliverables",
+            json={"format": "PDF"},
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+        )
+
+        assert response.status_code == 400
+        body = response.json()
+        assert body["code"] == "INVALID_REQUEST"
+        assert "request_id" in body
+
+    def test_invalid_cursor_returns_400(self, client: TestClient, deal_id: str) -> None:
+        """GET with invalid cursor returns 400."""
+        response = client.get(
+            f"/v1/deals/{deal_id}/deliverables?cursor=not-a-timestamp",
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+        )
+
+        assert response.status_code == 400
+        body = response.json()
+        assert body["code"] == "INVALID_CURSOR"
+        assert "request_id" in body
 
 
 class TestDeliverablesAPIAuditCorrelation:

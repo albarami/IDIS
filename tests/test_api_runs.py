@@ -141,15 +141,30 @@ class TestRunsAPITenantIsolation:
 class TestRunsAPIValidation:
     """Test validation scenarios for Runs API."""
 
-    def test_invalid_mode_returns_400(self, client: TestClient, deal_id: str) -> None:
-        """POST with invalid mode returns 400."""
+    def test_invalid_mode_returns_422(self, client: TestClient, deal_id: str) -> None:
+        """POST with invalid mode returns 422 (schema mismatch)."""
         response = client.post(
             f"/v1/deals/{deal_id}/runs",
             json={"mode": "INVALID"},
             headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
         )
 
-        assert response.status_code in (400, 422)  # 422 for Pydantic validation
+        assert response.status_code == 422
+        body = response.json()
+        assert body["code"] == "INVALID_REQUEST"
+
+    def test_missing_mode_returns_400(self, client: TestClient, deal_id: str) -> None:
+        """POST with missing mode field returns 400."""
+        response = client.post(
+            f"/v1/deals/{deal_id}/runs",
+            json={},
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+        )
+
+        assert response.status_code == 400
+        body = response.json()
+        assert body["code"] == "INVALID_REQUEST"
+        assert "request_id" in body
 
     def test_nonexistent_run_returns_404(self, client: TestClient) -> None:
         """GET /v1/runs/{runId} returns 404 for nonexistent run."""

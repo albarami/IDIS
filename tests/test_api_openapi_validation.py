@@ -300,7 +300,7 @@ class TestSchemaInvalid:
             },
         )
 
-        assert response.status_code == 422
+        assert response.status_code == 400
         data = response.json()
         assert data["code"] == "INVALID_REQUEST"
         assert "request_id" in data
@@ -308,13 +308,13 @@ class TestSchemaInvalid:
         assert "path" in data["details"]
         assert "message" in data["details"]
 
-    def test_422_includes_deterministic_error_path(
+    def test_400_includes_deterministic_error_path(
         self,
         client: TestClient,
         api_key_env: str,
         target_path_and_schema: tuple[str, dict[str, Any]],
     ) -> None:
-        """422 response includes deterministic error path (first missing required)."""
+        """400 response includes deterministic error path (first missing required)."""
         path_template, schema = target_path_and_schema
         path = _substitute_path_params(path_template)
 
@@ -329,7 +329,7 @@ class TestSchemaInvalid:
             },
         )
 
-        assert response.status_code == 422
+        assert response.status_code == 400
         data = response.json()
 
         if required_fields:
@@ -407,7 +407,7 @@ class TestSafetyRegression:
             },
         )
 
-        assert response.status_code == 422
+        assert response.status_code == 400
         data = response.json()
         assert data["code"] == "INVALID_REQUEST"
 
@@ -488,6 +488,6 @@ class TestRequestIdPropagation:
             },
         )
 
-        assert response.status_code == 422
+        assert response.status_code == 400
         data = response.json()
         assert data["request_id"] == custom_id

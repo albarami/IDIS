@@ -138,7 +138,9 @@ class TestOverridesAPIValidation:
             headers={"X-IDIS-API-Key": API_KEY_PARTNER_A},
         )
 
-        assert response.status_code in (400, 422)  # 422 for Pydantic validation
+        assert response.status_code == 400
+        body = response.json()
+        assert body["code"] == "INVALID_REQUEST"
 
     def test_whitespace_only_justification_returns_400(
         self, client: TestClient, deal_id: str
@@ -160,7 +162,35 @@ class TestOverridesAPIValidation:
             headers={"X-IDIS-API-Key": API_KEY_PARTNER_A},
         )
 
-        assert response.status_code in (400, 422)  # 422 for Pydantic validation
+        assert response.status_code == 400
+        body = response.json()
+        assert body["code"] == "INVALID_REQUEST"
+
+    def test_missing_override_type_returns_400(self, client: TestClient, deal_id: str) -> None:
+        """POST with missing override_type field returns 400."""
+        response = client.post(
+            f"/v1/deals/{deal_id}/overrides",
+            json={"justification": "Valid reason"},
+            headers={"X-IDIS-API-Key": API_KEY_PARTNER_A},
+        )
+
+        assert response.status_code == 400
+        body = response.json()
+        assert body["code"] == "INVALID_REQUEST"
+        assert "request_id" in body
+
+    def test_missing_justification_returns_400(self, client: TestClient, deal_id: str) -> None:
+        """POST with missing justification field returns 400."""
+        response = client.post(
+            f"/v1/deals/{deal_id}/overrides",
+            json={"override_type": "IC_EXPORT"},
+            headers={"X-IDIS-API-Key": API_KEY_PARTNER_A},
+        )
+
+        assert response.status_code == 400
+        body = response.json()
+        assert body["code"] == "INVALID_REQUEST"
+        assert "request_id" in body
 
 
 class TestOverridesAPIRBAC:

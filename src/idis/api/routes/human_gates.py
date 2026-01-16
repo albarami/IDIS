@@ -11,10 +11,11 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel
 
 from idis.api.auth import RequireTenantContext
+from idis.api.errors import IdisHttpError
 
 router = APIRouter(prefix="/v1", tags=["Human Gates"])
 
@@ -194,6 +195,23 @@ def _create_gate_action_in_postgres(
     }
 
 
+def _validate_cursor(cursor: str | None) -> str | None:
+    """Validate cursor format. Returns cursor if valid, raises 400 if invalid."""
+    if cursor is None:
+        return None
+    try:
+        from datetime import datetime
+
+        datetime.fromisoformat(cursor.replace("Z", "+00:00"))
+        return cursor
+    except (ValueError, AttributeError):
+        raise IdisHttpError(
+            status_code=400,
+            code="INVALID_CURSOR",
+            message="Invalid cursor format",
+        ) from None
+
+
 @router.get("/deals/{deal_id}/human-gates", response_model=PaginatedHumanGateList)
 def list_human_gates(
     deal_id: str,
@@ -215,18 +233,18 @@ def list_human_gates(
         Paginated list of human gates.
     """
     if limit < 1 or limit > 200:
-        from idis.api.errors import IdisHttpError
-
         raise IdisHttpError(
             status_code=400,
             code="INVALID_LIMIT",
             message="limit must be between 1 and 200",
         )
 
+    validated_cursor = _validate_cursor(cursor)
+
     db_conn = getattr(request.state, "db_conn", None)
 
     if db_conn is not None:
-        items, next_cursor = _list_gates_from_postgres(db_conn, deal_id, limit, cursor)
+        items, next_cursor = _list_gates_from_postgres(db_conn, deal_id, limit, validated_cursor)
     else:
         all_items = [
             g
@@ -252,10 +270,43 @@ def list_human_gates(
     )
 
 
+def _validate_submit_gate_action_body(body: dict[str, Any] | None) -> SubmitHumanGateActionRequest:
+    """Validate submit gate action request body, returning 400 for missing required fields."""
+    if body is None or not isinstance(body, dict):
+        raise IdisHttpError(
+            status_code=400,
+            code="INVALID_REQUEST",
+            message="Request body is required",
+        )
+    missing_fields = []
+    if "gate_id" not in body:
+        missing_fields.append("gate_id")
+    if "action" not in body:
+        missing_fields.append("action")
+    if missing_fields:
+        raise IdisHttpError(
+            status_code=400,
+            code="INVALID_REQUEST",
+            message=f"Missing required fields: {', '.join(missing_fields)}",
+            details={"missing_fields": missing_fields},
+        )
+    action = body["action"]
+    if action not in ("APPROVE", "REJECT", "CORRECT"):
+        raise IdisHttpError(
+            status_code=400,
+            code="INVALID_REQUEST",
+            message="Invalid action; must be APPROVE, REJECT, or CORRECT",
+        )
+    return SubmitHumanGateActionRequest(
+        gate_id=body["gate_id"],
+        action=action,
+        notes=body.get("notes"),
+    )
+
+
 @router.post("/deals/{deal_id}/human-gates", response_model=HumanGateAction, status_code=201)
-def submit_human_gate_action(
+async def submit_human_gate_action(
     deal_id: str,
-    request_body: SubmitHumanGateActionRequest,
     request: Request,
     tenant_ctx: RequireTenantContext,
 ) -> HumanGateAction:
@@ -263,20 +314,20 @@ def submit_human_gate_action(
 
     Args:
         deal_id: UUID of the deal.
-        request_body: Action request with gate_id, action, and optional notes.
-        request: FastAPI request for DB connection access.
+        request: FastAPI request for DB connection and body access.
         tenant_ctx: Injected tenant context from auth dependency.
 
     Returns:
         HumanGateAction with action details.
 
     Raises:
-        HTTPException: 400 if invalid action, 404 if gate not found.
+        IdisHttpError: 400 if invalid action, 404 if gate not found.
     """
-    if request_body.action not in ("APPROVE", "REJECT", "CORRECT"):
-        raise HTTPException(
-            status_code=400, detail="Invalid action; must be APPROVE, REJECT, or CORRECT"
-        )
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    request_body = _validate_submit_gate_action_body(body)
 
     action_id = str(uuid.uuid4())
     db_conn = getattr(request.state, "db_conn", None)
@@ -286,10 +337,14 @@ def submit_human_gate_action(
     if db_conn is not None:
         gate_data = _get_gate_from_postgres(db_conn, request_body.gate_id)
         if gate_data is None:
-            raise HTTPException(status_code=404, detail="Human gate not found")
+            raise IdisHttpError(status_code=404, code="NOT_FOUND", message="Human gate not found")
 
         if gate_data["deal_id"] != deal_id:
-            raise HTTPException(status_code=400, detail="Gate does not belong to this deal")
+            raise IdisHttpError(
+                status_code=400,
+                code="INVALID_REQUEST",
+                message="Gate does not belong to this deal",
+            )
 
         action_data = _create_gate_action_in_postgres(
             conn=db_conn,
@@ -304,10 +359,14 @@ def submit_human_gate_action(
     else:
         gate_data = _IN_MEMORY_GATES.get(request_body.gate_id)
         if gate_data is None or gate_data.get("tenant_id") != tenant_ctx.tenant_id:
-            raise HTTPException(status_code=404, detail="Human gate not found")
+            raise IdisHttpError(status_code=404, code="NOT_FOUND", message="Human gate not found")
 
         if gate_data["deal_id"] != deal_id:
-            raise HTTPException(status_code=400, detail="Gate does not belong to this deal")
+            raise IdisHttpError(
+                status_code=400,
+                code="INVALID_REQUEST",
+                message="Gate does not belong to this deal",
+            )
 
         now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         action_data = {

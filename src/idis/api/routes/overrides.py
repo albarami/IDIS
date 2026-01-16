@@ -11,10 +11,11 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from idis.api.auth import RequireTenantContext
+from idis.api.errors import IdisHttpError
 
 router = APIRouter(prefix="/v1", tags=["Overrides"])
 
@@ -99,10 +100,49 @@ def _deal_exists_in_postgres(conn: Any, deal_id: str) -> bool:
     return result.fetchone() is not None
 
 
+def _validate_create_override_body(body: dict[str, Any] | None) -> CreateOverrideRequest:
+    """Validate create override request body, returning 400 for missing required fields."""
+    if body is None or not isinstance(body, dict):
+        raise IdisHttpError(
+            status_code=400,
+            code="INVALID_REQUEST",
+            message="Request body is required",
+        )
+    missing_fields = []
+    if "override_type" not in body:
+        missing_fields.append("override_type")
+    if "justification" not in body:
+        missing_fields.append("justification")
+    if missing_fields:
+        raise IdisHttpError(
+            status_code=400,
+            code="INVALID_REQUEST",
+            message=f"Missing required fields: {', '.join(missing_fields)}",
+            details={"missing_fields": missing_fields},
+        )
+    override_type = body["override_type"]
+    justification = body["justification"]
+    if not override_type or len(str(override_type).strip()) == 0:
+        raise IdisHttpError(
+            status_code=400,
+            code="INVALID_REQUEST",
+            message="override_type is required and cannot be empty",
+        )
+    if not justification or len(str(justification).strip()) == 0:
+        raise IdisHttpError(
+            status_code=400,
+            code="INVALID_REQUEST",
+            message="justification is required and cannot be empty",
+        )
+    return CreateOverrideRequest(
+        override_type=str(override_type),
+        justification=str(justification),
+    )
+
+
 @router.post("/deals/{deal_id}/overrides", response_model=Override, status_code=201)
-def create_override(
+async def create_override(
     deal_id: str,
-    request_body: CreateOverrideRequest,
     request: Request,
     tenant_ctx: RequireTenantContext,
 ) -> Override:
@@ -110,21 +150,20 @@ def create_override(
 
     Args:
         deal_id: UUID of the deal.
-        request_body: Override request with type and justification.
-        request: FastAPI request for DB connection access.
+        request: FastAPI request for DB connection and body access.
         tenant_ctx: Injected tenant context from auth dependency.
 
     Returns:
         Override with override details.
 
     Raises:
-        HTTPException: 400 if missing justification, 404 if deal not found.
+        IdisHttpError: 400 if missing/invalid fields, 404 if deal not found.
     """
-    if not request_body.justification or len(request_body.justification.strip()) == 0:
-        raise HTTPException(status_code=400, detail="justification is required and cannot be empty")
-
-    if not request_body.override_type or len(request_body.override_type.strip()) == 0:
-        raise HTTPException(status_code=400, detail="override_type is required and cannot be empty")
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    request_body = _validate_create_override_body(body)
 
     override_id = str(uuid.uuid4())
     db_conn = getattr(request.state, "db_conn", None)
@@ -133,7 +172,7 @@ def create_override(
 
     if db_conn is not None:
         if not _deal_exists_in_postgres(db_conn, deal_id):
-            raise HTTPException(status_code=404, detail="Deal not found")
+            raise IdisHttpError(status_code=404, code="NOT_FOUND", message="Deal not found")
 
         override_data = _create_override_in_postgres(
             conn=db_conn,

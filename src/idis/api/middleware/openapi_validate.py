@@ -442,8 +442,15 @@ class OpenAPIValidationMiddleware(BaseHTTPMiddleware):
 
         if not is_valid:
             details = {"path": error_path, "message": error_message}
+            # Return 400 for missing required fields, 422 for other schema errors
+            is_missing_field = error_message and error_message.startswith("Missing required field")
+            status_code = 400 if is_missing_field else 422
             return _build_error_response(
-                422, "INVALID_REQUEST", "Request body does not match schema", request_id, details
+                status_code,
+                "INVALID_REQUEST",
+                "Request body does not match schema",
+                request_id,
+                details,
             )
 
         return await call_next(request)

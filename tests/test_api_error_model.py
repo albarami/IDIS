@@ -137,7 +137,7 @@ class TestErrorEnvelope422:
             json={},
         )
 
-        assert response.status_code == 422
+        assert response.status_code == 400
         body = response.json()
 
         assert "code" in body
@@ -145,10 +145,10 @@ class TestErrorEnvelope422:
         assert "details" in body
         assert "request_id" in body
 
-    def test_422_code_is_invalid_request(
+    def test_400_missing_field_code_is_invalid_request(
         self, client_with_valid_key: TestClient, test_api_key: str
     ) -> None:
-        """422 response has code 'INVALID_REQUEST'."""
+        """400 response for missing field has code 'INVALID_REQUEST'."""
         response = client_with_valid_key.post(
             "/v1/deals",
             headers={
@@ -158,14 +158,14 @@ class TestErrorEnvelope422:
             json={},
         )
 
-        assert response.status_code == 422
+        assert response.status_code == 400
         body = response.json()
         assert body["code"] == "INVALID_REQUEST"
 
-    def test_422_request_id_matches_header(
+    def test_400_request_id_matches_header(
         self, client_with_valid_key: TestClient, test_api_key: str
     ) -> None:
-        """422 response request_id matches X-Request-Id header."""
+        """400 response request_id matches X-Request-Id header."""
         response = client_with_valid_key.post(
             "/v1/deals",
             headers={
@@ -175,7 +175,7 @@ class TestErrorEnvelope422:
             json={},
         )
 
-        assert response.status_code == 422
+        assert response.status_code == 400
         body = response.json()
 
         header_request_id = response.headers.get("X-Request-Id")

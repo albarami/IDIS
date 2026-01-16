@@ -11,10 +11,11 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from idis.api.auth import RequireTenantContext
+from idis.api.errors import IdisHttpError
 
 router = APIRouter(prefix="/v1", tags=["Debate"])
 
@@ -130,10 +131,30 @@ def _deal_exists_in_postgres(conn: Any, deal_id: str) -> bool:
     return result.fetchone() is not None
 
 
+def _validate_start_debate_body(body: dict[str, Any] | None) -> StartDebateRequest:
+    """Validate start debate request body, returning 400 for invalid fields."""
+    if body is None:
+        body = {}
+    if not isinstance(body, dict):
+        raise IdisHttpError(
+            status_code=400,
+            code="INVALID_REQUEST",
+            message="Request body must be a JSON object",
+        )
+    protocol_version = body.get("protocol_version", "v1")
+    max_rounds = body.get("max_rounds", 5)
+    if not isinstance(max_rounds, int) or max_rounds < 1 or max_rounds > 10:
+        raise IdisHttpError(
+            status_code=400,
+            code="INVALID_REQUEST",
+            message="max_rounds must be an integer between 1 and 10",
+        )
+    return StartDebateRequest(protocol_version=protocol_version, max_rounds=max_rounds)
+
+
 @router.post("/deals/{deal_id}/debate", response_model=RunRef, status_code=202)
-def start_debate(
+async def start_debate(
     deal_id: str,
-    request_body: StartDebateRequest,
     request: Request,
     tenant_ctx: RequireTenantContext,
 ) -> RunRef:
@@ -141,18 +162,20 @@ def start_debate(
 
     Args:
         deal_id: UUID of the deal to debate.
-        request_body: Debate request with protocol_version and max_rounds.
-        request: FastAPI request for DB connection access.
+        request: FastAPI request for DB connection and body access.
         tenant_ctx: Injected tenant context from auth dependency.
 
     Returns:
         RunRef with debate_id (as run_id) and initial status.
 
     Raises:
-        HTTPException: 400 if invalid params, 404 if deal not found.
+        IdisHttpError: 400 if invalid params, 404 if deal not found.
     """
-    if request_body.max_rounds < 1 or request_body.max_rounds > 10:
-        raise HTTPException(status_code=400, detail="max_rounds must be between 1 and 10")
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    request_body = _validate_start_debate_body(body)
 
     debate_id = str(uuid.uuid4())
     db_conn = getattr(request.state, "db_conn", None)
@@ -160,7 +183,7 @@ def start_debate(
 
     if db_conn is not None:
         if not _deal_exists_in_postgres(db_conn, deal_id):
-            raise HTTPException(status_code=404, detail="Deal not found")
+            raise IdisHttpError(status_code=404, code="NOT_FOUND", message="Deal not found")
 
         debate_data = _create_debate_in_postgres(
             conn=db_conn,
@@ -222,7 +245,7 @@ def get_debate(
             debate_data = None
 
     if debate_data is None:
-        raise HTTPException(status_code=404, detail="Debate not found")
+        raise IdisHttpError(status_code=404, code="NOT_FOUND", message="Debate not found")
 
     return DebateSession(
         debate_id=debate_data["debate_id"],

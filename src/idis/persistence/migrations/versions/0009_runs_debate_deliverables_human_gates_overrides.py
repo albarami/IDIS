@@ -20,7 +20,7 @@ All tables have:
 from alembic import op
 
 revision = "0009"
-down_revision = "0008_add_primary_span_id_to_claims"
+down_revision = "0008"
 branch_labels = None
 depends_on = None
 

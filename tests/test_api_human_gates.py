@@ -206,7 +206,9 @@ class TestHumanGatesAPIValidation:
             headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
         )
 
-        assert response.status_code in (400, 422)  # 422 for Pydantic validation
+        assert response.status_code == 400
+        body = response.json()
+        assert body["code"] == "INVALID_REQUEST"
 
     def test_nonexistent_gate_returns_404(self, client: TestClient, deal_id: str) -> None:
         """POST with nonexistent gate_id returns 404."""
@@ -229,6 +231,46 @@ class TestHumanGatesAPIValidation:
         assert response.status_code == 400
         body = response.json()
         assert body["code"] == "INVALID_LIMIT"
+
+    def test_missing_gate_id_returns_400(self, client: TestClient, deal_id: str) -> None:
+        """POST with missing gate_id field returns 400."""
+        response = client.post(
+            f"/v1/deals/{deal_id}/human-gates",
+            json={"action": "APPROVE"},
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+        )
+
+        assert response.status_code == 400
+        body = response.json()
+        assert body["code"] == "INVALID_REQUEST"
+        assert "request_id" in body
+
+    def test_missing_action_returns_400(
+        self, client: TestClient, deal_id: str, gate_id: str
+    ) -> None:
+        """POST with missing action field returns 400."""
+        response = client.post(
+            f"/v1/deals/{deal_id}/human-gates",
+            json={"gate_id": gate_id},
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+        )
+
+        assert response.status_code == 400
+        body = response.json()
+        assert body["code"] == "INVALID_REQUEST"
+        assert "request_id" in body
+
+    def test_invalid_cursor_returns_400(self, client: TestClient, deal_id: str) -> None:
+        """GET with invalid cursor returns 400."""
+        response = client.get(
+            f"/v1/deals/{deal_id}/human-gates?cursor=not-a-timestamp",
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+        )
+
+        assert response.status_code == 400
+        body = response.json()
+        assert body["code"] == "INVALID_CURSOR"
+        assert "request_id" in body
 
 
 class TestHumanGatesAPIAuditCorrelation:

@@ -11,10 +11,11 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from idis.api.auth import RequireTenantContext
+from idis.api.errors import IdisHttpError
 
 router = APIRouter(prefix="/v1", tags=["Runs"])
 
@@ -130,10 +131,34 @@ def _deal_exists_in_postgres(conn: Any, deal_id: str) -> bool:
     return result.fetchone() is not None
 
 
+def _validate_start_run_body(body: dict[str, Any] | None) -> StartRunRequest:
+    """Validate start run request body, returning 400 for missing required fields."""
+    if body is None or not isinstance(body, dict):
+        raise IdisHttpError(
+            status_code=400,
+            code="INVALID_REQUEST",
+            message="Request body is required",
+        )
+    if "mode" not in body:
+        raise IdisHttpError(
+            status_code=400,
+            code="INVALID_REQUEST",
+            message="Missing required field: mode",
+            details={"missing_fields": ["mode"]},
+        )
+    mode = body.get("mode")
+    if mode not in ("SNAPSHOT", "FULL"):
+        raise IdisHttpError(
+            status_code=400,
+            code="INVALID_REQUEST",
+            message="Invalid mode; must be SNAPSHOT or FULL",
+        )
+    return StartRunRequest(mode=mode)
+
+
 @router.post("/deals/{deal_id}/runs", response_model=RunRef, status_code=202)
-def start_run(
+async def start_run(
     deal_id: str,
-    request_body: StartRunRequest,
     request: Request,
     tenant_ctx: RequireTenantContext,
 ) -> RunRef:
@@ -141,18 +166,20 @@ def start_run(
 
     Args:
         deal_id: UUID of the deal to run pipeline for.
-        request_body: Run request with mode (SNAPSHOT or FULL).
-        request: FastAPI request for DB connection access.
+        request: FastAPI request for DB connection and body access.
         tenant_ctx: Injected tenant context from auth dependency.
 
     Returns:
         RunRef with run_id and initial status.
 
     Raises:
-        HTTPException: 400 if invalid mode, 404 if deal not found.
+        IdisHttpError: 400 if invalid/missing fields, 404 if deal not found.
     """
-    if request_body.mode not in ("SNAPSHOT", "FULL"):
-        raise HTTPException(status_code=400, detail="Invalid mode; must be SNAPSHOT or FULL")
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    request_body = _validate_start_run_body(body)
 
     run_id = str(uuid.uuid4())
     db_conn = getattr(request.state, "db_conn", None)
@@ -160,7 +187,7 @@ def start_run(
 
     if db_conn is not None:
         if not _deal_exists_in_postgres(db_conn, deal_id):
-            raise HTTPException(status_code=404, detail="Deal not found")
+            raise IdisHttpError(status_code=404, code="NOT_FOUND", message="Deal not found")
 
         run_data = _create_run_in_postgres(
             conn=db_conn,
@@ -221,7 +248,7 @@ def get_run(
             run_data = None
 
     if run_data is None:
-        raise HTTPException(status_code=404, detail="Run not found")
+        raise IdisHttpError(status_code=404, code="NOT_FOUND", message="Run not found")
 
     return RunStatus(
         run_id=run_data["run_id"],

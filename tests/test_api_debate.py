@@ -161,7 +161,9 @@ class TestDebateAPIValidation:
             headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
         )
 
-        assert response.status_code in (400, 422)  # 422 for Pydantic validation
+        assert response.status_code == 400
+        body = response.json()
+        assert body["code"] == "INVALID_REQUEST"
 
     def test_zero_max_rounds_returns_400(self, client: TestClient, deal_id: str) -> None:
         """POST with max_rounds=0 returns 400."""
@@ -171,7 +173,9 @@ class TestDebateAPIValidation:
             headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
         )
 
-        assert response.status_code in (400, 422)  # 422 for Pydantic validation
+        assert response.status_code == 400
+        body = response.json()
+        assert body["code"] == "INVALID_REQUEST"
 
     def test_nonexistent_debate_returns_404(self, client: TestClient) -> None:
         """GET /v1/debate/{debateId} returns 404 for nonexistent debate."""

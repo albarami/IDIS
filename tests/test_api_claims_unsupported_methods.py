@@ -66,12 +66,12 @@ class TestClaimsUnsupportedMethods:
             headers={"X-IDIS-API-Key": "test-api-key-tenant-a"},
         )
 
-        # Must be rejected, not 500
-        # 403 = RBAC fail-closed (no operation_id for unsupported method)
-        # 405 = Method Not Allowed
-        # 404 = Not Found
-        assert response.status_code in {403, 404, 405}, (
-            f"Expected 403/404/405 for unsupported PUT, got {response.status_code}"
+        # Must be rejected as OpenAPI-invalid, not 500 or 403
+        # 405 = Method Not Allowed (expected - unsupported method)
+        # 404 = Not Found (route doesn't exist)
+        # 422 = Validation Error
+        assert response.status_code in {404, 405, 422}, (
+            f"Expected 404/405/422 for unsupported PUT, got {response.status_code}"
         )
 
         # Verify no audit internals leaked
@@ -92,12 +92,12 @@ class TestClaimsUnsupportedMethods:
             headers={"X-IDIS-API-Key": "test-api-key-tenant-a"},
         )
 
-        # Must be rejected, not 500
-        # 403 = RBAC fail-closed (no operation_id for unsupported method)
-        # 405 = Method Not Allowed
-        # 404 = Not Found
-        assert response.status_code in {403, 404, 405}, (
-            f"Expected 403/404/405 for unsupported DELETE, got {response.status_code}"
+        # Must be rejected as OpenAPI-invalid, not 500 or 403
+        # 405 = Method Not Allowed (expected - unsupported method)
+        # 404 = Not Found (route doesn't exist)
+        # 422 = Validation Error
+        assert response.status_code in {404, 405, 422}, (
+            f"Expected 404/405/422 for unsupported DELETE, got {response.status_code}"
         )
 
         # Verify no audit internals leaked

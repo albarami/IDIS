@@ -62,18 +62,20 @@ class RBACMiddleware(BaseHTTPMiddleware):
 
         operation_id: str | None = getattr(request.state, "openapi_operation_id", None)
         if operation_id is None:
+            # Missing operation_id means this method/path combination is not in
+            # the OpenAPI spec. Treat as "method not allowed" (405), not as an
+            # RBAC denial (403). This keeps unsupported methods in the OpenAPI-
+            # invalid category rather than authorization-denied category.
             logger.warning(
-                "RBAC fail-closed: missing operation_id for %s %s",
+                "Method not in OpenAPI spec: %s %s",
                 request.method,
                 path,
                 extra={"request_id": request_id},
             )
-            # Use generic error message to avoid leaking internal details
-            # about operation_id or OpenAPI validation internals
             return make_error_response_no_request(
-                code="RBAC_DENIED",
+                code="METHOD_NOT_ALLOWED",
                 message="Method not allowed for this resource",
-                http_status=403,
+                http_status=405,
                 request_id=request_id,
                 details=None,
             )

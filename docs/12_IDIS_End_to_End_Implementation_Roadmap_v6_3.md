@@ -578,7 +578,7 @@ docs(phase-3): update roadmap with Phase 3 completion
 | Debate API | `/v1/debates/*` | ⏳ | ⏳ |
 | Human Gates API | `/v1/human-gates/*` | ⏳ | ⏳ |
 | Overrides API | `/v1/overrides/*` | ⏳ | ⏳ |
-| Audit Query API | `/v1/audit/events` | ⏳ | ⏳ |
+| Audit Query API | `/v1/audit/events` | ✅ | `test_api_audit_events.py`, `test_api_audit_events_postgres.py` |
 
 **Gap:** Many OpenAPI-defined endpoints not yet implemented.
 
@@ -599,10 +599,11 @@ docs(phase-3): update roadmap with Phase 3 completion
 | `test_deliverable_no_free_facts.py` | ✅ |
 | `test_api_truth_dashboard.py` | ✅ |
 | `test_api_claim_detail_and_sanad.py` | ✅ |
+| `test_api_audit_events.py` | ✅ |
+| `test_api_audit_events_postgres.py` | ✅ |
 | `test_api_deliverables.py` | ⏳ Needed |
 | `test_api_runs.py` | ⏳ Needed |
 | `test_api_debate.py` | ⏳ Needed |
-| `test_api_audit_query.py` | ⏳ Needed |
 
 **Git Commits (Remaining):**
 ```
@@ -610,7 +611,6 @@ feat(phase-6): implement deliverables API endpoints
 feat(phase-6): implement runs API endpoints
 feat(phase-6): implement debate API endpoints
 feat(phase-6): implement human gates API endpoints
-feat(phase-6): implement audit query API endpoint
 test(phase-6): add API endpoint tests
 feat(phase-6): implement frontend Truth Dashboard
 feat(phase-6): implement frontend Claim Detail view

@@ -117,11 +117,13 @@ class RBACMiddleware(BaseHTTPMiddleware):
         """Extract resource IDs from path parameters.
 
         Maps OpenAPI path param names to policy_check kwargs:
-        - dealId -> deal_id
-        - claimId -> claim_id
+        - dealId / deal_id -> deal_id
+        - claimId / claim_id -> claim_id
         - docId -> doc_id
         - runId -> run_id
         - debateId -> debate_id
+        - sanad_id -> sanad_id
+        - defect_id -> defect_id
 
         Returns dict with None for missing params. Fail-closed on malformed values.
         """
@@ -133,14 +135,20 @@ class RBACMiddleware(BaseHTTPMiddleware):
             "doc_id": None,
             "run_id": None,
             "debate_id": None,
+            "sanad_id": None,
+            "defect_id": None,
         }
 
         param_mapping = {
             "dealId": "deal_id",
+            "deal_id": "deal_id",
             "claimId": "claim_id",
+            "claim_id": "claim_id",
             "docId": "doc_id",
             "runId": "run_id",
             "debateId": "debate_id",
+            "sanad_id": "sanad_id",
+            "defect_id": "defect_id",
         }
 
         for openapi_name, policy_name in param_mapping.items():

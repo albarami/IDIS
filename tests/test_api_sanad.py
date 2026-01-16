@@ -7,7 +7,6 @@ Tests sanad CRUD operations via HTTP endpoints with tenant isolation.
 from __future__ import annotations
 
 import json
-import os
 import uuid
 from pathlib import Path
 
@@ -29,8 +28,8 @@ from idis.persistence.repositories.deals import (
 
 TENANT_A_KEY = "test-api-key-tenant-a"
 TENANT_B_KEY = "test-api-key-tenant-b"
-TENANT_A_ID = "tenant-a-uuid"
-TENANT_B_ID = "tenant-b-uuid"
+TENANT_A_ID = "00000000-0000-0000-0000-000000000001"
+TENANT_B_ID = "00000000-0000-0000-0000-000000000002"
 
 
 def _make_api_keys_json(
@@ -51,6 +50,8 @@ def _make_api_keys_json(
                 "tenant_id": tenant_id,
                 "actor_id": actor_id,
                 "name": name,
+                "timezone": "UTC",
+                "data_region": "us-east-1",
                 "roles": roles,
             }
         }
@@ -64,16 +65,16 @@ def audit_sink() -> InMemoryAuditSink:
 
 
 @pytest.fixture
-def client(audit_sink: InMemoryAuditSink, tmp_path: Path) -> TestClient:
+def client(
+    audit_sink: InMemoryAuditSink, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> TestClient:
     """Create test client with in-memory stores."""
     audit_log_path = tmp_path / "audit.jsonl"
-    os.environ["IDIS_API_KEYS_JSON"] = _make_api_keys_json(TENANT_A_ID, TENANT_A_KEY)
-    os.environ["IDIS_AUDIT_LOG_PATH"] = str(audit_log_path)
+    monkeypatch.setenv("IDIS_API_KEYS_JSON", _make_api_keys_json(TENANT_A_ID, TENANT_A_KEY))
+    monkeypatch.setenv("IDIS_AUDIT_LOG_PATH", str(audit_log_path))
     sink = JsonlFileAuditSink(file_path=str(audit_log_path))
     app = create_app(audit_sink=sink)
-    yield TestClient(app)
-    os.environ.pop("IDIS_API_KEYS_JSON", None)
-    os.environ.pop("IDIS_AUDIT_LOG_PATH", None)
+    return TestClient(app)
 
 
 @pytest.fixture(autouse=True)
@@ -83,7 +84,6 @@ def clear_stores() -> None:
     clear_deals_in_memory_store()
 
 
-@pytest.mark.skip(reason="OpenAPI middleware not recognizing new routes - pending spec reload fix")
 class TestGetSanad:
     """Tests for GET /v1/sanads/{sanadId}."""
 
@@ -197,7 +197,6 @@ class TestGetSanad:
         assert response.status_code == 404
 
 
-@pytest.mark.skip(reason="OpenAPI middleware not recognizing new routes - pending spec reload fix")
 class TestListDealSanads:
     """Tests for GET /v1/deals/{dealId}/sanads."""
 
@@ -224,7 +223,7 @@ class TestListDealSanads:
         assert response.status_code == 200
         data = response.json()
         assert data["items"] == []
-        assert data["next_cursor"] is None
+        assert data.get("next_cursor") is None
 
     def test_list_sanads_returns_404_for_nonexistent_deal(self, client: TestClient) -> None:
         """GET returns 404 for nonexistent deal."""
@@ -235,7 +234,6 @@ class TestListDealSanads:
         assert response.status_code == 404
 
 
-@pytest.mark.skip(reason="OpenAPI middleware not recognizing new routes - pending spec reload fix")
 class TestCreateSanad:
     """Tests for POST /v1/deals/{dealId}/sanads."""
 
@@ -287,7 +285,6 @@ class TestCreateSanad:
         assert response.status_code == 404
 
 
-@pytest.mark.skip(reason="OpenAPI middleware not recognizing new routes - pending spec reload fix")
 class TestUpdateSanad:
     """Tests for PATCH /v1/sanads/{sanadId}."""
 
@@ -359,7 +356,6 @@ class TestUpdateSanad:
         assert response.status_code == 404
 
 
-@pytest.mark.skip(reason="OpenAPI middleware not recognizing new routes - pending spec reload fix")
 class TestSetCorroboration:
     """Tests for POST /v1/sanads/{sanadId}/corroboration."""
 

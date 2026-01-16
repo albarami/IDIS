@@ -7,7 +7,6 @@ Tests defect CRUD, waiver, and cure operations via HTTP endpoints.
 from __future__ import annotations
 
 import json
-import os
 import uuid
 from pathlib import Path
 
@@ -28,8 +27,8 @@ from idis.persistence.repositories.deals import (
 
 TENANT_A_KEY = "test-api-key-tenant-a"
 TENANT_B_KEY = "test-api-key-tenant-b"
-TENANT_A_ID = "tenant-a-uuid"
-TENANT_B_ID = "tenant-b-uuid"
+TENANT_A_ID = "00000000-0000-0000-0000-000000000001"
+TENANT_B_ID = "00000000-0000-0000-0000-000000000002"
 
 
 def _make_api_keys_json(
@@ -50,6 +49,8 @@ def _make_api_keys_json(
                 "tenant_id": tenant_id,
                 "actor_id": actor_id,
                 "name": name,
+                "timezone": "UTC",
+                "data_region": "us-east-1",
                 "roles": roles,
             }
         }
@@ -63,16 +64,16 @@ def audit_sink() -> InMemoryAuditSink:
 
 
 @pytest.fixture
-def client(audit_sink: InMemoryAuditSink, tmp_path: Path) -> TestClient:
+def client(
+    audit_sink: InMemoryAuditSink, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> TestClient:
     """Create test client with in-memory stores."""
     audit_log_path = tmp_path / "audit.jsonl"
-    os.environ["IDIS_API_KEYS_JSON"] = _make_api_keys_json(TENANT_A_ID, TENANT_A_KEY)
-    os.environ["IDIS_AUDIT_LOG_PATH"] = str(audit_log_path)
+    monkeypatch.setenv("IDIS_API_KEYS_JSON", _make_api_keys_json(TENANT_A_ID, TENANT_A_KEY))
+    monkeypatch.setenv("IDIS_AUDIT_LOG_PATH", str(audit_log_path))
     sink = JsonlFileAuditSink(file_path=str(audit_log_path))
     app = create_app(audit_sink=sink)
-    yield TestClient(app)
-    os.environ.pop("IDIS_API_KEYS_JSON", None)
-    os.environ.pop("IDIS_AUDIT_LOG_PATH", None)
+    return TestClient(app)
 
 
 @pytest.fixture(autouse=True)
@@ -87,7 +88,6 @@ def seed_defect_in_memory(defect_data: dict) -> None:
     _defects_in_memory_store[defect_data["defect_id"]] = defect_data
 
 
-@pytest.mark.skip(reason="OpenAPI middleware not recognizing new routes - pending spec reload fix")
 class TestGetDefect:
     """Tests for GET /v1/defects/{defectId}."""
 
@@ -157,7 +157,6 @@ class TestGetDefect:
         assert response.status_code == 404
 
 
-@pytest.mark.skip(reason="OpenAPI middleware not recognizing new routes - pending spec reload fix")
 class TestListDealDefects:
     """Tests for GET /v1/deals/{dealId}/defects."""
 
@@ -194,7 +193,6 @@ class TestListDealDefects:
         assert response.status_code == 404
 
 
-@pytest.mark.skip(reason="OpenAPI middleware not recognizing new routes - pending spec reload fix")
 class TestCreateDefect:
     """Tests for POST /v1/deals/{dealId}/defects."""
 
@@ -295,7 +293,6 @@ class TestCreateDefect:
         assert response.status_code == 404
 
 
-@pytest.mark.skip(reason="OpenAPI middleware not recognizing new routes - pending spec reload fix")
 class TestWaiveDefect:
     """Tests for POST /v1/defects/{defectId}/waive."""
 
@@ -378,7 +375,6 @@ class TestWaiveDefect:
         assert response.status_code == 404
 
 
-@pytest.mark.skip(reason="OpenAPI middleware not recognizing new routes - pending spec reload fix")
 class TestCureDefect:
     """Tests for POST /v1/defects/{defectId}/cure."""
 

@@ -38,6 +38,7 @@ from idis.api.routes.webhooks import router as webhooks_router
 from idis.audit.sink import AuditSink
 from idis.idempotency.store import SqliteIdempotencyStore
 from idis.observability.tracing import configure_tracing, instrument_fastapi, instrument_httpx
+from idis.pipeline.worker import start_worker, stop_worker
 from idis.rate_limit.limiter import TenantRateLimiter
 
 try:
@@ -122,6 +123,20 @@ def create_app(
     app.add_middleware(RequestIdMiddleware)
 
     instrument_fastapi(app)
+
+    # Lifecycle hooks for pipeline worker
+    @app.on_event("startup")
+    async def startup_event() -> None:
+        """Start background pipeline worker on app startup."""
+        from idis.persistence.db import is_postgres_configured
+
+        if is_postgres_configured():
+            await start_worker()
+
+    @app.on_event("shutdown")
+    async def shutdown_event() -> None:
+        """Stop background pipeline worker on app shutdown."""
+        await stop_worker()
 
     app.add_exception_handler(IdisHttpError, idis_http_error_handler)
     app.add_exception_handler(HTTPException, http_exception_handler)

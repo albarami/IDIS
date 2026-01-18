@@ -5,6 +5,7 @@ import { useRouter, useParams } from "next/navigation";
 import Link from "next/link";
 import Header from "@/components/Header";
 import StatusBadge from "@/components/StatusBadge";
+import ErrorCallout from "@/components/ErrorCallout";
 import { idis, type Run, type DebateSession, IDISApiError } from "@/lib/idis";
 
 export default function RunStatusPage() {
@@ -16,6 +17,7 @@ export default function RunStatusPage() {
   const [debate, setDebate] = useState<DebateSession | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [errorRequestId, setErrorRequestId] = useState<string | undefined>(undefined);
 
   const fetchData = useCallback(async () => {
     try {
@@ -34,7 +36,12 @@ export default function RunStatusPage() {
         router.push("/login");
         return;
       }
-      setError(err instanceof Error ? err.message : "Failed to load run");
+      if (err instanceof IDISApiError) {
+        setError(err.message);
+        setErrorRequestId(err.requestId);
+      } else {
+        setError(err instanceof Error ? err.message : "Failed to load run");
+      }
     } finally {
       setLoading(false);
     }
@@ -69,9 +76,7 @@ export default function RunStatusPage() {
       <div className="min-h-screen bg-gray-50">
         <Header />
         <main className="max-w-4xl mx-auto px-4 py-8">
-          <div className="rounded-md bg-red-50 p-4">
-            <p className="text-sm text-red-700">{error || "Run not found"}</p>
-          </div>
+          <ErrorCallout message={error || "Run not found"} requestId={errorRequestId} />
         </main>
       </div>
     );
@@ -85,13 +90,6 @@ export default function RunStatusPage() {
         <nav className="mb-4 text-sm">
           <Link href="/deals" className="text-blue-600 hover:text-blue-800">
             Deals
-          </Link>
-          <span className="mx-2 text-gray-400">/</span>
-          <Link
-            href={`/deals/${run.deal_id}/truth-dashboard`}
-            className="text-blue-600 hover:text-blue-800"
-          >
-            Deal Dashboard
           </Link>
           <span className="mx-2 text-gray-400">/</span>
           <span className="text-gray-600">Run</span>

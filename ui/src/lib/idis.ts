@@ -163,7 +163,6 @@ export interface Override {
 
 export interface Run {
   run_id: string;
-  deal_id: string;
   status: RunStatus;
   started_at: string;
   finished_at?: string | null;
@@ -180,12 +179,7 @@ export interface DebateSession {
 export interface AuditEvent {
   event_id: string;
   event_type: string;
-  resource_type: string;
-  resource_id: string;
-  actor_id: string;
-  tenant_id: string;
-  timestamp: string;
-  details?: Record<string, unknown>;
+  occurred_at: string;
 }
 
 export interface Sanad {

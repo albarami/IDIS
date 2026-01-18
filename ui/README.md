@@ -15,7 +15,15 @@ This UI implements a **secure session pattern**:
 
 ### Windows Local Development
 
-On Windows, if you encounter `EPERM` errors during `npm ci` (file locks on `.next-swc` binaries):
+On Windows, if you encounter `EPERM` errors during `npm ci` (file locks on `.next-swc` binaries), use the provided clean script:
+
+```powershell
+cd ui
+.\scripts\windows-clean.ps1
+npm ci
+```
+
+Or manually:
 
 ```powershell
 # 1. Stop any running Next dev server (Ctrl+C)

@@ -32,13 +32,45 @@ pre-commit install
 
 ### Running
 
+**Enterprise Mode (Postgres):**
+
 ```bash
-# Run the development server
+# Start Postgres container (if not already running)
+docker run -d --name idis-postgres \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=idis_test \
+  -p 15433:5432 \
+  postgres:16
+
+# Wait for Postgres to be ready
+sleep 5
+
+# Run migrations
+export IDIS_DATABASE_ADMIN_URL="postgresql://postgres:postgres@127.0.0.1:15433/idis_test"
+alembic -c src/idis/persistence/migrations/alembic.ini upgrade head
+
+# Start backend with Postgres
+export IDIS_DATABASE_URL="postgresql://idis_app:idis_app_pw@127.0.0.1:15433/idis_test"
+export IDIS_DATABASE_ADMIN_URL="postgresql://postgres:postgres@127.0.0.1:15433/idis_test"
+export IDIS_API_KEYS_JSON='{"test-key-123":{"tenant_id":"00000000-0000-0000-0000-000000000001","actor_id":"00000000-0000-0000-0000-000000000100","name":"Local Admin","timezone":"UTC","data_region":"us-east-1","roles":["ADMIN","ANALYST"]}}'
 uvicorn idis.app:app --reload
 
 # Health check
 curl http://localhost:8000/health
 ```
+
+**Development Mode (In-Memory Fallback):**
+
+```bash
+# Run without Postgres (in-memory repositories only)
+uvicorn idis.app:app --reload
+
+# Health check
+curl http://localhost:8000/health
+```
+
+**Note:** The in-memory fallback is for testing only. Production deployments must use Postgres.
 
 ### Development Commands
 

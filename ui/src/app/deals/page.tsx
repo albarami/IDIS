@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Header from "@/components/Header";
 import StatusBadge from "@/components/StatusBadge";
+import ErrorCallout from "@/components/ErrorCallout";
 import { idis, type Deal, IDISApiError } from "@/lib/idis";
 
 export default function DealsPage() {
@@ -12,6 +13,7 @@ export default function DealsPage() {
   const [deals, setDeals] = useState<Deal[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [errorRequestId, setErrorRequestId] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     async function fetchDeals() {
@@ -29,7 +31,12 @@ export default function DealsPage() {
           router.push("/login");
           return;
         }
-        setError(err instanceof Error ? err.message : "Failed to load deals");
+        if (err instanceof IDISApiError) {
+          setError(err.message);
+          setErrorRequestId(err.requestId);
+        } else {
+          setError(err instanceof Error ? err.message : "Failed to load deals");
+        }
       } finally {
         setLoading(false);
       }
@@ -53,9 +60,7 @@ export default function DealsPage() {
       <div className="min-h-screen bg-gray-50">
         <Header />
         <main className="max-w-7xl mx-auto px-4 py-8">
-          <div className="rounded-md bg-red-50 p-4">
-            <p className="text-sm text-red-700">{error}</p>
-          </div>
+          <ErrorCallout message={error} requestId={errorRequestId} />
         </main>
       </div>
     );

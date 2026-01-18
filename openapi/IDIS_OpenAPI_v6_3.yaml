@@ -751,6 +751,9 @@ paths:
     post:
       tags: [Debate]
       summary: Start LangGraph debate session (full analysis path)
+      description: |
+        Starts a debate session and returns a RunRef. The returned run_id
+        is also the debate_id and should be used when calling GET /v1/debate/{debateId}.
       operationId: startDebate
       parameters:
         - $ref: "#/components/parameters/DealId"
@@ -763,7 +766,9 @@ paths:
               $ref: "#/components/schemas/StartDebateRequest"
       responses:
         "202":
-          description: Debate started
+          description: |
+            Debate started. The run_id in the response is the debate_id
+            for subsequent GET /v1/debate/{debateId} calls.
           content:
             application/json:
               schema:
@@ -777,6 +782,9 @@ paths:
     get:
       tags: [Debate]
       summary: Get debate session (transcript + decisions)
+      description: |
+        Retrieves a debate session. The debateId is the run_id returned
+        from POST /v1/deals/{dealId}/debate.
       operationId: getDebate
       parameters:
         - $ref: "#/components/parameters/DebateId"

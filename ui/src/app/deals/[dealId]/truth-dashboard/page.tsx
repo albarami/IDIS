@@ -7,6 +7,7 @@ import Header from "@/components/Header";
 import GradeBadge from "@/components/GradeBadge";
 import VerdictBadge from "@/components/VerdictBadge";
 import StatusBadge from "@/components/StatusBadge";
+import ErrorCallout from "@/components/ErrorCallout";
 import {
   idis,
   type Deal,
@@ -29,6 +30,7 @@ export default function TruthDashboardPage() {
   const [humanGates, setHumanGates] = useState<HumanGate[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [errorRequestId, setErrorRequestId] = useState<string | undefined>(undefined);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
@@ -63,7 +65,12 @@ export default function TruthDashboardPage() {
         router.push("/login");
         return;
       }
-      setError(err instanceof Error ? err.message : "Failed to load data");
+      if (err instanceof IDISApiError) {
+        setError(err.message);
+        setErrorRequestId(err.requestId);
+      } else {
+        setError(err instanceof Error ? err.message : "Failed to load data");
+      }
     } finally {
       setLoading(false);
     }
@@ -141,9 +148,7 @@ export default function TruthDashboardPage() {
       <div className="min-h-screen bg-gray-50">
         <Header />
         <main className="max-w-7xl mx-auto px-4 py-8">
-          <div className="rounded-md bg-red-50 p-4">
-            <p className="text-sm text-red-700">{error || "Deal not found"}</p>
-          </div>
+          <ErrorCallout message={error || "Deal not found"} requestId={errorRequestId} />
         </main>
       </div>
     );

@@ -30,10 +30,10 @@ export default function AuditEventsPage() {
           dealId: filterDealId || undefined,
         });
 
-        // Deterministic sorting by timestamp descending, then by event_id
+        // Deterministic sorting by occurred_at descending, then by event_id
         const sortedEvents = [...response.items].sort((a, b) => {
           const dateCompare =
-            new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+            new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime();
           if (dateCompare !== 0) return dateCompare;
           return a.event_id.localeCompare(b.event_id);
         });
@@ -157,19 +157,13 @@ export default function AuditEventsPage() {
                 <thead className="bg-gray-50">
                   <tr>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                      Timestamp
+                      Occurred At
                     </th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                       Event Type
                     </th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                      Resource
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                      Actor
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                      Details
+                      Event ID
                     </th>
                   </tr>
                 </thead>
@@ -177,7 +171,7 @@ export default function AuditEventsPage() {
                   {events.map((event) => (
                     <tr key={event.event_id} className="hover:bg-gray-50">
                       <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
-                        {new Date(event.timestamp).toLocaleString()}
+                        {new Date(event.occurred_at).toLocaleString()}
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap">
                         <span className="text-sm font-medium text-gray-900">
@@ -185,18 +179,9 @@ export default function AuditEventsPage() {
                         </span>
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap text-sm">
-                        <span className="text-gray-500">{event.resource_type}:</span>
-                        <span className="ml-1 font-mono text-xs text-gray-700">
-                          {event.resource_id.substring(0, 8)}...
+                        <span className="font-mono text-xs text-gray-700">
+                          {event.event_id}
                         </span>
-                      </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
-                        <span className="font-mono text-xs">
-                          {event.actor_id.substring(0, 8)}...
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-sm text-gray-500 max-w-xs truncate">
-                        {event.details ? JSON.stringify(event.details).substring(0, 50) : "—"}
                       </td>
                     </tr>
                   ))}

@@ -14,6 +14,7 @@ if "%1"=="test" goto test
 if "%1"=="check" goto check
 if "%1"=="forbidden_scan" goto forbidden_scan
 if "%1"=="postgres_integration" goto postgres_integration
+if "%1"=="ui_check" goto ui_check
 
 echo Unknown target: %1
 goto help
@@ -58,6 +59,24 @@ echo === Running: python scripts/run_postgres_integration_local.py ===
 python scripts/run_postgres_integration_local.py
 if errorlevel 1 exit /b 1
 echo === Postgres integration tests complete ===
+goto end
+
+:ui_check
+echo === Running: UI checks (lint, typecheck, test, build) ===
+cd ui
+if errorlevel 1 exit /b 1
+call npm ci
+if errorlevel 1 exit /b 1
+call npm run lint
+if errorlevel 1 exit /b 1
+call npm run typecheck
+if errorlevel 1 exit /b 1
+call npm run test
+if errorlevel 1 exit /b 1
+call npm run build
+if errorlevel 1 exit /b 1
+cd ..
+echo === UI checks complete ===
 goto end
 
 :check
@@ -120,6 +139,7 @@ echo   test          Run pytest test suite
 echo   check         Run all checks (format + lint + typecheck + test)
 echo   forbidden_scan  Run forbidden pattern scanner
 echo   postgres_integration  Run Postgres integration tests locally (requires Docker)
+echo   ui_check      Run UI checks (npm lint, typecheck, test, build)
 echo   help          Show this help message
 echo.
 echo On Linux/macOS, use GNU Make with the Makefile.

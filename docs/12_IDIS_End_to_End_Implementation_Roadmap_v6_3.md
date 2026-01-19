@@ -792,12 +792,21 @@ docs(phase-6): update roadmap with Phase 6 completion
 
 **Note:** Harness implemented with fail-closed validation, deterministic ordering, and strict suite count enforcement (GDBS-S=20, GDBS-F=100, GDBS-A=30). Gate 3 end-to-end execution remains blocked pending pipeline integration.
 
-#### Task 7.4: SLO/SLA Monitoring ⏳ NOT STARTED
+#### Task 7.4: SLO/SLA Monitoring ✅ COMPLETE
 | Deliverable | Module | Status |
 |-------------|--------|--------|
-| SLO dashboards | `src/idis/monitoring/slo_dashboard.py` | ⏳ |
-| Alert rules | `src/idis/monitoring/alerts.py` | ⏳ |
-| Runbooks | `docs/runbooks/` | ⏳ |
+| SLO dashboards | `src/idis/monitoring/slo_dashboard.py` | ✅ |
+| Alert rules | `src/idis/monitoring/alerts.py` | ✅ |
+| Runbooks | `docs/runbooks/` | ✅ |
+
+**Implementation Notes:**
+- 10 golden dashboards implemented per SLO/Runbooks §8.1
+- 12 core alerts implemented per SLO/Runbooks §8.2
+- All dashboards include tenant_id variable for tenant isolation
+- All SEV-1 alerts for trust invariants (No-Free-Facts, tenant isolation, audit coverage)
+- Deterministic Grafana JSON and Prometheus YAML exports
+- RB-01 through RB-10 runbooks with required structure (Detection → Triage → Containment → Recovery → Verification → Postmortem)
+- Tests: `tests/test_slo_metrics.py`, `tests/test_alert_rules.py`
 
 #### Task 7.5: Data Residency + Compliance ⏳ NOT STARTED
 | Deliverable | Module | Status |

@@ -1,0 +1,31 @@
+{
+  "gate": "Gate 3: GDBS-F Evaluation",
+  "status": "BLOCKED",
+  "timestamp": "2026-01-19T03:57:25.508448+00:00",
+  "ready_to_execute": false,
+  "blockers": [
+    "Document ingestion pipeline not integrated with claim extraction",
+    "Claim extraction service not operational",
+    "Sanad chain building not automated (only manual test scripts exist)",
+    "Debate execution not integrated with deliverable generation",
+    "No /v1/deals/{dealId}/runs endpoint that executes full pipeline"
+  ],
+  "requirements": {
+    "dataset": "GDBS-F (100 adversarial deals)",
+    "required_completion_rate": 0.95,
+    "required_muhasabah_pass_rate": 0.95,
+    "metrics": [
+      "debate_completion_rate",
+      "muhasabah_pass_rate",
+      "deliverable_generation_rate",
+      "no_free_facts_violations"
+    ]
+  },
+  "next_steps": [
+    "Complete document ingestion + claim extraction pipeline",
+    "Integrate Sanad chain building into pipeline",
+    "Wire debate orchestration to deliverable generation",
+    "Implement /v1/deals/{dealId}/runs full execution endpoint",
+    "Run: python scripts/gates/gate_3_gdbs_f.py --execute"
+  ]
+}

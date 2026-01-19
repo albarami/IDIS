@@ -6,6 +6,7 @@ import Link from "next/link";
 import Header from "@/components/Header";
 import StatusBadge from "@/components/StatusBadge";
 import ErrorCallout from "@/components/ErrorCallout";
+import DebateTranscript from "@/components/DebateTranscript";
 import { idis, type Run, type DebateSession, IDISApiError } from "@/lib/idis";
 
 export default function RunStatusPage() {
@@ -161,12 +162,7 @@ export default function RunStatusPage() {
             {/* Rounds */}
             {debate.rounds && debate.rounds.length > 0 && (
               <div className="mt-4 pt-4 border-t border-gray-200">
-                <h3 className="text-sm font-medium text-gray-900 mb-2">Debate Rounds</h3>
-                <div className="bg-gray-50 p-3 rounded max-h-96 overflow-y-auto">
-                  <pre className="text-xs whitespace-pre-wrap">
-                    {JSON.stringify(debate.rounds, null, 2)}
-                  </pre>
-                </div>
+                <DebateTranscript rounds={debate.rounds} />
               </div>
             )}
           </div>

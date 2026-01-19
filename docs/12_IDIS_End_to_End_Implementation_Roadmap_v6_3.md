@@ -625,15 +625,103 @@ docs(phase-3): update roadmap with Phase 3 completion
   - Truth dashboard no longer renders `gate.action` column: `page.tsx:353`
   - `*.tsbuildinfo` ignored; worktree remains clean: `.gitignore:76`
 
-##### Task 6.3.3: Remaining UI Pages ⏳ NOT STARTED
+##### Task 6.3.3: Debate Transcript Viewer ✅ COMPLETE (CODEX APPROVED)
+| Deliverable | Status | Commit |
+|-------------|--------|--------|
+| DebateTranscript component | ✅ | `b50c839` |
+| debateNormalizer with OpenAPI-safe extraction | ✅ | `b50c839` |
+| Unit tests (16 test cases) | ✅ | `b50c839` |
+| Raw JSON fallback toggle | ✅ | `b50c839` |
+| Integration into /runs/[runId] page | ✅ | `b50c839` |
+
+**Implementation Details:**
+- Best-effort field normalization: `speaker` (fallback: role, agent, "Unknown Speaker")
+- Message extraction: `message` (fallback: content, text, empty string)
+- Timestamp handling: `timestamp` (fallback: created_at, undefined)
+- Graceful degradation for non-object or missing fields
+- Toggle between formatted transcript and raw JSON view
+
+##### Task 6.3.4: Deliverables Download/View UI ✅ COMPLETE (CODEX APPROVED)
+| Deliverable | Status | Commit |
+|-------------|--------|--------|
+| /deals/[dealId]/deliverables page | ✅ | `b50c839` |
+| URI handling (http/https, /v1/ proxy, copy) | ✅ | `b50c839` |
+| Generate deliverables (Snapshot, IC Memo) | ✅ | `b50c839` |
+| Link from truth dashboard | ✅ | `b50c839` |
+
+**Implementation Details:**
+- Direct open for http(s) URLs
+- Server-side proxy for `/v1/` API paths via `/api/idis`
+- Copy URI button for non-downloadable paths
+- Status badges and creation timestamps
+- Integrated with existing deliverables API endpoints
+
+##### Task 6.3.5: Runs List UI ✅ COMPLETE (CODEX APPROVED)
+| Deliverable | Status | Commit |
+|-------------|--------|--------|
+| /runs page with deal selector | ✅ | `b50c839` |
+| Header nav link to Runs | ✅ | `b50c839` |
+| Deal-scoped run navigation | ✅ | `b50c839` |
+
+**Implementation Details:**
+- Note: No global runs list endpoint in OpenAPI (deal-scoped only)
+- Lists all deals with navigation to truth dashboards
+- Informational note about deal-scoped architecture
+- Consistent with existing API contract
+
+##### Task 6.3.6: Gate 3 Evaluation Harness ✅ COMPLETE (BLOCKED STATUS DOCUMENTED - CODEX APPROVED)
+| Deliverable | Status | Commit |
+|-------------|--------|--------|
+| scripts/gates/gate_3_gdbs_f.py | ✅ | `b50c839` |
+| docs/gates/gate_3_blocked_status.json | ✅ | `b50c839` |
+| Blocked status documentation | ✅ | `b50c839` |
+
+**Gate 3 Status: BLOCKED**
+- **Reason:** Pipeline integration incomplete (E2E flow not operational)
+- **Exit code 2:** Indicates "blocked" (not failure, requires integration work)
+- **Blockers (5):**
+  1. Document ingestion pipeline not integrated with claim extraction
+  2. Claim extraction service not operational
+  3. Sanad chain building not automated
+  4. Debate execution not integrated with deliverable generation
+  5. No `/v1/deals/{dealId}/runs` full execution endpoint
+- **Framework ready:** When pipeline is complete, run `python scripts/gates/gate_3_gdbs_f.py --execute`
+
+**CODEX APPROVAL (2026-01-19):**
+- **Commit:** `b50c839`
+- **Backend Evidence:**
+  - `make.bat check`: 1453 passed, 79 skipped; forbidden scan OK
+  - `make.bat postgres_integration`: 79 passed
+- **UI Evidence:**
+  - `npm ci`: success (9 known vulnerabilities in Next.js 14.2.21)
+  - `npm run lint`: ✔ No ESLint warnings or errors
+  - `npm run typecheck`: ✔ No type errors
+  - `npm run test`: 35 passed (4 test files)
+  - `npm run build`: ✔ Compiled successfully (12 routes)
+- **Security:**
+  - `localStorage|sessionStorage`: 0 matches
+  - `X-IDIS-API-Key`: only in server proxy route
+- **Files Created/Modified:**
+  - `ui/src/components/DebateTranscript.tsx` (new)
+  - `ui/src/lib/debateNormalizer.ts` (new)
+  - `ui/src/lib/debateNormalizer.test.ts` (new)
+  - `ui/src/app/deals/[dealId]/deliverables/page.tsx` (new)
+  - `ui/src/app/runs/page.tsx` (new)
+  - `ui/src/components/Header.tsx` (modified - added Runs nav link)
+  - `ui/src/app/runs/[runId]/page.tsx` (modified - integrated DebateTranscript)
+  - `ui/src/app/deals/[dealId]/truth-dashboard/page.tsx` (modified - added View All link)
+  - `scripts/gates/gate_3_gdbs_f.py` (new)
+  - `docs/gates/gate_3_blocked_status.json` (new)
+
+##### Task 6.3.7: Additional UI Pages (Partial Implementation)
 | Deliverable | Status |
 |-------------|--------|
-| Deals List UI | ✅ Partial (basic) |
-| Truth Dashboard UI | ✅ Partial (basic) |
-| Claim Detail + Sanad View | ⏳ |
-| Debate Transcript Viewer | ⏳ |
-| Deliverables Download | ⏳ |
-| Runs List UI | ⏳ |
+| Deals List UI | ✅ Functional (basic) |
+| Truth Dashboard UI | ✅ Functional (basic) |
+| Claim Detail + Sanad View | ✅ Complete |
+| Debate Transcript Viewer | ✅ Complete |
+| Deliverables Download/View | ✅ Complete |
+| Runs List UI | ✅ Complete |
 
 **Testing Requirements:**
 | Test File | Status |
@@ -668,8 +756,8 @@ docs(phase-6): update roadmap with Phase 6 completion
 - [x] Deliverables generator produces valid PDFs
 - [x] Every fact linked to claim/calc
 - [x] All OpenAPI-defined endpoints implemented
-- [ ] Frontend UI operational
-- [ ] Gate 3 (GDBS-F pass≥95%)
+- [x] Frontend UI operational (Core pages complete: Deals, Truth Dashboard, Claim Detail+Sanad, Debate Viewer, Deliverables, Runs)
+- [⏸️] Gate 3 (GDBS-F pass≥95%) - **BLOCKED** - Evaluation harness ready, awaiting E2E pipeline integration
 
 ---
 

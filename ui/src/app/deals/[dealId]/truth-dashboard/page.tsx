@@ -351,21 +351,21 @@ export default function TruthDashboardPage() {
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Gate ID</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Action</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Created</th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {humanGates.map((gate) => (
                   <tr key={gate.gate_id}>
+                    <td className="px-6 py-4 text-sm font-mono text-gray-700">
+                      {gate.gate_id.substring(0, 8)}...
+                    </td>
                     <td className="px-6 py-4 text-sm text-gray-900">{gate.gate_type}</td>
                     <td className="px-6 py-4">
                       <StatusBadge status={gate.status} type="run" />
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-500">
-                      {gate.action || "—"}
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-500">
                       {new Date(gate.created_at).toLocaleString()}

@@ -142,14 +142,9 @@ export interface Deliverable {
 export interface HumanGate {
   gate_id: string;
   deal_id: string;
-  claim_id?: string;
   gate_type: string;
   status: string;
-  actor_id?: string;
-  action?: HumanGateAction;
-  reason?: string;
   created_at: string;
-  resolved_at?: string;
 }
 
 export interface Override {

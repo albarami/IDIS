@@ -3,13 +3,16 @@
 Usage:
     python -m idis validate --validator <name> [--input PATH]
     python -m idis schemas check
+    python -m idis test gdbs-s --dataset <path> [--execute --base-url URL] [--out FILE]
+    python -m idis test gdbs-f --dataset <path> [--execute --base-url URL] [--out FILE]
+    python -m idis test gdbs-a --dataset <path> [--execute --base-url URL] [--out FILE]
 
 Validators: no_free_facts, muhasabah, sanad_integrity, audit_event
 
 Exit codes:
-    0: Validation passed
-    2: Validation failed
-    1: Internal error (unexpected)
+    0: Validation passed / PASS
+    1: Validation failed / FAIL / Internal error
+    2: BLOCKED (for test commands when execution is blocked)
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
 from idis.validators import (
@@ -165,6 +169,43 @@ def cmd_schemas_check(args: argparse.Namespace) -> int:
     return 0 if result["pass"] else 2
 
 
+def cmd_test_gdbs(args: argparse.Namespace) -> int:
+    """Execute GDBS test suite command.
+
+    Exit codes:
+        0: PASS (all validations/executions succeeded)
+        1: FAIL (validation or execution errors)
+        2: BLOCKED (execution blocked due to missing dependencies)
+    """
+    from idis.evaluation.harness import format_summary, get_exit_code, run_suite
+    from idis.evaluation.types import SuiteId
+
+    suite: SuiteId = args.suite
+    dataset_path = Path(args.dataset)
+    execute_mode = getattr(args, "execute", False)
+    base_url = getattr(args, "base_url", None)
+    api_key = getattr(args, "api_key", None)
+    out_path = Path(args.out) if getattr(args, "out", None) else None
+
+    mode = "execute" if execute_mode else "validate"
+
+    result = run_suite(
+        dataset_root=dataset_path,
+        suite=suite,
+        mode=mode,
+        base_url=base_url,
+        api_key=api_key,
+        out_path=out_path,
+    )
+
+    print(format_summary(result), file=sys.stderr)
+
+    if out_path:
+        print(f"Report written to: {out_path}", file=sys.stderr)
+
+    return get_exit_code(result)
+
+
 def create_parser() -> argparse.ArgumentParser:
     """Create the argument parser."""
     parser = argparse.ArgumentParser(
@@ -206,6 +247,54 @@ def create_parser() -> argparse.ArgumentParser:
         help="Check schema registry completeness and loadability",
     )
 
+    # test command with gdbs-s, gdbs-f, gdbs-a subcommands
+    test_parser = subparsers.add_parser(
+        "test",
+        help="Run evaluation test suites",
+    )
+    test_subparsers = test_parser.add_subparsers(
+        dest="test_command",
+        help="Test suite subcommands",
+    )
+
+    for suite_id, description in [
+        ("gdbs-s", "GDBS-S (Screening): 20 deals, quick regression"),
+        ("gdbs-f", "GDBS-F (Full): 100 deals, broad coverage"),
+        ("gdbs-a", "GDBS-A (Adversarial): 30 deals, injected failures"),
+    ]:
+        suite_parser = test_subparsers.add_parser(
+            suite_id,
+            help=description,
+        )
+        suite_parser.add_argument(
+            "--dataset",
+            required=True,
+            metavar="PATH",
+            help="Path to GDBS dataset root (must contain manifest.json)",
+        )
+        suite_parser.add_argument(
+            "--execute",
+            action="store_true",
+            default=False,
+            help="Run in execute mode (attempt API calls); default is validate-only",
+        )
+        suite_parser.add_argument(
+            "--base-url",
+            metavar="URL",
+            help="API base URL for execute mode (e.g., http://localhost:8000)",
+        )
+        suite_parser.add_argument(
+            "--api-key",
+            metavar="KEY",
+            help="API key for execute mode",
+        )
+        suite_parser.add_argument(
+            "--out",
+            metavar="FILE",
+            help="Path to write JSON report",
+        )
+        suite_parser.set_defaults(suite=suite_id)
+
     return parser
 
 
@@ -213,9 +302,9 @@ def main(argv: list[str] | None = None) -> int:
     """Main entry point.
 
     Exit codes:
-        0: Success / validation passed
-        2: Validation failed / schema check failed
-        1: Internal error (unexpected)
+        0: Success / validation passed / PASS
+        1: FAIL / Internal error (unexpected)
+        2: Validation failed / schema check failed / BLOCKED
     """
     try:
         parser = create_parser()
@@ -233,6 +322,13 @@ def main(argv: list[str] | None = None) -> int:
                 return cmd_schemas_check(args)
             else:
                 parser.parse_args(["schemas", "--help"])
+                return 0
+
+        if args.command == "test":
+            if getattr(args, "test_command", None) in ("gdbs-s", "gdbs-f", "gdbs-a"):
+                return cmd_test_gdbs(args)
+            else:
+                parser.parse_args(["test", "--help"])
                 return 0
 
         return 0

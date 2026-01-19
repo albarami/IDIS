@@ -1,0 +1,6 @@
+{
+  "deal_id": "00000000-0000-0000-0002-000000000004",
+  "expected_status": "FAIL",
+  "expected_defects": ["UNIT_MISMATCH"],
+  "expected_grade": "C"
+}

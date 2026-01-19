@@ -1,0 +1,174 @@
+{
+  "manifest_version": "1.0.0",
+  "dataset_id": "gdbs-mini",
+  "dataset_name": "Golden Deal Benchmark Suite - Mini (Test Fixture)",
+  "version": "1.0.0",
+  "created_at": "2026-01-19T12:00:00Z",
+  "immutable": true,
+  "description": "Minimal synthetic GDBS for unit testing evaluation harness",
+  "idis_version_compatibility": "6.3",
+  "deals": [
+    {
+      "deal_key": "deal_001",
+      "scenario": "clean",
+      "directory": "deals/deal_001_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000001",
+      "description": "Clean baseline deal"
+    },
+    {
+      "deal_key": "deal_002",
+      "scenario": "contradiction",
+      "directory": "deals/deal_002_contradiction",
+      "deal_id": "00000000-0000-0000-0002-000000000002",
+      "description": "Contradiction scenario"
+    },
+    {
+      "deal_key": "deal_003",
+      "scenario": "clean",
+      "directory": "deals/deal_003_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000003",
+      "description": "Clean baseline deal"
+    },
+    {
+      "deal_key": "deal_004",
+      "scenario": "unit_mismatch",
+      "directory": "deals/deal_004_unit_mismatch",
+      "deal_id": "00000000-0000-0000-0002-000000000004",
+      "description": "Unit mismatch scenario"
+    },
+    {
+      "deal_key": "deal_005",
+      "scenario": "clean",
+      "directory": "deals/deal_005_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000005",
+      "description": "Clean baseline deal"
+    },
+    {
+      "deal_key": "deal_006",
+      "scenario": "clean",
+      "directory": "deals/deal_006_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000006",
+      "description": "Clean baseline deal"
+    },
+    {
+      "deal_key": "deal_007",
+      "scenario": "clean",
+      "directory": "deals/deal_007_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000007",
+      "description": "Clean baseline deal"
+    },
+    {
+      "deal_key": "deal_008",
+      "scenario": "clean",
+      "directory": "deals/deal_008_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000008",
+      "description": "Clean baseline deal"
+    },
+    {
+      "deal_key": "deal_009",
+      "scenario": "clean",
+      "directory": "deals/deal_009_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000009",
+      "description": "Clean baseline deal"
+    },
+    {
+      "deal_key": "deal_010",
+      "scenario": "clean",
+      "directory": "deals/deal_010_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000010",
+      "description": "Clean baseline deal"
+    },
+    {
+      "deal_key": "deal_011",
+      "scenario": "clean",
+      "directory": "deals/deal_011_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000011",
+      "description": "Clean baseline deal"
+    },
+    {
+      "deal_key": "deal_012",
+      "scenario": "clean",
+      "directory": "deals/deal_012_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000012",
+      "description": "Clean baseline deal"
+    },
+    {
+      "deal_key": "deal_013",
+      "scenario": "clean",
+      "directory": "deals/deal_013_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000013",
+      "description": "Clean baseline deal"
+    },
+    {
+      "deal_key": "deal_014",
+      "scenario": "clean",
+      "directory": "deals/deal_014_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000014",
+      "description": "Clean baseline deal"
+    },
+    {
+      "deal_key": "deal_015",
+      "scenario": "clean",
+      "directory": "deals/deal_015_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000015",
+      "description": "Clean baseline deal"
+    },
+    {
+      "deal_key": "deal_016",
+      "scenario": "clean",
+      "directory": "deals/deal_016_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000016",
+      "description": "Clean baseline deal"
+    },
+    {
+      "deal_key": "deal_017",
+      "scenario": "clean",
+      "directory": "deals/deal_017_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000017",
+      "description": "Clean baseline deal"
+    },
+    {
+      "deal_key": "deal_018",
+      "scenario": "clean",
+      "directory": "deals/deal_018_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000018",
+      "description": "Clean baseline deal"
+    },
+    {
+      "deal_key": "deal_019",
+      "scenario": "clean",
+      "directory": "deals/deal_019_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000019",
+      "description": "Clean baseline deal"
+    },
+    {
+      "deal_key": "deal_020",
+      "scenario": "clean",
+      "directory": "deals/deal_020_clean",
+      "deal_id": "00000000-0000-0000-0002-000000000020",
+      "description": "Clean baseline deal"
+    }
+  ],
+  "expected_outcomes": [
+    "expected_outcomes/deal_001_expected.json",
+    "expected_outcomes/deal_002_expected.json",
+    "expected_outcomes/deal_003_expected.json",
+    "expected_outcomes/deal_004_expected.json",
+    "expected_outcomes/deal_005_expected.json",
+    "expected_outcomes/deal_006_expected.json",
+    "expected_outcomes/deal_007_expected.json",
+    "expected_outcomes/deal_008_expected.json",
+    "expected_outcomes/deal_009_expected.json",
+    "expected_outcomes/deal_010_expected.json",
+    "expected_outcomes/deal_011_expected.json",
+    "expected_outcomes/deal_012_expected.json",
+    "expected_outcomes/deal_013_expected.json",
+    "expected_outcomes/deal_014_expected.json",
+    "expected_outcomes/deal_015_expected.json",
+    "expected_outcomes/deal_016_expected.json",
+    "expected_outcomes/deal_017_expected.json",
+    "expected_outcomes/deal_018_expected.json",
+    "expected_outcomes/deal_019_expected.json",
+    "expected_outcomes/deal_020_expected.json"
+  ]
+}

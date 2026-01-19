@@ -1,0 +1,6 @@
+{
+  "deal_id": "00000000-0000-0000-0002-000000000002",
+  "expected_status": "FAIL",
+  "expected_defects": ["INCONSISTENCY"],
+  "expected_grade": "C"
+}

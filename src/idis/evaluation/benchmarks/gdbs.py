@@ -88,8 +88,11 @@ def _filter_deals_for_suite(all_deals: list[dict], suite: SuiteId) -> tuple[list
 
     if suite == "gdbs-a":
         filtered = [d for d in all_deals if d.get("scenario", "clean") != "clean"]
+        expected_count = SUITE_DEAL_COUNTS[suite]
         if len(filtered) == 0:
             errors.append("No adversarial deals found (scenario != 'clean')")
+        elif len(filtered) != expected_count:
+            errors.append(f"GDBS-A requires exactly {expected_count} deals, got {len(filtered)}")
         return filtered, errors
 
     start, end = SUITE_DEAL_RANGES[suite]

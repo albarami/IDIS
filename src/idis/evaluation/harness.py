@@ -88,7 +88,8 @@ def _check_api_availability(base_url: str, api_key: str | None) -> tuple[bool, s
             if runs_resp.status_code == 501:
                 return False, "Runs endpoint not implemented (501)"
 
-            return True, "API available"
+            api_available = runs_resp.status_code < 500
+            return api_available, "API available" if api_available else "API unavailable"
 
     except httpx.ConnectError:
         return False, f"Cannot connect to {base_url}"

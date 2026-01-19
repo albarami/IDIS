@@ -21,7 +21,10 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    pass
 
 from idis.validators import (
     ValidationResult,
@@ -187,7 +190,7 @@ def cmd_test_gdbs(args: argparse.Namespace) -> int:
     api_key = getattr(args, "api_key", None)
     out_path = Path(args.out) if getattr(args, "out", None) else None
 
-    mode = "execute" if execute_mode else "validate"
+    mode: Literal["validate", "execute"] = "execute" if execute_mode else "validate"
 
     result = run_suite(
         dataset_root=dataset_path,

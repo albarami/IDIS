@@ -780,14 +780,17 @@ docs(phase-6): update roadmap with Phase 6 completion
 | Version promotion/rollback | `src/idis/services/prompts/versioning.py` | ⏳ |
 | Audit events | `prompt.version.promoted`, `prompt.version.rolledback` | ⏳ |
 
-#### Task 7.3: Evaluation Harness ⏳ NOT STARTED
+#### Task 7.3: Evaluation Harness ✅ COMPLETE
 | Deliverable | Module | Status |
 |-------------|--------|--------|
-| GDBS benchmark runner | `src/idis/evaluation/benchmarks/` | ⏳ |
-| Gate 0-4 integration | `src/idis/evaluation/harness.py` | ⏳ |
-| CI gate integration | `.github/workflows/ci.yml` | ⏳ |
+| GDBS benchmark runner | `src/idis/evaluation/benchmarks/gdbs.py` | ✅ |
+| Harness runner + types | `src/idis/evaluation/harness.py`, `types.py` | ✅ |
+| CLI commands | `src/idis/cli.py` (`idis test gdbs-s\|gdbs-f\|gdbs-a`) | ✅ |
+| CI gate integration | `.github/workflows/ci.yml` (`evaluation-harness` job) | ✅ |
+| Test fixtures | `tests/fixtures/gdbs_mini/` | ✅ |
+| Unit tests | `tests/test_evaluation_harness.py` | ✅ |
 
-**Note:** GDBS datasets exist in `datasets/gdbs_full/` but harness not implemented.
+**Note:** Harness implemented with fail-closed validation, deterministic ordering, and strict suite count enforcement (GDBS-S=20, GDBS-F=100, GDBS-A=30). Gate 3 end-to-end execution remains blocked pending pipeline integration.
 
 #### Task 7.4: SLO/SLA Monitoring ⏳ NOT STARTED
 | Deliverable | Module | Status |

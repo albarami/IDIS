@@ -303,18 +303,122 @@ class TestCLIIntegration:
 
 
 class TestAdversarialSuite:
-    """Test GDBS-A adversarial suite filtering."""
+    """Test GDBS-A adversarial suite filtering and count enforcement."""
 
-    def test_gdbs_a_filters_non_clean_scenarios(self) -> None:
-        """GDBS-A should only include deals with scenario != 'clean'."""
-        result = load_gdbs_suite(FIXTURES_DIR, "gdbs-a")
+    def test_gdbs_a_requires_30_deals_fail_closed(self, tmp_path: Path) -> None:
+        """GDBS-A must fail-closed if count != 30 (per spec)."""
+        # Create a dataset with only 5 adversarial deals (less than required 30)
+        manifest = {
+            "manifest_version": "1.0.0",
+            "dataset_id": "test-gdbs-a-short",
+            "deals": [
+                {
+                    "deal_key": f"deal_{i:03d}",
+                    "deal_id": f"00000000-0000-0000-0000-{i:012d}",
+                    "directory": f"deals/deal_{i:03d}",
+                    "scenario": "adversarial",
+                }
+                for i in range(1, 6)  # Only 5 deals, not 30
+            ],
+        }
+        manifest_path = tmp_path / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-        # gdbs_mini has 2 adversarial deals (deal_002_contradiction, deal_004_unit_mismatch)
+        # Create deal directories
+        for i in range(1, 6):
+            deal_dir = tmp_path / f"deals/deal_{i:03d}"
+            deal_dir.mkdir(parents=True, exist_ok=True)
+            (deal_dir / "deal.json").write_text("{}", encoding="utf-8")
+
+        result = load_gdbs_suite(tmp_path, "gdbs-a")
+
+        # Must FAIL because count != 30
+        assert result.success is False
+        assert any("30" in err and "5" in err for err in result.errors)
+
+    def test_gdbs_a_succeeds_with_exactly_30_deals(self, tmp_path: Path) -> None:
+        """GDBS-A must succeed when exactly 30 adversarial deals present."""
+        # Create a dataset with exactly 30 adversarial deals
+        manifest = {
+            "manifest_version": "1.0.0",
+            "dataset_id": "test-gdbs-a-full",
+            "deals": [
+                {
+                    "deal_key": f"deal_{i:03d}",
+                    "deal_id": f"00000000-0000-0000-0000-{i:012d}",
+                    "directory": f"deals/deal_{i:03d}",
+                    "scenario": "adversarial",
+                }
+                for i in range(1, 31)  # Exactly 30 deals
+            ],
+        }
+        manifest_path = tmp_path / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        # Create deal directories
+        for i in range(1, 31):
+            deal_dir = tmp_path / f"deals/deal_{i:03d}"
+            deal_dir.mkdir(parents=True, exist_ok=True)
+            (deal_dir / "deal.json").write_text("{}", encoding="utf-8")
+
+        result = load_gdbs_suite(tmp_path, "gdbs-a")
+
+        # Must PASS with exactly 30 deals
         assert result.success is True
-        assert len(result.cases) == 2
+        assert len(result.cases) == 30
 
+    def test_gdbs_a_filters_non_clean_scenarios(self, tmp_path: Path) -> None:
+        """GDBS-A should only include deals with scenario != 'clean'."""
+        # Create mixed dataset: 30 adversarial + 10 clean
+        deals = []
+        for i in range(1, 31):
+            deals.append(
+                {
+                    "deal_key": f"deal_{i:03d}",
+                    "deal_id": f"00000000-0000-0000-0000-{i:012d}",
+                    "directory": f"deals/deal_{i:03d}",
+                    "scenario": "adversarial",
+                }
+            )
+        for i in range(31, 41):
+            deals.append(
+                {
+                    "deal_key": f"deal_{i:03d}",
+                    "deal_id": f"00000000-0000-0000-0000-{i:012d}",
+                    "directory": f"deals/deal_{i:03d}",
+                    "scenario": "clean",
+                }
+            )
+
+        manifest = {
+            "manifest_version": "1.0.0",
+            "dataset_id": "test-gdbs-a-mixed",
+            "deals": deals,
+        }
+        manifest_path = tmp_path / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        # Create deal directories
+        for i in range(1, 41):
+            deal_dir = tmp_path / f"deals/deal_{i:03d}"
+            deal_dir.mkdir(parents=True, exist_ok=True)
+            (deal_dir / "deal.json").write_text("{}", encoding="utf-8")
+
+        result = load_gdbs_suite(tmp_path, "gdbs-a")
+
+        # Should only include adversarial deals (30), not clean ones
+        assert result.success is True
+        assert len(result.cases) == 30
         for case in result.cases:
             assert case.scenario != "clean"
+
+    def test_gdbs_a_with_gdbs_mini_fails_count_check(self) -> None:
+        """gdbs_mini has only 2 adversarial deals, must fail GDBS-A count check."""
+        result = load_gdbs_suite(FIXTURES_DIR, "gdbs-a")
+
+        # gdbs_mini has only 2 adversarial deals, GDBS-A requires 30
+        assert result.success is False
+        assert any("30" in err for err in result.errors)
 
 
 class TestMetrics:

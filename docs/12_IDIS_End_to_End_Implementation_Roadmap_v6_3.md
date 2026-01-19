@@ -582,13 +582,58 @@ docs(phase-3): update roadmap with Phase 3 completion
 
 **All core OpenAPI endpoints implemented with tenant isolation, idempotency, and audit coverage.**
 
-#### Task 6.3: Frontend UI ⏳ NOT STARTED
+#### Task 6.3: Frontend UI ⚠️ IN PROGRESS
+
+##### Task 6.3.1: UI Foundation & OpenAPI Alignment ✅ COMPLETE
+| Deliverable | Status | Commit |
+|-------------|--------|--------|
+| Next.js 14 UI with TypeScript | ✅ | `6110acc` |
+| Audit Events UI (OpenAPI-aligned) | ✅ | `6110acc` |
+| Run Status UI (OpenAPI-aligned) | ✅ | `6110acc` |
+| ErrorCallout component with request_id | ✅ | `6110acc` |
+| Enterprise Postgres mode docs | ✅ | `6110acc` |
+| Windows npm stability (clean script) | ✅ | `6110acc` |
+
+**Verification (2026-01-18):**
+- CI run #112 on main: all jobs green (check, postgres-integration, ui-check), 1m 48s
+- Backend: `make.bat check` - 1453 passed, 79 skipped; forbidden scan OK
+- Backend: `make.bat postgres_integration` - 79 passed
+- UI: `npm ci && npm run lint && npm run typecheck && npm run test && npm run build` - all passed, 19 tests
+- Security: `rg -n "localStorage|sessionStorage" ui` - 0 matches
+- Security: `rg -n "X-IDIS-API-Key" ui/src` - only in route.ts (server-side proxy)
+
+##### Task 6.3.2: HumanGate OpenAPI Alignment + Worktree Clean ✅ COMPLETE (CODEX APPROVED)
+| Deliverable | Status | Commit |
+|-------------|--------|--------|
+| HumanGate interface aligned to OpenAPI | ✅ | `6096ecd` |
+| Truth Dashboard: removed Action column | ✅ | `6096ecd` |
+| *.tsbuildinfo gitignored | ✅ | `6096ecd` |
+| Worktree hygiene enforced | ✅ | `6096ecd` |
+
+**CODEX APPROVAL (2026-01-19):**
+- **CI Evidence:** Run #113 on main for commit `6096ecd` - all jobs green (check, postgres-integration, ui-check), duration 1m 59s
+- **Local Evidence:**
+  - `git status -sb`: `## main...origin/main` (clean)
+  - `make.bat check`: 1453 passed, 79 skipped; forbidden scan OK
+  - `make.bat postgres_integration`: 79 passed
+  - `npm ci`: success (warnings about deprecated packages + Next 14.2.21 advisory; 9 vulnerabilities)
+  - `npm run lint/typecheck/test/build`: all passed; 19 tests
+  - `rg -n "localStorage|sessionStorage" ui`: 0 matches
+  - `rg -n "X-IDIS-API-Key" ui/src`: only in route.ts (line 14) and route.ts (line 53)
+- **OpenAPI Alignment Verified:**
+  - `HumanGate` interface only uses spec fields: `idis.ts:142`
+  - Truth dashboard no longer renders `gate.action` column: `page.tsx:353`
+  - `*.tsbuildinfo` ignored; worktree remains clean: `.gitignore:76`
+
+##### Task 6.3.3: Remaining UI Pages ⏳ NOT STARTED
 | Deliverable | Status |
 |-------------|--------|
-| Truth Dashboard UI | ⏳ |
+| Deals List UI | ✅ Partial (basic) |
+| Truth Dashboard UI | ✅ Partial (basic) |
 | Claim Detail + Sanad View | ⏳ |
 | Debate Transcript Viewer | ⏳ |
 | Deliverables Download | ⏳ |
+| Runs List UI | ⏳ |
 
 **Testing Requirements:**
 | Test File | Status |

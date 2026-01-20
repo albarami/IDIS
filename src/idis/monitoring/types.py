@@ -10,6 +10,7 @@ All validators raise MonitoringValidationError on invalid input.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -177,8 +178,43 @@ def validate_dashboard_specs(dashboards: tuple[DashboardSpec, ...]) -> None:
         )
 
 
-def validate_alert_specs(alerts: tuple[AlertRuleSpec, ...]) -> None:
+# Global audit alert names that are expected to have tenant_scope="global"
+GLOBAL_AUDIT_ALERT_NAMES = frozenset({"IDISAuditIngestionLag", "IDISMissingAuditEvents"})
+
+
+def _get_repo_root() -> Path:
+    """Resolve repository root from this file's location.
+
+    Resolution: src/idis/monitoring/types.py -> repo root is 3 levels up.
+    """
+    return Path(__file__).resolve().parents[3]
+
+
+def validate_runbook_file_exists(runbook_path: str, alert_name: str, errors: list[str]) -> None:
+    """Validate that a runbook file exists on disk (fail-closed).
+
+    Args:
+        runbook_path: Repo-root relative path to runbook (e.g., docs/runbooks/RB-01_api_outage.md)
+        alert_name: Name of the alert referencing the runbook (for error messages)
+        errors: List to append validation errors to
+    """
+    repo_root = _get_repo_root()
+    full_path = repo_root / runbook_path
+    if not full_path.is_file():
+        errors.append(
+            f"Alert '{alert_name}' references non-existent runbook: '{runbook_path}' "
+            f"(resolved to '{full_path}')"
+        )
+
+
+def validate_alert_specs(
+    alerts: tuple[AlertRuleSpec, ...], *, check_runbook_files: bool = True
+) -> None:
     """Validate a collection of alert specs for uniqueness and completeness.
+
+    Args:
+        alerts: Tuple of alert specs to validate.
+        check_runbook_files: If True, verify runbook files exist on disk (fail-closed).
 
     Raises:
         MonitoringValidationError: If validation fails (fail-closed).
@@ -201,11 +237,28 @@ def validate_alert_specs(alerts: tuple[AlertRuleSpec, ...]) -> None:
         if alert.severity == "SEV-1" and "runbook" not in alert.annotations:
             errors.append(f"SEV-1 alert '{alert.name}' missing runbook annotation")
 
-    # Verify runbook paths are valid
+    # Verify runbook paths are valid format
     for alert in alerts:
         runbook = alert.annotations.get("runbook", "")
         if runbook and not RUNBOOK_PATH_PATTERN.match(runbook):
             errors.append(f"Alert '{alert.name}' has invalid runbook path: '{runbook}'")
+
+    # Verify runbook files exist on disk (fail-closed)
+    if check_runbook_files:
+        for alert in alerts:
+            runbook = alert.annotations.get("runbook", "")
+            if runbook:
+                validate_runbook_file_exists(runbook, alert.name, errors)
+
+    # Verify global audit alerts have tenant_scope annotation
+    for alert in alerts:
+        if alert.name in GLOBAL_AUDIT_ALERT_NAMES:
+            tenant_scope = alert.annotations.get("tenant_scope")
+            if tenant_scope != "global":
+                errors.append(
+                    f"Global audit alert '{alert.name}' must have "
+                    f"annotations['tenant_scope']='global', got '{tenant_scope}'"
+                )
 
     if errors:
         raise MonitoringValidationError(

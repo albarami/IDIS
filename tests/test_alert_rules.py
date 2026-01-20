@@ -23,6 +23,7 @@ from idis.monitoring.alerts import (
     validate_core_alerts,
 )
 from idis.monitoring.types import (
+    GLOBAL_AUDIT_ALERT_NAMES,
     AlertRuleSpec,
     MonitoringValidationError,
     validate_alert_specs,
@@ -262,6 +263,26 @@ class TestValidationFailsClosed:
                 },
             )
 
+    def test_validation_fails_on_missing_runbook_file(self) -> None:
+        """Verify validation fails when runbook file does not exist (fail-closed)."""
+        alert = AlertRuleSpec(
+            name="TestAlertMissingRunbook",
+            severity="SEV-2",
+            expr="test_metric > 0",
+            for_duration="5m",
+            annotations={
+                "summary": "Test alert with missing runbook",
+                "description": "This alert references a non-existent runbook file.",
+                "runbook": "docs/runbooks/RB-99_missing.md",
+            },
+        )
+
+        with pytest.raises(MonitoringValidationError) as exc_info:
+            validate_alert_specs((alert,))
+
+        assert "RB-99_missing.md" in str(exc_info.value.errors)
+        assert "non-existent runbook" in str(exc_info.value.errors)
+
 
 class TestPrometheusExport:
     """Test Prometheus rules export functionality."""
@@ -394,7 +415,13 @@ class TestTenantSafeExpressions:
 
         # These alert types should include tenant_id in expression
         # Note: some alerts like audit lag are global metrics without tenant scoping
-        tenant_scoped_patterns = ["api5xx", "ingestionfailure", "calc", "debate", "deliverablegeneration"]
+        tenant_scoped_patterns = [
+            "api5xx",
+            "ingestionfailure",
+            "calc",
+            "debate",
+            "deliverablegeneration",
+        ]
 
         for alert in alerts:
             name_lower = alert.name.lower().replace("_", "")
@@ -421,3 +448,54 @@ class TestTenantSafeExpressions:
             if is_global:
                 # Global alerts are allowed to omit tenant_id
                 pass  # No assertion needed
+
+
+class TestGlobalAuditAlertScope:
+    """Test that global audit alerts are explicitly marked with tenant_scope='global'."""
+
+    def test_global_audit_alerts_have_tenant_scope_annotation(self) -> None:
+        """Verify global audit alerts include tenant_scope='global' annotation."""
+        alerts = get_core_alerts()
+
+        for alert in alerts:
+            if alert.name in GLOBAL_AUDIT_ALERT_NAMES:
+                assert "tenant_scope" in alert.annotations, (
+                    f"Global audit alert '{alert.name}' missing tenant_scope annotation"
+                )
+                assert alert.annotations["tenant_scope"] == "global", (
+                    f"Global audit alert '{alert.name}' tenant_scope must be 'global', "
+                    f"got '{alert.annotations.get('tenant_scope')}'"
+                )
+
+    def test_global_audit_alert_names_match_expected(self) -> None:
+        """Verify expected global audit alerts exist in core alerts."""
+        alerts = get_core_alerts()
+        alert_names = {a.name for a in alerts}
+
+        for expected_name in GLOBAL_AUDIT_ALERT_NAMES:
+            assert expected_name in alert_names, (
+                f"Expected global audit alert '{expected_name}' not found in core alerts"
+            )
+
+    def test_validation_fails_without_tenant_scope_on_global_audit_alert(self) -> None:
+        """Verify validation fails if global audit alert lacks tenant_scope='global'."""
+        # Create an alert with the same name as a global audit alert but missing tenant_scope
+        alert = AlertRuleSpec(
+            name="IDISAuditIngestionLag",
+            severity="SEV-2",
+            expr="audit_ingestion_lag_seconds > 300",
+            for_duration="5m",
+            labels={"team": "security", "component": "audit"},
+            annotations={
+                "summary": "Audit event ingestion lag exceeds 5 minutes",
+                "description": "Test description for audit lag alert.",
+                "runbook": "docs/runbooks/RB-08_audit_lag.md",
+                # Missing tenant_scope annotation
+            },
+        )
+
+        with pytest.raises(MonitoringValidationError) as exc_info:
+            validate_alert_specs((alert,))
+
+        assert "tenant_scope" in str(exc_info.value.errors)
+        assert "global" in str(exc_info.value.errors)

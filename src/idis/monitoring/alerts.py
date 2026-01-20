@@ -119,6 +119,7 @@ def _create_audit_lag_alert() -> AlertRuleSpec:
                 "This may indicate audit pipeline issues and potential compliance risk."
             ),
             "runbook": "docs/runbooks/RB-08_audit_lag.md",
+            "tenant_scope": "global",
         },
     )
 
@@ -138,6 +139,7 @@ def _create_missing_audit_events_alert() -> AlertRuleSpec:
                 "This is a SEV-1 compliance incident. Immediate investigation required."
             ),
             "runbook": "docs/runbooks/RB-08_audit_lag.md",
+            "tenant_scope": "global",
         },
     )
 

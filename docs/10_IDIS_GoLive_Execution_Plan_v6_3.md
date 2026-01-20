@@ -663,7 +663,7 @@ Derived from SLO/Runbooks §10 and Security Threat Model §11.
   - Claim registry writes + validator rejects
   - Sanad grading distribution drift
   - Calc success rate + reproducibility checks
-  - Debate completion rate
+  - Debate completion rate + max-round stops
   - Deliverable generation success rate
   - Audit event ingestion lag + coverage
   - Integration health

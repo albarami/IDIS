@@ -1,7 +1,11 @@
 """IDIS API authentication and tenant context extraction.
 
-Implements API key auth via X-IDIS-API-Key header. Fails closed on missing
-or invalid credentials. Bearer tokens are rejected if no verifier is configured.
+Implements dual auth paths per v6.3 Security Threat Model:
+- JWT bearer tokens for user sessions (SSO via OIDC)
+- API keys for service-to-service calls (X-IDIS-API-Key header)
+
+Fails closed on missing or invalid credentials. Unknown roles are rejected.
+Tenant isolation enforced: errors do not leak tenant existence (ADR-011).
 """
 
 import hmac
@@ -14,6 +18,7 @@ from fastapi import Depends, Request
 from pydantic import BaseModel, ValidationError
 
 from idis.api.errors import IdisHttpError
+from idis.api.policy import ALL_ROLES
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +31,7 @@ class TenantContext(BaseModel):
     """Tenant context per OpenAPI TenantContext schema.
 
     Includes actor roles for RBAC enforcement per v6.3 security model.
+    actor_type distinguishes HUMAN (JWT) from SERVICE (API key) actors.
     """
 
     tenant_id: str
@@ -34,6 +40,7 @@ class TenantContext(BaseModel):
     timezone: str
     data_region: str
     roles: frozenset[str] = frozenset()
+    actor_type: str = "SERVICE"
 
 
 class ApiKeyRecord(BaseModel):
@@ -134,41 +141,93 @@ def _extract_tenant_from_api_key(request: Request) -> TenantContext:
             message="Invalid API key",
         )
 
+    validated_roles = _normalize_roles(record.roles)
+
     return TenantContext(
         tenant_id=record.tenant_id,
         actor_id=record.actor_id,
         name=record.name,
         timezone=record.timezone,
         data_region=record.data_region,
-        roles=frozenset(record.roles),
+        roles=validated_roles,
+        actor_type="SERVICE",
     )
 
 
-def _check_bearer_token(request: Request) -> None:
-    """Check if Authorization: Bearer is present; reject if so (fail closed).
+def _extract_bearer_token(request: Request) -> str | None:
+    """Extract Bearer token from Authorization header if present.
 
-    Bearer JWT verification is not yet implemented. If a Bearer token is
-    provided without a configured verifier, we reject the request.
-
-    Raises:
-        IdisHttpError: 401 if Bearer token present but verification not configured.
+    Returns:
+        The raw JWT string (without prefix), or None if not present.
     """
     auth_header = request.headers.get("Authorization")
     if auth_header and auth_header.startswith(BEARER_PREFIX):
-        raise IdisHttpError(
-            status_code=401,
-            code="unauthorized",
-            message="Bearer token verification not configured",
-        )
+        return auth_header[len(BEARER_PREFIX) :].strip()
+    return None
+
+
+def _extract_tenant_from_jwt(token: str) -> TenantContext:
+    """Extract tenant context from a validated JWT.
+
+    Args:
+        token: The raw JWT string.
+
+    Returns:
+        TenantContext from validated JWT claims.
+
+    Raises:
+        IdisHttpError: 401 on any validation failure (fail-closed).
+    """
+    from idis.api.auth_sso import validate_jwt
+
+    identity = validate_jwt(token)
+
+    return TenantContext(
+        tenant_id=identity.tenant_id,
+        actor_id=identity.user_id,
+        name=identity.name or identity.email or identity.user_id,
+        timezone="UTC",
+        data_region=identity.data_region or "default",
+        roles=identity.roles,
+        actor_type="HUMAN",
+    )
+
+
+def _normalize_roles(roles: list[str]) -> frozenset[str]:
+    """Normalize and validate roles, rejecting unknown roles (fail-closed).
+
+    Args:
+        roles: List of role strings from API key or JWT.
+
+    Returns:
+        Frozenset of normalized, validated role strings.
+
+    Raises:
+        IdisHttpError: 401 if any role is unknown.
+    """
+    normalized: set[str] = set()
+    for role in roles:
+        upper_role = role.upper().strip()
+        if upper_role not in ALL_ROLES:
+            raise IdisHttpError(
+                status_code=401,
+                code="unauthorized",
+                message="Invalid credentials",
+            )
+        normalized.add(upper_role)
+    return frozenset(normalized)
 
 
 async def require_tenant_context(request: Request) -> TenantContext:
     """FastAPI dependency that enforces tenant authentication.
 
-    Auth flow (fail closed):
-    1. If Authorization: Bearer is present but no verifier configured => 401.
-    2. Extract tenant from X-IDIS-API-Key => 401 on missing/invalid.
+    Auth flow (fail closed, dual path):
+    1. If Authorization: Bearer is present => validate JWT via OIDC.
+    2. Else extract tenant from X-IDIS-API-Key => 401 on missing/invalid.
     3. Store tenant context in request.state for downstream use.
+
+    JWT path is preferred for user sessions; API key for service-to-service.
+    Errors do not leak tenant existence (ADR-011).
 
     Returns:
         TenantContext extracted from valid credentials.
@@ -176,9 +235,13 @@ async def require_tenant_context(request: Request) -> TenantContext:
     Raises:
         IdisHttpError: 401 on any auth failure.
     """
-    _check_bearer_token(request)
+    bearer_token = _extract_bearer_token(request)
 
-    tenant_ctx = _extract_tenant_from_api_key(request)
+    if bearer_token:
+        tenant_ctx = _extract_tenant_from_jwt(bearer_token)
+    else:
+        tenant_ctx = _extract_tenant_from_api_key(request)
+
     request.state.tenant_context = tenant_ctx
 
     return tenant_ctx
@@ -193,9 +256,11 @@ def authenticate_request(request: Request) -> TenantContext:
     This is a non-async version of require_tenant_context for use in middleware
     where we need to check auth before proceeding with request validation.
 
-    Auth flow (fail closed):
-    1. If Authorization: Bearer is present but no verifier configured => raises IdisHttpError 401.
-    2. Extract tenant from X-IDIS-API-Key => raises IdisHttpError 401 on missing/invalid.
+    Auth flow (fail closed, dual path):
+    1. If Authorization: Bearer is present => validate JWT via OIDC.
+    2. Else extract tenant from X-IDIS-API-Key => raises IdisHttpError 401 on missing/invalid.
+
+    Errors do not leak tenant existence (ADR-011).
 
     Returns:
         TenantContext extracted from valid credentials.
@@ -203,5 +268,8 @@ def authenticate_request(request: Request) -> TenantContext:
     Raises:
         IdisHttpError: 401 on any auth failure.
     """
-    _check_bearer_token(request)
+    bearer_token = _extract_bearer_token(request)
+
+    if bearer_token:
+        return _extract_tenant_from_jwt(bearer_token)
     return _extract_tenant_from_api_key(request)

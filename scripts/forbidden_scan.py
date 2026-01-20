@@ -60,12 +60,20 @@ SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("BEARER_TOKEN", re.compile(r"Bearer\s+[a-zA-Z0-9_\-\.]{40,}")),
 ]
 
-# Banned development tokens - must not appear in src/ or tests/
-BANNED_TOKEN_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+# Banned development tokens - must not appear in src/ (some allowed in tests/)
+BANNED_TOKEN_PATTERNS_SRC_ONLY: list[tuple[str, re.Pattern[str]]] = [
     ("BANNED_TODO", re.compile(r"\bTODO\b", re.IGNORECASE)),
     ("BANNED_FIXME", re.compile(r"\bFIXME\b", re.IGNORECASE)),
     ("BANNED_PLACEHOLDER", re.compile(r"\bplaceholder\b", re.IGNORECASE)),
     ("BANNED_MOCK", re.compile(r"\bmock\b", re.IGNORECASE)),
+    ("BANNED_HARDCODED", re.compile(r"\bhardcoded\b", re.IGNORECASE)),
+]
+
+# Banned tokens that apply to tests/ as well (mock is allowed in tests per user rules)
+BANNED_TOKEN_PATTERNS_TESTS: list[tuple[str, re.Pattern[str]]] = [
+    ("BANNED_TODO", re.compile(r"\bTODO\b", re.IGNORECASE)),
+    ("BANNED_FIXME", re.compile(r"\bFIXME\b", re.IGNORECASE)),
+    ("BANNED_PLACEHOLDER", re.compile(r"\bplaceholder\b", re.IGNORECASE)),
     ("BANNED_HARDCODED", re.compile(r"\bhardcoded\b", re.IGNORECASE)),
 ]
 
@@ -74,9 +82,9 @@ SQL_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("UNSAFE_JSONB_CAST", re.compile(r":\w+::jsonb")),
 ]
 
-# Combined patterns for scanning
+# Combined patterns for scanning (used for pattern count display)
 FORBIDDEN_PATTERNS: list[tuple[str, re.Pattern[str]]] = (
-    SECRET_PATTERNS + BANNED_TOKEN_PATTERNS + SQL_PATTERNS
+    SECRET_PATTERNS + BANNED_TOKEN_PATTERNS_SRC_ONLY + SQL_PATTERNS
 )
 
 ALLOWLIST_PATTERNS: list[re.Pattern[str]] = [
@@ -148,14 +156,23 @@ def should_skip_path(path: Path) -> bool:
     return path.suffix.lower() in BINARY_EXTENSIONS
 
 
-def is_in_code_directory(path: Path, repo_root: Path) -> bool:
-    """Check if path is in src/ or tests/ directories."""
+def get_code_directory_type(path: Path, repo_root: Path) -> str | None:
+    """Check if path is in src/ or tests/ directories.
+    
+    Returns:
+        'src' if in src/, 'tests' if in tests/, None otherwise.
+    """
     try:
         rel_path = path.relative_to(repo_root)
         parts = rel_path.parts
-        return len(parts) > 0 and parts[0] in ("src", "tests")
+        if len(parts) > 0:
+            if parts[0] == "src":
+                return "src"
+            if parts[0] == "tests":
+                return "tests"
+        return None
     except ValueError:
-        return False
+        return None
 
 
 def scan_file(file_path: Path, repo_root: Path) -> list[Match]:
@@ -167,13 +184,17 @@ def scan_file(file_path: Path, repo_root: Path) -> list[Match]:
     except (OSError, UnicodeDecodeError):
         return matches
 
-    # Determine which patterns to apply
-    in_code_dir = is_in_code_directory(file_path, repo_root)
+    # Determine which patterns to apply based on directory
+    code_dir_type = get_code_directory_type(file_path, repo_root)
 
     # Apply banned token and SQL patterns only to src/ and tests/
+    # Note: mock is allowed in tests/ per user rules
     patterns_to_check = SECRET_PATTERNS[:]
-    if in_code_dir:
-        patterns_to_check.extend(BANNED_TOKEN_PATTERNS)
+    if code_dir_type == "src":
+        patterns_to_check.extend(BANNED_TOKEN_PATTERNS_SRC_ONLY)
+        patterns_to_check.extend(SQL_PATTERNS)
+    elif code_dir_type == "tests":
+        patterns_to_check.extend(BANNED_TOKEN_PATTERNS_TESTS)
         patterns_to_check.extend(SQL_PATTERNS)
 
     lines = content.splitlines()

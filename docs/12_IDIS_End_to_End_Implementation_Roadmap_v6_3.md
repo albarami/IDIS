@@ -761,17 +761,27 @@ docs(phase-6): update roadmap with Phase 6 completion
 
 ---
 
-### Phase 7 — Enterprise Hardening ⏳ NOT STARTED
+### Phase 7 — Enterprise Hardening 🔄 IN PROGRESS
 
 **Scope:** Production readiness, security, and compliance.
 
-#### Task 7.1: SSO Integration ⏳ NOT STARTED
+#### Task 7.1: SSO Integration ✅ COMPLETE
 | Deliverable | Module | Status |
 |-------------|--------|--------|
-| OIDC/SAML integration | `src/idis/api/auth_sso.py` | ⏳ |
-| JWT validation | `src/idis/api/auth.py` (extend) | ⏳ |
-| ABAC (deal-level access) | `src/idis/api/abac.py` | ⏳ |
-| Break-glass audit | `src/idis/api/break_glass.py` | ⏳ |
+| OIDC/SAML integration | `src/idis/api/auth_sso.py` | ✅ |
+| JWT validation | `src/idis/api/auth.py` (extend) | ✅ |
+| ABAC (deal-level access) | `src/idis/api/abac.py` | ✅ |
+| Break-glass audit | `src/idis/api/break_glass.py` | ✅ |
+
+**Implementation Notes:**
+- OIDC JWT validation with JWKS signature verification (RSA + EC curves)
+- Dual auth paths: JWT bearer for user sessions, API keys for service-to-service
+- Fail-closed on missing config, invalid tokens, unknown roles (ADR-007)
+- Deal-level ABAC with assignment/group membership checks
+- Break-glass admin override with time-bound tokens and justification
+- Mandatory break_glass.used audit emission (CRITICAL severity) - fails closed if audit fails
+- Tenant isolation enforced; no cross-tenant existence leakage (ADR-011)
+- 68 tests covering SSO validation, ABAC decisions, and break-glass flows
 
 #### Task 7.2: Prompt Registry ✅ COMPLETE
 | Deliverable | Module | Status |
@@ -836,10 +846,10 @@ docs(phase-6): update roadmap with Phase 6 completion
 **Testing Requirements:**
 | Test File | Status |
 |-----------|--------|
-| `test_auth_sso.py` | ⏳ Needed |
-| `test_abac.py` | ⏳ Needed |
-| `test_prompt_registry.py` | ⏳ Needed |
-| `test_evaluation_harness.py` | ⏳ Needed |
+| `test_auth_sso.py` | ✅ |
+| `test_abac.py` | ✅ |
+| `test_prompt_registry.py` | ✅ |
+| `test_evaluation_harness.py` | ✅ |
 | `test_data_residency.py` | ⏳ Needed |
 
 **Git Commits (Planned):**

@@ -122,14 +122,14 @@ class TestUnauthorizedBearerToken:
     """Test unauthorized access with Bearer token (not configured)."""
 
     def test_bearer_token_returns_401(self, client_with_keys: TestClient) -> None:
-        """Bearer token without verifier configured returns 401."""
+        """Bearer token without SSO/OIDC configured returns 401 with specific code."""
         response = client_with_keys.get(
             "/v1/tenants/me", headers={"Authorization": "Bearer some-jwt-token"}
         )
 
         assert response.status_code == 401
         body = response.json()
-        assert body["code"] == "unauthorized"
+        assert body["code"] == "sso_not_configured"
 
 
 class TestUnauthorizedNoRegistry:

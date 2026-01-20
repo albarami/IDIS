@@ -9,15 +9,21 @@ Key components:
 
 from idis.services.prompts.registry import (
     InvalidPromptVersionError,
+    MissingRequiredFieldError,
     PromptArtifact,
     PromptNotFoundError,
     PromptRegistry,
     PromptRegistryError,
+    SchemaRefBypassError,
     SchemaRefNotFoundError,
 )
 from idis.services.prompts.versioning import (
+    Approval,
+    ApprovalRole,
     AuditEmissionError,
     GateRequirementError,
+    MissingApprovalError,
+    MissingEvidenceError,
     PromptVersioningError,
     PromptVersioningService,
 )
@@ -29,8 +35,14 @@ __all__ = [
     "PromptNotFoundError",
     "InvalidPromptVersionError",
     "SchemaRefNotFoundError",
+    "SchemaRefBypassError",
+    "MissingRequiredFieldError",
     "PromptVersioningService",
     "PromptVersioningError",
     "GateRequirementError",
     "AuditEmissionError",
+    "Approval",
+    "ApprovalRole",
+    "MissingApprovalError",
+    "MissingEvidenceError",
 ]

@@ -81,6 +81,30 @@ class PromptArtifactError(PromptRegistryError):
         super().__init__(f"Invalid prompt artifact '{prompt_id}@{version}': {reason}")
 
 
+class SchemaRefBypassError(PromptRegistryError):
+    """Raised when schema refs exist but schemas_root is not configured (fail-closed)."""
+
+    def __init__(self, prompt_id: str, schema_ref: str) -> None:
+        self.prompt_id = prompt_id
+        self.schema_ref = schema_ref
+        super().__init__(
+            f"Schema ref '{schema_ref}' in prompt '{prompt_id}' cannot be validated: "
+            "schemas_root is not configured. This is a fail-closed violation."
+        )
+
+
+class MissingRequiredFieldError(PromptRegistryError):
+    """Raised when a required PromptArtifact field is missing."""
+
+    def __init__(self, field: str, prompt_id: str | None = None) -> None:
+        self.field = field
+        self.prompt_id = prompt_id
+        if prompt_id:
+            super().__init__(f"Missing required field '{field}' in prompt '{prompt_id}'")
+        else:
+            super().__init__(f"Missing required field '{field}' in PromptArtifact")
+
+
 class PromptStatus(str, Enum):
     """Prompt lifecycle status."""
 
@@ -110,17 +134,29 @@ class PromptArtifact(BaseModel):
     """Prompt artifact with all required fields per v6.3 spec.
 
     Required fields from IDIS_Prompt_Registry_and_Model_Policy_v6_3.md §2.1.
+    All fields listed as required in spec MUST NOT have defaults (fail-closed).
+
+    Required (no defaults):
+    - prompt_id, name, version, owner, created_at, updated_at
+    - status (DRAFT|STAGING|PROD|DEPRECATED)
+    - risk_class (LOW|MEDIUM|HIGH)
+    - validation_gates_required (list of integers 1-4)
+    - evaluation_results_ref (non-empty string)
     """
+
+    model_config = {"protected_namespaces": ()}
 
     prompt_id: str = Field(..., description="Stable identifier")
     name: str = Field(..., description="Human-readable name")
     version: str = Field(..., description="SemVer: MAJOR.MINOR.PATCH")
-    status: PromptStatus = Field(default=PromptStatus.DRAFT, description="Lifecycle status")
+    status: PromptStatus = Field(
+        ..., description="Lifecycle status (DRAFT|STAGING|PROD|DEPRECATED)"
+    )
     owner: str = Field(..., description="Team + person responsible")
     created_at: str = Field(..., description="ISO-8601 creation timestamp")
     updated_at: str = Field(..., description="ISO-8601 last update timestamp")
     change_summary: str = Field(default="", description="Summary of changes in this version")
-    risk_class: RiskClass = Field(default=RiskClass.MEDIUM, description="Risk classification")
+    risk_class: RiskClass = Field(..., description="Risk classification (LOW|MEDIUM|HIGH)")
     model_requirements: ModelRequirements = Field(
         default_factory=ModelRequirements, description="Model requirements"
     )
@@ -130,11 +166,11 @@ class PromptArtifact(BaseModel):
     input_schema_ref: str | None = Field(default=None, description="Path to input JSON schema")
     output_schema_ref: str | None = Field(default=None, description="Path to output JSON schema")
     validation_gates_required: list[int] = Field(
-        default_factory=list, description="Required gates (1, 2, 3, 4)"
+        ..., description="Required gates (integers 1-4, must be present)"
     )
     fallback_policy: list[str] = Field(default_factory=list, description="Fallback model list")
-    evaluation_results_ref: str | None = Field(
-        default=None, description="Immutable link to evaluation results"
+    evaluation_results_ref: str = Field(
+        ..., description="Immutable link to evaluation results (required, non-empty)"
     )
     security_notes: str = Field(default="", description="PII exposure risks, redaction rules")
 
@@ -157,6 +193,24 @@ class PromptArtifact(BaseModel):
                 datetime.fromisoformat(v)
         except ValueError as e:
             raise ValueError(f"Timestamp must be ISO-8601, got: {v}") from e
+        return v
+
+    @field_validator("validation_gates_required")
+    @classmethod
+    def validate_gates(cls, v: list[int]) -> list[int]:
+        """Validate gates are integers 1-4."""
+        valid_gates = {1, 2, 3, 4}
+        for gate in v:
+            if gate not in valid_gates:
+                raise ValueError(f"Gate must be 1, 2, 3, or 4, got: {gate}")
+        return sorted(set(v))
+
+    @field_validator("evaluation_results_ref")
+    @classmethod
+    def validate_evaluation_results_ref(cls, v: str) -> str:
+        """Validate evaluation_results_ref is non-empty."""
+        if not v or not v.strip():
+            raise ValueError("evaluation_results_ref must be a non-empty string")
         return v
 
 
@@ -251,13 +305,20 @@ class PromptRegistry:
     def _validate_schema_ref(self, schema_ref: str | None, prompt_id: str) -> None:
         """Validate that a schema ref path exists.
 
-        Fail-closed: raises SchemaRefNotFoundError if path doesn't exist.
+        Fail-closed behavior:
+        - If schema_ref is None, no validation needed
+        - If schema_ref exists but schemas_root is None, FAIL (cannot bypass validation)
+        - If schema_ref exists and schemas_root is set, validate path exists
+
+        Raises:
+            SchemaRefBypassError: If schema ref exists but schemas_root is not configured
+            SchemaRefNotFoundError: If schema ref path doesn't exist
         """
         if schema_ref is None:
             return
 
         if self._schemas_root is None:
-            return
+            raise SchemaRefBypassError(prompt_id, schema_ref)
 
         schema_path = self._schemas_root / schema_ref
         if not schema_path.exists():

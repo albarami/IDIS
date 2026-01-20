@@ -25,6 +25,7 @@ import os
 import tempfile
 import uuid
 from datetime import UTC, datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
 
@@ -89,9 +90,17 @@ class RollbackTargetError(PromptVersioningError):
 class MissingApprovalError(PromptVersioningError):
     """Raised when required approvals are missing."""
 
-    def __init__(self, missing: list[str]) -> None:
-        self.missing = missing
-        super().__init__(f"Missing required approvals: {missing}")
+    def __init__(self, missing_roles: list[str]) -> None:
+        self.missing_roles = missing_roles
+        super().__init__(f"Missing required approval roles: {missing_roles}")
+
+
+class MissingEvidenceError(PromptVersioningError):
+    """Raised when required evidence fields are missing for promotion."""
+
+    def __init__(self, missing_fields: list[str]) -> None:
+        self.missing_fields = missing_fields
+        super().__init__(f"Missing required evidence fields for promotion: {missing_fields}")
 
 
 class MissingFieldError(PromptVersioningError):
@@ -100,6 +109,25 @@ class MissingFieldError(PromptVersioningError):
     def __init__(self, field: str) -> None:
         self.field = field
         super().__init__(f"Missing required field: {field}")
+
+
+class ApprovalRole(str, Enum):
+    """Approval roles per spec §8.1."""
+
+    OWNER = "OWNER"
+    SECURITY_COMPLIANCE = "SECURITY_COMPLIANCE"
+
+
+class Approval(BaseModel):
+    """Approval record for promotion/rollback.
+
+    Per spec §8.1: prompt owner approval required for all promotions.
+    Per spec §8.2: security/compliance reviewer required for HIGH risk.
+    """
+
+    approver_id: str = Field(..., description="ID of the approver")
+    role: ApprovalRole = Field(..., description="Role of the approver")
+    approved_at: str | None = Field(default=None, description="ISO-8601 approval timestamp")
 
 
 class GateResult(BaseModel):
@@ -111,21 +139,27 @@ class GateResult(BaseModel):
 
 
 class PromotionRequest(BaseModel):
-    """Request to promote a prompt version."""
+    """Request to promote a prompt version.
+
+    Per Go-Live checklist §4.4:
+    - evaluation_results_ref and evaluation_results_sha256 are REQUIRED
+    - approvals must include at least OWNER role
+    - HIGH risk requires SECURITY_COMPLIANCE approval
+    """
 
     prompt_id: str
     new_version: str
     env: Literal["dev", "staging", "prod"]
     actor: str
     reason: str
-    approvals: list[str] = Field(default_factory=list, description="List of approvers")
-    evaluation_results_ref: str | None = Field(
-        default=None, description="Reference to evaluation results"
+    approvals: list[Approval] = Field(..., description="List of approvals (required)")
+    evaluation_results_ref: str = Field(
+        ..., description="Reference to evaluation results (required)"
     )
-    evaluation_results_sha256: str | None = Field(
-        default=None, description="SHA256 of evaluation results"
+    evaluation_results_sha256: str = Field(
+        ..., description="SHA256 of evaluation results (required)"
     )
-    gate_results: list[GateResult] = Field(default_factory=list, description="Gate results")
+    gate_results: list[GateResult] = Field(..., description="Gate results (required)")
 
 
 class RollbackRequest(BaseModel):
@@ -137,7 +171,7 @@ class RollbackRequest(BaseModel):
     actor: str
     reason: str
     incident_ticket_id: str | None = Field(default=None, description="Incident ticket for rollback")
-    approvals: list[str] = Field(default_factory=list, description="List of approvers")
+    approvals: list[Approval] = Field(default_factory=list, description="List of approvals")
 
 
 class RetireRequest(BaseModel):
@@ -332,23 +366,30 @@ class PromptVersioningService:
     def _validate_gate_requirements(
         self,
         risk_class: RiskClass,
+        artifact_required_gates: list[int],
         gate_results: list[GateResult],
     ) -> None:
         """Validate that required gates are present and passing.
 
-        Gate requirements by risk class:
-        - LOW: Gate 1 + automated review
+        Gate requirements by risk class (per spec §8.2):
+        - LOW: Gate 1
         - MEDIUM: Gate 1 + Gate 2
-        - HIGH: Gate 1 + Gate 2 + Gate 3 + Gate 4 + security sign-off
+        - HIGH: Gate 1 + Gate 2 + Gate 3 + Gate 4
+
+        Required gates = union(risk_class_required, artifact.validation_gates_required)
 
         Args:
             risk_class: Prompt risk classification
+            artifact_required_gates: Gates required by artifact.validation_gates_required
             gate_results: List of gate results
 
         Raises:
             GateRequirementError: If required gates are missing or failed
         """
-        required_gates = REQUIRED_GATES_BY_RISK_CLASS[risk_class]
+        risk_class_gates = set(REQUIRED_GATES_BY_RISK_CLASS[risk_class])
+        artifact_gates = set(artifact_required_gates)
+        required_gates = sorted(risk_class_gates | artifact_gates)
+
         provided_gates = {gr.gate: gr for gr in gate_results}
 
         missing_gates = [g for g in required_gates if g not in provided_gates]
@@ -358,6 +399,36 @@ class PromptVersioningService:
 
         if missing_gates or failed_gates:
             raise GateRequirementError(risk_class.value, missing_gates, failed_gates)
+
+    def _validate_approvals(
+        self,
+        risk_class: RiskClass,
+        approvals: list[Approval],
+    ) -> None:
+        """Validate that required approvals are present.
+
+        Per spec §8.1:
+        - All promotions require OWNER approval
+        - HIGH risk requires SECURITY_COMPLIANCE approval in addition
+
+        Args:
+            risk_class: Prompt risk classification
+            approvals: List of approvals
+
+        Raises:
+            MissingApprovalError: If required approvals are missing
+        """
+        approval_roles = {a.role for a in approvals}
+        missing_roles: list[str] = []
+
+        if ApprovalRole.OWNER not in approval_roles:
+            missing_roles.append(ApprovalRole.OWNER.value)
+
+        if risk_class == RiskClass.HIGH and ApprovalRole.SECURITY_COMPLIANCE not in approval_roles:
+            missing_roles.append(ApprovalRole.SECURITY_COMPLIANCE.value)
+
+        if missing_roles:
+            raise MissingApprovalError(missing_roles)
 
     def _validate_prompt_exists(self, prompt_id: str, version: str) -> PromptArtifact:
         """Validate that a prompt artifact exists.
@@ -388,11 +459,12 @@ class PromptVersioningService:
     def promote(self, request: PromotionRequest) -> dict[str, Any]:
         """Promote a prompt version to an environment.
 
-        Process:
+        Process (per spec §8.1-8.2 and Go-Live §4.4):
         1. Validate prompt artifact exists
-        2. Validate gate requirements by risk class
-        3. Update registry pointer atomically
-        4. Emit prompt.version.promoted audit event (fail-closed)
+        2. Validate approval requirements (OWNER for all, +SECURITY_COMPLIANCE for HIGH)
+        3. Validate gate requirements (union of risk_class + artifact gates)
+        4. Update registry pointer atomically
+        5. Emit prompt.version.promoted audit event (fail-closed)
 
         Args:
             request: PromotionRequest with all required fields
@@ -402,12 +474,19 @@ class PromptVersioningService:
 
         Raises:
             PromptVersioningError: On validation failure
+            MissingApprovalError: On missing required approvals
             GateRequirementError: On missing/failed gates
             AuditEmissionError: On audit failure (operation rolled back)
         """
         artifact = self._validate_prompt_exists(request.prompt_id, request.new_version)
 
-        self._validate_gate_requirements(artifact.risk_class, request.gate_results)
+        self._validate_approvals(artifact.risk_class, request.approvals)
+
+        self._validate_gate_requirements(
+            artifact.risk_class,
+            artifact.validation_gates_required,
+            request.gate_results,
+        )
 
         pointer = self._load_registry_pointer(request.env)
 
@@ -417,20 +496,21 @@ class PromptVersioningService:
 
         self._write_registry_pointer_atomic(request.env, pointer)
 
+        owner_approval = next((a for a in request.approvals if a.role == ApprovalRole.OWNER), None)
+        approver_id = owner_approval.approver_id if owner_approval else request.actor
+
         audit_details: dict[str, Any] = {
             "env": request.env,
             "old_version": old_version,
             "new_version": request.new_version,
             "risk_class": artifact.risk_class.value,
-            "approvers": request.approvals,
+            "approver": approver_id,
+            "approvals": [a.model_dump() for a in request.approvals],
             "reason": request.reason,
             "gate_results": [gr.model_dump() for gr in request.gate_results],
+            "evaluation_results_ref": request.evaluation_results_ref,
+            "evaluation_results_sha256": request.evaluation_results_sha256,
         }
-
-        if request.evaluation_results_ref:
-            audit_details["evaluation_results_ref"] = request.evaluation_results_ref
-        if request.evaluation_results_sha256:
-            audit_details["evaluation_results_sha256"] = request.evaluation_results_sha256
 
         try:
             self._emit_audit_event(
@@ -497,7 +577,7 @@ class PromptVersioningService:
             "old_version": old_version,
             "rollback_target": request.rollback_target_version,
             "reason": request.reason,
-            "approvers": request.approvals,
+            "approvals": [a.model_dump() for a in request.approvals],
         }
 
         if request.incident_ticket_id:

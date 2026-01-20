@@ -33,14 +33,18 @@ from idis.services.prompts.registry import (
     PromptRegistry,
     RegistryFileError,
     RiskClass,
+    SchemaRefBypassError,
     SchemaRefNotFoundError,
     compute_content_hash,
     validate_semver,
 )
 from idis.services.prompts.versioning import (
+    Approval,
+    ApprovalRole,
     AuditEmissionError,
     GateRequirementError,
     GateResult,
+    MissingApprovalError,
     MissingFieldError,
     PromotionRequest,
     PromptVersioningError,
@@ -71,8 +75,16 @@ def _create_prompt_artifact(
     version: str,
     risk_class: str = "MEDIUM",
     name: str | None = None,
+    validation_gates_required: list[int] | None = None,
+    evaluation_results_ref: str = "s3://bucket/eval/default.json",
 ) -> dict[str, Any]:
-    """Create a valid prompt artifact metadata dict."""
+    """Create a valid prompt artifact metadata dict with all required fields.
+
+    Per spec, the following fields are required (no defaults):
+    - status, risk_class, validation_gates_required, evaluation_results_ref
+    """
+    if validation_gates_required is None:
+        validation_gates_required = [1, 2]
     return {
         "prompt_id": prompt_id,
         "name": name or f"Test Prompt {prompt_id}",
@@ -91,9 +103,9 @@ def _create_prompt_artifact(
         "tool_contracts": [],
         "input_schema_ref": None,
         "output_schema_ref": None,
-        "validation_gates_required": [1, 2],
+        "validation_gates_required": validation_gates_required,
         "fallback_policy": [],
-        "evaluation_results_ref": None,
+        "evaluation_results_ref": evaluation_results_ref,
         "security_notes": "",
     }
 
@@ -104,12 +116,20 @@ def _create_test_prompt_structure(
     version: str,
     prompt_text: str = "You are a helpful assistant.",
     risk_class: str = "MEDIUM",
+    validation_gates_required: list[int] | None = None,
+    evaluation_results_ref: str = "s3://bucket/eval/default.json",
 ) -> Path:
-    """Create a test prompt artifact on disk."""
+    """Create a test prompt artifact on disk with all required fields."""
     prompt_dir = root / prompt_id / version
     prompt_dir.mkdir(parents=True, exist_ok=True)
 
-    metadata = _create_prompt_artifact(prompt_id, version, risk_class)
+    metadata = _create_prompt_artifact(
+        prompt_id,
+        version,
+        risk_class,
+        validation_gates_required=validation_gates_required,
+        evaluation_results_ref=evaluation_results_ref,
+    )
     metadata_path = prompt_dir / "metadata.json"
     with open(metadata_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)
@@ -119,6 +139,16 @@ def _create_test_prompt_structure(
         f.write(prompt_text)
 
     return prompt_dir
+
+
+def _owner_approval(approver_id: str = "owner-1") -> Approval:
+    """Create an OWNER approval."""
+    return Approval(approver_id=approver_id, role=ApprovalRole.OWNER)
+
+
+def _security_approval(approver_id: str = "security-1") -> Approval:
+    """Create a SECURITY_COMPLIANCE approval."""
+    return Approval(approver_id=approver_id, role=ApprovalRole.SECURITY_COMPLIANCE)
 
 
 def _create_registry_pointer(
@@ -356,7 +386,9 @@ class TestPromptVersioningPromotion:
 
     def test_promote_succeeds_with_valid_gates(self, tmp_path: Path) -> None:
         """Test that promotion succeeds when required gates pass."""
-        _create_test_prompt_structure(tmp_path, "my-prompt", "1.0.0", risk_class="LOW")
+        _create_test_prompt_structure(
+            tmp_path, "my-prompt", "1.0.0", risk_class="LOW", validation_gates_required=[1]
+        )
         _create_registry_pointer(tmp_path, "dev", {})
 
         registry = PromptRegistry(tmp_path)
@@ -369,7 +401,7 @@ class TestPromptVersioningPromotion:
             env="dev",
             actor="test-user",
             reason="Initial deployment",
-            approvals=["reviewer-1"],
+            approvals=[_owner_approval()],
             evaluation_results_ref="s3://bucket/results/123",
             evaluation_results_sha256="abc123def456",
             gate_results=[GateResult(gate=1, passed=True, details="OK")],
@@ -387,9 +419,13 @@ class TestPromptVersioningPromotion:
 
     def test_promote_emits_audit_event(self, tmp_path: Path) -> None:
         """Test that promotion emits prompt.version.promoted audit event."""
-        _create_test_prompt_structure(tmp_path, "audit-prompt", "2.0.0", risk_class="MEDIUM")
+        _create_test_prompt_structure(
+            tmp_path, "audit-prompt", "2.0.0", risk_class="MEDIUM", validation_gates_required=[1, 2]
+        )
         _create_registry_pointer(tmp_path, "staging", {"audit-prompt": "1.0.0"})
-        _create_test_prompt_structure(tmp_path, "audit-prompt", "1.0.0", risk_class="MEDIUM")
+        _create_test_prompt_structure(
+            tmp_path, "audit-prompt", "1.0.0", risk_class="MEDIUM", validation_gates_required=[1, 2]
+        )
 
         registry = PromptRegistry(tmp_path)
         audit_sink = InMemoryAuditSink()
@@ -401,7 +437,9 @@ class TestPromptVersioningPromotion:
             env="staging",
             actor="deployer",
             reason="Feature update",
-            approvals=["lead"],
+            approvals=[_owner_approval("lead")],
+            evaluation_results_ref="s3://bucket/eval/audit.json",
+            evaluation_results_sha256="sha256abc",
             gate_results=[
                 GateResult(gate=1, passed=True),
                 GateResult(gate=2, passed=True),
@@ -419,11 +457,16 @@ class TestPromptVersioningPromotion:
         assert event["payload"]["new_version"] == "2.0.0"
         assert event["payload"]["old_version"] == "1.0.0"
         assert event["payload"]["risk_class"] == "MEDIUM"
-        assert "approvers" in event["payload"]
+        assert "approvals" in event["payload"]
+        assert "approver" in event["payload"]
+        assert event["payload"]["evaluation_results_ref"] == "s3://bucket/eval/audit.json"
+        assert event["payload"]["evaluation_results_sha256"] == "sha256abc"
 
     def test_promote_with_sha256_evidence(self, tmp_path: Path) -> None:
         """Test that promotion includes sha256 evidence in audit."""
-        _create_test_prompt_structure(tmp_path, "evidence-prompt", "1.0.0", risk_class="LOW")
+        _create_test_prompt_structure(
+            tmp_path, "evidence-prompt", "1.0.0", risk_class="LOW", validation_gates_required=[1]
+        )
         _create_registry_pointer(tmp_path, "dev", {})
 
         registry = PromptRegistry(tmp_path)
@@ -437,6 +480,7 @@ class TestPromptVersioningPromotion:
             env="dev",
             actor="test",
             reason="Test",
+            approvals=[_owner_approval()],
             evaluation_results_ref="s3://bucket/eval.json",
             evaluation_results_sha256=sha256,
             gate_results=[GateResult(gate=1, passed=True)],
@@ -450,7 +494,9 @@ class TestPromptVersioningPromotion:
 
     def test_promote_fails_missing_gates_low_risk(self, tmp_path: Path) -> None:
         """Test that promotion fails when Gate 1 is missing for LOW risk."""
-        _create_test_prompt_structure(tmp_path, "gated-prompt", "1.0.0", risk_class="LOW")
+        _create_test_prompt_structure(
+            tmp_path, "gated-prompt", "1.0.0", risk_class="LOW", validation_gates_required=[1]
+        )
         _create_registry_pointer(tmp_path, "dev", {})
 
         registry = PromptRegistry(tmp_path)
@@ -462,6 +508,9 @@ class TestPromptVersioningPromotion:
             env="dev",
             actor="test",
             reason="Test",
+            approvals=[_owner_approval()],
+            evaluation_results_ref="s3://bucket/eval.json",
+            evaluation_results_sha256="sha256",
             gate_results=[],
         )
 
@@ -473,7 +522,13 @@ class TestPromptVersioningPromotion:
 
     def test_promote_fails_missing_gates_medium_risk(self, tmp_path: Path) -> None:
         """Test that promotion fails when Gates 1+2 are missing for MEDIUM risk."""
-        _create_test_prompt_structure(tmp_path, "medium-prompt", "1.0.0", risk_class="MEDIUM")
+        _create_test_prompt_structure(
+            tmp_path,
+            "medium-prompt",
+            "1.0.0",
+            risk_class="MEDIUM",
+            validation_gates_required=[1, 2],
+        )
         _create_registry_pointer(tmp_path, "dev", {})
 
         registry = PromptRegistry(tmp_path)
@@ -485,6 +540,9 @@ class TestPromptVersioningPromotion:
             env="dev",
             actor="test",
             reason="Test",
+            approvals=[_owner_approval()],
+            evaluation_results_ref="s3://bucket/eval.json",
+            evaluation_results_sha256="sha256",
             gate_results=[GateResult(gate=1, passed=True)],
         )
 
@@ -495,7 +553,13 @@ class TestPromptVersioningPromotion:
 
     def test_promote_fails_missing_gates_high_risk(self, tmp_path: Path) -> None:
         """Test that promotion fails when Gates 1-4 incomplete for HIGH risk."""
-        _create_test_prompt_structure(tmp_path, "high-prompt", "1.0.0", risk_class="HIGH")
+        _create_test_prompt_structure(
+            tmp_path,
+            "high-prompt",
+            "1.0.0",
+            risk_class="HIGH",
+            validation_gates_required=[1, 2, 3, 4],
+        )
         _create_registry_pointer(tmp_path, "dev", {})
 
         registry = PromptRegistry(tmp_path)
@@ -507,6 +571,9 @@ class TestPromptVersioningPromotion:
             env="dev",
             actor="test",
             reason="Test",
+            approvals=[_owner_approval(), _security_approval()],
+            evaluation_results_ref="s3://bucket/eval.json",
+            evaluation_results_sha256="sha256",
             gate_results=[
                 GateResult(gate=1, passed=True),
                 GateResult(gate=2, passed=True),
@@ -521,7 +588,9 @@ class TestPromptVersioningPromotion:
 
     def test_promote_fails_on_failed_gate(self, tmp_path: Path) -> None:
         """Test that promotion fails when a required gate fails."""
-        _create_test_prompt_structure(tmp_path, "fail-gate", "1.0.0", risk_class="LOW")
+        _create_test_prompt_structure(
+            tmp_path, "fail-gate", "1.0.0", risk_class="LOW", validation_gates_required=[1]
+        )
         _create_registry_pointer(tmp_path, "dev", {})
 
         registry = PromptRegistry(tmp_path)
@@ -533,6 +602,9 @@ class TestPromptVersioningPromotion:
             env="dev",
             actor="test",
             reason="Test",
+            approvals=[_owner_approval()],
+            evaluation_results_ref="s3://bucket/eval.json",
+            evaluation_results_sha256="sha256",
             gate_results=[GateResult(gate=1, passed=False, details="Failed validation")],
         )
 
@@ -554,6 +626,9 @@ class TestPromptVersioningPromotion:
             env="dev",
             actor="test",
             reason="Test",
+            approvals=[_owner_approval()],
+            evaluation_results_ref="s3://bucket/eval.json",
+            evaluation_results_sha256="sha256",
             gate_results=[GateResult(gate=1, passed=True)],
         )
 
@@ -581,7 +656,7 @@ class TestPromptVersioningRollback:
             actor="oncall",
             reason="Regression detected",
             incident_ticket_id="INC-12345",
-            approvals=["manager"],
+            approvals=[_owner_approval("manager")],
         )
 
         result = service.rollback(request)
@@ -716,7 +791,9 @@ class TestAuditFailureIsFatal:
 
     def test_promote_rolls_back_on_audit_failure(self, tmp_path: Path) -> None:
         """Test that promotion rolls back registry on audit failure."""
-        _create_test_prompt_structure(tmp_path, "audit-fail", "1.0.0", risk_class="LOW")
+        _create_test_prompt_structure(
+            tmp_path, "audit-fail", "1.0.0", risk_class="LOW", validation_gates_required=[1]
+        )
         _create_registry_pointer(tmp_path, "dev", {})
 
         registry = PromptRegistry(tmp_path)
@@ -731,6 +808,9 @@ class TestAuditFailureIsFatal:
             env="dev",
             actor="test",
             reason="Test",
+            approvals=[_owner_approval()],
+            evaluation_results_ref="s3://bucket/eval.json",
+            evaluation_results_sha256="sha256",
             gate_results=[GateResult(gate=1, passed=True)],
         )
 
@@ -792,8 +872,12 @@ class TestAtomicUpdates:
 
     def test_registry_json_is_deterministic(self, tmp_path: Path) -> None:
         """Test that registry JSON is deterministically serialized."""
-        _create_test_prompt_structure(tmp_path, "z-prompt", "1.0.0", risk_class="LOW")
-        _create_test_prompt_structure(tmp_path, "a-prompt", "1.0.0", risk_class="LOW")
+        _create_test_prompt_structure(
+            tmp_path, "z-prompt", "1.0.0", risk_class="LOW", validation_gates_required=[1]
+        )
+        _create_test_prompt_structure(
+            tmp_path, "a-prompt", "1.0.0", risk_class="LOW", validation_gates_required=[1]
+        )
         _create_registry_pointer(tmp_path, "dev", {})
 
         registry = PromptRegistry(tmp_path)
@@ -807,6 +891,9 @@ class TestAtomicUpdates:
                 env="dev",
                 actor="test",
                 reason="Test",
+                approvals=[_owner_approval()],
+                evaluation_results_ref="s3://bucket/eval.json",
+                evaluation_results_sha256="sha256",
                 gate_results=[GateResult(gate=1, passed=True)],
             )
         )
@@ -818,6 +905,9 @@ class TestAtomicUpdates:
                 env="dev",
                 actor="test",
                 reason="Test",
+                approvals=[_owner_approval()],
+                evaluation_results_ref="s3://bucket/eval.json",
+                evaluation_results_sha256="sha256",
                 gate_results=[GateResult(gate=1, passed=True)],
             )
         )
@@ -833,7 +923,9 @@ class TestAtomicUpdates:
 
     def test_concurrent_writes_are_atomic(self, tmp_path: Path) -> None:
         """Test that registry writes are atomic (no partial writes)."""
-        _create_test_prompt_structure(tmp_path, "atomic-test", "1.0.0", risk_class="LOW")
+        _create_test_prompt_structure(
+            tmp_path, "atomic-test", "1.0.0", risk_class="LOW", validation_gates_required=[1]
+        )
         _create_registry_pointer(tmp_path, "dev", {})
 
         registry = PromptRegistry(tmp_path)
@@ -846,6 +938,9 @@ class TestAtomicUpdates:
             env="dev",
             actor="test",
             reason="Test",
+            approvals=[_owner_approval()],
+            evaluation_results_ref="s3://bucket/eval.json",
+            evaluation_results_sha256="sha256",
             gate_results=[GateResult(gate=1, passed=True)],
         )
 
@@ -923,3 +1018,256 @@ class TestPR001Traceability:
         event = audit_sink.events[0]
         assert event["event_type"] == "prompt.version.rolledback"
         assert event["payload"]["incident_ticket_id"] == "INC-2026-001"
+
+
+class TestFailClosedRequiredFields:
+    """Tests that missing required PromptArtifact fields fail closed.
+
+    Per spec §2.1, these fields are required (no defaults):
+    - status, risk_class, validation_gates_required, evaluation_results_ref
+    """
+
+    @pytest.mark.parametrize(
+        "missing_field",
+        ["status", "risk_class", "validation_gates_required", "evaluation_results_ref"],
+    )
+    def test_missing_required_field_fails_closed(self, tmp_path: Path, missing_field: str) -> None:
+        """Test that missing required field causes load to fail."""
+        prompt_dir = tmp_path / "missing-field" / "1.0.0"
+        prompt_dir.mkdir(parents=True)
+
+        metadata = _create_prompt_artifact("missing-field", "1.0.0")
+        del metadata[missing_field]
+
+        with open(prompt_dir / "metadata.json", "w") as f:
+            json.dump(metadata, f)
+        (prompt_dir / "prompt.md").write_text("content")
+
+        _create_registry_pointer(tmp_path, "dev", {"missing-field": "1.0.0"})
+
+        registry = PromptRegistry(tmp_path)
+        registry.load("dev")
+
+        with pytest.raises(PromptArtifactError, match="validation failed"):
+            registry.get_prompt("missing-field")
+
+    def test_empty_evaluation_results_ref_fails_closed(self, tmp_path: Path) -> None:
+        """Test that empty evaluation_results_ref fails closed."""
+        prompt_dir = tmp_path / "empty-ref" / "1.0.0"
+        prompt_dir.mkdir(parents=True)
+
+        metadata = _create_prompt_artifact("empty-ref", "1.0.0")
+        metadata["evaluation_results_ref"] = ""
+
+        with open(prompt_dir / "metadata.json", "w") as f:
+            json.dump(metadata, f)
+        (prompt_dir / "prompt.md").write_text("content")
+
+        _create_registry_pointer(tmp_path, "dev", {"empty-ref": "1.0.0"})
+
+        registry = PromptRegistry(tmp_path)
+        registry.load("dev")
+
+        with pytest.raises(PromptArtifactError, match="validation failed"):
+            registry.get_prompt("empty-ref")
+
+    def test_invalid_gate_number_fails_closed(self, tmp_path: Path) -> None:
+        """Test that invalid gate number (not 1-4) fails closed."""
+        prompt_dir = tmp_path / "bad-gate" / "1.0.0"
+        prompt_dir.mkdir(parents=True)
+
+        metadata = _create_prompt_artifact("bad-gate", "1.0.0")
+        metadata["validation_gates_required"] = [1, 5]
+
+        with open(prompt_dir / "metadata.json", "w") as f:
+            json.dump(metadata, f)
+        (prompt_dir / "prompt.md").write_text("content")
+
+        _create_registry_pointer(tmp_path, "dev", {"bad-gate": "1.0.0"})
+
+        registry = PromptRegistry(tmp_path)
+        registry.load("dev")
+
+        with pytest.raises(PromptArtifactError, match="validation failed"):
+            registry.get_prompt("bad-gate")
+
+
+class TestHighRiskApprovalRequirements:
+    """Tests that HIGH-risk promotion requires security sign-off."""
+
+    def test_high_risk_fails_without_security_approval(self, tmp_path: Path) -> None:
+        """Test that HIGH-risk promotion fails without SECURITY_COMPLIANCE approval."""
+        _create_test_prompt_structure(
+            tmp_path, "high-sec", "1.0.0", risk_class="HIGH", validation_gates_required=[1, 2, 3, 4]
+        )
+        _create_registry_pointer(tmp_path, "prod", {})
+
+        registry = PromptRegistry(tmp_path)
+        service = PromptVersioningService(registry)
+
+        request = PromotionRequest(
+            prompt_id="high-sec",
+            new_version="1.0.0",
+            env="prod",
+            actor="test",
+            reason="Test",
+            approvals=[_owner_approval()],
+            evaluation_results_ref="s3://bucket/eval.json",
+            evaluation_results_sha256="sha256",
+            gate_results=[
+                GateResult(gate=1, passed=True),
+                GateResult(gate=2, passed=True),
+                GateResult(gate=3, passed=True),
+                GateResult(gate=4, passed=True),
+            ],
+        )
+
+        with pytest.raises(MissingApprovalError) as exc_info:
+            service.promote(request)
+
+        assert "SECURITY_COMPLIANCE" in exc_info.value.missing_roles
+
+    def test_high_risk_succeeds_with_security_approval(self, tmp_path: Path) -> None:
+        """Test that HIGH-risk promotion succeeds with both approvals."""
+        _create_test_prompt_structure(
+            tmp_path, "high-ok", "1.0.0", risk_class="HIGH", validation_gates_required=[1, 2, 3, 4]
+        )
+        _create_registry_pointer(tmp_path, "prod", {})
+
+        registry = PromptRegistry(tmp_path)
+        audit_sink = InMemoryAuditSink()
+        service = PromptVersioningService(registry, audit_sink=audit_sink)
+
+        request = PromotionRequest(
+            prompt_id="high-ok",
+            new_version="1.0.0",
+            env="prod",
+            actor="test",
+            reason="Test",
+            approvals=[_owner_approval(), _security_approval()],
+            evaluation_results_ref="s3://bucket/eval.json",
+            evaluation_results_sha256="sha256abc",
+            gate_results=[
+                GateResult(gate=1, passed=True),
+                GateResult(gate=2, passed=True),
+                GateResult(gate=3, passed=True),
+                GateResult(gate=4, passed=True),
+            ],
+        )
+
+        result = service.promote(request)
+        assert result["prompt_id"] == "high-ok"
+        assert result["risk_class"] == "HIGH"
+
+    def test_promotion_fails_without_owner_approval(self, tmp_path: Path) -> None:
+        """Test that any promotion fails without OWNER approval."""
+        _create_test_prompt_structure(
+            tmp_path, "no-owner", "1.0.0", risk_class="LOW", validation_gates_required=[1]
+        )
+        _create_registry_pointer(tmp_path, "dev", {})
+
+        registry = PromptRegistry(tmp_path)
+        service = PromptVersioningService(registry)
+
+        request = PromotionRequest(
+            prompt_id="no-owner",
+            new_version="1.0.0",
+            env="dev",
+            actor="test",
+            reason="Test",
+            approvals=[],
+            evaluation_results_ref="s3://bucket/eval.json",
+            evaluation_results_sha256="sha256",
+            gate_results=[GateResult(gate=1, passed=True)],
+        )
+
+        with pytest.raises(MissingApprovalError) as exc_info:
+            service.promote(request)
+
+        assert "OWNER" in exc_info.value.missing_roles
+
+
+class TestSchemaRefBypassPrevention:
+    """Tests that schema refs cannot be bypassed when schemas_root is unset."""
+
+    def test_schema_ref_fails_when_schemas_root_unset(self, tmp_path: Path) -> None:
+        """Test that schema refs fail-closed when schemas_root is None."""
+        prompt_dir = tmp_path / "schema-bypass" / "1.0.0"
+        prompt_dir.mkdir(parents=True)
+
+        metadata = _create_prompt_artifact("schema-bypass", "1.0.0")
+        metadata["input_schema_ref"] = "some_schema.json"
+
+        with open(prompt_dir / "metadata.json", "w") as f:
+            json.dump(metadata, f)
+        (prompt_dir / "prompt.md").write_text("content")
+
+        _create_registry_pointer(tmp_path, "dev", {"schema-bypass": "1.0.0"})
+
+        registry = PromptRegistry(tmp_path, schemas_root=None)
+        registry.load("dev")
+
+        with pytest.raises(SchemaRefBypassError, match="schemas_root is not configured"):
+            registry.get_prompt("schema-bypass")
+
+    def test_output_schema_ref_also_fails_when_schemas_root_unset(self, tmp_path: Path) -> None:
+        """Test that output_schema_ref also fails-closed when schemas_root is None."""
+        prompt_dir = tmp_path / "output-bypass" / "1.0.0"
+        prompt_dir.mkdir(parents=True)
+
+        metadata = _create_prompt_artifact("output-bypass", "1.0.0")
+        metadata["output_schema_ref"] = "output.schema.json"
+
+        with open(prompt_dir / "metadata.json", "w") as f:
+            json.dump(metadata, f)
+        (prompt_dir / "prompt.md").write_text("content")
+
+        _create_registry_pointer(tmp_path, "dev", {"output-bypass": "1.0.0"})
+
+        registry = PromptRegistry(tmp_path, schemas_root=None)
+        registry.load("dev")
+
+        with pytest.raises(SchemaRefBypassError, match="schemas_root is not configured"):
+            registry.get_prompt("output-bypass")
+
+    def test_no_schema_ref_succeeds_without_schemas_root(self, tmp_path: Path) -> None:
+        """Test that prompts without schema refs work without schemas_root."""
+        _create_test_prompt_structure(tmp_path, "no-schema", "1.0.0")
+        _create_registry_pointer(tmp_path, "dev", {"no-schema": "1.0.0"})
+
+        registry = PromptRegistry(tmp_path, schemas_root=None)
+        registry.load("dev")
+
+        loaded = registry.get_prompt("no-schema")
+        assert loaded.artifact.prompt_id == "no-schema"
+
+
+class TestGateUnionRequirement:
+    """Tests that required gates are union of risk_class gates and artifact gates."""
+
+    def test_artifact_gates_added_to_risk_class_gates(self, tmp_path: Path) -> None:
+        """Test that artifact-specified gates are enforced even if not in risk class."""
+        _create_test_prompt_structure(
+            tmp_path, "extra-gate", "1.0.0", risk_class="LOW", validation_gates_required=[1, 3]
+        )
+        _create_registry_pointer(tmp_path, "dev", {})
+
+        registry = PromptRegistry(tmp_path)
+        service = PromptVersioningService(registry)
+
+        request = PromotionRequest(
+            prompt_id="extra-gate",
+            new_version="1.0.0",
+            env="dev",
+            actor="test",
+            reason="Test",
+            approvals=[_owner_approval()],
+            evaluation_results_ref="s3://bucket/eval.json",
+            evaluation_results_sha256="sha256",
+            gate_results=[GateResult(gate=1, passed=True)],
+        )
+
+        with pytest.raises(GateRequirementError) as exc_info:
+            service.promote(request)
+
+        assert 3 in exc_info.value.missing_gates

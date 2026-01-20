@@ -383,13 +383,18 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | PR-001 |
 | **Requirement** | Prompts versioned (semver), stored with metadata, promotion requires gates |
-| **Source Doc** | Prompt Registry §2-11 |
-| **Source Section** | "Prompt Registry Overview", "Promotion Pipeline" |
-| **Enforcing Component** | `prompts/` directory; registry JSON files; CI gates |
+| **Source Doc** | Prompt Registry §2-11; Go-Live Checklist §4.4 |
+| **Source Section** | "Prompt Registry Overview", "Promotion Pipeline", "Audited Promotion/Rollback" |
+| **Enforcing Component** | `src/idis/services/prompts/registry.py` — PromptRegistry |
+| | `src/idis/services/prompts/versioning.py` — PromptVersioningService |
 | **Tests** | `tests/test_prompt_registry.py::test_version_loaded` |
 | | `tests/test_prompt_registry.py::test_rollback_works` |
-| **Phase Gate** | Phase 5 (basic); Phase 6 (full); Phase 7 (CI gates) |
-| **Evidence Artifact** | `prompt.promoted`, `prompt.rollback` audit events |
+| | `tests/test_prompt_registry.py::TestPromptVersioningPromotion` |
+| | `tests/test_prompt_registry.py::TestPromptVersioningRollback` |
+| | `tests/test_prompt_registry.py::TestAuditFailureIsFatal` |
+| **Phase Gate** | Phase 7.2 |
+| **Evidence Artifact** | `prompt.version.promoted`, `prompt.version.rolledback`, `prompt.version.retired` audit events (per Go-Live §4.4) |
+| **Implementation Status** | ✅ Exists |
 
 **Required Gates by Risk Class:**
 | Risk Class | Required Gates |
@@ -498,7 +503,7 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | DR-001 | Data residency | Residency §3 | `tenant.py` (data_region) | test_data_residency.py | 7 | ⏳ Planned | Region metadata |
 | BYOL-001 | BYOL isolation | Residency §7 | `enrichment/service.py` | test_byol_isolation.py | 7 | ⏳ Planned | EnrichmentRecord |
 | OPS-001 | Ops readiness | SLO §10 | Manual checklist | Manual | 7 | ⏳ Planned | Checklist sign-off |
-| PR-001 | Prompt registry | Prompt §2 | `prompts/` directory | test_prompt_registry.py | 5/6/7 | ⏳ Planned | prompt.* events |
+| PR-001 | Prompt registry | Prompt §2; Go-Live §4.4 | `services/prompts/registry.py`, `services/prompts/versioning.py` | test_prompt_registry.py | 7.2 | ✅ Exists | prompt.version.promoted/rolledback/retired |
 | EH-001 | Eval harness | Eval §8 | CI pipeline | GDBS suites | 5/6/7 | ⏳ Planned | Gate results |
 | SEC-001 | Encryption | Security §5 | Infra config | test_encryption.py | 0/7 | ⏳ Planned | TLS certs |
 | SEC-002 | RBAC | Security §4 | `auth.py` | test_rbac.py | 2/7 | ⏳ Planned | rbac.denied |

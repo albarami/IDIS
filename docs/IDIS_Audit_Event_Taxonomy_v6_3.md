@@ -168,7 +168,12 @@ Audit events are **append-only** and must be emitted for every mutating operatio
 - `webhook.delivery.succeeded` (LOW)
 - `webhook.delivery.failed` (MEDIUM)
 
-### 4.12 Security Events
+### 4.12 Prompt Registry (Go-Live §4.4)
+- `prompt.version.promoted` (HIGH) — records version, risk_class, approver, gate_results, evaluation_results_ref, evaluation_results_sha256
+- `prompt.version.rolledback` (HIGH) — records version, reason, actor, rollback_target, incident_ticket_id
+- `prompt.version.retired` (MEDIUM) — records version, reason, actor
+
+### 4.13 Security Events
 - `auth.login.succeeded` (LOW)
 - `auth.login.failed` (MEDIUM)
 - `auth.mfa.failed` (MEDIUM)

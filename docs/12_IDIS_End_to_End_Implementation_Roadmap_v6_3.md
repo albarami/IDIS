@@ -773,12 +773,22 @@ docs(phase-6): update roadmap with Phase 6 completion
 | ABAC (deal-level access) | `src/idis/api/abac.py` | ⏳ |
 | Break-glass audit | `src/idis/api/break_glass.py` | ⏳ |
 
-#### Task 7.2: Prompt Registry ⏳ NOT STARTED
+#### Task 7.2: Prompt Registry ✅ COMPLETE
 | Deliverable | Module | Status |
 |-------------|--------|--------|
-| Prompt registry | `src/idis/services/prompts/registry.py` | ⏳ |
-| Version promotion/rollback | `src/idis/services/prompts/versioning.py` | ⏳ |
-| Audit events | `prompt.version.promoted`, `prompt.version.rolledback` | ⏳ |
+| Prompt registry | `src/idis/services/prompts/registry.py` | ✅ |
+| Version promotion/rollback | `src/idis/services/prompts/versioning.py` | ✅ |
+| Audit events | `prompt.version.promoted`, `prompt.version.rolledback`, `prompt.version.retired` | ✅ |
+| Unit tests | `tests/test_prompt_registry.py` | ✅ |
+
+**Implementation Notes:**
+- Fail-closed validation for all registry operations (missing files, invalid SemVer, schema refs)
+- Deterministic JSON serialization with sorted keys for registry pointers
+- Atomic file updates via temp file + os.replace pattern
+- Risk-class gate enforcement: LOW (Gate 1), MEDIUM (Gates 1-2), HIGH (Gates 1-3)
+- Audit emission is fatal—operations roll back on audit sink failure
+- SHA256 content hashes in audit event evidence artifacts
+- 41 tests covering PR-001 traceability requirements
 
 #### Task 7.3: Evaluation Harness ✅ COMPLETE
 | Deliverable | Module | Status |

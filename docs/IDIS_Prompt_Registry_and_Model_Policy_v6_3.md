@@ -252,7 +252,7 @@ This section references the evaluation harness gates.
 
 ### 9.2 Rollback procedure (normative)
 1. Flip registry pointer to previous prompt version (atomic)
-2. Emit audit event: `prompt.rollback`
+2. Emit audit event: `prompt.version.rolledback` (with version, reason, actor, rollback_target, incident_ticket_id)
 3. Re-run affected runs if needed
 4. Open incident ticket + postmortem for SEV-1/2
 
@@ -261,19 +261,18 @@ This section references the evaluation harness gates.
 ## 10) Audit Requirements
 
 ### 10.1 Prompt lifecycle events
-Audit event types:
-- `prompt.created`
-- `prompt.updated`
-- `prompt.promoted`
-- `prompt.deprecated`
-- `prompt.rollback`
+Audit event types (aligned with Go-Live checklist §4.4):
+- `prompt.version.promoted` — records version, risk_class, approver, gate_results, evaluation_results_ref, evaluation_results_sha256
+- `prompt.version.rolledback` — records version, reason, actor, rollback_target, incident_ticket_id
+- `prompt.version.retired` — records version, reason, actor
 - `model.policy.updated`
 
 Each must include:
 - prompt_id, version
 - actor identity
-- approvals
-- evaluation_results_ref
+- approvals (where applicable)
+- evaluation_results_ref (for promotion)
+- sha256 hash of evidence artifacts (for promotion)
 
 ---
 

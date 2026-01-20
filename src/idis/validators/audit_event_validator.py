@@ -42,6 +42,7 @@ VALID_EVENT_PREFIXES = {
     "tenant.",
     "break_glass.",
     "data.",
+    "prompt.",
 }
 
 VALID_SEVERITIES = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
@@ -59,6 +60,7 @@ VALID_RESOURCE_TYPES = {
     "override",
     "integration",
     "webhook",
+    "prompt",
 }
 
 VALID_ACTOR_TYPES = {"HUMAN", "SERVICE"}

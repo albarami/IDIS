@@ -175,13 +175,18 @@ class PostgresClaimDealResolver:
         try:
             # Query claims table for deal_id
             # RLS ensures tenant isolation automatically
+            # Note: Using SQLAlchemy text() for proper parameterization
+            from sqlalchemy import text
+
             cursor = db_conn.execute(
-                """
-                SELECT deal_id FROM claims
-                WHERE id = %s AND tenant_id = %s
-                LIMIT 1
-                """,
-                (claim_id, tenant_id),
+                text(
+                    """
+                    SELECT deal_id FROM claims
+                    WHERE claim_id = :claim_id
+                    LIMIT 1
+                    """
+                ),
+                {"claim_id": claim_id},
             )
             row = cursor.fetchone()
             if row:
@@ -311,8 +316,19 @@ def resolve_deal_id_for_claim(
         if db_conn is not None:
             postgres_resolver = PostgresClaimDealResolver()
             return postgres_resolver.resolve_deal_id_for_claim(tenant_id, claim_id, db_conn=db_conn)
+        # Fail-closed: production context requires db_conn for claim resolution
+        # Do NOT silently fall back to in-memory resolver in production
+        logger.warning(
+            "Claim resolution unavailable: no db_conn in request.state",
+            extra={"tenant_id": tenant_id, "claim_id": claim_id},
+        )
+        raise IdisHttpError(
+            status_code=503,
+            code="resolver_unavailable",
+            message="Claim resolution service unavailable",
+        )
 
-    # Test/fallback path: use configured resolver
+    # Test/fallback path: use configured resolver (only when request is None)
     if resolver is None:
         resolver = get_claim_deal_resolver()
 

@@ -436,3 +436,163 @@ class TestTenantIsolationBreakAttempts:
             headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
         )
         assert get_deal_a.status_code == 200
+
+
+class TestPostgresClaimDealResolution:
+    """Tests proving claim→deal resolution works under Postgres RLS.
+
+    These tests verify that:
+    1. PostgresClaimDealResolver correctly queries claim_id column
+    2. Claim→deal resolution is tenant-scoped via RLS
+    3. Cross-tenant claim access returns 404 (no existence leak)
+    """
+
+    def test_claim_resolution_works_under_postgres_rls(
+        self,
+        client_with_postgres: TestClient,
+        admin_engine: Engine,
+        clean_tables: None,
+    ) -> None:
+        """Verify claim→deal resolution returns correct deal_id under RLS."""
+        deal_id = str(uuid.uuid4())
+        with admin_engine.begin() as conn:
+            _create_deal_in_postgres(conn, TENANT_A_ID, deal_id)
+
+        # Create a claim via API (this seeds the claim in Postgres)
+        create_response = client_with_postgres.post(
+            f"/v1/deals/{deal_id}/claims",
+            json={
+                "claim_class": "FINANCIAL",
+                "claim_text": "Test claim for ABAC resolution",
+                "materiality": "HIGH",
+                "ic_bound": False,
+            },
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+        )
+        assert create_response.status_code == 201, create_response.text
+        claim_id = create_response.json()["claim_id"]
+
+        # Verify the claim exists and has correct deal_id in database
+        with admin_engine.begin() as conn:
+            result = conn.execute(
+                text("SELECT deal_id FROM claims WHERE claim_id = :claim_id"),
+                {"claim_id": claim_id},
+            )
+            row = result.fetchone()
+            assert row is not None, "Claim should exist in database"
+            assert str(row[0]) == deal_id, "Claim should be linked to correct deal"
+
+        # Access claim via GET endpoint - this exercises the resolver
+        get_response = client_with_postgres.get(
+            f"/v1/claims/{claim_id}",
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+        )
+        # Should succeed (200) because tenant A owns both claim and deal
+        assert get_response.status_code == 200, get_response.text
+        assert get_response.json()["deal_id"] == deal_id
+
+    def test_cross_tenant_claim_access_returns_404_not_403(
+        self,
+        client_with_postgres: TestClient,
+        admin_engine: Engine,
+        clean_tables: None,
+    ) -> None:
+        """Cross-tenant claim access returns 404 (no existence leak per ADR-011)."""
+        deal_id = str(uuid.uuid4())
+        with admin_engine.begin() as conn:
+            _create_deal_in_postgres(conn, TENANT_A_ID, deal_id)
+
+        # Create claim as tenant A
+        create_response = client_with_postgres.post(
+            f"/v1/deals/{deal_id}/claims",
+            json={
+                "claim_class": "FINANCIAL",
+                "claim_text": "Tenant A private claim",
+                "materiality": "HIGH",
+                "ic_bound": False,
+            },
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+        )
+        assert create_response.status_code == 201
+        claim_id = create_response.json()["claim_id"]
+
+        # Tenant B tries to access tenant A's claim
+        cross_tenant_response = client_with_postgres.get(
+            f"/v1/claims/{claim_id}",
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_B},
+        )
+
+        # Must be 404, not 403, to prevent existence leak
+        assert cross_tenant_response.status_code == 404, (
+            f"Expected 404, got {cross_tenant_response.status_code}: {cross_tenant_response.text}"
+        )
+
+    def test_claim_sanad_endpoint_uses_claim_resolution(
+        self,
+        client_with_postgres: TestClient,
+        admin_engine: Engine,
+        clean_tables: None,
+    ) -> None:
+        """Verify /claims/{claimId}/sanad endpoint uses claim→deal resolution."""
+        deal_id = str(uuid.uuid4())
+        with admin_engine.begin() as conn:
+            _create_deal_in_postgres(conn, TENANT_A_ID, deal_id)
+
+        # Create claim
+        create_response = client_with_postgres.post(
+            f"/v1/deals/{deal_id}/claims",
+            json={
+                "claim_class": "LEGAL",
+                "claim_text": "Test claim for sanad endpoint",
+                "materiality": "MEDIUM",
+                "ic_bound": False,
+            },
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+        )
+        assert create_response.status_code == 201
+        claim_id = create_response.json()["claim_id"]
+
+        # Access sanad endpoint - exercises claim→deal resolution
+        sanad_response = client_with_postgres.get(
+            f"/v1/claims/{claim_id}/sanad",
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+        )
+        # May be 200 or 404 depending on whether sanad exists, but NOT 500
+        assert sanad_response.status_code in [200, 404], (
+            f"Sanad endpoint should not fail with 500: {sanad_response.text}"
+        )
+
+    def test_claim_defects_endpoint_uses_claim_resolution(
+        self,
+        client_with_postgres: TestClient,
+        admin_engine: Engine,
+        clean_tables: None,
+    ) -> None:
+        """Verify /claims/{claimId}/defects endpoint uses claim→deal resolution."""
+        deal_id = str(uuid.uuid4())
+        with admin_engine.begin() as conn:
+            _create_deal_in_postgres(conn, TENANT_A_ID, deal_id)
+
+        # Create claim
+        create_response = client_with_postgres.post(
+            f"/v1/deals/{deal_id}/claims",
+            json={
+                "claim_class": "OPERATIONAL",
+                "claim_text": "Test claim for defects endpoint",
+                "materiality": "LOW",
+                "ic_bound": False,
+            },
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+        )
+        assert create_response.status_code == 201
+        claim_id = create_response.json()["claim_id"]
+
+        # Access defects endpoint - exercises claim→deal resolution
+        defects_response = client_with_postgres.get(
+            f"/v1/claims/{claim_id}/defects",
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+        )
+        # Should return 200 with empty list (no defects), not 500
+        assert defects_response.status_code == 200, (
+            f"Defects endpoint should not fail: {defects_response.text}"
+        )

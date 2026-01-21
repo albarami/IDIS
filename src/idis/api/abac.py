@@ -55,6 +55,26 @@ class AbacDecision:
     requires_break_glass: bool = False
 
 
+class ClaimDealResolver(Protocol):
+    """Protocol for resolving claim_id to deal_id.
+
+    Implementations must be tenant-scoped (use RLS).
+    Returns None for unknown claims (no existence leak per ADR-011).
+    """
+
+    def resolve_deal_id_for_claim(
+        self,
+        tenant_id: str,
+        claim_id: str,
+    ) -> str | None:
+        """Resolve claim_id to its parent deal_id.
+
+        Must execute under tenant RLS. Returns None if claim not found
+        or not accessible (no cross-tenant existence checks per ADR-011).
+        """
+        ...
+
+
 class DealAssignmentStore(Protocol):
     """Protocol for deal assignment persistence.
 
@@ -84,6 +104,36 @@ class DealAssignmentStore(Protocol):
         Must be tenant-scoped. Returns False for unknown deals (no existence leak).
         """
         ...
+
+
+class InMemoryClaimDealResolver:
+    """In-memory claim->deal resolver for testing and development.
+
+    Production should use a database-backed implementation with RLS.
+    """
+
+    def __init__(self) -> None:
+        self._claim_deals: dict[tuple[str, str], str] = {}
+
+    def add_claim(self, tenant_id: str, claim_id: str, deal_id: str) -> None:
+        """Register a claim's parent deal."""
+        self._claim_deals[(tenant_id, claim_id)] = deal_id
+
+    def remove_claim(self, tenant_id: str, claim_id: str) -> None:
+        """Remove a claim registration."""
+        self._claim_deals.pop((tenant_id, claim_id), None)
+
+    def resolve_deal_id_for_claim(
+        self,
+        tenant_id: str,
+        claim_id: str,
+    ) -> str | None:
+        """Resolve claim to deal. Returns None if not found (no existence leak)."""
+        return self._claim_deals.get((tenant_id, claim_id))
+
+    def clear(self) -> None:
+        """Clear all mappings. For testing only."""
+        self._claim_deals.clear()
 
 
 class InMemoryDealAssignmentStore:
@@ -137,6 +187,54 @@ class InMemoryDealAssignmentStore:
 
 
 _default_store: DealAssignmentStore | None = None
+_default_claim_resolver: ClaimDealResolver | None = None
+
+
+def get_claim_deal_resolver() -> ClaimDealResolver:
+    """Get the configured claim->deal resolver.
+
+    Returns in-memory resolver by default. Production should configure
+    a database-backed resolver.
+    """
+    global _default_claim_resolver
+    if _default_claim_resolver is None:
+        _default_claim_resolver = InMemoryClaimDealResolver()
+    return _default_claim_resolver
+
+
+def set_claim_deal_resolver(resolver: ClaimDealResolver) -> None:
+    """Set the claim->deal resolver. For testing and configuration."""
+    global _default_claim_resolver
+    _default_claim_resolver = resolver
+
+
+def resolve_deal_id_for_claim(
+    tenant_id: str,
+    claim_id: str,
+    resolver: ClaimDealResolver | None = None,
+) -> str | None:
+    """Resolve a claim_id to its parent deal_id.
+
+    This function is the main entry point for claim->deal resolution.
+    Must execute under tenant RLS context.
+
+    Per ADR-011: Returns None for unknown claims (no cross-tenant existence leak).
+
+    Args:
+        tenant_id: Tenant ID from auth context.
+        claim_id: Claim ID to resolve.
+        resolver: Optional resolver override (for testing).
+
+    Returns:
+        deal_id if claim found and accessible, None otherwise.
+    """
+    if not tenant_id or not claim_id:
+        return None
+
+    if resolver is None:
+        resolver = get_claim_deal_resolver()
+
+    return resolver.resolve_deal_id_for_claim(tenant_id, claim_id)
 
 
 def get_deal_assignment_store() -> DealAssignmentStore:

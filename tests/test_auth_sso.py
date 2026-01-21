@@ -401,6 +401,97 @@ class TestValidateJwt:
         assert exc_info.value.status_code == 401
         assert "key ID" in exc_info.value.message
 
+    def test_wrong_kid_fails_with_401(self) -> None:
+        """JWT with kid not in JWKS fails with 401 and structured error."""
+        from idis.api.auth_sso import set_jwks_cache
+
+        config = OidcConfig(
+            issuer="https://idp.example.com",
+            audience="idis-api",
+            jwks_uri="https://idp.example.com/.well-known/jwks.json",
+        )
+
+        # Set up cache with different key
+        cache = JwksCache(
+            keys={"actual-key-1": {"kty": "RSA", "kid": "actual-key-1", "n": "abc", "e": "AQAB"}},
+            fetched_at=time.time(),
+            ttl=3600,
+        )
+        set_jwks_cache(cache)
+
+        # Token references kid that doesn't exist in JWKS
+        token = _create_test_jwt(
+            {"alg": "RS256", "kid": "wrong-key-id"},
+            _valid_payload(),
+        )
+
+        # Mock the JWKS fetch to return same keys (kid still not found)
+        with mock.patch("idis.api.auth_sso._fetch_jwks") as mock_fetch:
+            mock_fetch.return_value = {"actual-key-1": {"kty": "RSA", "kid": "actual-key-1"}}
+
+            with pytest.raises(IdisHttpError) as exc_info:
+                validate_jwt(token, config=config)
+
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.code == "invalid_token"
+        # Error may say "signature" or "key" depending on code path
+        msg_lower = exc_info.value.message.lower()
+        assert "signature" in msg_lower or "key" in msg_lower or "kid" in msg_lower
+
+    def test_signature_mismatch_fails_with_401(self) -> None:
+        """JWT with invalid signature fails with 401 and structured error."""
+        from idis.api.auth_sso import set_jwks_cache
+
+        config = OidcConfig(
+            issuer="https://idp.example.com",
+            audience="idis-api",
+            jwks_uri="https://idp.example.com/.well-known/jwks.json",
+        )
+
+        # Set up cache with a valid-looking RSA key
+        # This is a minimal RSA public key structure
+        rsa_n = (
+            "0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86z"
+            "wu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5Js"
+            "GY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMic"
+            "AtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-"
+            "bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csF"
+            "Cur-kEgU8awapJzKnqDKgw"
+        )
+        cache = JwksCache(
+            keys={
+                "key-1": {
+                    "kty": "RSA",
+                    "kid": "key-1",
+                    "alg": "RS256",
+                    "use": "sig",
+                    "n": rsa_n,
+                    "e": "AQAB",
+                }
+            },
+            fetched_at=time.time(),
+            ttl=3600,
+        )
+        set_jwks_cache(cache)
+
+        # Token with valid structure but wrong signature
+        token = _create_test_jwt(
+            {"alg": "RS256", "kid": "key-1"},
+            _valid_payload(),
+            signature=b"invalid_signature_bytes_that_wont_verify",
+        )
+
+        with pytest.raises(IdisHttpError) as exc_info:
+            validate_jwt(token, config=config)
+
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.code == "invalid_token"
+        # Error should indicate signature problem
+        assert (
+            "signature" in exc_info.value.message.lower()
+            or "invalid" in exc_info.value.message.lower()
+        )
+
 
 class TestJwksCache:
     """Tests for JwksCache."""

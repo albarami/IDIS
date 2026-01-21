@@ -25,11 +25,16 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
-from idis.api.abac import AbacDecisionCode, check_deal_access_with_break_glass
+from idis.api.abac import (
+    AbacDecisionCode,
+    check_deal_access_with_break_glass,
+    resolve_deal_id_for_claim,
+)
 from idis.api.auth import TenantContext
 from idis.api.break_glass import (
     emit_break_glass_audit_event,
     extract_break_glass_token,
+    validate_actor_binding,
     validate_break_glass_token,
 )
 from idis.api.error_model import make_error_response_no_request
@@ -142,10 +147,29 @@ class RBACMiddleware(BaseHTTPMiddleware):
     ) -> Response | None:
         """Check ABAC for deal-scoped operations.
 
+        For claim endpoints (getClaim, updateClaim, getClaimSanad), resolves
+        deal_id from claim_id when deal_id is not in path.
+
         Returns:
             Response if ABAC denied, None if allowed (continue processing).
         """
         deal_id = resource_ctx.get("deal_id")
+        claim_id = resource_ctx.get("claim_id")
+
+        # For claim endpoints without deal_id in path, resolve deal from claim
+        claim_operations = {"getClaim", "updateClaim", "getClaimSanad"}
+        if not deal_id and claim_id and operation_id in claim_operations:
+            resolved_deal_id = resolve_deal_id_for_claim(
+                tenant_id=tenant_ctx.tenant_id,
+                claim_id=claim_id,
+            )
+            if resolved_deal_id:
+                deal_id = resolved_deal_id
+            else:
+                # Claim not found or not accessible - let route return 404
+                # Do not pre-deny to avoid existence leak (ADR-011)
+                return None
+
         if not deal_id:
             return None
 
@@ -164,8 +188,24 @@ class RBACMiddleware(BaseHTTPMiddleware):
                 expected_deal_id=deal_id,
             )
             if validation.valid and validation.token:
-                break_glass_valid = True
-                break_glass_token = validation.token
+                # Validate actor binding - token must be for current actor
+                if validate_actor_binding(validation.token, tenant_ctx.actor_id):
+                    break_glass_valid = True
+                    break_glass_token = validation.token
+                else:
+                    logger.warning(
+                        "Break-glass actor mismatch: token_actor=%s, request_actor=%s",
+                        validation.token.actor_id,
+                        tenant_ctx.actor_id,
+                        extra={"request_id": request_id},
+                    )
+                    return make_error_response_no_request(
+                        code="BREAK_GLASS_ACTOR_MISMATCH",
+                        message="Break-glass token not valid for this actor",
+                        http_status=403,
+                        request_id=request_id,
+                        details=None,
+                    )
 
         abac_decision = check_deal_access_with_break_glass(
             tenant_id=tenant_ctx.tenant_id,

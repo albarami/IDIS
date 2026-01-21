@@ -158,7 +158,7 @@ def should_skip_path(path: Path) -> bool:
 
 def get_code_directory_type(path: Path, repo_root: Path) -> str | None:
     """Check if path is in src/ or tests/ directories.
-    
+
     Returns:
         'src' if in src/, 'tests' if in tests/, None otherwise.
     """

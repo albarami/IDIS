@@ -608,3 +608,9 @@ def clear_jwks_cache() -> None:
     """Clear the JWKS cache. Useful for testing."""
     global _jwks_cache
     _jwks_cache = JwksCache()
+
+
+def set_jwks_cache(cache: JwksCache) -> None:
+    """Set the JWKS cache. Useful for testing."""
+    global _jwks_cache
+    _jwks_cache = cache

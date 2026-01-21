@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 BREAK_GLASS_SECRET_ENV = "IDIS_BREAK_GLASS_SECRET"
 BREAK_GLASS_MAX_DURATION_SECONDS = 3600
 BREAK_GLASS_DEFAULT_DURATION_SECONDS = 900
-MIN_JUSTIFICATION_LENGTH = 10
+MIN_JUSTIFICATION_LENGTH = 20
 
 
 @dataclass(frozen=True, slots=True)
@@ -315,6 +315,12 @@ def emit_break_glass_audit_event(
     ip_address = request.client.host if request.client else "unknown"
     user_agent = request.headers.get("User-Agent", "unknown")
 
+    justification_hash = hashlib.sha256(token.justification.encode("utf-8")).hexdigest()
+
+    refs: list[str] = [f"operation:{operation_id}"]
+    if token.deal_id:
+        refs.append(f"deal_id:{token.deal_id}")
+
     event: dict[str, Any] = {
         "event_id": str(uuid.uuid4()),
         "occurred_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
@@ -335,26 +341,24 @@ def emit_break_glass_audit_event(
         "resource": {
             "resource_type": resource_type,
             "resource_id": resource_id,
+            "deal_id": token.deal_id,
         },
         "event_type": "break_glass.used",
         "severity": "CRITICAL",
         "summary": f"Break-glass access to {resource_type}/{resource_id} via {operation_id}",
         "payload": {
-            "hashes": [f"token:{token.token_hash}"],
-            "refs": [
-                f"operation:{operation_id}",
-                f"justification_length:{len(token.justification)}",
-            ],
-            "break_glass": {
-                "token_id": token.token_id,
-                "deal_id": token.deal_id,
-                "issued_at": datetime.fromtimestamp(token.issued_at, tz=UTC)
-                .isoformat()
-                .replace("+00:00", "Z"),
+            "safe": {
+                "scope": token.deal_id or "tenant-wide",
                 "expires_at": datetime.fromtimestamp(token.expires_at, tz=UTC)
                 .isoformat()
                 .replace("+00:00", "Z"),
+                "justification_len": len(token.justification),
             },
+            "hashes": [
+                f"token_sha256:{token.token_hash}",
+                f"justification_sha256:{justification_hash}",
+            ],
+            "refs": refs,
         },
     }
 
@@ -407,3 +411,45 @@ def extract_break_glass_token(request: Request) -> str | None:
         The raw token string, or None if not present.
     """
     return request.headers.get("X-IDIS-Break-Glass")
+
+
+def validate_actor_binding(
+    token: BreakGlassToken,
+    expected_actor_id: str,
+) -> bool:
+    """Validate that break-glass token is bound to expected actor.
+
+    Per security threat model, break-glass tokens are actor-bound.
+    A token issued to actor A cannot be used by actor B.
+
+    Args:
+        token: The validated break-glass token.
+        expected_actor_id: Actor ID from current request context.
+
+    Returns:
+        True if actor matches, False otherwise.
+    """
+    return token.actor_id == expected_actor_id
+
+
+def validate_deal_binding(
+    token: BreakGlassToken,
+    expected_deal_id: str | None,
+) -> bool:
+    """Validate that break-glass token deal scope matches.
+
+    If token has a deal_id, it must match the expected deal_id.
+    If token has no deal_id (tenant-wide), any deal is allowed.
+
+    Args:
+        token: The validated break-glass token.
+        expected_deal_id: Deal ID from current request context.
+
+    Returns:
+        True if deal matches or token is tenant-wide, False otherwise.
+    """
+    if token.deal_id is None:
+        return True
+    if expected_deal_id is None:
+        return True
+    return token.deal_id == expected_deal_id

@@ -55,6 +55,18 @@ READ_ONLY_ROLES: frozenset[str] = frozenset({Role.AUDITOR.value})
 ADMIN_ONLY: frozenset[str] = frozenset({Role.ADMIN.value})
 AUDIT_READERS: frozenset[str] = frozenset({Role.AUDITOR.value, Role.ADMIN.value})
 
+# Operations that require ABAC enforcement via claim->deal resolution.
+# These operations access claim-scoped resources but don't have deal_id in URL path.
+# RBAC middleware must resolve deal_id from claim_id and enforce ABAC.
+ABAC_CLAIM_SCOPED_OPS: frozenset[str] = frozenset(
+    {
+        "getClaim",
+        "updateClaim",
+        "getClaimSanad",
+        "listClaimDefects",
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class PolicyRule:

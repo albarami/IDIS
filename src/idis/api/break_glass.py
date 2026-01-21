@@ -257,6 +257,30 @@ def validate_break_glass_token(
             error_message="Break-glass token deal mismatch",
         )
 
+    # Validate justification quality - must be at least MIN_JUSTIFICATION_LENGTH after strip
+    justification = payload.get("justification", "")
+    if not isinstance(justification, str):
+        return BreakGlassValidation(
+            valid=False,
+            error_code="invalid_justification",
+            error_message="Break-glass token has invalid justification",
+        )
+
+    justification_stripped = justification.strip()
+    if len(justification_stripped) < MIN_JUSTIFICATION_LENGTH:
+        logger.warning(
+            "Break-glass token rejected: justification too short (%d < %d)",
+            len(justification_stripped),
+            MIN_JUSTIFICATION_LENGTH,
+        )
+        return BreakGlassValidation(
+            valid=False,
+            error_code="invalid_justification",
+            error_message=(
+                f"Break-glass justification must be at least {MIN_JUSTIFICATION_LENGTH} characters"
+            ),
+        )
+
     token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
 
     return BreakGlassValidation(

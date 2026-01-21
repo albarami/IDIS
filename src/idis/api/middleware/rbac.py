@@ -39,7 +39,7 @@ from idis.api.break_glass import (
 )
 from idis.api.error_model import make_error_response_no_request
 from idis.api.errors import IdisHttpError
-from idis.api.policy import POLICY_RULES, policy_check
+from idis.api.policy import ABAC_CLAIM_SCOPED_OPS, POLICY_RULES, policy_check
 
 logger = logging.getLogger(__name__)
 
@@ -147,22 +147,43 @@ class RBACMiddleware(BaseHTTPMiddleware):
     ) -> Response | None:
         """Check ABAC for deal-scoped operations.
 
-        For claim endpoints (getClaim, updateClaim, getClaimSanad), resolves
-        deal_id from claim_id when deal_id is not in path.
+        For claim endpoints (getClaim, updateClaim, getClaimSanad, listClaimDefects),
+        resolves deal_id from claim_id when deal_id is not in path.
+
+        ABAC is enforced for:
+        1. Operations with is_deal_scoped=True and deal_id in path
+        2. Operations in ABAC_CLAIM_SCOPED_OPS with claim_id (resolve deal first)
 
         Returns:
             Response if ABAC denied, None if allowed (continue processing).
         """
         deal_id = resource_ctx.get("deal_id")
         claim_id = resource_ctx.get("claim_id")
+        is_claim_scoped_op = operation_id in ABAC_CLAIM_SCOPED_OPS
 
-        # For claim endpoints without deal_id in path, resolve deal from claim
-        claim_operations = {"getClaim", "updateClaim", "getClaimSanad"}
-        if not deal_id and claim_id and operation_id in claim_operations:
-            resolved_deal_id = resolve_deal_id_for_claim(
-                tenant_id=tenant_ctx.tenant_id,
-                claim_id=claim_id,
-            )
+        # For claim-scoped operations without deal_id in path, resolve deal from claim
+        if not deal_id and claim_id and is_claim_scoped_op:
+            try:
+                resolved_deal_id = resolve_deal_id_for_claim(
+                    tenant_id=tenant_ctx.tenant_id,
+                    claim_id=claim_id,
+                    request=request,
+                )
+            except IdisHttpError as e:
+                # Fail-closed: resolver error denies access
+                logger.error(
+                    "Claim->deal resolution failed: %s",
+                    str(e),
+                    extra={"request_id": request_id, "claim_id": claim_id},
+                )
+                return make_error_response_no_request(
+                    code="ABAC_RESOLUTION_FAILED",
+                    message="Access denied: resource resolution failed",
+                    http_status=500,
+                    request_id=request_id,
+                    details=None,
+                )
+
             if resolved_deal_id:
                 deal_id = resolved_deal_id
             else:
@@ -170,12 +191,23 @@ class RBACMiddleware(BaseHTTPMiddleware):
                 # Do not pre-deny to avoid existence leak (ADR-011)
                 return None
 
-        if not deal_id:
+        # Determine if ABAC enforcement is required
+        rule = POLICY_RULES.get(operation_id)
+
+        # ABAC required if: deal_id present AND (operation is deal-scoped OR claim-scoped)
+        requires_abac = deal_id and (
+            (rule is not None and rule.is_deal_scoped) or is_claim_scoped_op
+        )
+
+        if not requires_abac:
             return None
 
-        rule = POLICY_RULES.get(operation_id)
-        if rule is None or not rule.is_deal_scoped:
-            return None
+        # At this point, deal_id is guaranteed to be non-None (checked in requires_abac)
+        # and rule is guaranteed for claim-scoped ops
+        assert deal_id is not None, "deal_id must be set when requires_abac is True"
+
+        # For claim-scoped ops, rule may be None but we default is_mutation to False
+        is_mutation = rule.is_mutation if rule is not None else False
 
         break_glass_token_str = extract_break_glass_token(request)
         break_glass_valid = False
@@ -212,7 +244,7 @@ class RBACMiddleware(BaseHTTPMiddleware):
             actor_id=tenant_ctx.actor_id,
             roles=tenant_ctx.roles,
             deal_id=deal_id,
-            is_mutation=rule.is_mutation,
+            is_mutation=is_mutation,
             break_glass_valid=break_glass_valid,
         )
 

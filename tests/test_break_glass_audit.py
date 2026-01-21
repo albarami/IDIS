@@ -364,3 +364,210 @@ class TestJustificationHashing:
         # Verify hash is correct
         expected_hash = hashlib.sha256(valid_token.justification.encode("utf-8")).hexdigest()
         assert f"justification_sha256:{expected_hash}" in hashes
+
+
+class TestValidateBreakGlassTokenJustification:
+    """Test justification validation in validate_break_glass_token."""
+
+    def test_signed_token_with_empty_justification_rejected(self, break_glass_secret: str) -> None:
+        """A syntactically valid signed token with empty justification must be rejected."""
+        import base64
+
+        # Manually construct a token with empty justification (bypassing create check)
+        import time
+
+        now = time.time()
+        payload = {
+            "token_id": "test-token-id",
+            "actor_id": "admin",
+            "tenant_id": TEST_TENANT_ID,
+            "deal_id": TEST_DEAL_ID,
+            "justification": "",  # Empty justification
+            "iat": int(now),
+            "exp": int(now + 900),
+        }
+
+        # Sign the payload
+        import hmac
+
+        payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        signature = hmac.new(
+            break_glass_secret.encode("utf-8"),
+            payload_json.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        payload["sig"] = signature
+
+        token_json = json.dumps(payload, separators=(",", ":"))
+        token = base64.urlsafe_b64encode(token_json.encode("utf-8")).decode("utf-8")
+
+        validation = validate_break_glass_token(
+            token,
+            expected_tenant_id=TEST_TENANT_ID,
+            expected_deal_id=TEST_DEAL_ID,
+        )
+
+        assert not validation.valid
+        assert validation.error_code == "invalid_justification"
+
+    def test_signed_token_with_short_justification_rejected(self, break_glass_secret: str) -> None:
+        """A syntactically valid signed token with short justification must be rejected."""
+        import base64
+        import time
+
+        now = time.time()
+        payload = {
+            "token_id": "test-token-id",
+            "actor_id": "admin",
+            "tenant_id": TEST_TENANT_ID,
+            "deal_id": TEST_DEAL_ID,
+            "justification": "too short",  # Less than 20 chars
+            "iat": int(now),
+            "exp": int(now + 900),
+        }
+
+        import hmac
+
+        payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        signature = hmac.new(
+            break_glass_secret.encode("utf-8"),
+            payload_json.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        payload["sig"] = signature
+
+        token_json = json.dumps(payload, separators=(",", ":"))
+        token = base64.urlsafe_b64encode(token_json.encode("utf-8")).decode("utf-8")
+
+        validation = validate_break_glass_token(
+            token,
+            expected_tenant_id=TEST_TENANT_ID,
+            expected_deal_id=TEST_DEAL_ID,
+        )
+
+        assert not validation.valid
+        assert validation.error_code == "invalid_justification"
+
+    def test_signed_token_with_whitespace_only_justification_rejected(
+        self, break_glass_secret: str
+    ) -> None:
+        """A signed token with whitespace-only justification must be rejected."""
+        import base64
+        import time
+
+        now = time.time()
+        payload = {
+            "token_id": "test-token-id",
+            "actor_id": "admin",
+            "tenant_id": TEST_TENANT_ID,
+            "deal_id": TEST_DEAL_ID,
+            "justification": "                         ",  # 25 spaces
+            "iat": int(now),
+            "exp": int(now + 900),
+        }
+
+        import hmac
+
+        payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        signature = hmac.new(
+            break_glass_secret.encode("utf-8"),
+            payload_json.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        payload["sig"] = signature
+
+        token_json = json.dumps(payload, separators=(",", ":"))
+        token = base64.urlsafe_b64encode(token_json.encode("utf-8")).decode("utf-8")
+
+        validation = validate_break_glass_token(
+            token,
+            expected_tenant_id=TEST_TENANT_ID,
+            expected_deal_id=TEST_DEAL_ID,
+        )
+
+        assert not validation.valid
+        assert validation.error_code == "invalid_justification"
+
+    def test_signed_token_with_valid_justification_accepted(self, break_glass_secret: str) -> None:
+        """A signed token with valid 20+ char justification must be accepted."""
+        import base64
+        import time
+
+        now = time.time()
+        payload = {
+            "token_id": "test-token-id",
+            "actor_id": "admin",
+            "tenant_id": TEST_TENANT_ID,
+            "deal_id": TEST_DEAL_ID,
+            "justification": "This is a valid justification for break-glass access",
+            "iat": int(now),
+            "exp": int(now + 900),
+        }
+
+        import hmac
+
+        payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        signature = hmac.new(
+            break_glass_secret.encode("utf-8"),
+            payload_json.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        payload["sig"] = signature
+
+        token_json = json.dumps(payload, separators=(",", ":"))
+        token = base64.urlsafe_b64encode(token_json.encode("utf-8")).decode("utf-8")
+
+        validation = validate_break_glass_token(
+            token,
+            expected_tenant_id=TEST_TENANT_ID,
+            expected_deal_id=TEST_DEAL_ID,
+        )
+
+        assert validation.valid
+        assert validation.token is not None
+
+
+class TestAuditPayloadSchemaValidation:
+    """Test that invalid audit payloads are rejected (fail-closed)."""
+
+    def test_invalid_payload_with_break_glass_key_fails_validation(
+        self, valid_token: BreakGlassToken, mock_request: MagicMock
+    ) -> None:
+        """Audit payload with break_glass key (schema violation) must fail validation."""
+        from idis.validators.audit_event_validator import validate_audit_event
+
+        # Construct an invalid event with break_glass directly in payload
+        invalid_event = {
+            "event_id": str(uuid.uuid4()),
+            "occurred_at": "2026-01-21T00:00:00Z",
+            "tenant_id": TEST_TENANT_ID,
+            "actor": {
+                "actor_type": "HUMAN",
+                "actor_id": "admin",
+                "roles": ["ADMIN"],
+                "ip": "127.0.0.1",
+                "user_agent": "Test",
+            },
+            "request": {
+                "request_id": str(uuid.uuid4()),
+                "method": "GET",
+                "path": "/v1/deals/123",
+                "status_code": 200,
+            },
+            "resource": {
+                "resource_type": "deal",
+                "resource_id": TEST_DEAL_ID,
+            },
+            "event_type": "break_glass.used",
+            "severity": "CRITICAL",
+            "summary": "Break-glass access",
+            "payload": {
+                "break_glass": {  # This violates additionalProperties: false
+                    "scope": "tenant-wide",
+                    "justification": "raw justification text",
+                },
+            },
+        }
+
+        result = validate_audit_event(invalid_event)
+        assert not result.passed, "Schema should reject payload with break_glass key"

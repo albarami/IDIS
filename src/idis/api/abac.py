@@ -18,12 +18,15 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
+from idis.api.errors import IdisHttpError
 from idis.api.policy import Role
 
 if TYPE_CHECKING:
     from collections.abc import Set
+
+    from fastapi import Request
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +139,68 @@ class InMemoryClaimDealResolver:
         self._claim_deals.clear()
 
 
+class PostgresClaimDealResolver:
+    """Postgres-backed claim->deal resolver for production use.
+
+    Queries the claims table to resolve claim_id to deal_id under tenant RLS.
+    Fail-closed: raises IdisHttpError if DB query fails when DB is available.
+    """
+
+    def resolve_deal_id_for_claim(
+        self,
+        tenant_id: str,
+        claim_id: str,
+        db_conn: Any = None,
+    ) -> str | None:
+        """Resolve claim_id to deal_id via database query.
+
+        Must execute under tenant RLS context.
+        Per ADR-011: Returns None for unknown claims (no existence leak).
+
+        Args:
+            tenant_id: Tenant ID for RLS scoping.
+            claim_id: Claim ID to resolve.
+            db_conn: Database connection from request.state.db_conn.
+
+        Returns:
+            deal_id if claim found, None otherwise.
+
+        Raises:
+            IdisHttpError: If DB is available but query fails (fail-closed).
+        """
+        if db_conn is None:
+            # No DB connection - cannot resolve, return None (caller handles)
+            return None
+
+        try:
+            # Query claims table for deal_id
+            # RLS ensures tenant isolation automatically
+            cursor = db_conn.execute(
+                """
+                SELECT deal_id FROM claims
+                WHERE id = %s AND tenant_id = %s
+                LIMIT 1
+                """,
+                (claim_id, tenant_id),
+            )
+            row = cursor.fetchone()
+            if row:
+                return str(row[0])
+            return None
+        except Exception as e:
+            # Fail-closed: DB error means we cannot verify access
+            logger.error(
+                "PostgresClaimDealResolver query failed: %s",
+                str(e),
+                extra={"tenant_id": tenant_id, "claim_id": claim_id},
+            )
+            raise IdisHttpError(
+                status_code=500,
+                code="claim_resolution_failed",
+                message="Failed to resolve claim access",
+            ) from e
+
+
 class InMemoryDealAssignmentStore:
     """In-memory deal assignment store for testing and development.
 
@@ -212,11 +277,16 @@ def resolve_deal_id_for_claim(
     tenant_id: str,
     claim_id: str,
     resolver: ClaimDealResolver | None = None,
+    request: Request | None = None,
 ) -> str | None:
     """Resolve a claim_id to its parent deal_id.
 
     This function is the main entry point for claim->deal resolution.
     Must execute under tenant RLS context.
+
+    Resolution strategy:
+    1. If request has db_conn, use PostgresClaimDealResolver (production)
+    2. Otherwise, use configured resolver (in-memory for tests)
 
     Per ADR-011: Returns None for unknown claims (no cross-tenant existence leak).
 
@@ -224,13 +294,25 @@ def resolve_deal_id_for_claim(
         tenant_id: Tenant ID from auth context.
         claim_id: Claim ID to resolve.
         resolver: Optional resolver override (for testing).
+        request: Optional FastAPI request for DB connection access.
 
     Returns:
         deal_id if claim found and accessible, None otherwise.
+
+    Raises:
+        IdisHttpError: If DB is available but query fails (fail-closed).
     """
     if not tenant_id or not claim_id:
         return None
 
+    # Production path: use Postgres resolver when DB connection is available
+    if request is not None:
+        db_conn = getattr(request.state, "db_conn", None)
+        if db_conn is not None:
+            postgres_resolver = PostgresClaimDealResolver()
+            return postgres_resolver.resolve_deal_id_for_claim(tenant_id, claim_id, db_conn=db_conn)
+
+    # Test/fallback path: use configured resolver
     if resolver is None:
         resolver = get_claim_deal_resolver()
 

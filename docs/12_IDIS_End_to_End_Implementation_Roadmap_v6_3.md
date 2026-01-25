@@ -828,12 +828,23 @@ docs(phase-6): update roadmap with Phase 6 completion
 - RB-01 through RB-10 runbooks with required structure (Detection → Triage → Containment → Recovery → Verification → Postmortem)
 - Tests: `tests/test_slo_metrics.py`, `tests/test_alert_rules.py`
 
-#### Task 7.5: Data Residency + Compliance ⏳ NOT STARTED
+#### Task 7.5: Data Residency + Compliance ✅ COMPLETE
 | Deliverable | Module | Status |
 |-------------|--------|--------|
-| Data residency controls | `src/idis/compliance/residency.py` | ⏳ |
-| BYOK (customer keys) | `src/idis/compliance/byok.py` | ⏳ |
-| Retention/legal hold | `src/idis/compliance/retention.py` | ⏳ |
+| Data residency controls | `src/idis/compliance/residency.py` | ✅ |
+| BYOK (customer keys) | `src/idis/compliance/byok.py` | ✅ |
+| Retention/legal hold | `src/idis/compliance/retention.py` | ✅ |
+| Residency middleware | `src/idis/api/middleware/residency.py` | ✅ |
+
+**Implementation Notes:**
+- Fail-closed region enforcement: missing config or mismatch returns 403 with stable code
+- BYOK key states (ACTIVE/REVOKED) with audit-enforced mutations (configure/rotate/revoke)
+- Revoked BYOK key denies Class2/3 data access
+- Legal hold registry with CRITICAL severity audit events for apply/lift
+- Hold reason content never logged raw (hash/length only per v6.3 §6.3)
+- Deletion blocked for resources under active legal hold
+- No Class2/3 leakage in logs or error messages
+- Tests: `tests/test_data_residency.py`, `tests/test_byok.py`, `tests/test_retention_hold.py`
 
 #### Task 7.6: Infrastructure ⏳ NOT STARTED
 | Deliverable | Location | Status |
@@ -850,7 +861,9 @@ docs(phase-6): update roadmap with Phase 6 completion
 | `test_abac.py` | ✅ |
 | `test_prompt_registry.py` | ✅ |
 | `test_evaluation_harness.py` | ✅ |
-| `test_data_residency.py` | ⏳ Needed |
+| `test_data_residency.py` | ✅ |
+| `test_byok.py` | ✅ |
+| `test_retention_hold.py` | ✅ |
 
 **Git Commits (Planned):**
 ```
@@ -868,14 +881,14 @@ docs(phase-7): update roadmap with Phase 7 completion
 ```
 
 **Exit Criteria:**
-- [ ] SSO integration working
-- [ ] ABAC with deal-level access
-- [ ] Prompt registry with audited promotion/rollback
-- [ ] GDBS benchmarks passing (Gate 0-4 in CI)
-- [ ] SLO dashboards operational
-- [ ] Data residency controls enforced
+- [x] SSO integration working
+- [x] ABAC with deal-level access
+- [x] Prompt registry with audited promotion/rollback
+- [x] GDBS benchmarks passing (Gate 0-4 in CI)
+- [x] SLO dashboards operational
+- [x] Data residency controls enforced
 - [ ] Infrastructure artifacts complete
-- [ ] Runbooks published
+- [x] Runbooks published
 - [ ] Gate 4 (human review 10-deal sample)
 
 ---

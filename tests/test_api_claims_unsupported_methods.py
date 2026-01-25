@@ -30,7 +30,7 @@ def api_keys_config() -> dict[str, dict[str, str | list[str]]]:
             "actor_id": "actor-a-uuid",
             "name": "Tenant A",
             "timezone": "UTC",
-            "data_region": "us-east-1",
+            "data_region": "me-south-1",
             "roles": ["ANALYST"],
         },
     }
@@ -43,7 +43,7 @@ def client(
 ) -> TestClient:
     """Create a test client with API keys configured."""
     monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys_config))
-    app = create_app()
+    app = create_app(service_region="me-south-1")
     return TestClient(app, raise_server_exceptions=False)
 
 

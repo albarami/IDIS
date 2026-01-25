@@ -20,6 +20,7 @@ from idis.api.middleware.openapi_validate import OpenAPIValidationMiddleware
 from idis.api.middleware.rate_limit import RateLimitMiddleware
 from idis.api.middleware.rbac import RBACMiddleware
 from idis.api.middleware.request_id import RequestIdMiddleware
+from idis.api.middleware.residency import ResidencyMiddleware
 from idis.api.middleware.tracing import TracingEnrichmentMiddleware
 from idis.api.routes.audit import router as audit_router
 from idis.api.routes.claims import router as claims_router
@@ -60,6 +61,7 @@ def create_app(
     rate_limiter: TenantRateLimiter | None = None,
     postgres_audit_sink: PostgresAuditSink | None = None,
     postgres_idempotency_store: PostgresIdempotencyStore | None = None,
+    service_region: str | None = None,
 ) -> FastAPI:
     """Create and configure the IDIS FastAPI application.
 
@@ -75,9 +77,10 @@ def create_app(
     2. DBTransactionMiddleware - opens DB connection when Postgres configured
     3. AuditMiddleware - captures all responses including early returns
     4. OpenAPIValidationMiddleware - handles auth, sets tenant context + DB tenant
-    5. RateLimitMiddleware - tenant-scoped rate limiting (sees tenant + roles)
-    6. RBACMiddleware - enforces deny-by-default authorization
-    7. IdempotencyMiddleware - innermost, uses tenant context and operation_id
+    5. ResidencyMiddleware - enforces data residency region pinning
+    6. RateLimitMiddleware - tenant-scoped rate limiting (sees tenant + roles)
+    7. RBACMiddleware - enforces deny-by-default authorization
+    8. IdempotencyMiddleware - innermost, uses tenant context and operation_id
 
     Note: Starlette middleware is added in reverse order (last added = outermost).
     RequestIdMiddleware is added last so it runs first and sets request_id.
@@ -94,6 +97,8 @@ def create_app(
         rate_limiter: Optional TenantRateLimiter for testing. If None, uses default.
         postgres_audit_sink: Optional PostgresAuditSink for in-transaction audit.
         postgres_idempotency_store: Optional PostgresIdempotencyStore for in-tx idempotency.
+        service_region: Optional service region for residency enforcement. If None,
+            reads from IDIS_SERVICE_REGION env var (fails closed with 403 if unset).
 
     Returns:
         Configured FastAPI application instance.
@@ -116,6 +121,7 @@ def create_app(
     )
     app.add_middleware(RBACMiddleware)
     app.add_middleware(RateLimitMiddleware, limiter=rate_limiter)
+    app.add_middleware(ResidencyMiddleware, service_region=service_region)
     app.add_middleware(TracingEnrichmentMiddleware)
     app.add_middleware(OpenAPIValidationMiddleware)
     app.add_middleware(AuditMiddleware, sink=audit_sink, postgres_sink=postgres_audit_sink)

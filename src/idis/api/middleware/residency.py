@@ -38,11 +38,11 @@ logger = logging.getLogger(__name__)
 class ResidencyMiddleware(BaseHTTPMiddleware):
     """Middleware that enforces data residency region pinning.
 
-    Behavior:
+    Behavior (FAIL-CLOSED):
     1. Skip non-/v1 paths (health, public endpoints)
     2. If no tenant_context, skip (auth middleware handles 401)
     3. Get service region from environment or constructor
-    4. If service region not configured, skip with warning (dev mode)
+    4. If service region not configured, DENY with 403 (fail closed)
     5. Call enforce_region_pin() - fails closed on mismatch
 
     All denials use the normative error envelope with X-Request-Id header.
@@ -87,11 +87,18 @@ class ResidencyMiddleware(BaseHTTPMiddleware):
         service_region = self._get_service_region()
 
         if not service_region:
-            logger.debug(
-                "Residency enforcement skipped: %s not configured",
+            logger.error(
+                "Residency enforcement DENIED: %s not configured (fail-closed)",
                 IDIS_SERVICE_REGION_ENV,
+                extra={"request_id": request_id},
             )
-            return await call_next(request)
+            return make_error_response_no_request(
+                code="RESIDENCY_SERVICE_REGION_UNSET",
+                message="Access denied",
+                http_status=403,
+                request_id=request_id,
+                details=None,
+            )
 
         try:
             enforce_region_pin(tenant_ctx, service_region)

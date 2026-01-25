@@ -97,7 +97,7 @@ def client_with_audit_sink(
     monkeypatch.setenv(AUDIT_LOG_PATH_ENV, str(audit_log_path))
 
     sink = JsonlFileAuditSink(str(audit_log_path))
-    app = create_app(audit_sink=sink)
+    app = create_app(audit_sink=sink, service_region="us-east-1")
     return TestClient(app)
 
 

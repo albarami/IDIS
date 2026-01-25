@@ -267,7 +267,7 @@ class TestUserTierHits429AfterCapacity:
         try:
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
             limiter = TenantRateLimiter()
-            app = create_app(audit_sink=sink, rate_limiter=limiter)
+            app = create_app(audit_sink=sink, rate_limiter=limiter, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             responses = []
@@ -324,7 +324,7 @@ class TestIntegrationTierHigherLimit:
         try:
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
             limiter = TenantRateLimiter()
-            app = create_app(audit_sink=sink, rate_limiter=limiter)
+            app = create_app(audit_sink=sink, rate_limiter=limiter, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             responses = []
@@ -373,7 +373,7 @@ class TestTenantIsolation:
         try:
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
             limiter = TenantRateLimiter()
-            app = create_app(audit_sink=sink, rate_limiter=limiter)
+            app = create_app(audit_sink=sink, rate_limiter=limiter, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             for _ in range(5):
@@ -423,7 +423,7 @@ class TestErrorEnvelopeCompliance:
         try:
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
             limiter = TenantRateLimiter()
-            app = create_app(audit_sink=sink, rate_limiter=limiter)
+            app = create_app(audit_sink=sink, rate_limiter=limiter, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             client.get(
@@ -473,7 +473,7 @@ class TestErrorEnvelopeCompliance:
         try:
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
             limiter = TenantRateLimiter()
-            app = create_app(audit_sink=sink, rate_limiter=limiter)
+            app = create_app(audit_sink=sink, rate_limiter=limiter, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             client.get(
@@ -513,7 +513,7 @@ class TestErrorEnvelopeCompliance:
         try:
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
             limiter = TenantRateLimiter()
-            app = create_app(audit_sink=sink, rate_limiter=limiter)
+            app = create_app(audit_sink=sink, rate_limiter=limiter, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             client.get(
@@ -556,7 +556,7 @@ class TestRateLimitHeaders:
         try:
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
             limiter = TenantRateLimiter()
-            app = create_app(audit_sink=sink, rate_limiter=limiter)
+            app = create_app(audit_sink=sink, rate_limiter=limiter, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.get(
@@ -592,7 +592,7 @@ class TestNonV1PathsNotRateLimited:
         try:
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
             limiter = TenantRateLimiter()
-            app = create_app(audit_sink=sink, rate_limiter=limiter)
+            app = create_app(audit_sink=sink, rate_limiter=limiter, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             for _ in range(10):
@@ -618,7 +618,7 @@ class TestUnauthenticatedRequestsSkipRateLimit:
         try:
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
             limiter = TenantRateLimiter()
-            app = create_app(audit_sink=sink, rate_limiter=limiter)
+            app = create_app(audit_sink=sink, rate_limiter=limiter, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             for _ in range(5):

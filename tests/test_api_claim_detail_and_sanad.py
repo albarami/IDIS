@@ -197,7 +197,7 @@ class TestClaimDetailEndpoint:
             claim_id, _ = _seed_claim_with_sanad(tenant_id, deal_id)
 
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.get(
@@ -239,7 +239,7 @@ class TestClaimDetailEndpoint:
 
         try:
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.get(
@@ -264,7 +264,7 @@ class TestClaimDetailEndpoint:
 
         try:
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.get(
@@ -312,7 +312,7 @@ class TestClaimDetailEndpoint:
             )
 
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.get(
@@ -351,7 +351,7 @@ class TestSanadChainEndpoint:
             claim_id, sanad_id = _seed_claim_with_sanad(tenant_id, deal_id)
 
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.get(
@@ -396,7 +396,7 @@ class TestSanadChainEndpoint:
             claim_id, _ = _seed_claim_with_sanad(tenant_id, deal_id)
 
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response1 = client.get(
@@ -440,7 +440,7 @@ class TestSanadChainEndpoint:
 
         try:
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.get(
@@ -487,7 +487,7 @@ class TestSanadChainEndpoint:
             )
 
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.get(
@@ -521,7 +521,7 @@ class TestClaimAndSanadRBAC:
             claim_id, _ = _seed_claim_with_sanad(tenant_id, deal_id)
 
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.get(
@@ -551,7 +551,7 @@ class TestClaimAndSanadRBAC:
             claim_id, _ = _seed_claim_with_sanad(tenant_id, deal_id)
 
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.get(
@@ -575,7 +575,7 @@ class TestClaimAndSanadRBAC:
 
         try:
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.get(f"/v1/claims/{claim_id}")
@@ -595,7 +595,7 @@ class TestClaimAndSanadRBAC:
 
         try:
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.get(f"/v1/claims/{claim_id}/sanad")

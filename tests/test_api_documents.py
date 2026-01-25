@@ -105,7 +105,7 @@ def api_keys_config_multi(
             "actor_id": actor_b_id,
             "name": "Tenant B",
             "timezone": "America/New_York",
-            "data_region": "us-east-1",
+            "data_region": "me-south-1",
             "roles": ["ANALYST"],
         },
     }

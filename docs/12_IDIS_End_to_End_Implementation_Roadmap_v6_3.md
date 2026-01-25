@@ -828,22 +828,27 @@ docs(phase-6): update roadmap with Phase 6 completion
 - RB-01 through RB-10 runbooks with required structure (Detection → Triage → Containment → Recovery → Verification → Postmortem)
 - Tests: `tests/test_slo_metrics.py`, `tests/test_alert_rules.py`
 
-#### Task 7.5: Data Residency + Compliance ✅ COMPLETE
+#### Task 7.5: Data Residency + Compliance 🔄 IN PROGRESS (Codex Review)
 | Deliverable | Module | Status |
 |-------------|--------|--------|
 | Data residency controls | `src/idis/compliance/residency.py` | ✅ |
 | BYOK (customer keys) | `src/idis/compliance/byok.py` | ✅ |
 | Retention/legal hold | `src/idis/compliance/retention.py` | ✅ |
 | Residency middleware | `src/idis/api/middleware/residency.py` | ✅ |
+| Compliant storage wrapper | `src/idis/storage/compliant_store.py` | ✅ |
+| Middleware registered in main.py | `src/idis/api/main.py` | ✅ |
 
-**Implementation Notes:**
-- Fail-closed region enforcement: missing config or mismatch returns 403 with stable code
+**Implementation Notes (v2 - Codex remediation):**
+- ResidencyMiddleware registered in main.py middleware stack
+- Fail-closed region enforcement: missing service region config returns 403 `RESIDENCY_SERVICE_REGION_UNSET`
+- BYOK audit required: missing audit_sink fails with 500 `BYOK_AUDIT_REQUIRED` (no silent return)
 - BYOK key states (ACTIVE/REVOKED) with audit-enforced mutations (configure/rotate/revoke)
-- Revoked BYOK key denies Class2/3 data access
+- Revoked BYOK key denies Class2/3 data access at ComplianceEnforcedStore boundary
 - Legal hold registry with CRITICAL severity audit events for apply/lift
+- Legal hold blocks deletion at ComplianceEnforcedStore boundary
 - Hold reason content never logged raw (hash/length only per v6.3 §6.3)
-- Deletion blocked for resources under active legal hold
 - No Class2/3 leakage in logs or error messages
+- Traceability test `test_customer_key_used` verifies BYOK at storage boundary
 - Tests: `tests/test_data_residency.py`, `tests/test_byok.py`, `tests/test_retention_hold.py`
 
 #### Task 7.6: Infrastructure ⏳ NOT STARTED

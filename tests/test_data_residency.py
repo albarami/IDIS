@@ -265,14 +265,20 @@ class TestResidencyMiddleware:
         response = client.get("/v1/test")
         assert response.status_code == 200
 
-    def test_skips_when_no_service_region_configured(self) -> None:
-        """Skips enforcement when service region not configured (dev mode)."""
+    def test_denies_when_no_service_region_configured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Denies with 403 when service region not configured (fail-closed)."""
+        monkeypatch.delenv(IDIS_SERVICE_REGION_ENV, raising=False)
         app = self._create_app(service_region=None)
         self._inject_tenant_context(app, data_region="me-south-1")
         client = TestClient(app, raise_server_exceptions=False)
 
         response = client.get("/v1/test")
-        assert response.status_code == 200
+        assert response.status_code == 403
+        data = response.json()
+        assert data["code"] == "RESIDENCY_SERVICE_REGION_UNSET"
+        assert data["message"] == "Access denied"
 
     def test_error_includes_request_id(self) -> None:
         """Error response includes request_id for tracing."""

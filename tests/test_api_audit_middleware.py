@@ -63,7 +63,7 @@ class TestAuditMiddlewareEmission:
 
         try:
             sink = JsonlFileAuditSink(str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.post(
@@ -107,7 +107,7 @@ class TestAuditMiddlewareEmission:
 
         try:
             sink = JsonlFileAuditSink(str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             client.post(
@@ -162,7 +162,7 @@ class TestAuditMiddlewareFailClosed:
 
         try:
             sink = JsonlFileAuditSink(str(bad_sink_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             # Use valid JSON to trigger a mutation that would need auditing
@@ -199,7 +199,7 @@ class TestAuditMiddlewareNoAuditForNonMutating:
 
         try:
             sink = JsonlFileAuditSink(str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.get("/health")
@@ -223,7 +223,7 @@ class TestAuditMiddlewareNoAuditForNonMutating:
 
         try:
             sink = JsonlFileAuditSink(str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.get(
@@ -250,7 +250,7 @@ class TestAuditMiddlewareNoAuditForNonMutating:
 
         try:
             sink = JsonlFileAuditSink(str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.post(
@@ -282,7 +282,7 @@ class TestAuditEventValidation:
 
         try:
             sink = JsonlFileAuditSink(str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             client.post(

@@ -194,7 +194,8 @@ def _emit_audit_or_fail(
 ) -> None:
     """Emit audit event or fail the operation.
 
-    Audit emission is fatal per v6.3 requirements.
+    Audit emission is fatal per v6.3 requirements (FAIL-CLOSED).
+    If audit_sink is None, the operation MUST fail.
 
     Args:
         audit_sink: The audit sink to emit to.
@@ -202,11 +203,18 @@ def _emit_audit_or_fail(
         operation: Description of the operation for error messages.
 
     Raises:
-        IdisHttpError: 500 if audit emission fails.
+        IdisHttpError: 500 if audit sink missing or emission fails.
     """
     if audit_sink is None:
-        logger.warning("BYOK audit sink not configured; %s audit skipped", operation)
-        return
+        logger.error(
+            "BYOK audit sink not configured; %s BLOCKED (fail-closed)",
+            operation,
+        )
+        raise IdisHttpError(
+            status_code=500,
+            code="BYOK_AUDIT_REQUIRED",
+            message="Operation failed: audit requirement not met",
+        )
 
     try:
         audit_sink.emit(event)

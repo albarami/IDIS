@@ -25,9 +25,21 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
+from idis.api.abac import (
+    InMemoryDealAssignmentStore,
+    get_deal_assignment_store,
+)
 from idis.api.auth import IDIS_API_KEYS_ENV
 from idis.api.main import create_app
 from idis.persistence.db import set_tenant_local
+
+
+def _assign_actor_to_deal(tenant_id: str, deal_id: str, actor_id: str) -> None:
+    """Helper to assign an actor to a deal for ABAC access."""
+    store = get_deal_assignment_store()
+    if isinstance(store, InMemoryDealAssignmentStore):
+        store.add_assignment(tenant_id, deal_id, actor_id)
+
 
 if TYPE_CHECKING:
     from sqlalchemy import Engine
@@ -574,6 +586,9 @@ class TestClaimsAPIPostgresReadPath:
                 claim_grade="A",
                 claim_verdict="VERIFIED",
             )
+
+        # Assign actor to deal for ABAC access
+        _assign_actor_to_deal(TENANT_A_ID, deal_id, ACTOR_A_ID)
 
         response = client_with_postgres.get(
             f"/v1/claims/{claim_id}",

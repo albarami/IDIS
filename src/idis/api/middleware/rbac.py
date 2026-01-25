@@ -170,18 +170,19 @@ class RBACMiddleware(BaseHTTPMiddleware):
                     request=request,
                 )
             except IdisHttpError as e:
-                # Fail-closed: resolver error denies access
-                logger.error(
+                # Fail-closed: resolver error denies access (403, not 500)
+                # This is an authorization denial, not a server error
+                logger.warning(
                     "Claim->deal resolution failed: %s",
                     str(e),
                     extra={"request_id": request_id, "claim_id": claim_id},
                 )
                 return make_error_response_no_request(
                     code="ABAC_RESOLUTION_FAILED",
-                    message="Access denied: resource resolution failed",
-                    http_status=500,
+                    message="Access denied.",
+                    http_status=403,
                     request_id=request_id,
-                    details=None,
+                    details={"reason": "resolver_unavailable"},
                 )
 
             if resolved_deal_id:
@@ -300,7 +301,7 @@ class RBACMiddleware(BaseHTTPMiddleware):
         )
 
     def _extract_resource_context(self, request: Request) -> dict[str, str | None]:
-        """Extract resource IDs from path parameters.
+        """Extract resource IDs from path parameters and URL path.
 
         Maps OpenAPI path param names to policy_check kwargs:
         - dealId / deal_id -> deal_id
@@ -311,8 +312,14 @@ class RBACMiddleware(BaseHTTPMiddleware):
         - sanad_id -> sanad_id
         - defect_id -> defect_id
 
+        Note: In BaseHTTPMiddleware, request.path_params may not be populated
+        until after route matching. We use regex fallback to extract IDs from
+        the URL path directly to ensure ABAC enforcement for claim endpoints.
+
         Returns dict with None for missing params. Fail-closed on malformed values.
         """
+        import re
+
         path_params: dict[str, str] = dict(request.path_params) if request.path_params else {}
 
         result: dict[str, str | None] = {
@@ -341,5 +348,19 @@ class RBACMiddleware(BaseHTTPMiddleware):
             value = path_params.get(openapi_name)
             if value is not None and isinstance(value, str) and value.strip():
                 result[policy_name] = value.strip()
+
+        # Fallback: parse URL path directly for claim_id when not found in path_params
+        # This is needed because BaseHTTPMiddleware runs before route matching,
+        # and claim-scoped operations need claim_id for the claim→deal resolver.
+        # Note: We only extract claim_id here, not deal_id, to avoid breaking
+        # ABAC enforcement on deal endpoints that rely on path_params being
+        # properly populated by the router.
+        if result["claim_id"] is None:
+            path = request.url.path
+            uuid_pattern = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+            # Match /v1/claims/{uuid} or /v1/claims/{uuid}/...
+            claim_match = re.search(rf"/v1/claims/({uuid_pattern})", path, re.IGNORECASE)
+            if claim_match:
+                result["claim_id"] = claim_match.group(1)
 
         return result

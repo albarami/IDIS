@@ -619,10 +619,24 @@ def ingest_document(
 
     ingestion_service = getattr(request.app.state, "ingestion_service", None)
     if ingestion_service is not None:
-        object_store = getattr(ingestion_service, "_object_store", None)
-        if object_store is not None:
+        compliant_store = getattr(ingestion_service, "_compliant_store", None)
+        if compliant_store is not None:
             try:
-                stored_obj = object_store.get(tenant_ctx.tenant_id, uri)
+                from idis.api.auth import TenantContext as TenantCtx
+                from idis.compliance.byok import DataClass
+
+                ctx_for_store = TenantCtx(
+                    tenant_id=tenant_ctx.tenant_id,
+                    actor_id=tenant_ctx.actor_id,
+                    name=getattr(tenant_ctx, "name", "api"),
+                    timezone=getattr(tenant_ctx, "timezone", "UTC"),
+                    data_region=getattr(tenant_ctx, "data_region", "me-south-1"),
+                )
+                stored_obj = compliant_store.get(
+                    tenant_ctx=ctx_for_store,
+                    key=uri,
+                    data_class=DataClass.CLASS_2,
+                )
                 actual_data = stored_obj.body
 
                 if expected_sha256:

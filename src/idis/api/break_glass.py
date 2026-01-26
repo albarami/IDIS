@@ -472,8 +472,8 @@ def validate_deal_binding(
     Returns:
         True if deal matches or token is tenant-wide, False otherwise.
     """
-    if token.deal_id is None:
-        return True
-    if expected_deal_id is None:
-        return True
-    return token.deal_id == expected_deal_id
+    token_is_tenant_wide = token.deal_id is None
+    request_has_no_deal = expected_deal_id is None
+    deals_match = token.deal_id == expected_deal_id
+
+    return token_is_tenant_wide or request_has_no_deal or deals_match

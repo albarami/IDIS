@@ -119,7 +119,9 @@ def client_with_idempotency(
     audit_sink = InMemoryAuditSink()
     idem_store = SqliteIdempotencyStore(in_memory=True)
 
-    app = create_app(audit_sink=audit_sink, idempotency_store=idem_store, service_region="me-south-1")
+    app = create_app(
+        audit_sink=audit_sink, idempotency_store=idem_store, service_region="me-south-1"
+    )
     return TestClient(app)
 
 
@@ -137,7 +139,9 @@ def client_multi_tenant(
     audit_sink = InMemoryAuditSink()
     idem_store = SqliteIdempotencyStore(in_memory=True)
 
-    app = create_app(audit_sink=audit_sink, idempotency_store=idem_store, service_region="me-south-1")
+    app = create_app(
+        audit_sink=audit_sink, idempotency_store=idem_store, service_region="me-south-1"
+    )
     return TestClient(app)
 
 
@@ -171,7 +175,9 @@ def client_with_broken_store(
     audit_sink = InMemoryAuditSink()
     broken_store = BrokenIdempotencyStore()
 
-    app = create_app(audit_sink=audit_sink, idempotency_store=broken_store, service_region="me-south-1")
+    app = create_app(
+        audit_sink=audit_sink, idempotency_store=broken_store, service_region="me-south-1"
+    )
     return TestClient(app)
 
 
@@ -786,7 +792,9 @@ class TestActorIsolation:
         audit_sink = InMemoryAuditSink()
         idem_store = SqliteIdempotencyStore(in_memory=True)
 
-        app = create_app(audit_sink=audit_sink, idempotency_store=idem_store, service_region="me-south-1")
+        app = create_app(
+            audit_sink=audit_sink, idempotency_store=idem_store, service_region="me-south-1"
+        )
         return TestClient(app)
 
     def test_same_tenant_different_actor_creates_separate_deals(
@@ -896,7 +904,9 @@ class TestStorePutFailure:
         audit_sink = InMemoryAuditSink()
         failing_store = FailingIdempotencyStore()
 
-        app = create_app(audit_sink=audit_sink, idempotency_store=failing_store, service_region="me-south-1")
+        app = create_app(
+            audit_sink=audit_sink, idempotency_store=failing_store, service_region="me-south-1"
+        )
 
         return TestClient(app)
 

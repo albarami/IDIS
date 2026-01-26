@@ -38,6 +38,14 @@ def object_store(temp_storage_dir: Path) -> Any:
 
 
 @pytest.fixture
+def compliant_store(object_store: Any) -> Any:
+    """Create a ComplianceEnforcedStore wrapping the FilesystemObjectStore."""
+    from idis.storage.compliant_store import ComplianceEnforcedStore
+
+    return ComplianceEnforcedStore(inner_store=object_store)
+
+
+@pytest.fixture
 def audit_sink() -> Any:
     """Create an in-memory audit sink for testing."""
     from idis.audit.sink import InMemoryAuditSink
@@ -46,12 +54,12 @@ def audit_sink() -> Any:
 
 
 @pytest.fixture
-def ingestion_service(object_store: Any, audit_sink: Any) -> Any:
-    """Create an IngestionService with test dependencies."""
+def ingestion_service(compliant_store: Any, audit_sink: Any) -> Any:
+    """Create an IngestionService with compliance-enforced store."""
     from idis.services.ingestion import IngestionService
 
     return IngestionService(
-        object_store=object_store,
+        compliant_store=compliant_store,
         audit_sink=audit_sink,
     )
 
@@ -559,7 +567,7 @@ class TestTenantIsolation:
 
     def test_same_bytes_different_tenants_no_collision(
         self,
-        object_store: Any,
+        compliant_store: Any,
         audit_sink: Any,
         tenant_a: UUID,
         tenant_b: UUID,
@@ -568,7 +576,7 @@ class TestTenantIsolation:
         from idis.services.ingestion import IngestionContext, IngestionService
 
         service = IngestionService(
-            object_store=object_store,
+            compliant_store=compliant_store,
             audit_sink=audit_sink,
         )
 
@@ -611,7 +619,7 @@ class TestTenantIsolation:
 
     def test_tenant_a_cannot_access_tenant_b_artifacts(
         self,
-        object_store: Any,
+        compliant_store: Any,
         audit_sink: Any,
         tenant_a: UUID,
         tenant_b: UUID,
@@ -620,7 +628,7 @@ class TestTenantIsolation:
         from idis.services.ingestion import IngestionContext, IngestionService
 
         service = IngestionService(
-            object_store=object_store,
+            compliant_store=compliant_store,
             audit_sink=audit_sink,
         )
 
@@ -657,7 +665,7 @@ class TestDeterminismRegression:
 
     def test_same_bytes_twice_stable_span_ordering(
         self,
-        object_store: Any,
+        compliant_store: Any,
         audit_sink: Any,
         tenant_a: UUID,
     ) -> None:
@@ -667,11 +675,11 @@ class TestDeterminismRegression:
         xlsx_bytes = _create_minimal_xlsx()
 
         service1 = IngestionService(
-            object_store=object_store,
+            compliant_store=compliant_store,
             audit_sink=audit_sink,
         )
         service2 = IngestionService(
-            object_store=object_store,
+            compliant_store=compliant_store,
             audit_sink=audit_sink,
         )
 
@@ -806,7 +814,7 @@ class TestFileSizeLimit:
 
     def test_oversized_file_rejected(
         self,
-        object_store: Any,
+        compliant_store: Any,
         audit_sink: Any,
         tenant_a: UUID,
     ) -> None:
@@ -818,7 +826,7 @@ class TestFileSizeLimit:
         )
 
         service = IngestionService(
-            object_store=object_store,
+            compliant_store=compliant_store,
             audit_sink=audit_sink,
             max_bytes=100,
         )

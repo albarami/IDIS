@@ -3,13 +3,17 @@
 Wraps any ObjectStore implementation with compliance enforcement:
 - BYOK key revocation check at storage boundary (Class2/3 data)
 - Legal hold deletion protection
+- Persists BYOK metadata as sidecar evidence for audit
 
 This is the non-bypassable boundary for compliance controls per v6.3 §5.3 and §6.3.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from idis.compliance.byok import (
@@ -117,9 +121,10 @@ class ComplianceEnforcedStore:
         content_type: str | None = None,
         data_class: DataClass = DataClass.CLASS_2,
     ) -> StoredObjectMetadata:
-        """Store an object with BYOK enforcement.
+        """Store an object with BYOK enforcement and evidence persistence.
 
         For Class2/3 data, BYOK key must be active if configured.
+        Persists BYOK metadata as sidecar evidence for audit compliance.
 
         Args:
             tenant_ctx: Tenant context (required for compliance).
@@ -144,15 +149,77 @@ class ComplianceEnforcedStore:
         )
 
         byok_metadata = get_key_metadata(tenant_ctx, self._byok_registry)
-        if byok_metadata:
+        if byok_metadata and data_class in (DataClass.CLASS_2, DataClass.CLASS_3):
+            self._persist_byok_evidence(
+                tenant_ctx=tenant_ctx,
+                key=key,
+                byok_metadata=byok_metadata,
+                data_class=data_class,
+            )
             logger.info(
-                "Object stored with BYOK: tenant=%s, key=%s, kms_key_hash=%s",
+                "Object stored with BYOK evidence: tenant=%s, key=%s, kms_key_hash=%s",
                 tenant_ctx.tenant_id,
                 key,
                 byok_metadata.get("kms_key_alias_hash"),
             )
 
         return metadata
+
+    def _persist_byok_evidence(
+        self,
+        tenant_ctx: TenantContext,
+        key: str,
+        byok_metadata: dict[str, str],
+        data_class: DataClass,
+    ) -> None:
+        """Persist BYOK usage evidence as sidecar metadata.
+
+        This creates deterministic, non-sensitive evidence that customer keys
+        were used for Class2/3 storage operations. The evidence file includes:
+        - kms_key_alias_hash (SHA256 prefix, not the actual alias)
+        - kms_key_state at write time
+        - timestamp of write
+        - data classification
+
+        Args:
+            tenant_ctx: Tenant context.
+            key: Original object key.
+            byok_metadata: BYOK metadata from get_key_metadata().
+            data_class: Data classification of the stored object.
+        """
+        evidence_key = f"{key}.byok-evidence.json"
+        evidence = {
+            "kms_key_alias_hash": byok_metadata.get("kms_key_alias_hash"),
+            "kms_key_alias_sha256": hashlib.sha256(
+                byok_metadata.get("kms_key_alias_hash", "").encode()
+            ).hexdigest()[:32],
+            "kms_key_state": byok_metadata.get("kms_key_state"),
+            "data_class": data_class.value,
+            "tenant_id": tenant_ctx.tenant_id,
+            "written_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "evidence_version": "1.0",
+        }
+        evidence_bytes = json.dumps(evidence, indent=2).encode("utf-8")
+
+        try:
+            self._inner.put(
+                tenant_id=tenant_ctx.tenant_id,
+                key=evidence_key,
+                data=evidence_bytes,
+                content_type="application/json",
+            )
+            logger.debug(
+                "BYOK evidence persisted: tenant=%s, evidence_key=%s",
+                tenant_ctx.tenant_id,
+                evidence_key,
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to persist BYOK evidence (non-fatal): tenant=%s, key=%s, error=%s",
+                tenant_ctx.tenant_id,
+                evidence_key,
+                str(e),
+            )
 
     def get(
         self,
@@ -274,3 +341,31 @@ class ComplianceEnforcedStore:
             tenant_id=tenant_ctx.tenant_id,
             key=key,
         )
+
+    def get_byok_evidence(
+        self,
+        tenant_ctx: TenantContext,
+        key: str,
+    ) -> dict[str, str] | None:
+        """Retrieve BYOK evidence sidecar metadata for an object.
+
+        This method reads the sidecar evidence file created during put()
+        to verify that customer keys were used for Class2/3 storage.
+
+        Args:
+            tenant_ctx: Tenant context.
+            key: Original object key (not the evidence key).
+
+        Returns:
+            Dict with BYOK evidence if found, None otherwise.
+        """
+        evidence_key = f"{key}.byok-evidence.json"
+        try:
+            stored = self._inner.get(
+                tenant_id=tenant_ctx.tenant_id,
+                key=evidence_key,
+            )
+            result: dict[str, str] = json.loads(stored.body.decode("utf-8"))
+            return result
+        except Exception:
+            return None

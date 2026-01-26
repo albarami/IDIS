@@ -512,7 +512,9 @@ class TestCustomerKeyUsed:
         It verifies that:
         1. When BYOK is configured, storage operations include key metadata
         2. The key alias hash is deterministic and included in stored object metadata
+        3. BYOK evidence is persisted as sidecar metadata at the storage boundary
         """
+        import hashlib
         import tempfile
         from pathlib import Path
 
@@ -535,9 +537,10 @@ class TestCustomerKeyUsed:
             )
 
             test_data = b"sensitive Class2 document content"
+            object_key = "documents/secret.pdf"
             metadata = compliant_store.put(
                 tenant_ctx=ctx,
-                key="documents/secret.pdf",
+                key=object_key,
                 data=test_data,
                 content_type="application/pdf",
             )
@@ -550,10 +553,17 @@ class TestCustomerKeyUsed:
             assert "kms_key_alias_hash" in byok_meta
             assert byok_meta["kms_key_state"] == "ACTIVE"
 
-            import hashlib
-
             expected_hash = hashlib.sha256(customer_key_alias.encode()).hexdigest()[:16]
             assert byok_meta["kms_key_alias_hash"] == expected_hash
+
+            evidence = compliant_store.get_byok_evidence(ctx, object_key)
+            assert evidence is not None, "BYOK evidence sidecar must be persisted"
+            assert evidence["kms_key_alias_hash"] == expected_hash
+            assert evidence["kms_key_state"] == "ACTIVE"
+            assert evidence["data_class"] == "CLASS_2"
+            assert evidence["tenant_id"] == ctx.tenant_id
+            assert "written_at" in evidence
+            assert evidence["evidence_version"] == "1.0"
 
     def test_revoked_key_denies_storage_access(self) -> None:
         """Verify revoked BYOK key denies Class2/3 storage access at real boundary.

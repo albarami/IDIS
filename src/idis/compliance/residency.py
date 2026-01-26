@@ -161,29 +161,32 @@ def enforce_region_pin(tenant_ctx: TenantContext, service_region: str) -> None:
         )
 
 
-def enforce_region_pin_safe(tenant_ctx: TenantContext, service_region: str | None) -> None:
-    """Enforce region pin with graceful handling of missing service region.
+def enforce_region_pin_strict(tenant_ctx: TenantContext, service_region: str | None) -> None:
+    """Enforce region pin with fail-closed behavior for missing service region.
 
-    This variant is for use in middleware where we want to enforce residency
-    but need to handle the case where service region might not be configured
-    (e.g., during development or testing).
+    This is the production-safe enforcement function. It NEVER skips enforcement.
+    If service_region is None or empty, it fails closed with 403.
 
-    If service_region is None or empty, enforcement is skipped with a warning.
-    In production, service_region should always be set.
+    Per v6.3 compliance requirements, missing configuration must deny access,
+    not silently skip enforcement.
 
     Args:
         tenant_ctx: The tenant context from authentication.
         service_region: The region this service instance is deployed in, or None.
 
     Raises:
-        IdisHttpError: 403 if tenant region doesn't match service region.
+        IdisHttpError: 403 if service region not configured or tenant region mismatch.
     """
     if not service_region or not service_region.strip():
-        logger.warning(
-            "Residency enforcement skipped: service region not configured. "
-            "Set %s environment variable for production.",
+        logger.error(
+            "Residency enforcement DENIED: service region not configured. "
+            "Set %s environment variable. Fail-closed: denying request.",
             IDIS_SERVICE_REGION_ENV,
         )
-        return
+        raise IdisHttpError(
+            status_code=403,
+            code="RESIDENCY_SERVICE_REGION_UNSET",
+            message="Access denied",
+        )
 
     enforce_region_pin(tenant_ctx, service_region)

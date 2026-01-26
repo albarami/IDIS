@@ -22,7 +22,7 @@ from idis.compliance.residency import (
     IDIS_SERVICE_REGION_ENV,
     ResidencyConfigError,
     enforce_region_pin,
-    enforce_region_pin_safe,
+    enforce_region_pin_strict,
     get_service_region_from_env,
 )
 
@@ -151,8 +151,8 @@ class TestEnforceRegionPin:
         assert all(code == "RESIDENCY_REGION_MISMATCH" for code in errors)
 
 
-class TestEnforceRegionPinSafe:
-    """Tests for enforce_region_pin_safe() variant."""
+class TestEnforceRegionPinStrict:
+    """Tests for enforce_region_pin_strict() fail-closed variant."""
 
     def _make_tenant_ctx(self, data_region: str = "me-south-1") -> TenantContext:
         return TenantContext(
@@ -163,23 +163,36 @@ class TestEnforceRegionPinSafe:
             data_region=data_region,
         )
 
-    def test_skips_enforcement_when_no_service_region(self) -> None:
-        """Does not raise when service_region is None."""
+    def test_denies_when_no_service_region(self) -> None:
+        """Fails closed (403) when service_region is None."""
         ctx = self._make_tenant_ctx(data_region="me-south-1")
-        enforce_region_pin_safe(ctx, None)
+        with pytest.raises(IdisHttpError) as exc_info:
+            enforce_region_pin_strict(ctx, None)
 
-    def test_skips_enforcement_when_empty_service_region(self) -> None:
-        """Does not raise when service_region is empty string."""
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.code == "RESIDENCY_SERVICE_REGION_UNSET"
+
+    def test_denies_when_empty_service_region(self) -> None:
+        """Fails closed (403) when service_region is empty string."""
         ctx = self._make_tenant_ctx(data_region="me-south-1")
-        enforce_region_pin_safe(ctx, "")
+        with pytest.raises(IdisHttpError) as exc_info:
+            enforce_region_pin_strict(ctx, "")
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.code == "RESIDENCY_SERVICE_REGION_UNSET"
 
     def test_enforces_when_service_region_set(self) -> None:
         """Enforces region when service_region is provided."""
         ctx = self._make_tenant_ctx(data_region="me-south-1")
         with pytest.raises(IdisHttpError) as exc_info:
-            enforce_region_pin_safe(ctx, "us-east-1")
+            enforce_region_pin_strict(ctx, "us-east-1")
 
         assert exc_info.value.code == "RESIDENCY_REGION_MISMATCH"
+
+    def test_allows_when_regions_match(self) -> None:
+        """Allows access when tenant and service regions match."""
+        ctx = self._make_tenant_ctx(data_region="me-south-1")
+        enforce_region_pin_strict(ctx, "me-south-1")
 
 
 class TestResidencyMiddleware:

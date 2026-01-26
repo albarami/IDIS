@@ -27,14 +27,16 @@ from enum import Enum
 from typing import Any
 from uuid import UUID, uuid4
 
+from idis.api.auth import TenantContext
 from idis.audit.sink import AuditSink, InMemoryAuditSink
+from idis.compliance.byok import DataClass
 from idis.models.document import Document, DocumentType, ParseStatus
 from idis.models.document_artifact import DocType, DocumentArtifact
 from idis.models.document_span import DocumentSpan
 from idis.parsers.base import ParseError, ParseLimits, ParseResult
 from idis.parsers.registry import parse_bytes
 from idis.services.ingestion.span_generator import SpanGenerator
-from idis.storage.object_store import ObjectStore
+from idis.storage.compliant_store import ComplianceEnforcedStore
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +151,7 @@ class IngestionService:
     def __init__(
         self,
         *,
-        object_store: ObjectStore,
+        compliant_store: ComplianceEnforcedStore,
         audit_sink: AuditSink | None = None,
         span_generator: SpanGenerator | None = None,
         max_bytes: int = DEFAULT_MAX_BYTES,
@@ -158,13 +160,14 @@ class IngestionService:
         """Initialize the ingestion service.
 
         Args:
-            object_store: Object store for raw document storage.
+            compliant_store: Compliance-enforced store for raw document storage.
+                            This wrapper enforces BYOK and legal hold at the boundary.
             audit_sink: Audit sink for event emission.
             span_generator: Span generator (uses default if None).
             max_bytes: Maximum file size in bytes.
             parse_limits: Parser limits configuration.
         """
-        self._object_store = object_store
+        self._compliant_store = compliant_store
         self._audit_sink = audit_sink or InMemoryAuditSink()
         self._span_generator = span_generator or SpanGenerator()
         self._max_bytes = max_bytes
@@ -399,17 +402,29 @@ class IngestionService:
         data: bytes,
         content_type: str | None,
     ) -> IngestionError | None:
-        """Store raw bytes in object store.
+        """Store raw bytes via compliance-enforced store.
+
+        This method routes through ComplianceEnforcedStore which enforces:
+        - BYOK key active check for Class2/3 data
+        - Legal hold protections
 
         Returns:
             IngestionError if storage fails, None on success.
         """
         try:
-            self._object_store.put(
+            tenant_ctx = TenantContext(
                 tenant_id=str(ctx.tenant_id),
+                actor_id=ctx.actor_id,
+                name="ingestion",
+                timezone="UTC",
+                data_region="me-south-1",
+            )
+            self._compliant_store.put(
+                tenant_ctx=tenant_ctx,
                 key=storage_key,
                 data=data,
                 content_type=content_type,
+                data_class=DataClass.CLASS_2,
             )
             return None
         except Exception as e:

@@ -5,12 +5,9 @@ This module provides common fixtures and configuration for all tests.
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from idis.compliance.residency import IDIS_SERVICE_REGION_ENV
-
 
 TEST_SERVICE_REGION = "me-south-1"
 

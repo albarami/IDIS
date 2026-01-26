@@ -3,6 +3,8 @@
 This module provides the create_app() factory for bootstrapping the IDIS API.
 """
 
+from typing import Any
+
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 
@@ -62,6 +64,7 @@ def create_app(
     postgres_audit_sink: PostgresAuditSink | None = None,
     postgres_idempotency_store: PostgresIdempotencyStore | None = None,
     service_region: str | None = None,
+    ingestion_service: Any | None = None,
 ) -> FastAPI:
     """Create and configure the IDIS FastAPI application.
 
@@ -99,6 +102,7 @@ def create_app(
         postgres_idempotency_store: Optional PostgresIdempotencyStore for in-tx idempotency.
         service_region: Optional service region for residency enforcement. If None,
             reads from IDIS_SERVICE_REGION env var (fails closed with 403 if unset).
+        ingestion_service: Optional IngestionService for testing with custom BYOK/store.
 
     Returns:
         Configured FastAPI application instance.
@@ -110,6 +114,7 @@ def create_app(
     )
 
     app.state.audit_sink = audit_sink
+    app.state.ingestion_service = ingestion_service
 
     configure_tracing()
     instrument_httpx()

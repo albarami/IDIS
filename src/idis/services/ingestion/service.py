@@ -410,7 +410,24 @@ class IngestionService:
 
         Returns:
             IngestionError if storage fails, None on success.
+
+        Raises:
+            IdisHttpError: Re-raised for compliance denials (403 BYOK/hold errors).
+                          These must NOT be swallowed into run failures.
         """
+        from idis.api.errors import IdisHttpError
+
+        _COMPLIANCE_DENIAL_CODES = frozenset(
+            {
+                "BYOK_KEY_REVOKED",
+                "BYOK_AUDIT_REQUIRED",
+                "BYOK_AUDIT_FAILED",
+                "DELETION_BLOCKED_BY_HOLD",
+                "RESIDENCY_REGION_MISMATCH",
+                "RESIDENCY_SERVICE_REGION_UNSET",
+            }
+        )
+
         try:
             tenant_ctx = TenantContext(
                 tenant_id=str(ctx.tenant_id),
@@ -427,6 +444,16 @@ class IngestionService:
                 data_class=DataClass.CLASS_2,
             )
             return None
+        except IdisHttpError as e:
+            if e.status_code == 403 and e.code in _COMPLIANCE_DENIAL_CODES:
+                logger.warning("Compliance denial during storage (re-raising): code=%s", e.code)
+                raise
+            logger.error("IdisHttpError during storage: %s", e)
+            return IngestionError(
+                code=IngestionErrorCode.STORAGE_FAILED,
+                message="Failed to store document in object store",
+                details={"exception_type": type(e).__name__},
+            )
         except Exception as e:
             logger.error("Failed to store raw bytes: %s", e)
             return IngestionError(

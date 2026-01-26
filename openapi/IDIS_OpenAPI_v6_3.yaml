@@ -278,6 +278,37 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /v1/documents/{docId}:
+    delete:
+      tags: [Documents]
+      summary: Delete a document
+      description: Delete a document by ID. Blocked if document is under legal hold.
+      operationId: deleteDocument
+      parameters:
+        - $ref: "#/components/parameters/DocId"
+      responses:
+        "200":
+          description: Document deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [doc_id, deleted, message]
+                properties:
+                  doc_id:
+                    type: string
+                    format: uuid
+                  deleted:
+                    type: boolean
+                  message:
+                    type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /v1/deals/{dealId}/claims:
     get:
       tags: [Claims]

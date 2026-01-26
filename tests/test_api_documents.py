@@ -1088,3 +1088,291 @@ class TestFailClosedIngestion:
         assert ingest_resp.status_code == 202
         run_ref = ingest_resp.json()
         assert run_ref["status"] != "SUCCEEDED"
+
+
+class TestBYOKRevokeRealPath:
+    """Real-path integration tests for BYOK revoke enforcement.
+
+    These tests verify that BYOK revoke denial surfaces as HTTP 403
+    with code BYOK_KEY_REVOKED, not swallowed into 202 run failed.
+    """
+
+    def test_ingestion_denied_when_byok_key_revoked_real_path(
+        self,
+        api_keys_config_single: dict[str, dict[str, str]],
+        api_key_a: str,
+        tenant_a_id: str,
+        actor_a_id: str,
+        deal_id: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """BYOK revoke must return 403 BYOK_KEY_REVOKED on ingestion, not 202.
+
+        This test configures BYOK, revokes the key, then attempts ingestion.
+        The route must return 403 with code BYOK_KEY_REVOKED, not swallow
+        the error into a 202 run-failed response.
+        """
+        import tempfile
+        from pathlib import Path
+
+        from idis.api.auth import TenantContext
+        from idis.audit.sink import InMemoryAuditSink
+        from idis.compliance.byok import (
+            BYOKPolicyRegistry,
+            configure_key,
+            revoke_key,
+        )
+        from idis.idempotency.store import SqliteIdempotencyStore
+        from idis.services.ingestion import IngestionService
+        from idis.storage.compliant_store import ComplianceEnforcedStore
+        from idis.storage.filesystem_store import FilesystemObjectStore
+
+        clear_deals_store()
+        clear_document_store()
+
+        monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys_config_single))
+
+        byok_registry = BYOKPolicyRegistry()
+        audit_sink = InMemoryAuditSink()
+        idem_store = SqliteIdempotencyStore(in_memory=True)
+
+        tenant_ctx = TenantContext(
+            tenant_id=tenant_a_id,
+            actor_id=actor_a_id,
+            name="Test Tenant",
+            timezone="UTC",
+            data_region="me-south-1",
+        )
+
+        configure_key(tenant_ctx, "test-key-alias-123", audit_sink, registry=byok_registry)
+        revoke_key(tenant_ctx, audit_sink, registry=byok_registry)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            inner_store = FilesystemObjectStore(base_dir=Path(tmpdir))
+            compliant_store = ComplianceEnforcedStore(
+                inner_store=inner_store,
+                byok_registry=byok_registry,
+            )
+            ingestion_service = IngestionService(
+                compliant_store=compliant_store,
+                audit_sink=audit_sink,
+            )
+
+            app = create_app(
+                audit_sink=audit_sink,
+                idempotency_store=idem_store,
+                ingestion_service=ingestion_service,
+            )
+            client = TestClient(app, raise_server_exceptions=False)
+
+            create_resp = client.post(
+                f"/v1/deals/{deal_id}/documents",
+                headers={
+                    "X-IDIS-API-Key": api_key_a,
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "doc_type": "PITCH_DECK",
+                    "title": "BYOK Revoke Test Doc",
+                    "uri": "idis://bucket/revoke-test.pdf",
+                    "auto_ingest": False,
+                },
+            )
+            assert create_resp.status_code == 201
+            doc_id = create_resp.json()["doc_id"]
+
+            ingest_resp = client.post(
+                f"/v1/documents/{doc_id}/ingest",
+                headers={
+                    "X-IDIS-API-Key": api_key_a,
+                    "Content-Type": "application/json",
+                },
+                json={},
+            )
+
+            assert ingest_resp.status_code == 403, (
+                f"Expected 403 for BYOK revoke, got {ingest_resp.status_code}: {ingest_resp.text}"
+            )
+            body = ingest_resp.json()
+            assert body["code"] == "BYOK_KEY_REVOKED"
+            assert body["message"] == "Access denied"
+
+
+class TestLegalHoldDeleteRealPath:
+    """Real-path integration tests for legal hold delete protection.
+
+    These tests verify that delete with active legal hold returns HTTP 403
+    with code DELETION_BLOCKED_BY_HOLD.
+    """
+
+    def test_document_delete_blocked_when_legal_hold_active_real_path(
+        self,
+        api_keys_config_single: dict[str, dict[str, str]],
+        api_key_a: str,
+        tenant_a_id: str,
+        actor_a_id: str,
+        deal_id: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Legal hold must return 403 DELETION_BLOCKED_BY_HOLD on delete.
+
+        This test creates a document, applies a legal hold, then attempts
+        deletion. The route must return 403 with DELETION_BLOCKED_BY_HOLD.
+        """
+        from idis.api.auth import TenantContext
+        from idis.audit.sink import InMemoryAuditSink
+        from idis.compliance.retention import (
+            HoldTarget,
+            LegalHoldRegistry,
+            apply_hold,
+        )
+        from idis.idempotency.store import SqliteIdempotencyStore
+
+        clear_deals_store()
+        clear_document_store()
+
+        monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys_config_single))
+
+        hold_registry = LegalHoldRegistry()
+        audit_sink = InMemoryAuditSink()
+        idem_store = SqliteIdempotencyStore(in_memory=True)
+
+        app = create_app(audit_sink=audit_sink, idempotency_store=idem_store)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        create_resp = client.post(
+            f"/v1/deals/{deal_id}/documents",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/json",
+            },
+            json={
+                "doc_type": "TERM_SHEET",
+                "title": "Legal Hold Test Doc",
+                "auto_ingest": False,
+            },
+        )
+        assert create_resp.status_code == 201
+        doc_id = create_resp.json()["doc_id"]
+
+        tenant_ctx = TenantContext(
+            tenant_id=tenant_a_id,
+            actor_id=actor_a_id,
+            name="Test Tenant",
+            timezone="UTC",
+            data_region="me-south-1",
+        )
+
+        apply_hold(
+            tenant_ctx=tenant_ctx,
+            target_type=HoldTarget.ARTIFACT,
+            target_id=doc_id,
+            reason="Litigation hold for compliance test",
+            audit_sink=audit_sink,
+            registry=hold_registry,
+        )
+
+        from idis.compliance import retention as retention_module
+
+        original_registry = retention_module._default_registry
+        retention_module._default_registry = hold_registry
+
+        try:
+            delete_resp = client.delete(
+                f"/v1/documents/{doc_id}",
+                headers={
+                    "X-IDIS-API-Key": api_key_a,
+                },
+            )
+
+            assert delete_resp.status_code == 403, (
+                f"Expected 403 for legal hold, got {delete_resp.status_code}: {delete_resp.text}"
+            )
+            body = delete_resp.json()
+            assert body["code"] == "DELETION_BLOCKED_BY_HOLD"
+            assert "denied" in body["message"].lower() or "hold" in body["message"].lower()
+        finally:
+            retention_module._default_registry = original_registry
+
+    def test_document_delete_succeeds_without_legal_hold(
+        self,
+        api_keys_config_single: dict[str, dict[str, str]],
+        api_key_a: str,
+        deal_id: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Document delete succeeds when no legal hold is active."""
+        from idis.audit.sink import InMemoryAuditSink
+        from idis.idempotency.store import SqliteIdempotencyStore
+
+        clear_deals_store()
+        clear_document_store()
+
+        monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys_config_single))
+
+        audit_sink = InMemoryAuditSink()
+        idem_store = SqliteIdempotencyStore(in_memory=True)
+
+        app = create_app(audit_sink=audit_sink, idempotency_store=idem_store)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        create_resp = client.post(
+            f"/v1/deals/{deal_id}/documents",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/json",
+            },
+            json={
+                "doc_type": "OTHER",
+                "title": "Delete Test Doc",
+                "auto_ingest": False,
+            },
+        )
+        assert create_resp.status_code == 201
+        doc_id = create_resp.json()["doc_id"]
+
+        delete_resp = client.delete(
+            f"/v1/documents/{doc_id}",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+            },
+        )
+
+        assert delete_resp.status_code == 200
+        body = delete_resp.json()
+        assert body["doc_id"] == doc_id
+        assert body["deleted"] is True
+
+    def test_document_delete_returns_404_for_nonexistent(
+        self,
+        api_keys_config_single: dict[str, dict[str, str]],
+        api_key_a: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Document delete returns 404 for non-existent document."""
+        from idis.audit.sink import InMemoryAuditSink
+        from idis.idempotency.store import SqliteIdempotencyStore
+
+        clear_deals_store()
+        clear_document_store()
+
+        monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys_config_single))
+
+        audit_sink = InMemoryAuditSink()
+        idem_store = SqliteIdempotencyStore(in_memory=True)
+
+        app = create_app(audit_sink=audit_sink, idempotency_store=idem_store)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        fake_doc_id = str(uuid.uuid4())
+
+        delete_resp = client.delete(
+            f"/v1/documents/{fake_doc_id}",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+            },
+        )
+
+        assert delete_resp.status_code == 404
+        body = delete_resp.json()
+        assert body["code"] == "DOCUMENT_NOT_FOUND"

@@ -1195,7 +1195,7 @@ class TestBYOKRevokeRealPath:
             )
             body = ingest_resp.json()
             assert body["code"] == "BYOK_KEY_REVOKED"
-            assert body["message"] == "Access denied"
+            assert body["message"] == "Access denied."
 
 
 class TestLegalHoldDeleteRealPath:
@@ -1290,7 +1290,7 @@ class TestLegalHoldDeleteRealPath:
             )
             body = delete_resp.json()
             assert body["code"] == "DELETION_BLOCKED_BY_HOLD"
-            assert "denied" in body["message"].lower() or "hold" in body["message"].lower()
+            assert body["message"] == "Access denied."
         finally:
             retention_module._default_registry = original_registry
 
@@ -1376,3 +1376,200 @@ class TestLegalHoldDeleteRealPath:
         assert delete_resp.status_code == 404
         body = delete_resp.json()
         assert body["code"] == "DOCUMENT_NOT_FOUND"
+
+
+class TestBYOKRevokeGetRealPath:
+    """Real-path integration tests for BYOK revoke enforcement on GET.
+
+    These tests verify that BYOK revoke denial surfaces as HTTP 403
+    with code BYOK_KEY_REVOKED on document GET.
+    """
+
+    def test_documents_get_denied_when_byok_key_revoked_real_path(
+        self,
+        api_keys_config_single: dict[str, dict[str, str]],
+        api_key_a: str,
+        tenant_a_id: str,
+        actor_a_id: str,
+        deal_id: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """BYOK revoke must return 403 BYOK_KEY_REVOKED on GET.
+
+        This test creates a document, then revokes the BYOK key and attempts
+        GET. The route must return 403 with code BYOK_KEY_REVOKED and
+        message 'Access denied.'
+        """
+        import tempfile
+        from pathlib import Path
+
+        from idis.api.auth import TenantContext
+        from idis.audit.sink import InMemoryAuditSink
+        from idis.compliance.byok import (
+            BYOKPolicyRegistry,
+            configure_key,
+            revoke_key,
+        )
+        from idis.idempotency.store import SqliteIdempotencyStore
+        from idis.services.ingestion import IngestionService
+        from idis.storage.compliant_store import ComplianceEnforcedStore
+        from idis.storage.filesystem_store import FilesystemObjectStore
+
+        clear_deals_store()
+        clear_document_store()
+
+        monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys_config_single))
+
+        byok_registry = BYOKPolicyRegistry()
+        audit_sink = InMemoryAuditSink()
+        idem_store = SqliteIdempotencyStore(in_memory=True)
+
+        tenant_ctx = TenantContext(
+            tenant_id=tenant_a_id,
+            actor_id=actor_a_id,
+            name="Test Tenant",
+            timezone="UTC",
+            data_region="me-south-1",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            inner_store = FilesystemObjectStore(base_dir=Path(tmpdir))
+            compliant_store = ComplianceEnforcedStore(
+                inner_store=inner_store,
+                byok_registry=byok_registry,
+            )
+            ingestion_service = IngestionService(
+                compliant_store=compliant_store,
+                audit_sink=audit_sink,
+            )
+
+            app = create_app(
+                audit_sink=audit_sink,
+                idempotency_store=idem_store,
+                ingestion_service=ingestion_service,
+            )
+            client = TestClient(app, raise_server_exceptions=False)
+
+            create_resp = client.post(
+                f"/v1/deals/{deal_id}/documents",
+                headers={
+                    "X-IDIS-API-Key": api_key_a,
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "doc_type": "PITCH_DECK",
+                    "title": "BYOK Revoke GET Test Doc",
+                    "uri": "idis://bucket/revoke-get-test.pdf",
+                    "auto_ingest": False,
+                },
+            )
+            assert create_resp.status_code == 201
+            doc_id = create_resp.json()["doc_id"]
+
+            configure_key(tenant_ctx, "test-key-alias-456", audit_sink, registry=byok_registry)
+            revoke_key(tenant_ctx, audit_sink, registry=byok_registry)
+
+            get_resp = client.get(
+                f"/v1/documents/{doc_id}",
+                headers={
+                    "X-IDIS-API-Key": api_key_a,
+                },
+            )
+
+            assert get_resp.status_code == 403, (
+                f"Expected 403 for BYOK revoke on GET, got {get_resp.status_code}: {get_resp.text}"
+            )
+            body = get_resp.json()
+            assert body["code"] == "BYOK_KEY_REVOKED"
+            assert body["message"] == "Access denied."
+
+    def test_documents_get_succeeds_when_byok_key_active(
+        self,
+        api_keys_config_single: dict[str, dict[str, str]],
+        api_key_a: str,
+        tenant_a_id: str,
+        actor_a_id: str,
+        deal_id: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Document GET succeeds when BYOK key is active (positive control)."""
+        import tempfile
+        from pathlib import Path
+
+        from idis.api.auth import TenantContext
+        from idis.audit.sink import InMemoryAuditSink
+        from idis.compliance.byok import (
+            BYOKPolicyRegistry,
+            configure_key,
+        )
+        from idis.idempotency.store import SqliteIdempotencyStore
+        from idis.services.ingestion import IngestionService
+        from idis.storage.compliant_store import ComplianceEnforcedStore
+        from idis.storage.filesystem_store import FilesystemObjectStore
+
+        clear_deals_store()
+        clear_document_store()
+
+        monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys_config_single))
+
+        byok_registry = BYOKPolicyRegistry()
+        audit_sink = InMemoryAuditSink()
+        idem_store = SqliteIdempotencyStore(in_memory=True)
+
+        tenant_ctx = TenantContext(
+            tenant_id=tenant_a_id,
+            actor_id=actor_a_id,
+            name="Test Tenant",
+            timezone="UTC",
+            data_region="me-south-1",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            inner_store = FilesystemObjectStore(base_dir=Path(tmpdir))
+            compliant_store = ComplianceEnforcedStore(
+                inner_store=inner_store,
+                byok_registry=byok_registry,
+            )
+            ingestion_service = IngestionService(
+                compliant_store=compliant_store,
+                audit_sink=audit_sink,
+            )
+
+            app = create_app(
+                audit_sink=audit_sink,
+                idempotency_store=idem_store,
+                ingestion_service=ingestion_service,
+            )
+            client = TestClient(app, raise_server_exceptions=False)
+
+            create_resp = client.post(
+                f"/v1/deals/{deal_id}/documents",
+                headers={
+                    "X-IDIS-API-Key": api_key_a,
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "doc_type": "PITCH_DECK",
+                    "title": "BYOK Active GET Test Doc",
+                    "uri": "idis://bucket/active-get-test.pdf",
+                    "auto_ingest": False,
+                },
+            )
+            assert create_resp.status_code == 201
+            doc_id = create_resp.json()["doc_id"]
+
+            configure_key(tenant_ctx, "test-key-alias-789", audit_sink, registry=byok_registry)
+
+            get_resp = client.get(
+                f"/v1/documents/{doc_id}",
+                headers={
+                    "X-IDIS-API-Key": api_key_a,
+                },
+            )
+
+            assert get_resp.status_code == 200, (
+                f"Expected 200 for BYOK active on GET, got {get_resp.status_code}: {get_resp.text}"
+            )
+            body = get_resp.json()
+            assert body["doc_id"] == doc_id
+            assert body["title"] == "BYOK Active GET Test Doc"

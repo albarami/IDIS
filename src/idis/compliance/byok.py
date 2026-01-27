@@ -447,7 +447,7 @@ def require_key_active(
         raise IdisHttpError(
             status_code=403,
             code="BYOK_KEY_REVOKED",
-            message="Access denied",
+            message="Access denied.",
         )
 
 

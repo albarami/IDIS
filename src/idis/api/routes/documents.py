@@ -162,10 +162,10 @@ class _DocumentStore:
         Returns True if artifact was deleted, False if not found.
         """
         key = f"{tenant_id}:{doc_id}"
-        if key in self._artifacts:
+        existed = key in self._artifacts
+        if existed:
             del self._artifacts[key]
-            return True
-        return False
+        return existed
 
     def list_artifacts(
         self,
@@ -783,6 +783,99 @@ def ingest_document(
         error_message="Ingestion service unavailable: cannot validate SHA256 integrity",
     )
     return RunRef(run_id=run["run_id"], status=run["status"])
+
+
+class GetDocumentResponse(BaseModel):
+    """Response model for GET /v1/documents/{doc_id}."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    doc_id: str
+    tenant_id: str
+    deal_id: str
+    doc_type: str
+    title: str
+    source_system: str
+    version_id: str
+    ingested_at: str
+    sha256: str | None = None
+    uri: str | None = None
+    metadata: dict[str, Any] | None = None
+
+
+@router.get(
+    "/v1/documents/{doc_id}",
+    response_model=GetDocumentResponse,
+    summary="Get a document",
+    description="Retrieve a document by ID. Requires BYOK key active for Class2/3 data.",
+    responses={
+        200: {"description": "Document retrieved successfully"},
+        403: {"description": "Access denied - BYOK key revoked"},
+        404: {"description": "Document not found"},
+    },
+)
+async def get_document(
+    request: Request,
+    doc_id: str,
+    tenant_ctx: RequireTenantContext,
+) -> GetDocumentResponse:
+    """Get a document with BYOK enforcement.
+
+    This endpoint enforces BYOK key checks for Class2/3 data access.
+    If BYOK key is revoked, returns 403 BYOK_KEY_REVOKED.
+
+    Args:
+        request: FastAPI request object.
+        doc_id: Document ID to retrieve.
+        tenant_ctx: Tenant context from authentication.
+
+    Returns:
+        GetDocumentResponse with document metadata.
+
+    Raises:
+        IdisHttpError: 403 if BYOK key revoked, 404 if not found.
+    """
+    from idis.api.auth import TenantContext as TenantCtx
+    from idis.compliance.byok import DataClass, require_key_active
+
+    request.state.audit_resource_id = doc_id
+
+    artifact = _document_store.get_artifact(tenant_ctx.tenant_id, doc_id)
+    if artifact is None:
+        raise IdisHttpError(
+            status_code=404,
+            code="DOCUMENT_NOT_FOUND",
+            message="Document not found",
+        )
+
+    ctx_for_byok = TenantCtx(
+        tenant_id=tenant_ctx.tenant_id,
+        actor_id=tenant_ctx.actor_id,
+        name=getattr(tenant_ctx, "name", "api"),
+        timezone=getattr(tenant_ctx, "timezone", "UTC"),
+        data_region=getattr(tenant_ctx, "data_region", "me-south-1"),
+    )
+
+    ingestion_service = getattr(request.app.state, "ingestion_service", None)
+    if ingestion_service is not None:
+        compliant_store = getattr(ingestion_service, "_compliant_store", None)
+        if compliant_store is not None:
+            byok_registry = getattr(compliant_store, "_byok_registry", None)
+            require_key_active(ctx_for_byok, DataClass.CLASS_2, byok_registry)
+
+    return GetDocumentResponse(
+        doc_id=artifact["doc_id"],
+        tenant_id=artifact["tenant_id"],
+        deal_id=artifact["deal_id"],
+        doc_type=artifact["doc_type"],
+        title=artifact["title"],
+        source_system=artifact["source_system"],
+        version_id=artifact["version_id"],
+        ingested_at=artifact["ingested_at"],
+        sha256=artifact.get("sha256"),
+        uri=artifact.get("uri"),
+        metadata=artifact.get("metadata"),
+    )
 
 
 class DeleteDocumentResponse(BaseModel):

@@ -455,7 +455,7 @@ def block_deletion_if_held(
         raise IdisHttpError(
             status_code=403,
             code="DELETION_BLOCKED_BY_HOLD",
-            message="Resource cannot be deleted while under legal hold",
+            message="Access denied.",
         )
 
 

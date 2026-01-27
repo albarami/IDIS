@@ -118,6 +118,7 @@ POLICY_RULES: dict[str, PolicyRule] = {
     "ingestDocument": PolicyRule(
         allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=False
     ),
+    "getDocument": PolicyRule(allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=False),
     "deleteDocument": PolicyRule(
         allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=False
     ),

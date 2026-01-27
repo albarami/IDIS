@@ -355,7 +355,7 @@ class TestRequireKeyActive:
 
         assert exc_info.value.status_code == 403
         assert exc_info.value.code == "BYOK_KEY_REVOKED"
-        assert exc_info.value.message == "Access denied"
+        assert exc_info.value.message == "Access denied."
 
     def test_denies_class3_with_revoked_key(self) -> None:
         """Class3 access denied when BYOK key is REVOKED."""

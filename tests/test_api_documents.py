@@ -1459,7 +1459,7 @@ class TestBYOKRevokeGetRealPath:
                 json={
                     "doc_type": "PITCH_DECK",
                     "title": "BYOK Revoke GET Test Doc",
-                    "uri": "idis://bucket/revoke-get-test.pdf",
+                    "uri": "documents/revoke-get-test.pdf",
                     "auto_ingest": False,
                 },
             )
@@ -1467,6 +1467,14 @@ class TestBYOKRevokeGetRealPath:
             doc_id = create_resp.json()["doc_id"]
 
             configure_key(tenant_ctx, "test-key-alias-456", audit_sink, registry=byok_registry)
+
+            storage_key = "documents/revoke-get-test.pdf"
+            compliant_store.put(
+                tenant_ctx=tenant_ctx,
+                key=storage_key,
+                data=b"test document content for BYOK revoke test",
+            )
+
             revoke_key(tenant_ctx, audit_sink, registry=byok_registry)
 
             get_resp = client.get(
@@ -1551,7 +1559,7 @@ class TestBYOKRevokeGetRealPath:
                 json={
                     "doc_type": "PITCH_DECK",
                     "title": "BYOK Active GET Test Doc",
-                    "uri": "idis://bucket/active-get-test.pdf",
+                    "uri": "documents/active-get-test.pdf",
                     "auto_ingest": False,
                 },
             )
@@ -1559,6 +1567,14 @@ class TestBYOKRevokeGetRealPath:
             doc_id = create_resp.json()["doc_id"]
 
             configure_key(tenant_ctx, "test-key-alias-789", audit_sink, registry=byok_registry)
+
+            storage_key = "documents/active-get-test.pdf"
+            test_content = b"real document content for BYOK active GET test"
+            compliant_store.put(
+                tenant_ctx=tenant_ctx,
+                key=storage_key,
+                data=test_content,
+            )
 
             get_resp = client.get(
                 f"/v1/documents/{doc_id}",
@@ -1573,3 +1589,4 @@ class TestBYOKRevokeGetRealPath:
             body = get_resp.json()
             assert body["doc_id"] == doc_id
             assert body["title"] == "BYOK Active GET Test Doc"
+            assert body["uri"] == storage_key

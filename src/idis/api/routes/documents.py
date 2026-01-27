@@ -836,7 +836,7 @@ async def get_document(
         IdisHttpError: 403 if BYOK key revoked, 404 if not found.
     """
     from idis.api.auth import TenantContext as TenantCtx
-    from idis.compliance.byok import DataClass, require_key_active
+    from idis.compliance.byok import DataClass
 
     request.state.audit_resource_id = doc_id
 
@@ -848,7 +848,7 @@ async def get_document(
             message="Document not found",
         )
 
-    ctx_for_byok = TenantCtx(
+    ctx_for_store = TenantCtx(
         tenant_id=tenant_ctx.tenant_id,
         actor_id=tenant_ctx.actor_id,
         name=getattr(tenant_ctx, "name", "api"),
@@ -856,12 +856,17 @@ async def get_document(
         data_region=getattr(tenant_ctx, "data_region", "me-south-1"),
     )
 
-    ingestion_service = getattr(request.app.state, "ingestion_service", None)
-    if ingestion_service is not None:
-        compliant_store = getattr(ingestion_service, "_compliant_store", None)
-        if compliant_store is not None:
-            byok_registry = getattr(compliant_store, "_byok_registry", None)
-            require_key_active(ctx_for_byok, DataClass.CLASS_2, byok_registry)
+    storage_key = artifact.get("uri")
+    if storage_key:
+        ingestion_service = getattr(request.app.state, "ingestion_service", None)
+        if ingestion_service is not None:
+            compliant_store = getattr(ingestion_service, "_compliant_store", None)
+            if compliant_store is not None:
+                compliant_store.get(
+                    tenant_ctx=ctx_for_store,
+                    key=storage_key,
+                    data_class=DataClass.CLASS_2,
+                )
 
     return GetDocumentResponse(
         doc_id=artifact["doc_id"],

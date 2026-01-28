@@ -1,0 +1,27 @@
+# IDIS Kubernetes ConfigMap
+# Non-sensitive configuration for the IDIS API
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: idis-config
+  namespace: idis
+  labels:
+    app.kubernetes.io/name: idis
+    app.kubernetes.io/component: api
+data:
+  # Service region for data residency enforcement (required - fail-closed)
+  IDIS_SERVICE_REGION: "us-east-1"
+  # Object storage base directory
+  IDIS_OBJECT_STORE_BASE_DIR: "/data/objects"
+  # OpenTelemetry configuration
+  IDIS_OTEL_ENABLED: "1"
+  IDIS_OTEL_SERVICE_NAME: "idis-api"
+  IDIS_OTEL_EXPORTER: "otlp"
+  IDIS_OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
+  # Uvicorn settings
+  UVICORN_HOST: "0.0.0.0"
+  UVICORN_PORT: "8000"
+  UVICORN_WORKERS: "4"
+  # Python settings
+  PYTHONUNBUFFERED: "1"
+  PYTHONDONTWRITEBYTECODE: "1"

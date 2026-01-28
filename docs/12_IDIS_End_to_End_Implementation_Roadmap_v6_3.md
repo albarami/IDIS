@@ -851,13 +851,23 @@ docs(phase-6): update roadmap with Phase 6 completion
 - Traceability test `test_customer_key_used` verifies BYOK at storage boundary
 - Tests: `tests/test_data_residency.py`, `tests/test_byok.py`, `tests/test_retention_hold.py`
 
-#### Task 7.6: Infrastructure ⏳ NOT STARTED
+#### Task 7.6: Infrastructure ✅ COMPLETE (Codex Review Pending)
 | Deliverable | Location | Status |
 |-------------|----------|--------|
-| Dockerfile | `Dockerfile` | ⏳ |
-| Docker Compose | `docker-compose.yml` | ⏳ |
-| Kubernetes manifests | `infra/k8s/` | ⏳ |
-| Terraform/IaC | `infra/terraform/` | ⏳ |
+| Dockerfile | `Dockerfile` | ✅ |
+| Docker Compose | `docker-compose.yml` | ✅ |
+| Kubernetes manifests | `deploy/k8s/` | ✅ |
+| Terraform/IaC | `deploy/terraform/` | ✅ |
+| Release build script | `scripts/release_build.py` | ✅ |
+| CI jobs (container, k8s, terraform) | `.github/workflows/ci.yml` | ✅ |
+
+**Implementation Notes (2026-01-28):**
+- **Dockerfile:** Multi-stage build (builder + runtime), pinned base image digest, non-root user (idis:1000), HEALTHCHECK directive
+- **Docker Compose:** idis-api, postgres:16, redis:7, migrations services with health checks and volumes
+- **Kubernetes:** namespace, configmap, secret template, deployment (3 replicas, probes, securityContext), service, ingress (TLS), HPA, NetworkPolicy
+- **Terraform:** VPC, subnets, NAT gateways, RDS PostgreSQL 16 (Multi-AZ, encrypted), S3 (versioned, encrypted), KMS, CloudWatch logs
+- **Release Build:** SHA256 checksums for source/schemas/openapi/dockerfile/k8s/terraform, git info, manifest hash
+- **CI Integration:** container-build (build + health check), k8s-validate (kubeconform), terraform-validate (fmt + validate)
 
 **Testing Requirements:**
 | Test File | Status |

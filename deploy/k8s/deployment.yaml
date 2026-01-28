@@ -1,0 +1,162 @@
+# IDIS Kubernetes Deployment
+# Production-ready deployment with security, health checks, and resource limits
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: idis-api
+  namespace: idis
+  labels:
+    app.kubernetes.io/name: idis
+    app.kubernetes.io/component: api
+    app.kubernetes.io/version: "6.3.0"
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: idis
+      app.kubernetes.io/component: api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: idis
+        app.kubernetes.io/component: api
+        app.kubernetes.io/version: "6.3.0"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Security: Non-root user
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      
+      # Service account for RBAC
+      serviceAccountName: idis-api
+      
+      # Anti-affinity: Spread pods across nodes
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: idis
+                    app.kubernetes.io/component: api
+                topologyKey: kubernetes.io/hostname
+      
+      containers:
+        - name: idis-api
+          image: idis:6.3.0
+          imagePullPolicy: IfNotPresent
+          
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          
+          # Environment from ConfigMap
+          envFrom:
+            - configMapRef:
+                name: idis-config
+            - secretRef:
+                name: idis-secrets
+          
+          # Resource limits (adjust based on workload)
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "2Gi"
+          
+          # Liveness probe: Is the container alive?
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          
+          # Readiness probe: Is the container ready to serve traffic?
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          
+          # Startup probe: For slow-starting containers
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 30
+          
+          # Security context for container
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          
+          # Volume mounts
+          volumeMounts:
+            - name: object-storage
+              mountPath: /data/objects
+            - name: tmp
+              mountPath: /tmp
+      
+      volumes:
+        - name: object-storage
+          persistentVolumeClaim:
+            claimName: idis-objects-pvc
+        - name: tmp
+          emptyDir: {}
+      
+      # Graceful termination
+      terminationGracePeriodSeconds: 30
+---
+# ServiceAccount for IDIS API
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: idis-api
+  namespace: idis
+  labels:
+    app.kubernetes.io/name: idis
+    app.kubernetes.io/component: api
+---
+# PersistentVolumeClaim for object storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: idis-objects-pvc
+  namespace: idis
+  labels:
+    app.kubernetes.io/name: idis
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 50Gi
+  storageClassName: standard

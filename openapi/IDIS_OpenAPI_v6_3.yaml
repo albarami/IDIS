@@ -323,6 +323,12 @@ paths:
                   metadata:
                     type: object
                     nullable: true
+                  content_b64:
+                    type: string
+                    description: Base64-encoded document content from storage
+                  content_sha256:
+                    type: string
+                    description: SHA256 hex digest of document content
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":

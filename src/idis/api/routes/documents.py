@@ -801,6 +801,8 @@ class GetDocumentResponse(BaseModel):
     sha256: str | None = None
     uri: str | None = None
     metadata: dict[str, Any] | None = None
+    content_b64: str
+    content_sha256: str
 
 
 @router.get(
@@ -835,8 +837,12 @@ async def get_document(
     Raises:
         IdisHttpError: 403 if BYOK key revoked, 404 if not found.
     """
+    import base64
+    import hashlib
+
     from idis.api.auth import TenantContext as TenantCtx
     from idis.compliance.byok import DataClass
+    from idis.storage.errors import ObjectNotFoundError
 
     request.state.audit_resource_id = doc_id
 
@@ -848,6 +854,14 @@ async def get_document(
             message="Document not found",
         )
 
+    storage_key = artifact.get("uri")
+    if not storage_key:
+        raise IdisHttpError(
+            status_code=404,
+            code="DOCUMENT_CONTENT_NOT_FOUND",
+            message="Document content not found",
+        )
+
     ctx_for_store = TenantCtx(
         tenant_id=tenant_ctx.tenant_id,
         actor_id=tenant_ctx.actor_id,
@@ -856,17 +870,38 @@ async def get_document(
         data_region=getattr(tenant_ctx, "data_region", "me-south-1"),
     )
 
-    storage_key = artifact.get("uri")
-    if storage_key:
-        ingestion_service = getattr(request.app.state, "ingestion_service", None)
-        if ingestion_service is not None:
-            compliant_store = getattr(ingestion_service, "_compliant_store", None)
-            if compliant_store is not None:
-                compliant_store.get(
-                    tenant_ctx=ctx_for_store,
-                    key=storage_key,
-                    data_class=DataClass.CLASS_2,
-                )
+    ingestion_service = getattr(request.app.state, "ingestion_service", None)
+    if ingestion_service is None:
+        raise IdisHttpError(
+            status_code=503,
+            code="SERVICE_UNAVAILABLE",
+            message="Ingestion service unavailable",
+        )
+
+    compliant_store = getattr(ingestion_service, "_compliant_store", None)
+    if compliant_store is None:
+        raise IdisHttpError(
+            status_code=503,
+            code="SERVICE_UNAVAILABLE",
+            message="Compliance store unavailable",
+        )
+
+    try:
+        stored_object = compliant_store.get(
+            tenant_ctx=ctx_for_store,
+            key=storage_key,
+            data_class=DataClass.CLASS_2,
+        )
+    except ObjectNotFoundError as err:
+        raise IdisHttpError(
+            status_code=404,
+            code="DOCUMENT_CONTENT_NOT_FOUND",
+            message="Document content not found",
+        ) from err
+
+    content_bytes = stored_object.body
+    content_b64 = base64.b64encode(content_bytes).decode("ascii")
+    content_sha256 = hashlib.sha256(content_bytes).hexdigest()
 
     return GetDocumentResponse(
         doc_id=artifact["doc_id"],
@@ -880,6 +915,8 @@ async def get_document(
         sha256=artifact.get("sha256"),
         uri=artifact.get("uri"),
         metadata=artifact.get("metadata"),
+        content_b64=content_b64,
+        content_sha256=content_sha256,
     )
 
 

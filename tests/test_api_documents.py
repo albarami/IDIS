@@ -1590,3 +1590,111 @@ class TestBYOKRevokeGetRealPath:
             assert body["doc_id"] == doc_id
             assert body["title"] == "BYOK Active GET Test Doc"
             assert body["uri"] == storage_key
+
+            import base64
+            import hashlib
+
+            assert "content_b64" in body, "Response must include content_b64 from storage"
+            assert "content_sha256" in body, "Response must include content_sha256 from storage"
+
+            decoded_content = base64.b64decode(body["content_b64"])
+            assert decoded_content == test_content, (
+                f"content_b64 must decode to exact stored bytes. "
+                f"Got {decoded_content!r}, expected {test_content!r}"
+            )
+
+            expected_sha256 = hashlib.sha256(test_content).hexdigest()
+            assert body["content_sha256"] == expected_sha256, (
+                f"content_sha256 must match SHA256 of stored bytes. "
+                f"Got {body['content_sha256']}, expected {expected_sha256}"
+            )
+
+    def test_documents_get_returns_404_when_storage_content_missing(
+        self,
+        api_keys_config_single: dict[str, dict[str, str]],
+        api_key_a: str,
+        tenant_a_id: str,
+        actor_a_id: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """GET returns 404 when document metadata exists but storage content is missing.
+
+        This test ensures the route depends on actual storage retrieval.
+        If the storage call is removed and response is built from in-memory metadata,
+        this test will fail because the route would return 200 instead of 404.
+        """
+        import tempfile
+        from pathlib import Path
+
+        from idis.api.auth import TenantContext
+        from idis.api.main import create_app
+        from idis.compliance.byok import BYOKPolicyRegistry, configure_key
+        from idis.idempotency.store import SqliteIdempotencyStore
+        from idis.services.ingestion import IngestionService
+        from idis.storage.compliant_store import ComplianceEnforcedStore
+        from idis.storage.filesystem_store import FilesystemObjectStore
+
+        monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys_config_single))
+
+        deal_id = str(uuid.uuid4())
+        audit_sink = InMemoryAuditSink()
+        idem_store = SqliteIdempotencyStore(in_memory=True)
+        byok_registry = BYOKPolicyRegistry()
+
+        tenant_ctx = TenantContext(
+            tenant_id=tenant_a_id,
+            actor_id=actor_a_id,
+            name="test-tenant",
+            timezone="UTC",
+            data_region="me-south-1",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            inner_store = FilesystemObjectStore(base_dir=Path(tmpdir))
+            compliant_store = ComplianceEnforcedStore(
+                inner_store=inner_store,
+                byok_registry=byok_registry,
+            )
+            ingestion_service = IngestionService(
+                compliant_store=compliant_store,
+                audit_sink=audit_sink,
+            )
+
+            app = create_app(
+                audit_sink=audit_sink,
+                idempotency_store=idem_store,
+                ingestion_service=ingestion_service,
+            )
+            client = TestClient(app, raise_server_exceptions=False)
+
+            configure_key(tenant_ctx, "test-key-alias-missing", audit_sink, registry=byok_registry)
+
+            storage_key = "documents/missing-content-test.pdf"
+            create_resp = client.post(
+                f"/v1/deals/{deal_id}/documents",
+                headers={
+                    "X-IDIS-API-Key": api_key_a,
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "doc_type": "PITCH_DECK",
+                    "title": "Missing Content Test Doc",
+                    "uri": storage_key,
+                    "auto_ingest": False,
+                },
+            )
+            assert create_resp.status_code == 201
+            doc_id = create_resp.json()["doc_id"]
+
+            get_resp = client.get(
+                f"/v1/documents/{doc_id}",
+                headers={
+                    "X-IDIS-API-Key": api_key_a,
+                },
+            )
+
+            assert get_resp.status_code == 404, (
+                f"Expected 404 when storage content missing, got {get_resp.status_code}"
+            )
+            body = get_resp.json()
+            assert body["code"] == "DOCUMENT_CONTENT_NOT_FOUND"

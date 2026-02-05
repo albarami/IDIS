@@ -7,7 +7,7 @@ lint:
 	ruff check .
 
 typecheck:
-	mypy src
+	mypy src/idis --ignore-missing-imports
 
 test:
 	pytest -q

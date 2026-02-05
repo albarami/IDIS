@@ -8,13 +8,13 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
 
-class VerificationStatus(str, Enum):
+class VerificationStatus(StrEnum):
     """Verification status of evidence."""
 
     UNVERIFIED = "UNVERIFIED"
@@ -22,7 +22,7 @@ class VerificationStatus(str, Enum):
     CONTRADICTED = "CONTRADICTED"
 
 
-class SourceGrade(str, Enum):
+class SourceGrade(StrEnum):
     """Public source grade (Tier 1).
 
     Ordering: A > B > C > D (A is highest quality).
@@ -34,7 +34,7 @@ class SourceGrade(str, Enum):
     D = "D"
 
 
-class SourceSubgrade(str, Enum):
+class SourceSubgrade(StrEnum):
     """Internal analytics subgrade (not used in gating)."""
 
     A_PLUS = "A+"

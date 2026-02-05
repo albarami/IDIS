@@ -12,13 +12,13 @@ HARD GATE: Invalid records are rejected (fail-closed).
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-class ImpactLevel(str, Enum):
+class ImpactLevel(StrEnum):
     """Impact level for uncertainties per v6.3 Data Model §5.2."""
 
     HIGH = "HIGH"

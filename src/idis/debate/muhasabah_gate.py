@@ -18,7 +18,7 @@ now outputs are auditably self-checking and IC-safe.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from idis.validators.muhasabah import MuhasabahValidator
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from idis.models.debate import AgentOutput
 
 
-class GateRejectionReason(str, Enum):
+class GateRejectionReason(StrEnum):
     """Reasons for gate rejection."""
 
     MISSING_MUHASABAH = "MISSING_MUHASABAH"

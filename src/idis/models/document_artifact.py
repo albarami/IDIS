@@ -7,14 +7,14 @@ Represents raw document metadata attached to a deal.
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Annotated, Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class DocType(str, Enum):
+class DocType(StrEnum):
     """Document type classification.
 
     Aligned to OpenAPI DocumentArtifact.doc_type enum.

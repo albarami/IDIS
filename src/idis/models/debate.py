@@ -12,13 +12,13 @@ Non-negotiables:
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class StopReason(str, Enum):
+class StopReason(StrEnum):
     """Stop condition reasons in v6.3 priority order (highest to lowest).
 
     Priority order (normative):
@@ -36,7 +36,7 @@ class StopReason(str, Enum):
     EVIDENCE_EXHAUSTED = "EVIDENCE_EXHAUSTED"
 
 
-class DebateRole(str, Enum):
+class DebateRole(StrEnum):
     """Agent roles in the debate per v6.3 roadmap."""
 
     ADVOCATE = "advocate"

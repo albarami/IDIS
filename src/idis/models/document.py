@@ -10,14 +10,14 @@ documents (e.g., ZIP archive extraction).
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Annotated, Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class DocumentType(str, Enum):
+class DocumentType(StrEnum):
     """Parsed document type.
 
     Aligned to Data Model §3.3 doc_type column.
@@ -31,7 +31,7 @@ class DocumentType(str, Enum):
     VIDEO = "VIDEO"
 
 
-class ParseStatus(str, Enum):
+class ParseStatus(StrEnum):
     """Document parse status.
 
     Aligned to Data Model §3.3 parse_status column.

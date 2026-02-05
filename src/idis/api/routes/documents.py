@@ -16,7 +16,7 @@ import json
 import logging
 import uuid
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -35,7 +35,7 @@ MAX_LIMIT = 200
 DEFAULT_LIMIT = 50
 
 
-class DocType(str, Enum):
+class DocType(StrEnum):
     """Document type classification per OpenAPI spec."""
 
     PITCH_DECK = "PITCH_DECK"
@@ -46,7 +46,7 @@ class DocType(str, Enum):
     OTHER = "OTHER"
 
 
-class RunStatus(str, Enum):
+class RunStatus(StrEnum):
     """Ingestion run status per OpenAPI RunRef schema."""
 
     QUEUED = "QUEUED"

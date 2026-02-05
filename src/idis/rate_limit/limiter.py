@@ -15,7 +15,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import Final
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ NANOSECONDS_PER_SECOND: Final[int] = 1_000_000_000
 SECONDS_PER_MINUTE: Final[int] = 60
 
 
-class RateLimitTier(str, Enum):
+class RateLimitTier(StrEnum):
     """Rate limit tier classification."""
 
     USER = "user"

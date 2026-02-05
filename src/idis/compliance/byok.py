@@ -20,7 +20,7 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from idis.api.errors import IdisHttpError
@@ -36,14 +36,14 @@ KEY_ALIAS_MIN_LENGTH = 1
 KEY_ALIAS_MAX_LENGTH = 256
 
 
-class BYOKKeyState(str, Enum):
+class BYOKKeyState(StrEnum):
     """Key states for BYOK customer-managed keys."""
 
     ACTIVE = "ACTIVE"
     REVOKED = "REVOKED"
 
 
-class DataClass(str, Enum):
+class DataClass(StrEnum):
     """Data classification per v6.3 Data Residency Model §2."""
 
     CLASS_0 = "CLASS_0"

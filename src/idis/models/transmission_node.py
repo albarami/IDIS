@@ -8,13 +8,13 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
-class NodeType(str, Enum):
+class NodeType(StrEnum):
     """Type of transformation/operation performed at this node."""
 
     INGEST = "INGEST"
@@ -27,7 +27,7 @@ class NodeType(str, Enum):
     EXPORT = "EXPORT"
 
 
-class ActorType(str, Enum):
+class ActorType(StrEnum):
     """Type of actor that performed this operation."""
 
     AGENT = "AGENT"
@@ -35,7 +35,7 @@ class ActorType(str, Enum):
     SYSTEM = "SYSTEM"
 
 
-class VerificationMethod(str, Enum):
+class VerificationMethod(StrEnum):
     """How this node's output was verified."""
 
     AUTO = "auto"

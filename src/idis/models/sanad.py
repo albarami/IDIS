@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -17,7 +17,7 @@ from idis.models.defect import Defect
 from idis.models.transmission_node import TransmissionNode
 
 
-class CorroborationStatus(str, Enum):
+class CorroborationStatus(StrEnum):
     """Level of independent corroboration."""
 
     NONE = "NONE"
@@ -26,7 +26,7 @@ class CorroborationStatus(str, Enum):
     MUTAWATIR = "MUTAWATIR"
 
 
-class SanadGrade(str, Enum):
+class SanadGrade(StrEnum):
     """Computed grade for this Sanad.
 
     Ordering: A > B > C > D (A is highest quality).

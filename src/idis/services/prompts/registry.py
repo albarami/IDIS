@@ -17,7 +17,7 @@ import json
 import logging
 import re
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
@@ -105,7 +105,7 @@ class MissingRequiredFieldError(PromptRegistryError):
             super().__init__(f"Missing required field '{field}' in PromptArtifact")
 
 
-class PromptStatus(str, Enum):
+class PromptStatus(StrEnum):
     """Prompt lifecycle status."""
 
     DRAFT = "DRAFT"
@@ -114,7 +114,7 @@ class PromptStatus(str, Enum):
     DEPRECATED = "DEPRECATED"
 
 
-class RiskClass(str, Enum):
+class RiskClass(StrEnum):
     """Prompt risk classification."""
 
     LOW = "LOW"

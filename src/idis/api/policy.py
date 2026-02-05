@@ -14,14 +14,14 @@ Policy highlights (v6.3 API Contracts):
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Set
 
 
-class Role(str, Enum):
+class Role(StrEnum):
     """RBAC roles per v6.3 Security Threat Model.
 
     Minimum roles required for IDIS authorization:

@@ -293,6 +293,12 @@ Each step completion stores a checkpoint:
 | `HUMAN_REVIEW → IC_READY` | `human_gate.approved` | approver_id, timestamp |
 | `HUMAN_REVIEW → BLOCKED` | `human_gate.rejected` | rejector_id, reason |
 | `IC_READY → EXPORTED` | `export.completed` | formats, artifact_ids |
+| `ENRICHED → DEBATING` | `debate.started` | run_id, debate_id, enrichment_applied |
+| `GENERATING → GENERATED` | `deliverables.generated` | run_id, deliverable_ids, formats |
+| `BLOCKED → EXTRACTING` | `run.unblocked` | run_id, unblock_reason, actor_id (user) |
+| `BLOCKED → GRADING` | `run.unblocked` | run_id, unblock_reason, actor_id (user) |
+
+**Acceptance Criteria:** Audit event matrix covers every state transition in §3.1 (no missing transitions).
 
 ### 6.2 Audit Event Schema
 

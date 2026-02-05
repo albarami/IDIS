@@ -16,7 +16,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any, Generic, TypeVar
 
 logger = logging.getLogger(__name__)
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 
-class SagaStepStatus(str, Enum):
+class SagaStepStatus(StrEnum):
     """Status of a saga step."""
 
     PENDING = "pending"
@@ -36,7 +36,7 @@ class SagaStepStatus(str, Enum):
     COMPENSATION_FAILED = "compensation_failed"
 
 
-class SagaStatus(str, Enum):
+class SagaStatus(StrEnum):
     """Overall status of a saga execution."""
 
     PENDING = "pending"

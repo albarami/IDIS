@@ -11,13 +11,13 @@ Non-negotiables (Phase 6.1):
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-class RefType(str, Enum):
+class RefType(StrEnum):
     """Type of reference in audit appendix."""
 
     CLAIM = "claim"
@@ -283,7 +283,7 @@ class ICMemo(BaseModel):
     generated_at: str = Field(..., description="ISO timestamp (passed in, not generated)")
 
 
-class DeliverableExportFormat(str, Enum):
+class DeliverableExportFormat(StrEnum):
     """Supported export formats for deliverables."""
 
     PDF = "pdf"

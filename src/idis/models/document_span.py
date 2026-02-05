@@ -10,14 +10,14 @@ that can serve as evidence for claims. Spans have stable locators
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Annotated, Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class SpanType(str, Enum):
+class SpanType(StrEnum):
     """Type of document span.
 
     Aligned to Data Model §3.3 span_type column.

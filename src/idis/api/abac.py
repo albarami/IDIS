@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol
 
 from idis.api.errors import IdisHttpError
@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class AbacDecisionCode(str, Enum):
+class AbacDecisionCode(StrEnum):
     """ABAC decision codes for audit and error responses."""
 
     ALLOWED = "ABAC_ALLOWED"

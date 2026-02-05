@@ -6,13 +6,13 @@ Phase 4.1: Calc-Sanad with grade derivation and explanation entries.
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 
-class SanadGrade(str, Enum):
+class SanadGrade(StrEnum):
     """Evidence quality grade for claims and calculations.
 
     Ordering: A > B > C > D (A is highest quality).

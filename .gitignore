@@ -39,6 +39,7 @@ build/
 .idea/
 .vscode/
 .claude/
+.windsurf/
 *.swp
 *.swo
 *~

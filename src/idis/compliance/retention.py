@@ -20,7 +20,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from idis.api.errors import IdisHttpError
@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class HoldTarget(str, Enum):
+class HoldTarget(StrEnum):
     """Types of resources that can be held."""
 
     DEAL = "DEAL"
@@ -40,7 +40,7 @@ class HoldTarget(str, Enum):
     ARTIFACT = "ARTIFACT"
 
 
-class RetentionClass(str, Enum):
+class RetentionClass(StrEnum):
     """Retention period classes per v6.3 §6.1."""
 
     RAW_DOCUMENTS = "RAW_DOCUMENTS"

@@ -23,7 +23,7 @@ import hashlib
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_MAX_BYTES = 50 * 1024 * 1024  # 50 MB
 
 
-class IngestionErrorCode(str, Enum):
+class IngestionErrorCode(StrEnum):
     """Standardized error codes for ingestion failures."""
 
     EMPTY_FILE = "empty_file"

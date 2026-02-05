@@ -25,7 +25,7 @@ import os
 import tempfile
 import uuid
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
@@ -111,7 +111,7 @@ class MissingFieldError(PromptVersioningError):
         super().__init__(f"Missing required field: {field}")
 
 
-class ApprovalRole(str, Enum):
+class ApprovalRole(StrEnum):
     """Approval roles per spec §8.1."""
 
     OWNER = "OWNER"

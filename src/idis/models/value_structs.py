@@ -16,13 +16,13 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
-from enum import Enum
+from enum import StrEnum
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
-class ValueStructType(str, Enum):
+class ValueStructType(StrEnum):
     """Discriminator for ValueStruct subtypes."""
 
     MONETARY = "monetary"
@@ -33,7 +33,7 @@ class ValueStructType(str, Enum):
     TEXT = "text"
 
 
-class Currency(str, Enum):
+class Currency(StrEnum):
     """ISO 4217 currency codes (subset for VC use cases)."""
 
     USD = "USD"
@@ -200,7 +200,7 @@ class RangeValue(BaseModel):
     model_config = {"frozen": True, "extra": "forbid"}
 
 
-class SemanticTag(str, Enum):
+class SemanticTag(StrEnum):
     """Semantic tags for text values."""
 
     COMPANY_NAME = "company_name"

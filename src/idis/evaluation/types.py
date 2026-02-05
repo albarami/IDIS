@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Any, Literal
 
 
@@ -22,7 +22,7 @@ class ExitCode(int, Enum):
     BLOCKED = 2
 
 
-class GateStatus(str, Enum):
+class GateStatus(StrEnum):
     """Status for gate evaluation results."""
 
     PASS = "PASS"
@@ -38,7 +38,7 @@ class GateStatus(str, Enum):
         }[self]
 
 
-class CaseStatus(str, Enum):
+class CaseStatus(StrEnum):
     """Status for individual case execution."""
 
     PASS = "PASS"

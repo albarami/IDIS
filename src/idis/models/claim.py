@@ -9,7 +9,7 @@ Derived claims: Created by calc outputs, cannot auto-trigger more calcs.
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -18,7 +18,7 @@ from idis.models.calc_sanad import SanadGrade
 from idis.models.value_structs import ValueStruct
 
 
-class ClaimClass(str, Enum):
+class ClaimClass(StrEnum):
     """Category of the claim."""
 
     FINANCIAL = "FINANCIAL"
@@ -31,7 +31,7 @@ class ClaimClass(str, Enum):
     OTHER = "OTHER"
 
 
-class ClaimVerdict(str, Enum):
+class ClaimVerdict(StrEnum):
     """Verdict on the claim's validity."""
 
     VERIFIED = "VERIFIED"
@@ -41,7 +41,7 @@ class ClaimVerdict(str, Enum):
     SUBJECTIVE = "SUBJECTIVE"
 
 
-class ClaimAction(str, Enum):
+class ClaimAction(StrEnum):
     """Required action based on grade/verdict."""
 
     NONE = "NONE"
@@ -52,7 +52,7 @@ class ClaimAction(str, Enum):
     PARTNER_OVERRIDE_REQUIRED = "PARTNER_OVERRIDE_REQUIRED"
 
 
-class ClaimType(str, Enum):
+class ClaimType(StrEnum):
     """Type of claim for calc loop guardrail.
 
     PRIMARY: Extracted from source documents. Can trigger automated calc runs.
@@ -63,7 +63,7 @@ class ClaimType(str, Enum):
     DERIVED = "derived"
 
 
-class CorroborationStatus(str, Enum):
+class CorroborationStatus(StrEnum):
     """Corroboration level for the claim."""
 
     NONE = "NONE"
@@ -83,7 +83,7 @@ class Corroboration(BaseModel):
     model_config = {"frozen": True, "extra": "forbid"}
 
 
-class Materiality(str, Enum):
+class Materiality(StrEnum):
     """Materiality level of the claim."""
 
     LOW = "LOW"

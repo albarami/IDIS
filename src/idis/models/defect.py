@@ -8,13 +8,13 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
 
-class DefectType(str, Enum):
+class DefectType(StrEnum):
     """Categorical type of the defect."""
 
     BROKEN_CHAIN = "BROKEN_CHAIN"
@@ -33,7 +33,7 @@ class DefectType(str, Enum):
     IMPLAUSIBILITY = "IMPLAUSIBILITY"
 
 
-class DefectSeverity(str, Enum):
+class DefectSeverity(StrEnum):
     """Impact severity of this defect."""
 
     FATAL = "FATAL"
@@ -41,7 +41,7 @@ class DefectSeverity(str, Enum):
     MINOR = "MINOR"
 
 
-class CureProtocol(str, Enum):
+class CureProtocol(StrEnum):
     """Required action to address this defect."""
 
     REQUEST_SOURCE = "REQUEST_SOURCE"
@@ -51,7 +51,7 @@ class CureProtocol(str, Enum):
     DISCARD_CLAIM = "DISCARD_CLAIM"
 
 
-class DefectStatus(str, Enum):
+class DefectStatus(StrEnum):
     """Current status of this defect."""
 
     OPEN = "OPEN"

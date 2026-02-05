@@ -73,7 +73,7 @@ def client(
     monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys_config))
     clear_deals_store()
     clear_overrides_store()
-    app = create_app(audit_sink=audit_sink)
+    app = create_app(audit_sink=audit_sink, service_region="us-east-1")
     return TestClient(app)
 
 

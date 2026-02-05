@@ -98,7 +98,7 @@ class TestAuditorCannotMutate:
 
         try:
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.post(
@@ -139,7 +139,7 @@ class TestAuditorCannotMutate:
 
         try:
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.patch(
@@ -171,7 +171,7 @@ class TestAuditorCannotMutate:
 
         try:
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.get(
@@ -201,7 +201,7 @@ class TestAllowedRolesCanProceed:
 
         try:
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.post(
@@ -233,7 +233,7 @@ class TestAllowedRolesCanProceed:
 
         try:
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.post(
@@ -261,7 +261,7 @@ class TestAllowedRolesCanProceed:
 
         try:
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.post(
@@ -542,7 +542,7 @@ class TestRBACMiddlewareIntegration:
 
         try:
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.get(
@@ -570,7 +570,7 @@ class TestRBACMiddlewareIntegration:
 
         try:
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.post(

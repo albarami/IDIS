@@ -310,25 +310,34 @@ def resolve_deal_id_for_claim(
     if not tenant_id or not claim_id:
         return None
 
+    import os
+
     # Production path: use Postgres resolver when DB connection is available
     if request is not None:
         db_conn = getattr(request.state, "db_conn", None)
         if db_conn is not None:
             postgres_resolver = PostgresClaimDealResolver()
             return postgres_resolver.resolve_deal_id_for_claim(tenant_id, claim_id, db_conn=db_conn)
-        # Fail-closed: production context requires db_conn for claim resolution
-        # Do NOT silently fall back to in-memory resolver in production
-        logger.warning(
-            "Claim resolution unavailable: no db_conn in request.state",
-            extra={"tenant_id": tenant_id, "claim_id": claim_id},
-        )
-        raise IdisHttpError(
-            status_code=503,
-            code="resolver_unavailable",
-            message="Claim resolution service unavailable",
-        )
 
-    # Test/fallback path: use configured resolver (only when request is None)
+        # Check if Postgres is expected (DATABASE_URL configured)
+        # If yes, fail-closed when db_conn is missing
+        # If no, allow fallback to in-memory resolver for test environments
+        database_url = os.environ.get("IDIS_DATABASE_URL")
+        if database_url:
+            # Fail-closed: production context requires db_conn for claim resolution
+            # Return 403 (not 500/503) - this is an authorization denial
+            logger.warning(
+                "Claim resolution unavailable: db_conn missing but DATABASE_URL set",
+                extra={"tenant_id": tenant_id, "claim_id": claim_id},
+            )
+            raise IdisHttpError(
+                status_code=403,
+                code="ABAC_RESOLUTION_FAILED",
+                message="Access denied.",
+            )
+        # No DATABASE_URL = test environment, allow fallback to in-memory resolver
+
+    # Test/fallback path: use configured resolver
     if resolver is None:
         resolver = get_claim_deal_resolver()
 

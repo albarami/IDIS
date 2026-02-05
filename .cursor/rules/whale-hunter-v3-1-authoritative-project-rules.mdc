@@ -1,0 +1,43 @@
+---
+name: whale-hunter-v3-1-authoritative-project-rules
+description: This is a new rule
+---
+
+# Overview
+PROJECT: Whale Hunter v3.1 (Dark Forest)
+
+AUTHORITATIVE DOCS
+docs/POLICY.md, GATES.md, DATA_DICTIONARY.md, API_REFERENCE.md,
+IMPLEMENTATION_RULES.md, THREAT_MODEL.md, RUNBOOK.md, EVENTS.pdf
+are binding for this project.
+
+BUILD ORDER (MANDATORY)
+1. Database & schema (DATA_DICTIONARY)
+2. Gates & veto engine (POLICY order)
+3. API clients (pinned endpoints only)
+4. Phase 0 tools (logger, harvester, backtest)
+5. Simulator (shadow only)
+6. Metrics & Go/No-Go checks
+7. Assassin ONLY after GATES approval
+
+PHASE AWARENESS
+Current phase must be respected.
+Do not implement Phase N+1 features early.
+Assassin code must remain disabled until simulator ≥95% accuracy.
+
+FAIL-CLOSED DESIGN
+All gates default to BLOCK.
+Missing data, stale data, or API failure must veto execution.
+
+GRAPH RULES
+Graph signals BOOST confidence only until Phase 3.
+Trust decays (30-day half-life). Trust earned slowly, lost quickly.
+CEX-funded wallets are low-quality signals.
+
+EVENT LOGGING
+All major decisions must emit structured events per EVENTS spec.
+
+OUTPUT DISCIPLINE
+For coding tasks, follow the two-role workflow:
+Engineer (implement) + Verifier (break & approve).
+

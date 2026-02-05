@@ -72,7 +72,7 @@ def client(
     monkeypatch.setenv("IDIS_API_KEYS_JSON", _make_api_keys_json(TENANT_A_ID, TENANT_A_KEY))
     monkeypatch.setenv("IDIS_AUDIT_LOG_PATH", str(audit_log_path))
     sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-    app = create_app(audit_sink=sink)
+    app = create_app(audit_sink=sink, service_region="us-east-1")
     return TestClient(app)
 
 

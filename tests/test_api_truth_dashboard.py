@@ -164,7 +164,7 @@ class TestTruthDashboardEndpoint:
             _seed_test_claims(tenant_id, deal_id)
 
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.get(
@@ -222,7 +222,7 @@ class TestTruthDashboardEndpoint:
             _seed_test_claims(tenant_id, deal_id)
 
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.get(
@@ -267,7 +267,7 @@ class TestTruthDashboardEndpoint:
             _seed_test_claims(tenant_id, deal_id)
 
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response1 = client.get(
@@ -312,7 +312,7 @@ class TestTruthDashboardEndpoint:
 
         try:
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.get(
@@ -337,7 +337,7 @@ class TestTruthDashboardEndpoint:
 
         try:
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.get(
@@ -364,7 +364,7 @@ class TestTruthDashboardEndpoint:
             _seed_deal(tenant_id, deal_id)
 
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.get(
@@ -421,7 +421,7 @@ class TestTruthDashboardEndpoint:
             )
 
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.get(
@@ -469,7 +469,7 @@ class TestTruthDashboardRBAC:
             _seed_deal(tenant_id, deal_id)
 
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.get(
@@ -493,7 +493,7 @@ class TestTruthDashboardRBAC:
 
         try:
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))
-            app = create_app(audit_sink=sink)
+            app = create_app(audit_sink=sink, service_region="us-east-1")
             client = TestClient(app, raise_server_exceptions=False)
 
             response = client.get(f"/v1/deals/{deal_id}/truth-dashboard")

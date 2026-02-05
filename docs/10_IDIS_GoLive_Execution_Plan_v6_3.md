@@ -872,9 +872,96 @@ Derived from SLO/Runbooks §10 and Security Threat Model §11.
 
 ---
 
-## 10) Revision History
+## 10) Infrastructure Artifacts (Task 7.6)
+
+### 10.1 Container Build
+
+| Artifact | Location | Purpose |
+|----------|----------|---------|
+| `Dockerfile` | `/Dockerfile` | Multi-stage production build (builder + runtime) |
+| `docker-compose.yml` | `/docker-compose.yml` | Local development environment |
+
+**Dockerfile Features:**
+- Multi-stage build for minimal runtime image
+- Pinned base image digest for reproducibility
+- Non-root user (`idis:1000`)
+- HEALTHCHECK directive hitting `/health`
+- Compiles Python bytecode in builder stage
+
+**Docker Compose Services:**
+- `idis-api`: Main API service (port 8000)
+- `postgres`: PostgreSQL 16 with init script
+- `redis`: Redis 7 for caching
+- `migrations`: One-shot Alembic migration runner
+
+### 10.2 Kubernetes Manifests
+
+| Manifest | Location | Purpose |
+|----------|----------|---------|
+| `namespace.yaml` | `/deploy/k8s/` | Namespace isolation |
+| `configmap.yaml` | `/deploy/k8s/` | Non-sensitive configuration |
+| `secret.example.yaml` | `/deploy/k8s/` | Secret template (DO NOT COMMIT REAL SECRETS) |
+| `deployment.yaml` | `/deploy/k8s/` | API deployment with probes |
+| `service.yaml` | `/deploy/k8s/` | ClusterIP service |
+| `ingress.yaml` | `/deploy/k8s/` | External access with TLS |
+| `hpa.yaml` | `/deploy/k8s/` | Horizontal Pod Autoscaler |
+| `networkpolicy.yaml` | `/deploy/k8s/` | Network segmentation |
+
+**Security Controls:**
+- Non-root securityContext (runAsUser: 1000)
+- Read-only root filesystem
+- Dropped capabilities (ALL)
+- Network policies for ingress/egress control
+- Resource limits enforced
+
+### 10.3 Terraform IaC
+
+| File | Location | Purpose |
+|------|----------|---------|
+| `versions.tf` | `/deploy/terraform/` | Provider version pins |
+| `variables.tf` | `/deploy/terraform/` | Input variables |
+| `main.tf` | `/deploy/terraform/` | Infrastructure resources |
+| `outputs.tf` | `/deploy/terraform/` | Exported values |
+
+**Resources Provisioned:**
+- VPC with public/private subnets
+- NAT Gateways for private subnet egress
+- RDS PostgreSQL 16 (Multi-AZ, encrypted)
+- S3 bucket for object storage (versioned, encrypted)
+- KMS key for encryption at rest
+- CloudWatch log groups (app + audit)
+- Security groups for RDS
+
+### 10.4 Release Build Script
+
+| Script | Location | Purpose |
+|--------|----------|---------|
+| `release_build.py` | `/scripts/` | Generate immutable build manifest |
+
+**Manifest Contents:**
+- Version stamp (6.3.0)
+- Git commit SHA
+- SHA256 checksums for source, schemas, OpenAPI, Dockerfile, K8s, Terraform
+- Build timestamp (ISO 8601)
+- CI metadata (run ID, run number)
+- Manifest hash for tamper detection
+
+### 10.5 CI Pipeline Integration
+
+New CI jobs added to `.github/workflows/ci.yml`:
+
+| Job | Purpose | Validation |
+|-----|---------|------------|
+| `container-build` | Build Docker image | Health check passes |
+| `k8s-validate` | Validate K8s manifests | kubeconform validation |
+| `terraform-validate` | Validate Terraform | `terraform fmt` + `terraform validate` |
+
+---
+
+## 11) Revision History
 
 | Date | Version | Author | Changes |
 |------|---------|--------|---------|
 | 2026-01-07 | 1.0 | Cascade | Initial creation from v6.3 docs consolidation |
 | 2026-01-07 | 1.1 | Cascade | Added Phase 2.3.1 as explicit sub-gate; added hard/soft gate classification table (§5.4); linked approving commits to completed phases |
+| 2026-01-28 | 1.2 | Cascade | Added §10 Infrastructure Artifacts documenting Task 7.6 deliverables (Dockerfile, K8s, Terraform, release build script, CI jobs) |

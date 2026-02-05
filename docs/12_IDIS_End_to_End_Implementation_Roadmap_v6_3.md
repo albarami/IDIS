@@ -828,20 +828,46 @@ docs(phase-6): update roadmap with Phase 6 completion
 - RB-01 through RB-10 runbooks with required structure (Detection → Triage → Containment → Recovery → Verification → Postmortem)
 - Tests: `tests/test_slo_metrics.py`, `tests/test_alert_rules.py`
 
-#### Task 7.5: Data Residency + Compliance ⏳ NOT STARTED
+#### Task 7.5: Data Residency + Compliance 🔄 IN PROGRESS (Codex Review)
 | Deliverable | Module | Status |
 |-------------|--------|--------|
-| Data residency controls | `src/idis/compliance/residency.py` | ⏳ |
-| BYOK (customer keys) | `src/idis/compliance/byok.py` | ⏳ |
-| Retention/legal hold | `src/idis/compliance/retention.py` | ⏳ |
+| Data residency controls | `src/idis/compliance/residency.py` | ✅ |
+| BYOK (customer keys) | `src/idis/compliance/byok.py` | ✅ |
+| Retention/legal hold | `src/idis/compliance/retention.py` | ✅ |
+| Residency middleware | `src/idis/api/middleware/residency.py` | ✅ |
+| Compliant storage wrapper | `src/idis/storage/compliant_store.py` | ✅ |
+| Middleware registered in main.py | `src/idis/api/main.py` | ✅ |
 
-#### Task 7.6: Infrastructure ⏳ NOT STARTED
+**Implementation Notes (v2 - Codex remediation):**
+- ResidencyMiddleware registered in main.py middleware stack
+- Fail-closed region enforcement: missing service region config returns 403 `RESIDENCY_SERVICE_REGION_UNSET`
+- BYOK audit required: missing audit_sink fails with 500 `BYOK_AUDIT_REQUIRED` (no silent return)
+- BYOK key states (ACTIVE/REVOKED) with audit-enforced mutations (configure/rotate/revoke)
+- Revoked BYOK key denies Class2/3 data access at ComplianceEnforcedStore boundary
+- Legal hold registry with CRITICAL severity audit events for apply/lift
+- Legal hold blocks deletion at ComplianceEnforcedStore boundary
+- Hold reason content never logged raw (hash/length only per v6.3 §6.3)
+- No Class2/3 leakage in logs or error messages
+- Traceability test `test_customer_key_used` verifies BYOK at storage boundary
+- Tests: `tests/test_data_residency.py`, `tests/test_byok.py`, `tests/test_retention_hold.py`
+
+#### Task 7.6: Infrastructure ✅ COMPLETE (Codex Review Pending)
 | Deliverable | Location | Status |
 |-------------|----------|--------|
-| Dockerfile | `Dockerfile` | ⏳ |
-| Docker Compose | `docker-compose.yml` | ⏳ |
-| Kubernetes manifests | `infra/k8s/` | ⏳ |
-| Terraform/IaC | `infra/terraform/` | ⏳ |
+| Dockerfile | `Dockerfile` | ✅ |
+| Docker Compose | `docker-compose.yml` | ✅ |
+| Kubernetes manifests | `deploy/k8s/` | ✅ |
+| Terraform/IaC | `deploy/terraform/` | ✅ |
+| Release build script | `scripts/release_build.py` | ✅ |
+| CI jobs (container, k8s, terraform) | `.github/workflows/ci.yml` | ✅ |
+
+**Implementation Notes (2026-01-28):**
+- **Dockerfile:** Multi-stage build (builder + runtime), pinned base image digest, non-root user (idis:1000), HEALTHCHECK directive
+- **Docker Compose:** idis-api, postgres:16, redis:7, migrations services with health checks and volumes
+- **Kubernetes:** namespace, configmap, secret template, deployment (3 replicas, probes, securityContext), service, ingress (TLS), HPA, NetworkPolicy
+- **Terraform:** VPC, subnets, NAT gateways, RDS PostgreSQL 16 (Multi-AZ, encrypted), S3 (versioned, encrypted), KMS, CloudWatch logs
+- **Release Build:** SHA256 checksums for source/schemas/openapi/dockerfile/k8s/terraform, git info, manifest hash
+- **CI Integration:** container-build (build + health check), k8s-validate (kubeconform), terraform-validate (fmt + validate)
 
 **Testing Requirements:**
 | Test File | Status |
@@ -850,7 +876,9 @@ docs(phase-6): update roadmap with Phase 6 completion
 | `test_abac.py` | ✅ |
 | `test_prompt_registry.py` | ✅ |
 | `test_evaluation_harness.py` | ✅ |
-| `test_data_residency.py` | ⏳ Needed |
+| `test_data_residency.py` | ✅ |
+| `test_byok.py` | ✅ |
+| `test_retention_hold.py` | ✅ |
 
 **Git Commits (Planned):**
 ```
@@ -868,14 +896,14 @@ docs(phase-7): update roadmap with Phase 7 completion
 ```
 
 **Exit Criteria:**
-- [ ] SSO integration working
-- [ ] ABAC with deal-level access
-- [ ] Prompt registry with audited promotion/rollback
-- [ ] GDBS benchmarks passing (Gate 0-4 in CI)
-- [ ] SLO dashboards operational
-- [ ] Data residency controls enforced
+- [x] SSO integration working
+- [x] ABAC with deal-level access
+- [x] Prompt registry with audited promotion/rollback
+- [x] GDBS benchmarks passing (Gate 0-4 in CI)
+- [x] SLO dashboards operational
+- [x] Data residency controls enforced
 - [ ] Infrastructure artifacts complete
-- [ ] Runbooks published
+- [x] Runbooks published
 - [ ] Gate 4 (human review 10-deal sample)
 
 ---

@@ -1,0 +1,10 @@
+# IDIS Kubernetes Namespace
+# Provides logical isolation for IDIS resources
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: idis
+  labels:
+    app.kubernetes.io/name: idis
+    app.kubernetes.io/version: "6.3.0"
+    app.kubernetes.io/managed-by: kubectl

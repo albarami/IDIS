@@ -43,6 +43,7 @@ OPERATION_ID_TO_EVENT_TYPE: dict[str, tuple[str, str, str]] = {
     "updateDeal": ("deal.updated", "MEDIUM", "deal"),
     "createDealDocument": ("document.created", "MEDIUM", "document"),
     "ingestDocument": ("document.ingestion.started", "LOW", "document"),
+    "deleteDocument": ("document.deleted", "MEDIUM", "document"),
     "createClaim": ("claim.created", "MEDIUM", "claim"),
     "updateClaim": ("claim.updated", "MEDIUM", "claim"),
     "createSanad": ("sanad.created", "MEDIUM", "sanad"),

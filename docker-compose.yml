@@ -1,93 +1,134 @@
-# IDIS Local Development Stack
-# Usage: docker compose up -d
-# Requires: Docker Desktop
+# IDIS Docker Compose - Local Development and Testing
+# Version: 6.3.0
+#
+# Usage:
+#   docker compose up -d          # Start all services
+#   docker compose logs -f idis   # Follow IDIS logs
+#   docker compose down -v        # Stop and remove volumes
+#
+# Health checks:
+#   curl http://localhost:8000/health
 
 services:
   # ==========================================================================
-  # PostgreSQL 16 with pgvector (Primary persistence - REQUIRED)
+  # IDIS API Service
+  # ==========================================================================
+  idis-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: idis-api
+    ports:
+      - "8000:8000"
+    environment:
+      # Database configuration (required)
+      IDIS_DATABASE_URL: "postgresql://idis_app:idis_app_password@postgres:5432/idis"
+      IDIS_DATABASE_ADMIN_URL: "postgresql://postgres:postgres_password@postgres:5432/idis"
+      # Service region for residency enforcement (required - fail-closed)
+      IDIS_SERVICE_REGION: "us-east-1"
+      # Object storage
+      IDIS_OBJECT_STORE_BASE_DIR: "/data/objects"
+      # OpenTelemetry (optional)
+      IDIS_OTEL_ENABLED: "0"
+      IDIS_OTEL_SERVICE_NAME: "idis-api"
+      # Redis for caching (optional)
+      IDIS_REDIS_URL: "redis://redis:6379/0"
+    volumes:
+      - idis-objects:/data/objects
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - idis-network
+
+  # ==========================================================================
+  # PostgreSQL Database
   # ==========================================================================
   postgres:
-    image: pgvector/pgvector:pg16
+    image: postgres:16-bookworm@sha256:8d3be35b184e70d81e54d446d8c552f8f834818e0e807294a0e2c4587e789d3b
     container_name: idis-postgres
-    restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-idis}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-idis_dev_password}
-      POSTGRES_DB: ${POSTGRES_DB:-idis}
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_password
+      POSTGRES_DB: idis
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/pg_init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     ports:
       - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./scripts/db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-idis} -d ${POSTGRES_DB:-idis}"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d idis"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - idis-network
 
   # ==========================================================================
-  # Redis (Optional - for distributed rate limiting)
+  # Redis Cache
   # ==========================================================================
   redis:
-    image: redis:7-alpine
+    image: redis:7-bookworm@sha256:e422889e156ebea83856b6ff973bfe0c86bce867d80def228044eeecf925592b
     container_name: idis-redis
-    restart: unless-stopped
     ports:
       - "6379:6379"
     volumes:
-      - redis_data:/data
+      - redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
-
-  # ==========================================================================
-  # MinIO (S3-compatible object storage for documents)
-  # ==========================================================================
-  minio:
-    image: minio/minio:latest
-    container_name: idis-minio
+      start_period: 5s
     restart: unless-stopped
-    command: server /data --console-address ":9001"
+    command: redis-server --appendonly yes
+    networks:
+      - idis-network
+
+  # ==========================================================================
+  # Database Migrations (one-shot)
+  # ==========================================================================
+  migrations:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: idis-migrations
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-idis_minio}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-idis_minio_secret}
-    ports:
-      - "9000:9000"   # S3 API
-      - "9001:9001"   # Console
-    volumes:
-      - minio_data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      IDIS_DATABASE_URL: "postgresql://idis_app:idis_app_password@postgres:5432/idis"
+      IDIS_DATABASE_ADMIN_URL: "postgresql://postgres:postgres_password@postgres:5432/idis"
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - idis-network
 
-  # ==========================================================================
-  # Neo4j (Optional - for Sanad graph visualization, defer until Phase 4/7)
-  # Uncomment when graph UX features are needed
-  # ==========================================================================
-  # neo4j:
-  #   image: neo4j:5-community
-  #   container_name: idis-neo4j
-  #   restart: unless-stopped
-  #   environment:
-  #     NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-idis_neo4j_dev}
-  #     NEO4J_PLUGINS: '["apoc"]'
-  #   ports:
-  #     - "7474:7474"   # HTTP
-  #     - "7687:7687"   # Bolt
-  #   volumes:
-  #     - neo4j_data:/data
-  #   healthcheck:
-  #     test: ["CMD", "curl", "-f", "http://localhost:7474"]
-  #     interval: 10s
-  #     timeout: 5s
-  #     retries: 5
-
+# ==========================================================================
+# Volumes
+# ==========================================================================
 volumes:
-  postgres_data:
-  redis_data:
-  minio_data:
-  # neo4j_data:  # Uncomment when Neo4j enabled
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
+  idis-objects:
+    driver: local
+
+# ==========================================================================
+# Networks
+# ==========================================================================
+networks:
+  idis-network:
+    driver: bridge

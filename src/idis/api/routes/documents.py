@@ -156,6 +156,17 @@ class _DocumentStore:
         key = f"{tenant_id}:{doc_id}"
         return self._artifacts.get(key)
 
+    def delete_artifact(self, tenant_id: str, doc_id: str) -> bool:
+        """Delete a document artifact by ID (tenant-scoped).
+
+        Returns True if artifact was deleted, False if not found.
+        """
+        key = f"{tenant_id}:{doc_id}"
+        existed = key in self._artifacts
+        if existed:
+            del self._artifacts[key]
+        return existed
+
     def list_artifacts(
         self,
         tenant_id: str,
@@ -619,10 +630,24 @@ def ingest_document(
 
     ingestion_service = getattr(request.app.state, "ingestion_service", None)
     if ingestion_service is not None:
-        object_store = getattr(ingestion_service, "_object_store", None)
-        if object_store is not None:
+        compliant_store = getattr(ingestion_service, "_compliant_store", None)
+        if compliant_store is not None:
             try:
-                stored_obj = object_store.get(tenant_ctx.tenant_id, uri)
+                from idis.api.auth import TenantContext as TenantCtx
+                from idis.compliance.byok import DataClass
+
+                ctx_for_store = TenantCtx(
+                    tenant_id=tenant_ctx.tenant_id,
+                    actor_id=tenant_ctx.actor_id,
+                    name=getattr(tenant_ctx, "name", "api"),
+                    timezone=getattr(tenant_ctx, "timezone", "UTC"),
+                    data_region=getattr(tenant_ctx, "data_region", "me-south-1"),
+                )
+                stored_obj = compliant_store.get(
+                    tenant_ctx=ctx_for_store,
+                    key=uri,
+                    data_class=DataClass.CLASS_2,
+                )
                 actual_data = stored_obj.body
 
                 if expected_sha256:
@@ -686,6 +711,41 @@ def ingest_document(
                 )
                 return RunRef(run_id=run["run_id"], status=run["status"])
 
+            except IdisHttpError as e:
+                _COMPLIANCE_DENIAL_CODES = frozenset(
+                    {
+                        "BYOK_KEY_REVOKED",
+                        "BYOK_AUDIT_REQUIRED",
+                        "BYOK_AUDIT_FAILED",
+                        "DELETION_BLOCKED_BY_HOLD",
+                        "RESIDENCY_REGION_MISMATCH",
+                        "RESIDENCY_SERVICE_REGION_UNSET",
+                    }
+                )
+                if e.status_code == 403 and e.code in _COMPLIANCE_DENIAL_CODES:
+                    logger.warning(
+                        "Compliance denial during document operation (re-raising): code=%s",
+                        e.code,
+                    )
+                    raise
+                logger.warning("IdisHttpError during ingestion: %s", e)
+                run = _document_store.create_run(
+                    tenant_id=tenant_ctx.tenant_id,
+                    run_id=run_id,
+                    doc_id=doc_id,
+                    status=RunStatus.FAILED.value,
+                )
+                _emit_ingestion_audit(
+                    request=request,
+                    tenant_id=tenant_ctx.tenant_id,
+                    doc_id=doc_id,
+                    deal_id=artifact["deal_id"],
+                    run_id=run_id,
+                    status=RunStatus.FAILED.value,
+                    idempotency_key=idempotency_key,
+                    error_message=str(e),
+                )
+                return RunRef(run_id=run["run_id"], status=run["status"])
             except Exception as e:
                 logger.warning("Ingestion failed: %s", e)
                 run = _document_store.create_run(
@@ -723,3 +783,250 @@ def ingest_document(
         error_message="Ingestion service unavailable: cannot validate SHA256 integrity",
     )
     return RunRef(run_id=run["run_id"], status=run["status"])
+
+
+class GetDocumentResponse(BaseModel):
+    """Response model for GET /v1/documents/{doc_id}."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    doc_id: str
+    tenant_id: str
+    deal_id: str
+    doc_type: str
+    title: str
+    source_system: str
+    version_id: str
+    ingested_at: str
+    sha256: str | None = None
+    uri: str | None = None
+    metadata: dict[str, Any] | None = None
+    content_b64: str
+    content_sha256: str
+
+
+@router.get(
+    "/v1/documents/{doc_id}",
+    response_model=GetDocumentResponse,
+    summary="Get a document",
+    description="Retrieve a document by ID. Requires BYOK key active for Class2/3 data.",
+    responses={
+        200: {"description": "Document retrieved successfully"},
+        403: {"description": "Access denied - BYOK key revoked"},
+        404: {"description": "Document not found"},
+    },
+)
+async def get_document(
+    request: Request,
+    doc_id: str,
+    tenant_ctx: RequireTenantContext,
+) -> GetDocumentResponse:
+    """Get a document with BYOK enforcement.
+
+    This endpoint enforces BYOK key checks for Class2/3 data access.
+    If BYOK key is revoked, returns 403 BYOK_KEY_REVOKED.
+
+    Args:
+        request: FastAPI request object.
+        doc_id: Document ID to retrieve.
+        tenant_ctx: Tenant context from authentication.
+
+    Returns:
+        GetDocumentResponse with document metadata.
+
+    Raises:
+        IdisHttpError: 403 if BYOK key revoked, 404 if not found.
+    """
+    import base64
+    import hashlib
+
+    from idis.api.auth import TenantContext as TenantCtx
+    from idis.compliance.byok import DataClass
+    from idis.storage.errors import ObjectNotFoundError
+
+    request.state.audit_resource_id = doc_id
+
+    artifact = _document_store.get_artifact(tenant_ctx.tenant_id, doc_id)
+    if artifact is None:
+        raise IdisHttpError(
+            status_code=404,
+            code="DOCUMENT_NOT_FOUND",
+            message="Document not found",
+        )
+
+    storage_key = artifact.get("uri")
+    if not storage_key:
+        raise IdisHttpError(
+            status_code=404,
+            code="DOCUMENT_CONTENT_NOT_FOUND",
+            message="Document content not found",
+        )
+
+    ctx_for_store = TenantCtx(
+        tenant_id=tenant_ctx.tenant_id,
+        actor_id=tenant_ctx.actor_id,
+        name=getattr(tenant_ctx, "name", "api"),
+        timezone=getattr(tenant_ctx, "timezone", "UTC"),
+        data_region=getattr(tenant_ctx, "data_region", "me-south-1"),
+    )
+
+    ingestion_service = getattr(request.app.state, "ingestion_service", None)
+    if ingestion_service is None:
+        raise IdisHttpError(
+            status_code=503,
+            code="SERVICE_UNAVAILABLE",
+            message="Ingestion service unavailable",
+        )
+
+    compliant_store = getattr(ingestion_service, "_compliant_store", None)
+    if compliant_store is None:
+        raise IdisHttpError(
+            status_code=503,
+            code="SERVICE_UNAVAILABLE",
+            message="Compliance store unavailable",
+        )
+
+    try:
+        stored_object = compliant_store.get(
+            tenant_ctx=ctx_for_store,
+            key=storage_key,
+            data_class=DataClass.CLASS_2,
+        )
+    except ObjectNotFoundError as err:
+        raise IdisHttpError(
+            status_code=404,
+            code="DOCUMENT_CONTENT_NOT_FOUND",
+            message="Document content not found",
+        ) from err
+
+    content_bytes = stored_object.body
+    content_b64 = base64.b64encode(content_bytes).decode("ascii")
+    content_sha256 = hashlib.sha256(content_bytes).hexdigest()
+
+    return GetDocumentResponse(
+        doc_id=artifact["doc_id"],
+        tenant_id=artifact["tenant_id"],
+        deal_id=artifact["deal_id"],
+        doc_type=artifact["doc_type"],
+        title=artifact["title"],
+        source_system=artifact["source_system"],
+        version_id=artifact["version_id"],
+        ingested_at=artifact["ingested_at"],
+        sha256=artifact.get("sha256"),
+        uri=artifact.get("uri"),
+        metadata=artifact.get("metadata"),
+        content_b64=content_b64,
+        content_sha256=content_sha256,
+    )
+
+
+class DeleteDocumentResponse(BaseModel):
+    """Response model for DELETE /v1/documents/{doc_id}."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    doc_id: str
+    deleted: bool
+    message: str
+
+
+@router.delete(
+    "/v1/documents/{doc_id}",
+    response_model=DeleteDocumentResponse,
+    summary="Delete a document",
+    description="Delete a document by ID. Blocked if document is under legal hold.",
+    responses={
+        200: {"description": "Document deleted successfully"},
+        403: {"description": "Access denied - document under legal hold or BYOK revoked"},
+        404: {"description": "Document not found"},
+    },
+)
+async def delete_document(
+    request: Request,
+    doc_id: str,
+    tenant_ctx: RequireTenantContext,
+) -> DeleteDocumentResponse:
+    """Delete a document with legal hold protection.
+
+    This endpoint enforces legal hold checks before deletion.
+    If a legal hold is active, returns 403 DELETION_BLOCKED_BY_HOLD.
+
+    Args:
+        request: FastAPI request object.
+        doc_id: Document ID to delete.
+        tenant_ctx: Tenant context from authentication.
+
+    Returns:
+        DeleteDocumentResponse with deletion status.
+
+    Raises:
+        IdisHttpError: 403 if document under legal hold, 404 if not found.
+    """
+    from idis.api.auth import TenantContext as TenantCtx
+    from idis.compliance.retention import HoldTarget, block_deletion_if_held
+
+    request.state.audit_resource_id = doc_id
+
+    artifact = _document_store.get_artifact(tenant_ctx.tenant_id, doc_id)
+    if artifact is None:
+        raise IdisHttpError(
+            status_code=404,
+            code="DOCUMENT_NOT_FOUND",
+            message="Document not found",
+        )
+
+    ctx_for_hold = TenantCtx(
+        tenant_id=tenant_ctx.tenant_id,
+        actor_id=tenant_ctx.actor_id,
+        name=getattr(tenant_ctx, "name", "api"),
+        timezone=getattr(tenant_ctx, "timezone", "UTC"),
+        data_region=getattr(tenant_ctx, "data_region", "me-south-1"),
+    )
+
+    block_deletion_if_held(
+        tenant_ctx=ctx_for_hold,
+        target_type=HoldTarget.ARTIFACT,
+        target_id=doc_id,
+    )
+
+    ingestion_service = getattr(request.app.state, "ingestion_service", None)
+    if ingestion_service is not None:
+        compliant_store = getattr(ingestion_service, "_compliant_store", None)
+        if compliant_store is not None:
+            storage_key = artifact.get("storage_key") or artifact.get("uri")
+            if storage_key:
+                try:
+                    compliant_store.delete(
+                        tenant_ctx=ctx_for_hold,
+                        key=storage_key,
+                        resource_id=doc_id,
+                        hold_target_type=HoldTarget.ARTIFACT,
+                    )
+                except IdisHttpError:
+                    raise
+                except Exception as e:
+                    logger.warning("Storage deletion failed (continuing): %s", e)
+
+    deleted = _document_store.delete_artifact(tenant_ctx.tenant_id, doc_id)
+
+    audit_sink = getattr(request.app.state, "audit_sink", None)
+    if audit_sink is not None:
+        event = {
+            "event_type": "document.deleted",
+            "tenant_id": tenant_ctx.tenant_id,
+            "actor_id": tenant_ctx.actor_id,
+            "resource_type": "document",
+            "resource_id": doc_id,
+            "details": {"deleted": deleted},
+            "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        }
+        try:
+            audit_sink.emit(event)
+        except Exception as e:
+            logger.warning("Audit emission failed for document.deleted: %s", e)
+
+    return DeleteDocumentResponse(
+        doc_id=doc_id,
+        deleted=deleted,
+        message="Document deleted" if deleted else "Document not found or already deleted",
+    )

@@ -62,7 +62,7 @@ def client_with_valid_key(tmp_path: str, api_keys_config: dict[str, dict[str, st
 
     os.environ["IDIS_API_KEYS_JSON"] = json.dumps(api_keys_config)
 
-    app = create_app(audit_sink=sink)
+    app = create_app(audit_sink=sink, service_region="us-east-1")
     client = TestClient(app, raise_server_exceptions=False)
 
     yield client
@@ -80,7 +80,7 @@ def client_no_keys(tmp_path: str) -> TestClient:
     if "IDIS_API_KEYS_JSON" in os.environ:
         del os.environ["IDIS_API_KEYS_JSON"]
 
-    app = create_app(audit_sink=sink)
+    app = create_app(audit_sink=sink, service_region="us-east-1")
     client = TestClient(app, raise_server_exceptions=False)
 
     yield client
@@ -259,7 +259,7 @@ class TestErrorEnvelopeAuditFailClosed:
 
         os.environ["IDIS_API_KEYS_JSON"] = json.dumps(api_keys_config)
 
-        app = create_app(audit_sink=sink)
+        app = create_app(audit_sink=sink, service_region="us-east-1")
         client = TestClient(app, raise_server_exceptions=False)
 
         response = client.post(
@@ -293,7 +293,7 @@ class TestErrorEnvelopeAuditFailClosed:
 
         os.environ["IDIS_API_KEYS_JSON"] = json.dumps(api_keys_config)
 
-        app = create_app(audit_sink=sink)
+        app = create_app(audit_sink=sink, service_region="us-east-1")
         client = TestClient(app, raise_server_exceptions=False)
 
         response = client.post(
@@ -323,7 +323,7 @@ class TestErrorEnvelopeAuditFailClosed:
 
         os.environ["IDIS_API_KEYS_JSON"] = json.dumps(api_keys_config)
 
-        app = create_app(audit_sink=sink)
+        app = create_app(audit_sink=sink, service_region="us-east-1")
         client = TestClient(app, raise_server_exceptions=False)
 
         response = client.post(

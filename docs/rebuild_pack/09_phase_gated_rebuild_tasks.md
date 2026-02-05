@@ -403,7 +403,27 @@ This document provides the phase-gated task plan for completing the IDIS E2E reb
 
 ## 12. Summary: Gate 3 Unblock Path
 
-**Critical Path (in order):**
+### 12.1 Critical Dependency Chain (NON-SKIPPABLE)
+
+**Gate 3 unblock requires Phase 2 → Phase 3 → Phase 4 → Phase 6 glue. Phases CANNOT be skipped or reordered.**
+
+```
+Phase 2 (Extraction) ──▶ Phase 3 (Sanad) ──▶ Phase 4 (Orchestration) ──▶ Phase 6 (Deliverables)
+       │                       │                      │                         │
+       │                       │                      │                         │
+   REQUIRED:              REQUIRED:              REQUIRED:                 REQUIRED:
+   - Claims exist         - Sanad chains         - Pipeline runs E2E       - Deliverables
+   - Evidence linked      - Grades computed      - State transitions       - NFF enforced
+   - Spans preserved      - Defects detected     - Audit complete          - Export works
+```
+
+**Why phases cannot be skipped:**
+- **Phase 3 depends on Phase 2:** Sanad chains require extracted claims with evidence links
+- **Phase 4 depends on Phase 3:** Pipeline orchestration wires graded claims to debate
+- **Phase 6 depends on Phase 4:** Deliverables require completed debate output from pipeline
+- **Gate 3 requires Phase 6:** Full E2E from document upload → deliverable export
+
+### 12.2 Critical Path (in order)
 
 1. **Week 1-2:** Phase 2 (Claim Extraction)
    - Chunkers for all doc types

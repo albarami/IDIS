@@ -137,17 +137,14 @@ This document freezes the legacy baseline of IDIS v6.3. All work completed befor
 - `/v1/deals/{dealId}/documents` — Documents list
 - `/v1/documents/{docId}/ingest` — Ingestion trigger
 
-### 3.10 Frontend UI (Partial) ✅
-| Component | Status |
-|-----------|--------|
-| Next.js 14 foundation | ✅ |
-| Audit Events UI | ✅ |
-| Run Status UI | ✅ |
-| ErrorCallout component | ✅ |
-| HumanGate interface (OpenAPI-aligned) | ✅ |
-| Truth Dashboard table | ✅ |
-| DebateTranscript viewer | ✅ |
-| Deliverables page | ✅ |
+### 3.10 Frontend UI — Fully Completed Components ✅
+| Component | Status | Verification |
+|-----------|--------|--------------|
+| Next.js 14 foundation | ✅ COMPLETE | App router works, builds pass |
+| Audit Events UI | ✅ COMPLETE | Lists/filters audit events |
+| ErrorCallout component | ✅ COMPLETE | Displays RFC 7807 errors |
+| HumanGate interface (OpenAPI-aligned) | ✅ COMPLETE | Approve/reject functional |
+| Truth Dashboard table | ✅ COMPLETE | Shows claim grades |
 
 ---
 
@@ -165,16 +162,24 @@ This document freezes the legacy baseline of IDIS v6.3. All work completed befor
 
 ---
 
-## 5. Frontend Missing (To Complete in Rebuild)
+## 5. Frontend — Incomplete Components (Rebuild Required)
+
+### 5.1 Components Needing Completion
+
+| Screen/Component | Completed | Missing | Spec Reference |
+|------------------|-----------|---------|----------------|
+| Run Status UI | [x] Basic status display | [ ] Real-time WebSocket updates<br>[ ] Step-level error display<br>[ ] Resume/retry buttons | Frontend Guidelines §2.3 |
+| DebateTranscript viewer | [x] Raw JSON display | [ ] Formatted message bubbles<br>[ ] Agent role colors<br>[ ] Citation links | Frontend Guidelines §2.6 |
+| Deliverables page | [x] List view | [ ] Download buttons<br>[ ] Preview modal<br>[ ] Export format selector | Frontend Guidelines §2.8 |
+| `/runs` list page | [x] Basic table | [ ] Pagination<br>[ ] Filter by status<br>[ ] Sort by date | Frontend Guidelines §2.3 |
+
+### 5.2 Components Not Started
 
 | Screen/Component | Status | Spec Reference |
 |------------------|--------|----------------|
-| `/runs` list page (deal-scoped navigation) | ⚠️ Partial | Frontend Guidelines §2.3 |
-| Deliverables download/view UI | ⚠️ Partial | Frontend Guidelines §2.8 |
-| Debate transcript formatted viewer | ⚠️ Partial (raw JSON fallback exists) | Frontend Guidelines §2.6 |
-| Sanad Graph Visualization | ⏳ Not started | Frontend Guidelines §2.5 |
-| Claim Detail Drawer (full) | ⏳ Not started | Frontend Guidelines §2.4 |
-| Governance Dashboard | ⏳ Not started | Frontend Guidelines §2.9 |
+| Sanad Graph Visualization | ⏳ NOT STARTED | Frontend Guidelines §2.5 |
+| Claim Detail Drawer (full) | ⏳ NOT STARTED | Frontend Guidelines §2.4 |
+| Governance Dashboard | ⏳ NOT STARTED | Frontend Guidelines §2.9 |
 
 ---
 

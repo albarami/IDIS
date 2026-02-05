@@ -217,7 +217,73 @@ def calculate_extraction_confidence(
 
 ## 7. Failure Taxonomy
 
-### 7.1 Extraction Failures
+### 7.1 Fail-Closed Extraction Policy (NON-NEGOTIABLE)
+
+**Invalid JSON or schema mismatch = NO claim persisted, run FAILS/BLOCKS, audit emitted.**
+
+```python
+async def extract_claims_from_chunk(chunk: Chunk) -> list[Claim]:
+    for attempt in range(MAX_RETRIES):
+        try:
+            raw_response = await llm.extract(chunk)
+            
+            # FAIL-CLOSED: Parse JSON strictly
+            try:
+                parsed = json.loads(raw_response)
+            except json.JSONDecodeError as e:
+                await emit_audit_event("extraction.invalid_json", {
+                    "chunk_id": chunk.id,
+                    "attempt": attempt + 1,
+                    "error": str(e),
+                    "response_preview": raw_response[:500],
+                })
+                if attempt == MAX_RETRIES - 1:
+                    raise ExtractionFailedError(
+                        code="LLM_INVALID_JSON",
+                        message="LLM returned invalid JSON after max retries",
+                        chunk_id=chunk.id,
+                    )
+                continue
+            
+            # FAIL-CLOSED: Validate against schema strictly
+            try:
+                validated = ClaimExtractionOutput.model_validate(parsed)
+            except ValidationError as e:
+                await emit_audit_event("extraction.schema_mismatch", {
+                    "chunk_id": chunk.id,
+                    "attempt": attempt + 1,
+                    "validation_errors": e.errors(),
+                })
+                if attempt == MAX_RETRIES - 1:
+                    raise ExtractionFailedError(
+                        code="SCHEMA_MISMATCH",
+                        message="LLM output failed schema validation",
+                        chunk_id=chunk.id,
+                        validation_errors=e.errors(),
+                    )
+                continue
+            
+            # SUCCESS: Return validated claims
+            return validated.claims
+            
+        except RetryableError:
+            continue
+    
+    # FAIL-CLOSED: Never silently skip - always raise
+    raise ExtractionFailedError(
+        code="MAX_RETRIES_EXCEEDED",
+        chunk_id=chunk.id,
+    )
+```
+
+**Key Invariants:**
+- ❌ NEVER persist a claim from invalid JSON
+- ❌ NEVER persist a claim that fails schema validation
+- ❌ NEVER silently skip extraction failures
+- ✅ ALWAYS emit audit event on failure
+- ✅ ALWAYS block the run on unrecoverable extraction failure
+
+### 7.2 Extraction Failures
 | Code | Severity | Description | Retry | Skip | Flag |
 |------|----------|-------------|-------|------|------|
 | `PARSE_ERROR` | ERROR | Document parsing failed | ✅ 3x | ❌ | ✅ |

@@ -230,6 +230,10 @@ A **Run** is a single execution of the pipeline for a deal. Each run:
 | `run_calculations` | `calc_type + input_hash` | Return cached if match |
 | `trigger_debate` | `run_id + round` | Resume from last round |
 | `generate_deliverables` | `run_id + type` | Regenerate (deterministic) |
+| `enrichment` | `run_id + connector + entity_key` | Skip if enrichment record exists |
+| `muhasabah_gate` | `run_id + debate_id` | Re-validate (deterministic check) |
+| `human_gate` | `run_id + gate_type` | Await approval (no skip) |
+| `export` | `run_id + format + version` | Regenerate if inputs changed |
 
 ### 5.2 Resumability
 
@@ -280,6 +284,15 @@ Each step completion stores a checkpoint:
 | `GENERATED → IC_READY` | `run.completed` | run_id, duration |
 | Any → `FAILED` | `run.failed` | step, error_code, error_msg |
 | Any → `BLOCKED` | `run.blocked` | reason, blocking_defects |
+| `CALCULATED → ENRICHING` | `enrichment.started` | run_id, connectors_enabled |
+| `ENRICHING → ENRICHED` | `enrichment.completed` | enrichment_count, sources |
+| `ENRICHING → CALCULATED` | `enrichment.skipped` | reason (connector_failure/disabled) |
+| `DEBATED → GENERATING` | `muhasabah.passed` | debate_id, validation_result |
+| `DEBATING → BLOCKED` | `muhasabah.failed` | debate_id, violations |
+| `GENERATED → HUMAN_REVIEW` | `human_gate.required` | run_id, gate_type, reason |
+| `HUMAN_REVIEW → IC_READY` | `human_gate.approved` | approver_id, timestamp |
+| `HUMAN_REVIEW → BLOCKED` | `human_gate.rejected` | rejector_id, reason |
+| `IC_READY → EXPORTED` | `export.completed` | formats, artifact_ids |
 
 ### 6.2 Audit Event Schema
 
@@ -322,6 +335,63 @@ async def transition_state(run: Run, new_state: str) -> Run:
     run.state = new_state
     await run_repo.save(run)
     return run
+```
+
+---
+
+## 6.4 Step-Level Error Persistence
+
+Every step failure persists error details for UI consumption:
+
+```json
+{
+  "step_id": "uuid",
+  "step_name": "extract_claims",
+  "status": "FAILED",
+  "error": {
+    "code": "LLM_INVALID_JSON",
+    "message": "LLM returned malformed JSON after 3 retries",
+    "details": {
+      "chunk_id": "uuid",
+      "attempt_count": 3,
+      "last_response_preview": "[truncated...]"
+    },
+    "recoverable": true,
+    "suggested_action": "RETRY_WITH_DIFFERENT_MODEL"
+  },
+  "failed_at": "2026-02-05T12:05:00Z"
+}
+```
+
+**UI Events Payload:** The run status endpoint streams step errors via:
+- **Polling:** `GET /v1/runs/{runId}` includes `steps[].error`
+- **WebSocket:** `ws://host/v1/runs/{runId}/stream` emits `step.failed` events
+
+### 6.5 System Actor + Correlation ID Semantics
+
+**Background Steps:** Steps triggered by the system (not user-initiated) use:
+
+```python
+SYSTEM_ACTOR_ID = UUID("00000000-0000-0000-0000-000000000000")
+
+class BackgroundStepContext:
+    actor_id: UUID = SYSTEM_ACTOR_ID  # System actor for background
+    correlation_id: UUID  # Original run trigger request_id
+    causation_id: UUID    # Previous step's event_id
+```
+
+**Audit Event Linking:**
+```json
+{
+  "event_id": "uuid-step-event",
+  "actor_id": "00000000-0000-0000-0000-000000000000",
+  "correlation_id": "uuid-original-run-request",
+  "causation_id": "uuid-previous-step-event",
+  "metadata": {
+    "triggered_by": "pipeline_orchestrator",
+    "step_sequence": 5
+  }
+}
 ```
 
 ---
@@ -447,7 +517,65 @@ CONNECTOR_FAILURE_POLICY = {
 
 ---
 
-## 9. Module Structure
+## 9. Tenant Isolation in Orchestration
+
+### 9.1 RLS Enforcement
+
+All pipeline operations enforce tenant isolation via Postgres RLS:
+
+```sql
+-- Every pipeline table has tenant_id + RLS policy
+ALTER TABLE runs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY tenant_isolation_runs ON runs
+    USING (tenant_id = current_setting('app.current_tenant_id')::uuid);
+```
+
+### 9.2 No Cross-Tenant Existence Leaks
+
+```python
+async def get_run(run_id: UUID, tenant_id: UUID) -> Run:
+    run = await run_repo.get_by_id(run_id)
+    
+    # CRITICAL: Same error whether run doesn't exist OR belongs to different tenant
+    if run is None or run.tenant_id != tenant_id:
+        raise NotFoundError(
+            code="RUN_NOT_FOUND",
+            message=f"Run {run_id} not found",
+            # NO indication whether it exists for another tenant
+        )
+    
+    return run
+```
+
+### 9.3 Pipeline Step Tenant Scoping
+
+Every step receives tenant context and must scope all queries:
+
+```python
+class PipelineStep(ABC):
+    async def execute(self, context: StepContext) -> StepResult:
+        # Tenant ID injected into every DB session
+        async with self.db.tenant_session(context.tenant_id) as session:
+            # All queries automatically scoped by RLS
+            return await self._execute_impl(session, context)
+```
+
+### 9.4 Audit Tenant Completeness
+
+Every audit event MUST include `tenant_id`:
+
+```python
+def build_audit_event(run: Run, event_type: str) -> AuditEvent:
+    return AuditEvent(
+        tenant_id=run.tenant_id,  # REQUIRED - validated at emit
+        # ... other fields
+    )
+```
+
+---
+
+## 10. Module Structure
 
 ```
 src/idis/pipeline/

@@ -1,0 +1,93 @@
+# IDIS Local Development Stack
+# Usage: docker compose up -d
+# Requires: Docker Desktop
+
+services:
+  # ==========================================================================
+  # PostgreSQL 16 with pgvector (Primary persistence - REQUIRED)
+  # ==========================================================================
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: idis-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-idis}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-idis_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-idis}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-idis} -d ${POSTGRES_DB:-idis}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================================================
+  # Redis (Optional - for distributed rate limiting)
+  # ==========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: idis-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================================================
+  # MinIO (S3-compatible object storage for documents)
+  # ==========================================================================
+  minio:
+    image: minio/minio:latest
+    container_name: idis-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-idis_minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-idis_minio_secret}
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Console
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================================================
+  # Neo4j (Optional - for Sanad graph visualization, defer until Phase 4/7)
+  # Uncomment when graph UX features are needed
+  # ==========================================================================
+  # neo4j:
+  #   image: neo4j:5-community
+  #   container_name: idis-neo4j
+  #   restart: unless-stopped
+  #   environment:
+  #     NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-idis_neo4j_dev}
+  #     NEO4J_PLUGINS: '["apoc"]'
+  #   ports:
+  #     - "7474:7474"   # HTTP
+  #     - "7687:7687"   # Bolt
+  #   volumes:
+  #     - neo4j_data:/data
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:7474"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  # neo4j_data:  # Uncomment when Neo4j enabled

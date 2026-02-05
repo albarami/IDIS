@@ -1,0 +1,486 @@
+# IDIS Prompt Registry Index
+# Version: 1.0.0
+# Date: 2026-02-05
+# Reference: docs/rebuild_pack/02_prompt_library.md
+
+# Registry metadata
+registry:
+  version: "1.0.0"
+  updated_at: "2026-02-05"
+  environments:
+    - dev
+    - staging
+    - prod
+
+# Prompt definitions
+prompts:
+  # ============================================
+  # Extraction Prompts
+  # ============================================
+  
+  EXTRACT_CLAIMS_V1:
+    id: "EXTRACT_CLAIMS_V1"
+    name: "Claim Extraction"
+    version: "1.0.0"
+    status: DRAFT  # DRAFT | STAGING | PROD | DEPRECATED
+    risk_class: HIGH
+    owner:
+      team: "extraction"
+      person: "TBD"
+    model_requirements:
+      model_class: fast
+      min_context_window: 16000
+      json_mode: required
+      tool_calling: false
+    input_schema: "schemas/extraction/extract_claims_input.json"
+    output_schema: "schemas/extraction/extract_claims_output.json"
+    file_path: "prompts/extract_claims/1.0.0/prompt.md"
+    metadata_path: "prompts/extract_claims/1.0.0/metadata.json"
+    validation_gates:
+      - GATE_1
+      - GATE_2
+      - GATE_3
+    fallback_policy:
+      primary_model: "gpt-4o"
+      secondary_model: "gpt-4o-mini"
+      safe_fallback: "gpt-3.5-turbo"
+
+  CLASSIFY_DOC_V1:
+    id: "CLASSIFY_DOC_V1"
+    name: "Document Classification"
+    version: "1.0.0"
+    status: DRAFT
+    risk_class: LOW
+    owner:
+      team: "extraction"
+      person: "TBD"
+    model_requirements:
+      model_class: fast
+      min_context_window: 4000
+      json_mode: required
+      tool_calling: false
+    input_schema: "schemas/extraction/classify_doc_input.json"
+    output_schema: "schemas/extraction/classify_doc_output.json"
+    file_path: "prompts/classify_doc/1.0.0/prompt.md"
+    metadata_path: "prompts/classify_doc/1.0.0/metadata.json"
+    validation_gates:
+      - GATE_1
+
+  ENTITY_RESOLUTION_V1:
+    id: "ENTITY_RESOLUTION_V1"
+    name: "Entity Resolution"
+    version: "1.0.0"
+    status: DRAFT
+    risk_class: MEDIUM
+    owner:
+      team: "extraction"
+      person: "TBD"
+    model_requirements:
+      model_class: reasoning
+      min_context_window: 32000
+      json_mode: required
+      tool_calling: false
+    input_schema: "schemas/extraction/entity_resolution_input.json"
+    output_schema: "schemas/extraction/entity_resolution_output.json"
+    file_path: "prompts/entity_resolution/1.0.0/prompt.md"
+    metadata_path: "prompts/entity_resolution/1.0.0/metadata.json"
+    validation_gates:
+      - GATE_1
+      - GATE_2
+
+  # ============================================
+  # Sanad & Verification Prompts
+  # ============================================
+
+  SANAD_GRADER_V1:
+    id: "SANAD_GRADER_V1"
+    name: "Sanad Chain Grader"
+    version: "1.0.0"
+    status: DRAFT
+    risk_class: HIGH
+    owner:
+      team: "trust"
+      person: "TBD"
+    model_requirements:
+      model_class: verifier
+      min_context_window: 8000
+      json_mode: strict
+      tool_calling: false
+    input_schema: "schemas/sanad/sanad_grader_input.json"
+    output_schema: "schemas/sanad/sanad_grader_output.json"
+    file_path: "prompts/sanad_grader/1.0.0/prompt.md"
+    metadata_path: "prompts/sanad_grader/1.0.0/metadata.json"
+    validation_gates:
+      - GATE_1
+      - GATE_2
+      - GATE_3
+
+  DEFECT_DETECTOR_V1:
+    id: "DEFECT_DETECTOR_V1"
+    name: "Defect Detection (I'lal)"
+    version: "1.0.0"
+    status: DRAFT
+    risk_class: HIGH
+    owner:
+      team: "trust"
+      person: "TBD"
+    model_requirements:
+      model_class: reasoning
+      min_context_window: 16000
+      json_mode: required
+      tool_calling: true
+    tool_contracts:
+      - lookup_claim
+    input_schema: "schemas/sanad/defect_detector_input.json"
+    output_schema: "schemas/sanad/defect_detector_output.json"
+    file_path: "prompts/defect_detector/1.0.0/prompt.md"
+    metadata_path: "prompts/defect_detector/1.0.0/metadata.json"
+    validation_gates:
+      - GATE_1
+      - GATE_2
+      - GATE_3
+
+  MATN_CHECKER_V1:
+    id: "MATN_CHECKER_V1"
+    name: "Content Integrity Checker"
+    version: "1.0.0"
+    status: DRAFT
+    risk_class: MEDIUM
+    owner:
+      team: "trust"
+      person: "TBD"
+    model_requirements:
+      model_class: reasoning
+      min_context_window: 16000
+      json_mode: required
+      tool_calling: true
+    tool_contracts:
+      - lookup_calc
+    input_schema: "schemas/sanad/matn_checker_input.json"
+    output_schema: "schemas/sanad/matn_checker_output.json"
+    file_path: "prompts/matn_checker/1.0.0/prompt.md"
+    metadata_path: "prompts/matn_checker/1.0.0/metadata.json"
+    validation_gates:
+      - GATE_1
+      - GATE_2
+
+  # ============================================
+  # Debate Role Prompts
+  # ============================================
+
+  DEBATE_ADVOCATE_V1:
+    id: "DEBATE_ADVOCATE_V1"
+    name: "Debate Advocate"
+    version: "1.0.0"
+    status: DRAFT
+    risk_class: HIGH
+    owner:
+      team: "debate"
+      person: "TBD"
+    model_requirements:
+      model_class: reasoning
+      min_context_window: 32000
+      json_mode: required
+      tool_calling: true
+    tool_contracts:
+      - lookup_claim
+      - lookup_calc
+    input_schema: "schemas/debate/advocate_input.json"
+    output_schema: "schemas/debate/agent_output.json"
+    file_path: "prompts/debate_advocate/1.0.0/prompt.md"
+    metadata_path: "prompts/debate_advocate/1.0.0/metadata.json"
+    validation_gates:
+      - GATE_1
+      - GATE_2
+      - GATE_3
+
+  DEBATE_SANAD_BREAKER_V1:
+    id: "DEBATE_SANAD_BREAKER_V1"
+    name: "Debate Sanad Breaker"
+    version: "1.0.0"
+    status: DRAFT
+    risk_class: HIGH
+    owner:
+      team: "debate"
+      person: "TBD"
+    model_requirements:
+      model_class: reasoning
+      min_context_window: 32000
+      json_mode: required
+      tool_calling: true
+    tool_contracts:
+      - lookup_claim
+      - lookup_calc
+      - search_evidence
+      - flag_defect
+    input_schema: "schemas/debate/sanad_breaker_input.json"
+    output_schema: "schemas/debate/agent_output.json"
+    file_path: "prompts/debate_sanad_breaker/1.0.0/prompt.md"
+    metadata_path: "prompts/debate_sanad_breaker/1.0.0/metadata.json"
+    validation_gates:
+      - GATE_1
+      - GATE_2
+      - GATE_3
+
+  DEBATE_CONTRADICTION_FINDER_V1:
+    id: "DEBATE_CONTRADICTION_FINDER_V1"
+    name: "Debate Contradiction Finder"
+    version: "1.0.0"
+    status: DRAFT
+    risk_class: HIGH
+    owner:
+      team: "debate"
+      person: "TBD"
+    model_requirements:
+      model_class: reasoning
+      min_context_window: 32000
+      json_mode: required
+      tool_calling: true
+    tool_contracts:
+      - lookup_claim
+      - lookup_calc
+      - search_evidence
+      - query_enrichment
+    input_schema: "schemas/debate/contradiction_finder_input.json"
+    output_schema: "schemas/debate/agent_output.json"
+    file_path: "prompts/debate_contradiction_finder/1.0.0/prompt.md"
+    metadata_path: "prompts/debate_contradiction_finder/1.0.0/metadata.json"
+    validation_gates:
+      - GATE_1
+      - GATE_2
+      - GATE_3
+
+  DEBATE_RISK_OFFICER_V1:
+    id: "DEBATE_RISK_OFFICER_V1"
+    name: "Debate Risk Officer"
+    version: "1.0.0"
+    status: DRAFT
+    risk_class: HIGH
+    owner:
+      team: "debate"
+      person: "TBD"
+    model_requirements:
+      model_class: reasoning
+      min_context_window: 32000
+      json_mode: required
+      tool_calling: true
+    tool_contracts:
+      - lookup_claim
+      - lookup_calc
+      - search_evidence
+      - query_enrichment
+    input_schema: "schemas/debate/risk_officer_input.json"
+    output_schema: "schemas/debate/agent_output.json"
+    file_path: "prompts/debate_risk_officer/1.0.0/prompt.md"
+    metadata_path: "prompts/debate_risk_officer/1.0.0/metadata.json"
+    validation_gates:
+      - GATE_1
+      - GATE_2
+      - GATE_3
+
+  DEBATE_ARBITER_V1:
+    id: "DEBATE_ARBITER_V1"
+    name: "Debate Arbiter"
+    version: "1.0.0"
+    status: DRAFT
+    risk_class: HIGH
+    owner:
+      team: "debate"
+      person: "TBD"
+    model_requirements:
+      model_class: reasoning
+      min_context_window: 32000
+      json_mode: required
+      tool_calling: true
+    tool_contracts:
+      - lookup_claim
+      - lookup_calc
+      - search_evidence
+      - request_human_review
+    input_schema: "schemas/debate/arbiter_input.json"
+    output_schema: "schemas/debate/arbiter_output.json"
+    file_path: "prompts/debate_arbiter/1.0.0/prompt.md"
+    metadata_path: "prompts/debate_arbiter/1.0.0/metadata.json"
+    validation_gates:
+      - GATE_1
+      - GATE_2
+      - GATE_3
+
+  # ============================================
+  # Validator Prompts
+  # ============================================
+
+  MUHASABAH_VALIDATOR_V1:
+    id: "MUHASABAH_VALIDATOR_V1"
+    name: "Muhasabah Record Validator"
+    version: "1.0.0"
+    status: DRAFT
+    risk_class: HIGH
+    owner:
+      team: "trust"
+      person: "TBD"
+    model_requirements:
+      model_class: verifier
+      min_context_window: 8000
+      json_mode: strict
+      tool_calling: false
+    input_schema: "schemas/validators/muhasabah_input.json"
+    output_schema: "schemas/validators/muhasabah_output.json"
+    file_path: "prompts/muhasabah_validator/1.0.0/prompt.md"
+    metadata_path: "prompts/muhasabah_validator/1.0.0/metadata.json"
+    validation_gates:
+      - GATE_1
+      - GATE_2
+      - GATE_3
+
+  NO_FREE_FACTS_CHECKER_V1:
+    id: "NO_FREE_FACTS_CHECKER_V1"
+    name: "No-Free-Facts Checker"
+    version: "1.0.0"
+    status: DRAFT
+    risk_class: HIGH
+    owner:
+      team: "trust"
+      person: "TBD"
+    model_requirements:
+      model_class: verifier
+      min_context_window: 8000
+      json_mode: strict
+      tool_calling: false
+    input_schema: "schemas/validators/nff_input.json"
+    output_schema: "schemas/validators/nff_output.json"
+    file_path: "prompts/no_free_facts_checker/1.0.0/prompt.md"
+    metadata_path: "prompts/no_free_facts_checker/1.0.0/metadata.json"
+    validation_gates:
+      - GATE_1
+      - GATE_2
+      - GATE_3
+
+  # ============================================
+  # Deliverables Prompts
+  # ============================================
+
+  IC_MEMO_GENERATOR_V1:
+    id: "IC_MEMO_GENERATOR_V1"
+    name: "IC Memo Generator"
+    version: "1.0.0"
+    status: DRAFT
+    risk_class: HIGH
+    owner:
+      team: "deliverables"
+      person: "TBD"
+    model_requirements:
+      model_class: reasoning
+      min_context_window: 32000
+      json_mode: optional
+      tool_calling: true
+    tool_contracts:
+      - lookup_claim
+      - lookup_calc
+    input_schema: "schemas/deliverables/ic_memo_input.json"
+    output_schema: "schemas/deliverables/ic_memo_output.json"
+    file_path: "prompts/ic_memo/1.0.0/prompt.md"
+    metadata_path: "prompts/ic_memo/1.0.0/metadata.json"
+    validation_gates:
+      - GATE_1
+      - GATE_2
+      - GATE_3
+      - GATE_4
+
+  SCREENING_SNAPSHOT_GENERATOR_V1:
+    id: "SCREENING_SNAPSHOT_GENERATOR_V1"
+    name: "Screening Snapshot Generator"
+    version: "1.0.0"
+    status: DRAFT
+    risk_class: MEDIUM
+    owner:
+      team: "deliverables"
+      person: "TBD"
+    model_requirements:
+      model_class: fast
+      min_context_window: 16000
+      json_mode: required
+      tool_calling: false
+    input_schema: "schemas/deliverables/screening_input.json"
+    output_schema: "schemas/deliverables/screening_output.json"
+    file_path: "prompts/screening_snapshot/1.0.0/prompt.md"
+    metadata_path: "prompts/screening_snapshot/1.0.0/metadata.json"
+    validation_gates:
+      - GATE_1
+      - GATE_2
+
+  TRUTH_DASHBOARD_GENERATOR_V1:
+    id: "TRUTH_DASHBOARD_GENERATOR_V1"
+    name: "Truth Dashboard Generator"
+    version: "1.0.0"
+    status: DRAFT
+    risk_class: MEDIUM
+    owner:
+      team: "deliverables"
+      person: "TBD"
+    model_requirements:
+      model_class: fast
+      min_context_window: 16000
+      json_mode: required
+      tool_calling: false
+    input_schema: "schemas/deliverables/truth_dashboard_input.json"
+    output_schema: "schemas/deliverables/truth_dashboard_output.json"
+    file_path: "prompts/truth_dashboard/1.0.0/prompt.md"
+    metadata_path: "prompts/truth_dashboard/1.0.0/metadata.json"
+    validation_gates:
+      - GATE_1
+      - GATE_2
+
+# Model class definitions
+model_classes:
+  fast:
+    description: "Fast model for extraction and light summarization"
+    default_model: "gpt-4o-mini"
+    fallback_model: "gpt-3.5-turbo"
+  reasoning:
+    description: "Reasoning model for complex analysis and debate"
+    default_model: "gpt-4o"
+    fallback_model: "gpt-4o-mini"
+  verifier:
+    description: "Verifier model for strict JSON validation"
+    default_model: "gpt-4o-mini"
+    fallback_model: "gpt-3.5-turbo"
+
+# Tool definitions (referenced by prompts)
+tools:
+  lookup_claim:
+    description: "Retrieve claim details by ID"
+    permitted_agents:
+      - advocate
+      - sanad_breaker
+      - contradiction_finder
+      - risk_officer
+      - arbiter
+  lookup_calc:
+    description: "Retrieve calculation details by ID"
+    permitted_agents:
+      - advocate
+      - sanad_breaker
+      - contradiction_finder
+      - risk_officer
+      - arbiter
+  search_evidence:
+    description: "Search for evidence supporting/contradicting claims"
+    permitted_agents:
+      - sanad_breaker
+      - contradiction_finder
+      - risk_officer
+      - arbiter
+  flag_defect:
+    description: "Flag a defect in an evidence chain"
+    permitted_agents:
+      - sanad_breaker
+  request_human_review:
+    description: "Escalate to human review"
+    permitted_agents:
+      - arbiter
+  query_enrichment:
+    description: "Query external enrichment connectors"
+    permitted_agents:
+      - contradiction_finder
+      - risk_officer

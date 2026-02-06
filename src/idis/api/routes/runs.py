@@ -236,7 +236,9 @@ async def start_run(
         raise IdisHttpError(
             status_code=400,
             code="NO_INGESTED_DOCUMENTS",
-            message="Deal has no ingested documents; ingest at least one document before starting a run",
+            message=(
+                "Deal has no ingested documents; ingest at least one document before starting a run"
+            ),
         )
 
     if db_conn is not None:

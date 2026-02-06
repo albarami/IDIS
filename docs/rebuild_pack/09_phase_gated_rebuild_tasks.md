@@ -11,12 +11,7 @@
 
 This document provides the phase-gated task plan for completing the IDIS E2E rebuild. Tasks are organized by phase and reference the rebuild pack specifications.
 
-**Gate 3 Unblock Checklist:**
-- [ ] Ingestion → Extraction wired
-- [ ] Sanad auto-chain built
-- [ ] Debate triggers from graded claims
-- [ ] Deliverables generated from debate output
-- [ ] `/v1/deals/{dealId}/runs` executes full pipeline
+**Gate 3 Unblock Checklist:** See §12.0 for the authoritative per-blocker mapping with stable task IDs.
 
 ---
 
@@ -53,7 +48,7 @@ This document provides the phase-gated task plan for completing the IDIS E2E reb
 
 | Task | Module | Spec | Priority |
 |------|--------|------|----------|
-| Wire ingestion service to API | `services/ingestion/` | 01_claim_extraction | 🔴 |
+| **P1-T02** Wire ingestion service to API | `services/ingestion/` | 01_claim_extraction | 🔴 |
 | Emit audit events for ingestion | `services/ingestion/` | 03_pipeline_orch | 🔴 |
 | Handle ingestion failures | `services/ingestion/` | 01_claim_extraction | 🔴 |
 
@@ -82,7 +77,7 @@ This document provides the phase-gated task plan for completing the IDIS E2E reb
 
 | Task | Module | Spec | Priority |
 |------|--------|------|----------|
-| PDF chunker | `services/extraction/chunking/pdf_chunker.py` | 01_claim_extraction §3.1 | 🔴 |
+| **P2-T02** PDF chunker | `services/extraction/chunking/pdf_chunker.py` | 01_claim_extraction §3.1 | 🔴 |
 | XLSX chunker | `services/extraction/chunking/xlsx_chunker.py` | 01_claim_extraction §3.2 | 🔴 |
 | DOCX chunker | `services/extraction/chunking/docx_chunker.py` | 01_claim_extraction §3.3 | 🔴 |
 | PPTX chunker | `services/extraction/chunking/pptx_chunker.py` | 01_claim_extraction §3.4 | 🔴 |
@@ -91,7 +86,7 @@ This document provides the phase-gated task plan for completing the IDIS E2E reb
 
 | Task | Module | Spec | Priority |
 |------|--------|------|----------|
-| Claim extractor | `services/extraction/extractors/claim_extractor.py` | 01_claim_extraction §4 | 🔴 |
+| **P2-T01** Claim extractor | `services/extraction/extractors/claim_extractor.py` | 01_claim_extraction §4 | 🔴 |
 | Entity extractor | `services/extraction/extractors/entity_extractor.py` | 01_claim_extraction §5 | 🔴 |
 | Confidence scorer | `services/extraction/confidence/scorer.py` | 01_claim_extraction §6 | 🔴 |
 
@@ -99,7 +94,7 @@ This document provides the phase-gated task plan for completing the IDIS E2E reb
 
 | Task | Module | Spec | Priority |
 |------|--------|------|----------|
-| Deduplicator | `services/extraction/resolution/deduplicator.py` | 01_claim_extraction §5.2 | 🔴 |
+| **P2-T03** Deduplicator | `services/extraction/resolution/deduplicator.py` | 01_claim_extraction §5.2 | 🔴 |
 | Conflict detector | `services/extraction/resolution/conflict_detector.py` | 01_claim_extraction §5.3 | 🔴 |
 | Reconciler | `services/extraction/resolution/reconciler.py` | 01_claim_extraction §8 | 🟡 |
 
@@ -139,7 +134,7 @@ This document provides the phase-gated task plan for completing the IDIS E2E reb
 
 | Task | Module | Spec | Priority |
 |------|--------|------|----------|
-| Auto-chain builder | `services/sanad/chain_builder.py` | IDIS_Sanad_Methodology_v2 | 🔴 |
+| **P3-T01** Auto-chain builder | `services/sanad/chain_builder.py` | IDIS_Sanad_Methodology_v2 | 🔴 |
 | Evidence linker | `services/sanad/evidence_linker.py` | 01_claim_extraction §4.2 | 🔴 |
 | Independence calculator | `services/sanad/tawatur.py` | Already exists, wire | 🔴 |
 
@@ -148,7 +143,7 @@ This document provides the phase-gated task plan for completing the IDIS E2E reb
 | Task | Module | Spec | Priority |
 |------|--------|------|----------|
 | Wire extraction → Sanad | `pipeline/steps/grade_step.py` | 03_pipeline_orch | 🔴 |
-| Auto-grade on extraction | `services/sanad/grader.py` | Already exists, wire | 🔴 |
+| **P3-T02** Auto-grade on extraction | `services/sanad/grader.py` | Already exists, wire | 🔴 |
 | Defect auto-detection | `services/sanad/ilal.py` | Already exists, wire | 🔴 |
 
 ### 3.3 Prompts
@@ -204,7 +199,7 @@ This document provides the phase-gated task plan for completing the IDIS E2E reb
 
 | Task | Module | Spec | Priority |
 |------|--------|------|----------|
-| `POST /v1/deals/{dealId}/runs` | `api/routes/runs.py` | 03_pipeline_orch §4.3 | 🔴 |
+| **P4-T03** `POST /v1/deals/{dealId}/runs` | `api/routes/runs.py` | 03_pipeline_orch §4.3 | 🔴 |
 | `GET /v1/runs/{runId}` | `api/routes/runs.py` | 03_pipeline_orch §4.4 | 🔴 |
 | Run status websocket | `api/routes/runs.py` | 03_pipeline_orch | 🟡 |
 
@@ -235,7 +230,7 @@ This document provides the phase-gated task plan for completing the IDIS E2E reb
 
 | Task | Module | Spec | Priority |
 |------|--------|------|----------|
-| Wire orchestrator to pipeline | `pipeline/steps/debate_step.py` | 04_agent_framework | 🔴 |
+| **P5-T01** Wire orchestrator to pipeline | `pipeline/steps/debate_step.py` | 04_agent_framework | 🔴 |
 | Implement all tools | `debate/tools/*.py` | 04_agent_framework §4 | 🔴 |
 | Wire Muḥāsabah gate | `debate/muhasabah_gate.py` | Already exists, wire | 🔴 |
 
@@ -273,7 +268,7 @@ This document provides the phase-gated task plan for completing the IDIS E2E reb
 
 | Task | Module | Spec | Priority |
 |------|--------|------|----------|
-| Wire to pipeline | `pipeline/steps/deliver_step.py` | 03_pipeline_orch | 🔴 |
+| **P6-T01** Wire to pipeline | `pipeline/steps/deliver_step.py` | 03_pipeline_orch | 🔴 |
 | NFF validator gate | `validators/deliverable.py` | Already exists, enforce | 🔴 |
 
 ### 6.2 Prompts
@@ -402,6 +397,20 @@ This document provides the phase-gated task plan for completing the IDIS E2E reb
 ---
 
 ## 12. Summary: Gate 3 Unblock Path
+
+### 12.0 Gate 3 Blocker Mapping (Verbatim from gate_3_blocked_status.json)
+
+Each blocker below is copied verbatim from `docs/gates/gate_3_blocked_status.json`. Every blocker must map to a rebuild pack doc, a stable task ID in this document, and named test hooks. **No blocker may be closed without all three columns satisfied.**
+
+| # | Blocker (verbatim) | Rebuild Pack Doc | Task ID(s) in This Doc | Test Hook(s) |
+|---|-------------------|------------------|----------------------|--------------|
+| 1 | Document ingestion pipeline not integrated with claim extraction | 01, 03 | P1-T02, P2-T01 | `test_ingestion_triggers_extraction`, `test_extraction_produces_claims_from_ingested_doc` |
+| 2 | Claim extraction service not operational | 01, 02 | P2-T01, P2-T02, P2-T03 | `test_extraction_service_e2e`, `test_chunker_span_preservation`, `test_dedup_conflict_detection` |
+| 3 | Sanad chain building not automated (only manual test scripts exist) | 03 | P3-T01, P3-T02 | `test_sanad_auto_chain_from_claims`, `test_auto_grading_produces_valid_grades` |
+| 4 | Debate execution not integrated with deliverable generation | 03, 04 | P5-T01, P6-T01 | `test_debate_output_feeds_deliverable_generator`, `test_deliverable_nff_enforcement` |
+| 5 | No /v1/deals/{dealId}/runs endpoint that executes full pipeline | 03 §4.3 | P4-T03 | `test_runs_api_triggers_full_pipeline`, `test_run_state_transitions_e2e`, `test_run_audit_events_all_steps` |
+
+**Acceptance Criteria:** Gate 3 is unblocked when all 5 rows are implemented AND all named test hooks pass in CI.
 
 ### 12.1 Critical Dependency Chain (NON-SKIPPABLE)
 

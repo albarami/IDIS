@@ -50,18 +50,25 @@ Start with `09_phase_gated_rebuild_tasks.md` and work through phases in order.
 
 ---
 
-## Gate 3 Unblock Checklist
+## Gate 3 Blocker-to-Task Mapping
+
+Source: `docs/gates/gate_3_blocked_status.json` (verbatim). Each blocker must map to a rebuild pack doc, a concrete implementation task (by stable ID from `09_phase_gated_rebuild_tasks.md`), and named test hooks. **Gate 3 is unblocked only when all 5 rows show ✅ and all named test hooks pass in CI.**
+
+| # | Blocker (verbatim from gate_3_blocked_status.json) | Rebuild Pack Doc | Implementation Task ID | Test Hook(s) | Status |
+|---|-----------------------------------------------------|------------------|----------------------|--------------|--------|
+| 1 | Document ingestion pipeline not integrated with claim extraction | 01_claim_extraction_pipeline_spec.md, 03_pipeline_orchestration_spec.md | P1-T02 (Ingestion Service Integration), P2-T01 (Extraction Service) | `test_ingestion_triggers_extraction`, `test_extraction_produces_claims_from_ingested_doc` | ⏳ |
+| 2 | Claim extraction service not operational | 01_claim_extraction_pipeline_spec.md, 02_prompt_library.md | P2-T01 (Extraction Service), P2-T02 (Chunkers), P2-T03 (Dedup/Conflict) | `test_extraction_service_e2e`, `test_chunker_span_preservation`, `test_dedup_conflict_detection` | ⏳ |
+| 3 | Sanad chain building not automated (only manual test scripts exist) | 03_pipeline_orchestration_spec.md | P3-T01 (Chain Builder), P3-T02 (Auto-Grading) | `test_sanad_auto_chain_from_claims`, `test_auto_grading_produces_valid_grades` | ⏳ |
+| 4 | Debate execution not integrated with deliverable generation | 03_pipeline_orchestration_spec.md, 04_agent_framework_and_tools_spec.md | P5-T01 (Wire Orchestrator to Debate), P6-T01 (Deliverable Generation from Debate) | `test_debate_output_feeds_deliverable_generator`, `test_deliverable_nff_enforcement` | ⏳ |
+| 5 | No /v1/deals/{dealId}/runs endpoint that executes full pipeline | 03_pipeline_orchestration_spec.md §4.3 | P4-T03 (Runs API: `POST /v1/deals/{dealId}/runs`) | `test_runs_api_triggers_full_pipeline`, `test_run_state_transitions_e2e`, `test_run_audit_events_all_steps` | ⏳ |
+
+### Additional Gate 3 Prerequisites
 
 | Requirement | Spec | Status |
 |-------------|------|--------|
-| Ingestion → Extraction wired | 01, 03 | ⏳ |
-| Sanad auto-chain built | 03 | ⏳ |
-| Debate triggers from graded claims | 03, 04 | ⏳ |
-| Deliverables generated from debate | 03 | ⏳ |
-| `/v1/deals/{dealId}/runs` executes full pipeline | 03 | ⏳ |
-| GDBS-S dataset created | 05 | ⏳ |
-| GDBS-F dataset created | 05 | ⏳ |
-| Gate 3 script executable | 05 | ⏳ |
+| GDBS-S dataset created | 05_testing_and_gdbs_data_plan.md | ⏳ |
+| GDBS-F dataset created | 05_testing_and_gdbs_data_plan.md | ⏳ |
+| Gate 3 script executable | 05_testing_and_gdbs_data_plan.md | ⏳ |
 
 ---
 

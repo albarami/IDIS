@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from idis.api.auth import RequireTenantContext
 from idis.api.errors import IdisHttpError
+from idis.audit.sink import AuditSinkError
 
 logger = logging.getLogger(__name__)
 
@@ -320,7 +321,7 @@ def _emit_document_created_audit(
     idempotency_key: str | None,
 ) -> None:
     """Emit document.created audit event."""
-    from idis.audit.sink import InMemoryAuditSink
+    from idis.audit.sink import get_audit_sink
 
     request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
     actor_id = getattr(request.state, "tenant_context", None)
@@ -355,7 +356,7 @@ def _emit_document_created_audit(
 
     audit_sink = getattr(request.app.state, "audit_sink", None)
     if audit_sink is None:
-        audit_sink = InMemoryAuditSink()
+        audit_sink = get_audit_sink()
     audit_sink.emit(event)
 
 
@@ -370,7 +371,7 @@ def _emit_ingestion_audit(
     error_message: str | None = None,
 ) -> None:
     """Emit ingestion audit event (completed or failed)."""
-    from idis.audit.sink import InMemoryAuditSink
+    from idis.audit.sink import get_audit_sink
 
     request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
     actor_id = getattr(request.state, "tenant_context", None)
@@ -416,7 +417,7 @@ def _emit_ingestion_audit(
 
     audit_sink = getattr(request.app.state, "audit_sink", None)
     if audit_sink is None:
-        audit_sink = InMemoryAuditSink()
+        audit_sink = get_audit_sink()
     audit_sink.emit(event)
 
 
@@ -433,6 +434,7 @@ def _trigger_auto_ingest(
     Retrieves document bytes from compliant store and calls ingest_bytes().
     On success, stores the ingestion document_id mapping for span retrieval.
     On failure, logs and emits audit but does not fail the create operation.
+    Audit emission failures propagate to fail closed.
     """
     ingestion_service = getattr(request.app.state, "ingestion_service", None)
     if ingestion_service is None:
@@ -506,6 +508,8 @@ def _trigger_auto_ingest(
             idempotency_key=idempotency_key,
             error_message=None if result.success else "Auto-ingestion failed",
         )
+    except AuditSinkError:
+        raise
     except Exception as e:
         logger.warning("Auto-ingestion failed for doc_id=%s: %s", doc_id, e)
 
@@ -882,6 +886,8 @@ def ingest_document(
                     error_message=str(e),
                 )
                 return RunRef(run_id=run["run_id"], status=run["status"])
+            except AuditSinkError:
+                raise
             except Exception as e:
                 logger.warning("Ingestion failed: %s", e)
                 run = _document_store.create_run(

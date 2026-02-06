@@ -255,7 +255,20 @@ async def start_run(
             deal_id=deal_id,
             documents=documents,
         )
-        run_data["status"] = pipeline_result.get("status", "COMPLETED")
+
+        grading_summary = _run_snapshot_auto_grade(
+            run_id=run_id,
+            tenant_id=tenant_ctx.tenant_id,
+            deal_id=deal_id,
+            created_claim_ids=pipeline_result.get("created_claim_ids", []),
+        )
+
+        extraction_status = pipeline_result.get("status", "COMPLETED")
+        if grading_summary.get("all_failed") and extraction_status == "COMPLETED":
+            run_data["status"] = "FAILED"
+        else:
+            run_data["status"] = extraction_status
+        run_data["grading_summary"] = grading_summary
         run_data["finished_at"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         if db_conn is None:
             _IN_MEMORY_RUNS[run_id] = run_data
@@ -423,6 +436,49 @@ def _emit_run_completed_audit(
         audit_sink.emit(event)
     except Exception as exc:
         logger.warning("Failed to emit run.completed audit: %s", exc)
+
+
+def _run_snapshot_auto_grade(
+    *,
+    run_id: str,
+    tenant_id: str,
+    deal_id: str,
+    created_claim_ids: list[str],
+) -> dict[str, Any]:
+    """Run Sanad auto-grading for all claims produced by SNAPSHOT extraction.
+
+    Args:
+        run_id: Pipeline run UUID.
+        tenant_id: Tenant context.
+        deal_id: Deal UUID.
+        created_claim_ids: Claim IDs from extraction.
+
+    Returns:
+        Dict with grading summary stats.
+    """
+    from idis.services.sanad.auto_grade import auto_grade_claims_for_run
+
+    if not created_claim_ids:
+        return {
+            "graded_count": 0,
+            "failed_count": 0,
+            "total_defects": 0,
+            "all_failed": False,
+        }
+
+    grade_result = auto_grade_claims_for_run(
+        run_id=run_id,
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        created_claim_ids=created_claim_ids,
+    )
+
+    return {
+        "graded_count": grade_result.graded_count,
+        "failed_count": grade_result.failed_count,
+        "total_defects": grade_result.total_defects,
+        "all_failed": grade_result.all_failed,
+    }
 
 
 def _run_snapshot_extraction(

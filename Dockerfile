@@ -5,7 +5,7 @@
 # =============================================================================
 # Stage 1: Builder
 # =============================================================================
-FROM python:3.11-slim-bookworm@sha256:ce81dc539f0aedc9114cae640f8352fad83d37461c24a3615b01f081d0c0f1c2 AS builder
+FROM python:3.11-slim-bookworm@sha256:04cd27899595a99dfe77709d96f08876bf2ee99139ee2f0fe9ac948005034e5b AS builder
 
 WORKDIR /build
 
@@ -21,6 +21,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # Install Python dependencies first (cache layer)
 COPY pyproject.toml ./
+COPY README.md ./
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -e .
 
@@ -29,8 +30,8 @@ COPY src/ ./src/
 COPY openapi/ ./openapi/
 COPY schemas/ ./schemas/
 
-# Install the package
-RUN pip install --no-cache-dir -e .
+# Install the package (non-editable so runtime has in-venv code)
+RUN pip install --no-cache-dir .
 
 # Compile Python files for faster startup (optional verification)
 RUN python -m compileall -q src/
@@ -38,7 +39,7 @@ RUN python -m compileall -q src/
 # =============================================================================
 # Stage 2: Runtime
 # =============================================================================
-FROM python:3.11-slim-bookworm@sha256:ce81dc539f0aedc9114cae640f8352fad83d37461c24a3615b01f081d0c0f1c2 AS runtime
+FROM python:3.11-slim-bookworm@sha256:04cd27899595a99dfe77709d96f08876bf2ee99139ee2f0fe9ac948005034e5b AS runtime
 
 # Security: Run as non-root user
 RUN groupadd --gid 1000 idis && \

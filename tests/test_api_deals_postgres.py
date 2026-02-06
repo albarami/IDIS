@@ -120,7 +120,7 @@ def clean_deals_table(admin_engine: Engine, migrated_db: None) -> Generator[None
 
 
 @pytest.fixture
-def api_keys_config() -> dict[str, dict[str, str | list[str]]]:
+def api_keys_config(test_tenant_data_region: str) -> dict[str, dict[str, str | list[str]]]:
     """Create API keys configuration for both tenants."""
     return {
         API_KEY_TENANT_A: {
@@ -128,7 +128,7 @@ def api_keys_config() -> dict[str, dict[str, str | list[str]]]:
             "actor_id": ACTOR_A_ID,
             "name": "Test Tenant A",
             "timezone": "UTC",
-            "data_region": "us-east-1",
+            "data_region": test_tenant_data_region,
             "roles": ["ANALYST", "ADMIN"],
         },
         API_KEY_TENANT_B: {
@@ -136,7 +136,7 @@ def api_keys_config() -> dict[str, dict[str, str | list[str]]]:
             "actor_id": ACTOR_B_ID,
             "name": "Test Tenant B",
             "timezone": "UTC",
-            "data_region": "us-east-1",
+            "data_region": test_tenant_data_region,
             "roles": ["ANALYST", "ADMIN"],
         },
     }

@@ -22,7 +22,7 @@ services:
       - "8000:8000"
     environment:
       # Database configuration (required)
-      IDIS_DATABASE_URL: "postgresql://idis_app:idis_app_password@postgres:5432/${POSTGRES_DB:-idis}"
+      IDIS_DATABASE_URL: "postgresql://idis_app:${IDIS_APP_PASSWORD:-idis_app_password}@postgres:5432/${POSTGRES_DB:-idis}"
       IDIS_DATABASE_ADMIN_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres_password}@postgres:5432/${POSTGRES_DB:-idis}"
       # Service region for residency enforcement (required - fail-closed)
       IDIS_SERVICE_REGION: "us-east-1"
@@ -31,6 +31,8 @@ services:
       # OpenTelemetry (optional)
       IDIS_OTEL_ENABLED: "0"
       IDIS_OTEL_SERVICE_NAME: "idis-api"
+      # OpenAPI spec path inside container
+      IDIS_OPENAPI_PATH: "/app/openapi/IDIS_OpenAPI_v6_3.yaml"
       # Redis for caching (optional)
       IDIS_REDIS_URL: "redis://redis:6379/0"
     volumes:
@@ -105,7 +107,7 @@ services:
       dockerfile: Dockerfile
     container_name: idis-migrations
     environment:
-      IDIS_DATABASE_URL: "postgresql://idis_app:idis_app_password@postgres:5432/${POSTGRES_DB:-idis}"
+      IDIS_DATABASE_URL: "postgresql://idis_app:${IDIS_APP_PASSWORD:-idis_app_password}@postgres:5432/${POSTGRES_DB:-idis}"
       IDIS_DATABASE_ADMIN_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres_password}@postgres:5432/${POSTGRES_DB:-idis}"
     command: ["alembic", "upgrade", "head"]
     depends_on:
@@ -128,7 +130,7 @@ services:
       NEO4J_AUTH: "${NEO4J_USERNAME:-neo4j}/${NEO4J_PASSWORD:-localdev123}"
       NEO4J_PLUGINS: '["apoc"]'
     volumes:
-      - neo4j-data:/data
+      - neo4j_data:/data
     healthcheck:
       test: ["CMD", "neo4j", "status"]
       interval: 10s
@@ -146,7 +148,7 @@ volumes:
     driver: local
   redis-data:
     driver: local
-  neo4j-data:
+  neo4j_data:
     driver: local
   idis-objects:
     driver: local

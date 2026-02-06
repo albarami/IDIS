@@ -1,4 +1,4 @@
-# New PC Bootstrap Guide
+﻿# New PC Bootstrap Guide
 
 Canonical setup guide for IDIS on a fresh Windows development machine.
 
@@ -61,4 +61,6 @@ curl http://localhost:8000/health           # Returns OK (or use: irm http://loc
 - Use `.\.venv\Scripts\activate` not `activate` alone.
 - If `python` opens Microsoft Store, use `py -3.11` or the full venv path.
 - Docker Desktop must be running before `docker compose up`.
-- The `make.bat` file uses `%PYTHON_BIN%` resolved from `.venv\Scripts\python.exe` — never bare `python`.
+- The `make.bat` file uses `%PYTHON_BIN%` resolved from `.venv\Scripts\python.exe` -- never bare `python`.
+
+

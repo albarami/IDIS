@@ -117,6 +117,7 @@ class _DocumentStore:
         self._artifacts: dict[str, dict[str, Any]] = {}
         self._idempotency: dict[str, str] = {}
         self._runs: dict[str, dict[str, Any]] = {}
+        self._ingestion_doc_ids: dict[str, str] = {}
 
     def create_artifact(
         self,
@@ -247,11 +248,24 @@ class _DocumentStore:
         if key in self._runs:
             self._runs[key]["status"] = status
 
+    def set_ingestion_document_id(
+        self, tenant_id: str, doc_id: str, ingestion_document_id: str
+    ) -> None:
+        """Map a route doc_id to the IngestionService's internal document_id."""
+        key = f"{tenant_id}:{doc_id}"
+        self._ingestion_doc_ids[key] = ingestion_document_id
+
+    def get_ingestion_document_id(self, tenant_id: str, doc_id: str) -> str | None:
+        """Get the IngestionService document_id for a route doc_id."""
+        key = f"{tenant_id}:{doc_id}"
+        return self._ingestion_doc_ids.get(key)
+
     def clear(self) -> None:
         """Clear all stores. For testing only."""
         self._artifacts.clear()
         self._idempotency.clear()
         self._runs.clear()
+        self._ingestion_doc_ids.clear()
 
 
 _document_store = _DocumentStore()
@@ -274,11 +288,29 @@ def _decode_cursor(cursor: str | None) -> dict[str, str] | None:
         return None
 
 
-def _is_uri_scheme_allowed(uri: str | None) -> bool:
+def _is_uri_scheme_allowed(uri: str) -> bool:
     """Check if URI scheme is in the allowlist (SSRF protection)."""
     if not uri:
         return False
     return any(uri.startswith(scheme) for scheme in ALLOWED_URI_SCHEMES)
+
+
+def _strip_uri_scheme(uri: str) -> str:
+    """Strip the URI scheme prefix to produce a storage-safe key.
+
+    Converts logical URIs (file://path, idis://bucket/key, s3://bucket/key)
+    to plain storage keys by removing the scheme prefix.
+
+    Args:
+        uri: Logical URI with scheme prefix.
+
+    Returns:
+        Storage-safe key without scheme.
+    """
+    for scheme in ALLOWED_URI_SCHEMES:
+        if uri.startswith(scheme):
+            return uri[len(scheme) :]
+    return uri
 
 
 def _emit_document_created_audit(
@@ -386,6 +418,96 @@ def _emit_ingestion_audit(
     if audit_sink is None:
         audit_sink = InMemoryAuditSink()
     audit_sink.emit(event)
+
+
+def _trigger_auto_ingest(
+    *,
+    request: Request,
+    tenant_ctx: RequireTenantContext,
+    artifact: dict[str, Any],
+    doc_id: str,
+    idempotency_key: str | None,
+) -> None:
+    """Trigger ingestion via IngestionService during auto_ingest on create.
+
+    Retrieves document bytes from compliant store and calls ingest_bytes().
+    On success, stores the ingestion document_id mapping for span retrieval.
+    On failure, logs and emits audit but does not fail the create operation.
+    """
+    ingestion_service = getattr(request.app.state, "ingestion_service", None)
+    if ingestion_service is None:
+        return
+
+    compliant_store = getattr(ingestion_service, "_compliant_store", None)
+    if compliant_store is None:
+        return
+
+    uri = artifact.get("uri")
+    if not uri:
+        return
+
+    try:
+        from idis.api.auth import TenantContext as TenantCtx
+        from idis.compliance.byok import DataClass
+        from idis.services.ingestion import IngestionContext
+
+        ctx_for_store = TenantCtx(
+            tenant_id=tenant_ctx.tenant_id,
+            actor_id=tenant_ctx.actor_id,
+            name=getattr(tenant_ctx, "name", "api"),
+            timezone=getattr(tenant_ctx, "timezone", "UTC"),
+            data_region=getattr(tenant_ctx, "data_region", "me-south-1"),
+        )
+
+        storage_key = _strip_uri_scheme(uri)
+        stored_obj = compliant_store.get(
+            tenant_ctx=ctx_for_store,
+            key=storage_key,
+            data_class=DataClass.CLASS_2,
+        )
+        actual_data = stored_obj.body
+
+        ctx = IngestionContext(
+            tenant_id=UUID(tenant_ctx.tenant_id),
+            actor_id=tenant_ctx.actor_id,
+            request_id=getattr(request.state, "request_id", str(uuid.uuid4())),
+            idempotency_key=idempotency_key,
+        )
+
+        result = ingestion_service.ingest_bytes(
+            ctx=ctx,
+            deal_id=UUID(artifact["deal_id"]),
+            filename=artifact["title"],
+            media_type=None,
+            data=actual_data,
+            metadata=artifact.get("metadata"),
+        )
+
+        if result.success and result.document_id is not None:
+            _document_store.set_ingestion_document_id(
+                tenant_ctx.tenant_id, doc_id, str(result.document_id)
+            )
+
+        run_id = str(uuid.uuid4())
+        status = RunStatus.SUCCEEDED.value if result.success else RunStatus.FAILED.value
+        _document_store.create_run(
+            tenant_id=tenant_ctx.tenant_id,
+            run_id=run_id,
+            doc_id=doc_id,
+            status=status,
+        )
+        _emit_ingestion_audit(
+            request=request,
+            tenant_id=tenant_ctx.tenant_id,
+            doc_id=doc_id,
+            deal_id=artifact["deal_id"],
+            run_id=run_id,
+            status=status,
+            idempotency_key=idempotency_key,
+            error_message=None if result.success else "Auto-ingestion failed",
+        )
+    except Exception as e:
+        logger.warning("Auto-ingestion failed for doc_id=%s: %s", doc_id, e)
 
 
 @router.get("/v1/deals/{deal_id}/documents", response_model=PaginatedDocumentList)
@@ -524,6 +646,15 @@ def create_deal_document(
         idempotency_key=idempotency_key,
     )
 
+    if request_body.auto_ingest and request_body.uri:
+        _trigger_auto_ingest(
+            request=request,
+            tenant_ctx=tenant_ctx,
+            artifact=artifact,
+            doc_id=doc_id,
+            idempotency_key=idempotency_key,
+        )
+
     return DocumentArtifactResponse(
         doc_id=artifact["doc_id"],
         deal_id=artifact["deal_id"],
@@ -643,9 +774,10 @@ def ingest_document(
                     timezone=getattr(tenant_ctx, "timezone", "UTC"),
                     data_region=getattr(tenant_ctx, "data_region", "me-south-1"),
                 )
+                storage_key = _strip_uri_scheme(uri)
                 stored_obj = compliant_store.get(
                     tenant_ctx=ctx_for_store,
-                    key=uri,
+                    key=storage_key,
                     data_class=DataClass.CLASS_2,
                 )
                 actual_data = stored_obj.body
@@ -693,6 +825,10 @@ def ingest_document(
                 )
 
                 status = RunStatus.SUCCEEDED.value if result.success else RunStatus.FAILED.value
+                if result.success and result.document_id is not None:
+                    _document_store.set_ingestion_document_id(
+                        tenant_ctx.tenant_id, doc_id, str(result.document_id)
+                    )
                 run = _document_store.create_run(
                     tenant_id=tenant_ctx.tenant_id,
                     run_id=run_id,
@@ -785,6 +921,90 @@ def ingest_document(
     return RunRef(run_id=run["run_id"], status=run["status"])
 
 
+class SpanResponse(BaseModel):
+    """Response model for a single DocumentSpan."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    span_id: str
+    document_id: str
+    span_type: str
+    locator: dict[str, Any]
+    text_excerpt: str | None = None
+
+
+class PaginatedSpanList(BaseModel):
+    """Paginated list of spans."""
+
+    items: list[SpanResponse]
+    total: int
+
+
+@router.get(
+    "/v1/documents/{doc_id}/spans",
+    response_model=PaginatedSpanList,
+    summary="Get document spans",
+    description="Retrieve spans for a document after ingestion.",
+    responses={
+        200: {"description": "Spans retrieved successfully"},
+        404: {"description": "Document not found or not yet ingested"},
+    },
+)
+def get_document_spans(
+    doc_id: str,
+    tenant_ctx: RequireTenantContext,
+    request: Request,
+) -> PaginatedSpanList:
+    """Get spans for a document (tenant-scoped).
+
+    Retrieves spans generated by IngestionService for this document.
+    Returns 404 if the document does not exist in this tenant scope.
+    Returns empty list if ingestion has not yet produced spans.
+
+    Args:
+        doc_id: Document ID to retrieve spans for.
+        tenant_ctx: Injected tenant context from auth dependency.
+        request: FastAPI request for service access.
+
+    Returns:
+        PaginatedSpanList with span items and total count.
+
+    Raises:
+        IdisHttpError: 404 if document not found in tenant scope.
+    """
+    artifact = _document_store.get_artifact(tenant_ctx.tenant_id, doc_id)
+    if artifact is None:
+        raise IdisHttpError(
+            status_code=404,
+            code="NOT_FOUND",
+            message="Document not found",
+            details={"doc_id": doc_id},
+        )
+
+    ingestion_service = getattr(request.app.state, "ingestion_service", None)
+    if ingestion_service is None:
+        return PaginatedSpanList(items=[], total=0)
+
+    ingestion_doc_id = _document_store.get_ingestion_document_id(tenant_ctx.tenant_id, doc_id)
+    if ingestion_doc_id is None:
+        return PaginatedSpanList(items=[], total=0)
+
+    spans = ingestion_service.get_spans(UUID(tenant_ctx.tenant_id), UUID(ingestion_doc_id))
+
+    span_items = [
+        SpanResponse(
+            span_id=str(span.span_id),
+            document_id=str(span.document_id),
+            span_type=span.span_type.value,
+            locator=span.locator,
+            text_excerpt=span.text_excerpt,
+        )
+        for span in spans
+    ]
+
+    return PaginatedSpanList(items=span_items, total=len(span_items))
+
+
 class GetDocumentResponse(BaseModel):
     """Response model for GET /v1/documents/{doc_id}."""
 
@@ -854,13 +1074,14 @@ async def get_document(
             message="Document not found",
         )
 
-    storage_key = artifact.get("uri")
-    if not storage_key:
+    raw_uri = artifact.get("uri")
+    if not raw_uri:
         raise IdisHttpError(
             status_code=404,
             code="DOCUMENT_CONTENT_NOT_FOUND",
             message="Document content not found",
         )
+    storage_key = _strip_uri_scheme(raw_uri)
 
     ctx_for_store = TenantCtx(
         tenant_id=tenant_ctx.tenant_id,

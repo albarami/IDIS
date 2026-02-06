@@ -4,8 +4,8 @@ Provides POST /v1/deals/{dealId}/runs and GET /v1/runs/{runId} per OpenAPI spec.
 
 Supports both Postgres persistence (when configured) and in-memory fallback.
 
-SNAPSHOT mode: Runs extraction pipeline synchronously and returns result.
-FULL mode: Fail-closed until Phase 4 pipeline orchestration is implemented.
+SNAPSHOT mode: Runs INGEST_CHECK -> EXTRACT -> GRADE via RunOrchestrator.
+FULL mode: Runs through implemented steps, then BLOCKED at DEBATE.
 """
 
 from __future__ import annotations
@@ -17,12 +17,14 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from idis.api.auth import RequireTenantContext
 from idis.api.errors import IdisHttpError
-from idis.audit.sink import AuditSink
+from idis.audit.sink import AuditSink, AuditSinkError
 from idis.persistence.repositories.deals import InMemoryDealsRepository
+from idis.persistence.repositories.run_steps import InMemoryRunStepsRepository
+from idis.services.runs.orchestrator import RunContext, RunOrchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -37,11 +39,31 @@ class StartRunRequest(BaseModel):
     mode: str
 
 
+class StepErrorResponse(BaseModel):
+    """Error envelope for a failed step."""
+
+    code: str
+    message: str
+
+
+class RunStepResponse(BaseModel):
+    """Single step in the run response."""
+
+    step_name: str
+    status: str
+    started_at: str | None = None
+    finished_at: str | None = None
+    error: StepErrorResponse | None = None
+    retry_count: int = 0
+
+
 class RunRef(BaseModel):
     """Run reference returned by startRun (202)."""
 
     run_id: str
     status: str
+    steps: list[RunStepResponse] = Field(default_factory=list)
+    block_reason: str | None = None
 
 
 class RunStatus(BaseModel):
@@ -51,6 +73,8 @@ class RunStatus(BaseModel):
     status: str
     started_at: str
     finished_at: str | None = None
+    steps: list[RunStepResponse] = Field(default_factory=list)
+    block_reason: str | None = None
 
 
 def _get_run_from_postgres(conn: Any, run_id: str) -> dict[str, Any] | None:
@@ -182,7 +206,8 @@ async def start_run(
         RunRef with run_id and initial status.
 
     Raises:
-        IdisHttpError: 400 if invalid/missing fields, 404 if deal not found.
+        IdisHttpError: 400 if invalid/missing fields, 404 if deal not found,
+            500 if audit emission fails (fail-closed).
     """
     try:
         body = await request.json()
@@ -230,65 +255,58 @@ async def start_run(
 
     request.state.audit_resource_id = run_id
 
-    if request_body.mode == "SNAPSHOT":
-        documents = _gather_snapshot_documents(request, tenant_ctx.tenant_id, deal_id)
-        if not documents:
-            raise IdisHttpError(
-                status_code=400,
-                code="NO_INGESTED_DOCUMENTS",
-                message=(
-                    "No ingested documents found for this deal. "
-                    "Ingest at least one document before running extraction."
-                ),
-            )
+    documents = _gather_snapshot_documents(request, tenant_ctx.tenant_id, deal_id)
 
-        extractor_configured = getattr(request.app.state, "extractor_configured", True)
-        if not extractor_configured:
-            raise IdisHttpError(
-                status_code=503,
-                code="EXTRACTOR_NOT_CONFIGURED",
-                message="No claim extractor is configured. Cannot proceed.",
-            )
-
-        pipeline_result = _run_snapshot_extraction(
-            run_id=run_id,
-            tenant_id=tenant_ctx.tenant_id,
-            deal_id=deal_id,
-            documents=documents,
-        )
-
-        audit_sink = request.app.state.audit_sink
-        grading_summary = _run_snapshot_auto_grade(
-            run_id=run_id,
-            tenant_id=tenant_ctx.tenant_id,
-            deal_id=deal_id,
-            created_claim_ids=pipeline_result.get("created_claim_ids", []),
-            audit_sink=audit_sink,
-        )
-
-        if grading_summary.get("all_failed"):
-            run_data["status"] = "FAILED"
-        elif grading_summary.get("failed_count", 0) > 0:
-            run_data["status"] = "PARTIAL"
-        else:
-            run_data["status"] = "COMPLETED"
-        run_data["grading_summary"] = grading_summary
-        run_data["finished_at"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-        if db_conn is None:
-            _IN_MEMORY_RUNS[run_id] = run_data
-
-        _emit_run_completed_audit(request, run_id, tenant_ctx.tenant_id, run_data["status"])
-
-    elif request_body.mode == "FULL":
+    extractor_configured = getattr(request.app.state, "extractor_configured", True)
+    if not extractor_configured:
         raise IdisHttpError(
-            status_code=501,
-            code="NOT_IMPLEMENTED",
-            message="FULL mode is not yet implemented (Phase 4). Use SNAPSHOT mode.",
+            status_code=503,
+            code="EXTRACTOR_NOT_CONFIGURED",
+            message="No claim extractor is configured. Cannot proceed.",
         )
+
+    audit_sink = _get_audit_sink(request)
+    run_steps_repo = InMemoryRunStepsRepository(tenant_ctx.tenant_id)
+    orchestrator = RunOrchestrator(
+        audit_sink=audit_sink,
+        run_steps_repo=run_steps_repo,
+    )
+
+    ctx = RunContext(
+        run_id=run_id,
+        tenant_id=tenant_ctx.tenant_id,
+        deal_id=deal_id,
+        mode=request_body.mode,
+        documents=documents,
+        extract_fn=_run_snapshot_extraction,
+        grade_fn=_run_snapshot_auto_grade,
+    )
+
+    try:
+        orch_result = orchestrator.execute(ctx)
+    except AuditSinkError as exc:
+        logger.error("Audit failure aborted run %s: %s", run_id, exc)
+        raise IdisHttpError(
+            status_code=500,
+            code="AUDIT_FAILURE",
+            message="Run aborted: audit event emission failed",
+        ) from exc
+
+    run_data["status"] = orch_result.status
+    run_data["finished_at"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    run_data["block_reason"] = orch_result.block_reason
+    if db_conn is None:
+        _IN_MEMORY_RUNS[run_id] = run_data
+
+    _emit_run_completed_audit(request, run_id, tenant_ctx.tenant_id, run_data["status"])
+
+    step_responses = _build_step_responses(orch_result.steps)
 
     return RunRef(
         run_id=run_data["run_id"],
         status=run_data["status"],
+        steps=step_responses,
+        block_reason=orch_result.block_reason,
     )
 
 
@@ -306,10 +324,10 @@ def get_run(
         tenant_ctx: Injected tenant context from auth dependency.
 
     Returns:
-        RunStatus with run details.
+        RunStatus with run details and step ledger.
 
     Raises:
-        HTTPException: 404 if run not found or belongs to different tenant.
+        IdisHttpError: 404 if run not found or belongs to different tenant.
     """
     db_conn = getattr(request.state, "db_conn", None)
 
@@ -323,11 +341,17 @@ def get_run(
     if run_data is None:
         raise IdisHttpError(status_code=404, code="NOT_FOUND", message="Run not found")
 
+    run_steps_repo = InMemoryRunStepsRepository(tenant_ctx.tenant_id)
+    steps = run_steps_repo.get_by_run_id(run_id)
+    step_responses = _build_step_responses(steps)
+
     return RunStatus(
         run_id=run_data["run_id"],
         status=run_data["status"],
         started_at=run_data["started_at"],
         finished_at=run_data.get("finished_at"),
+        steps=step_responses,
+        block_reason=run_data.get("block_reason"),
     )
 
 
@@ -401,6 +425,57 @@ def _gather_snapshot_documents(
         )
 
     return documents
+
+
+def _get_audit_sink(request: Request) -> AuditSink:
+    """Get the audit sink from app state, falling back to in-memory.
+
+    Args:
+        request: FastAPI request.
+
+    Returns:
+        AuditSink instance.
+    """
+    from idis.audit.sink import InMemoryAuditSink
+
+    sink: AuditSink | None = getattr(request.app.state, "audit_sink", None)
+    if sink is None:
+        return InMemoryAuditSink()
+    return sink
+
+
+def _build_step_responses(steps: list[Any]) -> list[RunStepResponse]:
+    """Convert RunStep models to API response format.
+
+    Args:
+        steps: List of RunStep instances (already ordered by step_order).
+
+    Returns:
+        List of RunStepResponse dicts for JSON serialization.
+    """
+    from idis.models.run_step import StepStatus
+
+    responses: list[RunStepResponse] = []
+    for step in steps:
+        error = None
+        if step.status in (StepStatus.FAILED, StepStatus.BLOCKED) and step.error_code:
+            error = StepErrorResponse(
+                code=step.error_code,
+                message=step.error_message or "",
+            )
+        responses.append(
+            RunStepResponse(
+                step_name=step.step_name.value
+                if hasattr(step.step_name, "value")
+                else step.step_name,
+                status=step.status.value if hasattr(step.status, "value") else step.status,
+                started_at=step.started_at,
+                finished_at=step.finished_at,
+                error=error,
+                retry_count=step.retry_count,
+            )
+        )
+    return responses
 
 
 def _emit_run_completed_audit(

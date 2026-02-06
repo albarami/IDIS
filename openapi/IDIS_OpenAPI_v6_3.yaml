@@ -1654,12 +1654,34 @@ components:
           items: { $ref: "#/components/schemas/Sanad" }
         next_cursor: { type: string, nullable: true }
 
+    StepError:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
+
+    RunStepResponse:
+      type: object
+      required: [step_name, status]
+      properties:
+        step_name: { type: string, enum: [INGEST_CHECK, EXTRACT, GRADE, DEBATE] }
+        status: { type: string, enum: [PENDING, RUNNING, COMPLETED, FAILED, BLOCKED] }
+        started_at: { type: string, format: date-time, nullable: true }
+        finished_at: { type: string, format: date-time, nullable: true }
+        error: { $ref: "#/components/schemas/StepError" }
+        retry_count: { type: integer, default: 0 }
+
     RunRef:
       type: object
       required: [run_id, status]
       properties:
         run_id: { type: string, format: uuid }
-        status: { type: string, enum: [QUEUED, RUNNING, SUCCEEDED, FAILED] }
+        status: { type: string, enum: [QUEUED, RUNNING, COMPLETED, FAILED, BLOCKED, PARTIAL] }
+        steps:
+          type: array
+          items: { $ref: "#/components/schemas/RunStepResponse" }
+        block_reason: { type: string, nullable: true }
 
     StartRunRequest:
       type: object
@@ -1672,9 +1694,13 @@ components:
       required: [run_id, status, started_at]
       properties:
         run_id: { type: string, format: uuid }
-        status: { type: string, enum: [QUEUED, RUNNING, SUCCEEDED, FAILED] }
+        status: { type: string, enum: [QUEUED, RUNNING, COMPLETED, FAILED, BLOCKED, PARTIAL] }
         started_at: { type: string, format: date-time }
         finished_at: { type: string, format: date-time, nullable: true }
+        steps:
+          type: array
+          items: { $ref: "#/components/schemas/RunStepResponse" }
+        block_reason: { type: string, nullable: true }
 
     RunCalcRequest:
       type: object

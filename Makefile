@@ -21,8 +21,12 @@ postgres-integration:
 ui-check:
 	cd ui && npm ci && npm run lint && npm run typecheck && npm run test && npm run build
 
-check: format lint typecheck test forbidden-scan
-	@echo "All checks passed."
+check:
+	format
+	lint
+	typecheck
+	test
+	forbidden-scan
 
 install:
 	pip install -e .

@@ -4,6 +4,13 @@ REM Provides equivalent functionality to GNU Make targets
 REM Usage: make [target]  (e.g., make format, make lint, make test, make check)
 
 setlocal enabledelayedexpansion
+pushd "%~dp0"
+
+set "PYTHON_BIN=python"
+if not "%VIRTUAL_ENV%"=="" if exist "%VIRTUAL_ENV%\Scripts\python.exe" set "PYTHON_BIN=%VIRTUAL_ENV%\Scripts\python.exe"
+if exist "%~dp0.venv\Scripts\python.exe" set "PYTHON_BIN=%~dp0.venv\Scripts\python.exe"
+if exist "%~dp0venv\Scripts\python.exe" set "PYTHON_BIN=%~dp0venv\Scripts\python.exe"
+if exist "%~dp0env\Scripts\python.exe" set "PYTHON_BIN=%~dp0env\Scripts\python.exe"
 
 if "%1"=="" goto help
 if "%1"=="help" goto help
@@ -20,36 +27,36 @@ echo Unknown target: %1
 goto help
 
 :format
-echo === Running: ruff format . ===
-ruff format .
+echo === Running: python -m ruff format . ===
+"%PYTHON_BIN%" -m ruff format .
 if errorlevel 1 exit /b 1
 echo === Format complete ===
 goto end
 
 :lint
-echo === Running: ruff check . ===
-ruff check .
+echo === Running: python -m ruff check . ===
+"%PYTHON_BIN%" -m ruff check .
 if errorlevel 1 exit /b 1
 echo === Lint complete ===
 goto end
 
 :typecheck
 echo === Running: mypy src/idis --ignore-missing-imports ===
-python -m mypy src/idis --ignore-missing-imports
+"%PYTHON_BIN%" -m mypy src/idis --ignore-missing-imports
 if errorlevel 1 exit /b 1
 echo === Typecheck complete ===
 goto end
 
 :test
 echo === Running: pytest ===
-python -m pytest
+"%PYTHON_BIN%" -m pytest
 if errorlevel 1 exit /b 1
 echo === Tests complete ===
 goto end
 
 :forbidden_scan
 echo === Running: python scripts/forbidden_scan.py ===
-python scripts/forbidden_scan.py
+"%PYTHON_BIN%" scripts/forbidden_scan.py
 if errorlevel 1 exit /b 1
 echo === Forbidden scan complete ===
 goto end
@@ -107,23 +114,23 @@ echo === All checks passed ===
 goto end
 
 :format_internal
-ruff format .
+"%PYTHON_BIN%" -m ruff format .
 exit /b %errorlevel%
 
 :lint_internal
-ruff check .
+"%PYTHON_BIN%" -m ruff check .
 exit /b %errorlevel%
 
 :typecheck_internal
-python -m mypy src/idis --ignore-missing-imports
+"%PYTHON_BIN%" -m mypy src/idis --ignore-missing-imports
 exit /b %errorlevel%
 
 :test_internal
-python -m pytest
+"%PYTHON_BIN%" -m pytest
 exit /b %errorlevel%
 
 :forbidden_scan_internal
-python scripts/forbidden_scan.py
+"%PYTHON_BIN%" scripts/forbidden_scan.py
 exit /b %errorlevel%
 
 :help
@@ -147,4 +154,5 @@ echo On Windows, this batch file provides equivalent functionality.
 goto end
 
 :end
+popd
 endlocal

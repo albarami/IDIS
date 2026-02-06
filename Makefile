@@ -10,7 +10,7 @@ typecheck:
 	mypy src/idis --ignore-missing-imports
 
 test:
-	pytest -q
+	pytest
 
 forbidden-scan:
 	python scripts/forbidden_scan.py
@@ -22,11 +22,11 @@ ui-check:
 	cd ui && npm ci && npm run lint && npm run typecheck && npm run test && npm run build
 
 check:
-	format
-	lint
-	typecheck
-	test
-	forbidden-scan
+	ruff format .
+	ruff check .
+	mypy src/idis --ignore-missing-imports
+	pytest
+	python scripts/forbidden_scan.py
 
 install:
 	pip install -e .

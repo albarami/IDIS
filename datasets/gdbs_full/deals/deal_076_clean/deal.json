@@ -8,7 +8,7 @@
   "status": "IN_REVIEW",
   "materiality_threshold": 0.5,
   "scenario": "clean",
-  "scenario_description": "Clean baseline deal with all claims verified and consistent across sources",
+  "scenario_description": "Clean baseline deal with all claims verified",
   "created_at": "2026-01-05T09:00:00Z",
   "updated_at": "2026-01-05T09:00:00Z"
 }

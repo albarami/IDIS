@@ -21,7 +21,7 @@
       },
       "reproducibility_hash": "6d0e8b96cbd33ccb",
       "calc_grade": "B",
-      "explanation": "GM = (Revenue - COGS) / Revenue = (9320000 - 3939564) / 9320000 = 57.73%",
+      "explanation": "GM = (Rev - COGS) / Rev = (9320000 - 3939564) / 9320000 = 57.73%",
       "created_at": "2026-01-05T11:00:00Z",
       "updated_at": "2026-01-05T11:00:00Z"
     },

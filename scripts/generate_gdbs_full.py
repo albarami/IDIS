@@ -1146,6 +1146,21 @@ def main() -> None:
         xlsx_path = artifacts_dir / "financials.xlsx"
         xlsx_path.write_bytes(xlsx_bytes)
 
+        # Update artifacts.json with current sha256 and file_size_bytes
+        artifacts_json_path = deal_dir / "artifacts.json"
+        if artifacts_json_path.exists():
+            artifacts_data = json.loads(artifacts_json_path.read_text(encoding="utf-8"))
+            for artifact in artifacts_data.get("artifacts", []):
+                fname = artifact.get("filename", "")
+                fpath = artifacts_dir / fname
+                if fpath.exists():
+                    content = fpath.read_bytes()
+                    artifact["sha256"] = sha256_hex(content)
+                    artifact["file_size_bytes"] = len(content)
+            artifacts_json_path.write_text(
+                json.dumps(artifacts_data, indent=2) + "\n", encoding="utf-8"
+            )
+
         print(f"  Deal {deal_num:03d}: {company_name}")
 
     # Generate 92 additional clean deals (9-100)

@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from idis.audit.sink import AuditSink, InMemoryAuditSink
+from idis.audit.sink import AuditSink
 from idis.persistence.repositories.claims import InMemoryEvidenceRepository
 from idis.services.defects.service import CreateDefectInput, DefectService
 from idis.services.sanad.chain_builder import ChainBuildError, build_sanad_chain
@@ -115,7 +115,7 @@ def auto_grade_claims_for_run(
     evidence_repo: InMemoryEvidenceRepository | None = None,
     sanad_service: SanadService | None = None,
     defect_service: DefectService | None = None,
-    audit_sink: AuditSink | None = None,
+    audit_sink: AuditSink,
 ) -> AutoGradeRunResult:
     """Auto-grade all extracted claims for a SNAPSHOT run.
 
@@ -135,12 +135,12 @@ def auto_grade_claims_for_run(
         evidence_repo: Evidence repository (defaults to in-memory).
         sanad_service: SanadService instance (defaults to in-memory).
         defect_service: DefectService instance (defaults to in-memory).
-        audit_sink: Audit sink (defaults to in-memory).
+        audit_sink: Audit sink (required, fail-closed).
 
     Returns:
         AutoGradeRunResult summarising per-claim outcomes.
     """
-    sink = audit_sink or InMemoryAuditSink()
+    sink = audit_sink
     ev_repo = evidence_repo or InMemoryEvidenceRepository(tenant_id)
     s_service = sanad_service or SanadService(tenant_id=tenant_id, audit_sink=sink)
     d_service = defect_service or DefectService(tenant_id=tenant_id, audit_sink=sink)

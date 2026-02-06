@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from idis.api.auth import RequireTenantContext
 from idis.api.errors import IdisHttpError
+from idis.audit.sink import AuditSink
 from idis.persistence.repositories.deals import InMemoryDealsRepository
 
 logger = logging.getLogger(__name__)
@@ -256,18 +257,21 @@ async def start_run(
             documents=documents,
         )
 
+        audit_sink = request.app.state.audit_sink
         grading_summary = _run_snapshot_auto_grade(
             run_id=run_id,
             tenant_id=tenant_ctx.tenant_id,
             deal_id=deal_id,
             created_claim_ids=pipeline_result.get("created_claim_ids", []),
+            audit_sink=audit_sink,
         )
 
-        extraction_status = pipeline_result.get("status", "COMPLETED")
-        if grading_summary.get("all_failed") and extraction_status == "COMPLETED":
+        if grading_summary.get("all_failed"):
             run_data["status"] = "FAILED"
+        elif grading_summary.get("failed_count", 0) > 0:
+            run_data["status"] = "PARTIAL"
         else:
-            run_data["status"] = extraction_status
+            run_data["status"] = "COMPLETED"
         run_data["grading_summary"] = grading_summary
         run_data["finished_at"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         if db_conn is None:
@@ -444,6 +448,7 @@ def _run_snapshot_auto_grade(
     tenant_id: str,
     deal_id: str,
     created_claim_ids: list[str],
+    audit_sink: AuditSink,
 ) -> dict[str, Any]:
     """Run Sanad auto-grading for all claims produced by SNAPSHOT extraction.
 
@@ -452,6 +457,7 @@ def _run_snapshot_auto_grade(
         tenant_id: Tenant context.
         deal_id: Deal UUID.
         created_claim_ids: Claim IDs from extraction.
+        audit_sink: App-level audit sink (required).
 
     Returns:
         Dict with grading summary stats.
@@ -471,6 +477,7 @@ def _run_snapshot_auto_grade(
         tenant_id=tenant_id,
         deal_id=deal_id,
         created_claim_ids=created_claim_ids,
+        audit_sink=audit_sink,
     )
 
     return {

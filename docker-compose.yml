@@ -22,8 +22,8 @@ services:
       - "8000:8000"
     environment:
       # Database configuration (required)
-      IDIS_DATABASE_URL: "postgresql://idis_app:idis_app_password@postgres:5432/idis"
-      IDIS_DATABASE_ADMIN_URL: "postgresql://postgres:postgres_password@postgres:5432/idis"
+      IDIS_DATABASE_URL: "postgresql://idis_app:idis_app_password@postgres:5432/${POSTGRES_DB:-idis}"
+      IDIS_DATABASE_ADMIN_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres_password}@postgres:5432/${POSTGRES_DB:-idis}"
       # Service region for residency enforcement (required - fail-closed)
       IDIS_SERVICE_REGION: "us-east-1"
       # Object storage
@@ -54,12 +54,12 @@ services:
   # PostgreSQL Database
   # ==========================================================================
   postgres:
-    image: postgres:16-bookworm@sha256:8d3be35b184e70d81e54d446d8c552f8f834818e0e807294a0e2c4587e789d3b
+    image: pgvector/pgvector:pg16
     container_name: idis-postgres
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres_password
-      POSTGRES_DB: idis
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres_password}
+      POSTGRES_DB: ${POSTGRES_DB:-idis}
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./scripts/pg_init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -105,13 +105,36 @@ services:
       dockerfile: Dockerfile
     container_name: idis-migrations
     environment:
-      IDIS_DATABASE_URL: "postgresql://idis_app:idis_app_password@postgres:5432/idis"
-      IDIS_DATABASE_ADMIN_URL: "postgresql://postgres:postgres_password@postgres:5432/idis"
+      IDIS_DATABASE_URL: "postgresql://idis_app:idis_app_password@postgres:5432/${POSTGRES_DB:-idis}"
+      IDIS_DATABASE_ADMIN_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres_password}@postgres:5432/${POSTGRES_DB:-idis}"
     command: ["alembic", "upgrade", "head"]
     depends_on:
       postgres:
         condition: service_healthy
     restart: "no"
+    networks:
+      - idis-network
+
+  # ==========================================================================
+  # Neo4j Graph Database
+  # ==========================================================================
+  neo4j:
+    image: neo4j:5-community
+    container_name: idis-neo4j
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      NEO4J_AUTH: "${NEO4J_USERNAME:-neo4j}/${NEO4J_PASSWORD:-localdev123}"
+      NEO4J_PLUGINS: '["apoc"]'
+    volumes:
+      - neo4j-data:/data
+    healthcheck:
+      test: ["CMD", "neo4j", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
     networks:
       - idis-network
 
@@ -122,6 +145,8 @@ volumes:
   postgres-data:
     driver: local
   redis-data:
+    driver: local
+  neo4j-data:
     driver: local
   idis-objects:
     driver: local

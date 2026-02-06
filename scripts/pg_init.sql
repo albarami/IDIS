@@ -24,6 +24,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO id
 
 -- Enable required extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS vector;
 
 -- Note: Row-Level Security (RLS) policies are created by Alembic migrations
 -- This script only handles initial user and permission setup

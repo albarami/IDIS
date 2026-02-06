@@ -63,7 +63,7 @@ goto end
 
 :postgres_integration
 echo === Running: python scripts/run_postgres_integration_local.py ===
-python scripts/run_postgres_integration_local.py
+"%PYTHON_BIN%" scripts/run_postgres_integration_local.py
 if errorlevel 1 exit /b 1
 echo === Postgres integration tests complete ===
 goto end

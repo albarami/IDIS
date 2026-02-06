@@ -15,6 +15,8 @@ IDIS is an enterprise-grade AI Investment Analyst Layer for Venture Capital. It 
 
 ## Quick Start
 
+**New machine?** Follow [docs/dev/NEW_PC_BOOTSTRAP.md](docs/dev/NEW_PC_BOOTSTRAP.md) for step-by-step setup.
+
 ### Prerequisites
 
 - Python 3.11+

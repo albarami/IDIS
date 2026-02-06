@@ -222,15 +222,6 @@ async def start_run(
     if db_conn is not None:
         if not _deal_exists_in_postgres(db_conn, deal_id):
             raise IdisHttpError(status_code=404, code="NOT_FOUND", message="Deal not found")
-
-        run_data = _create_run_in_postgres(
-            conn=db_conn,
-            run_id=run_id,
-            tenant_id=tenant_ctx.tenant_id,
-            deal_id=deal_id,
-            mode=request_body.mode,
-            idempotency_key=idempotency_key,
-        )
     else:
         deals_repo = InMemoryDealsRepository(tenant_ctx.tenant_id)
         if deals_repo.get(deal_id) is None:
@@ -240,6 +231,24 @@ async def start_run(
                 message="Deal not found",
             )
 
+    documents = _gather_snapshot_documents(request, tenant_ctx.tenant_id, deal_id)
+    if not documents:
+        raise IdisHttpError(
+            status_code=400,
+            code="NO_INGESTED_DOCUMENTS",
+            message="Deal has no ingested documents; ingest at least one document before starting a run",
+        )
+
+    if db_conn is not None:
+        run_data = _create_run_in_postgres(
+            conn=db_conn,
+            run_id=run_id,
+            tenant_id=tenant_ctx.tenant_id,
+            deal_id=deal_id,
+            mode=request_body.mode,
+            idempotency_key=idempotency_key,
+        )
+    else:
         now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         run_data = {
             "run_id": run_id,
@@ -254,8 +263,6 @@ async def start_run(
         _IN_MEMORY_RUNS[run_id] = run_data
 
     request.state.audit_resource_id = run_id
-
-    documents = _gather_snapshot_documents(request, tenant_ctx.tenant_id, deal_id)
 
     extractor_configured = getattr(request.app.state, "extractor_configured", True)
     if not extractor_configured:
@@ -298,7 +305,15 @@ async def start_run(
     if db_conn is None:
         _IN_MEMORY_RUNS[run_id] = run_data
 
-    _emit_run_completed_audit(request, run_id, tenant_ctx.tenant_id, run_data["status"])
+    try:
+        _emit_run_completed_audit(request, run_id, tenant_ctx.tenant_id, run_data["status"])
+    except AuditSinkError as exc:
+        logger.error("Audit failure on run.completed for run %s: %s", run_id, exc)
+        raise IdisHttpError(
+            status_code=500,
+            code="AUDIT_FAILURE",
+            message="Run completed but audit event emission failed",
+        ) from exc
 
     step_responses = _build_step_responses(orch_result.steps)
 
@@ -511,10 +526,7 @@ def _emit_run_completed_audit(
             "resource_id": run_id,
         },
     }
-    try:
-        audit_sink.emit(event)
-    except Exception as exc:
-        logger.warning("Failed to emit run.completed audit: %s", exc)
+    audit_sink.emit(event)
 
 
 def _run_snapshot_auto_grade(

@@ -16,7 +16,7 @@ from idis.api.auth import IDIS_API_KEYS_ENV
 from idis.api.main import create_app
 from idis.api.routes.deals import clear_deals_store
 from idis.api.routes.runs import clear_runs_store
-from idis.audit.sink import InMemoryAuditSink
+from idis.audit.sink import AuditSinkError, InMemoryAuditSink
 
 TENANT_A_ID = "11111111-1111-1111-1111-111111111111"
 TENANT_B_ID = "22222222-2222-2222-2222-222222222222"
@@ -282,3 +282,119 @@ class TestRunsAPIIdempotency:
 
         assert resp1.status_code == 202
         assert resp2.status_code == 409
+
+
+class TestNoIngestedDocumentsReturns400:
+    """Regression: deal with zero ingested docs must return 400 before orchestration."""
+
+    def test_no_ingested_docs_returns_400(self, client: TestClient) -> None:
+        """POST /v1/deals/{dealId}/runs with no docs returns 400 NO_INGESTED_DOCUMENTS."""
+        create_resp = client.post(
+            "/v1/deals",
+            json={"name": "Empty Deal", "company_name": "NoDocs Inc"},
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+        )
+        assert create_resp.status_code == 201
+        empty_deal_id = create_resp.json()["deal_id"]
+
+        response = client.post(
+            f"/v1/deals/{empty_deal_id}/runs",
+            json={"mode": "SNAPSHOT"},
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+        )
+
+        assert response.status_code == 400
+        body = response.json()
+        assert body["code"] == "NO_INGESTED_DOCUMENTS"
+
+    def test_no_ingested_docs_does_not_create_run(self, client: TestClient) -> None:
+        """No run record should exist after NO_INGESTED_DOCUMENTS rejection."""
+        create_resp = client.post(
+            "/v1/deals",
+            json={"name": "Empty Deal 2", "company_name": "NoDocs LLC"},
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+        )
+        assert create_resp.status_code == 201
+        empty_deal_id = create_resp.json()["deal_id"]
+
+        response = client.post(
+            f"/v1/deals/{empty_deal_id}/runs",
+            json={"mode": "SNAPSHOT"},
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+        )
+        assert response.status_code == 400
+
+        from idis.api.routes.runs import _IN_MEMORY_RUNS
+
+        for run_data in _IN_MEMORY_RUNS.values():
+            assert run_data["deal_id"] != empty_deal_id, (
+                "Run record must not be created for deal with no ingested documents"
+            )
+
+
+class TestAuditFailureOnRunCompletedReturns500:
+    """Regression: AuditSinkError on deal.run.completed must return 500 AUDIT_FAILURE."""
+
+    def test_audit_sink_failure_on_run_completed_returns_500(
+        self,
+        api_keys_config: dict[str, dict[str, str | list[str]]],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When audit sink raises on deal.run.completed, endpoint returns 500."""
+        monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys_config))
+        clear_deals_store()
+        clear_runs_store()
+
+        call_count = 0
+
+        class FailOnRunCompletedSink:
+            """Audit sink that fails only on deal.run.completed events."""
+
+            def __init__(self) -> None:
+                self.events: list[dict] = []
+
+            def emit(self, event: dict) -> None:
+                nonlocal call_count
+                call_count += 1
+                if event.get("event_type") == "deal.run.completed":
+                    raise AuditSinkError("Disk full on run completed")
+                self.events.append(event)
+
+        sink = FailOnRunCompletedSink()
+        app = create_app(audit_sink=sink, service_region="us-east-1")
+        app.state.deal_documents = {}
+        client = TestClient(app, raise_server_exceptions=False)
+
+        create_resp = client.post(
+            "/v1/deals",
+            json={"name": "Audit Fail Deal", "company_name": "AuditCo"},
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+        )
+        assert create_resp.status_code == 201
+        deal_id = create_resp.json()["deal_id"]
+
+        app.state.deal_documents[deal_id] = [
+            {
+                "document_id": "doc-audit-001",
+                "doc_type": "PDF",
+                "document_name": "audit_test.pdf",
+                "spans": [
+                    {
+                        "span_id": "span-audit-001",
+                        "text_excerpt": "Revenue $10M.",
+                        "locator": {"page": 1},
+                        "span_type": "PAGE_TEXT",
+                    }
+                ],
+            }
+        ]
+
+        response = client.post(
+            f"/v1/deals/{deal_id}/runs",
+            json={"mode": "SNAPSHOT"},
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+        )
+
+        assert response.status_code == 500
+        body = response.json()
+        assert body["code"] == "AUDIT_FAILURE"

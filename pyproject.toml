@@ -49,6 +49,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/idis"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"openapi/IDIS_OpenAPI_v6_3.yaml" = "idis/_openapi/IDIS_OpenAPI_v6_3.yaml"
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"

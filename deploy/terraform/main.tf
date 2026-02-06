@@ -348,7 +348,7 @@ resource "aws_cloudwatch_log_group" "app" {
 
 resource "aws_cloudwatch_log_group" "audit" {
   name              = "/aws/idis/${var.environment}/audit"
-  retention_in_days = 2555  # 7 years for compliance
+  retention_in_days = 2557  # 7 years for compliance
   kms_key_id        = local.kms_key_arn
 
   tags = {

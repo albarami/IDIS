@@ -4,6 +4,7 @@ Provides deterministic loading of the OpenAPI spec with fail-closed behavior.
 """
 
 import os
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
@@ -28,26 +29,42 @@ class OpenAPILoadError(Exception):
 def _resolve_openapi_path() -> Path:
     """Resolve the OpenAPI spec file path deterministically.
 
-    Resolution order:
+    Resolution order (first existing file wins):
     1. IDIS_OPENAPI_PATH environment variable (if set and non-empty)
-    2. Default: repo-root/openapi/IDIS_OpenAPI_v6_3.yaml
+    2. Package data: idis/_openapi/IDIS_OpenAPI_v6_3.yaml (works when pip-installed)
+    3. Repo-root fallback: openapi/IDIS_OpenAPI_v6_3.yaml (works in editable / dev checkout)
 
     Returns:
         Path to the OpenAPI spec file.
+
+    Raises:
+        OpenAPILoadError: If the spec file cannot be found in any location.
     """
     env_path = os.environ.get(OPENAPI_PATH_ENV_VAR)
     if env_path and env_path.strip():
         return Path(env_path.strip())
 
+    pkg_resource = files("idis._openapi").joinpath(DEFAULT_OPENAPI_FILENAME)
+    pkg_path = Path(str(pkg_resource))
+    if pkg_path.is_file():
+        return pkg_path
+
     repo_root = Path(__file__).parent.parent.parent.parent
-    return repo_root / "openapi" / DEFAULT_OPENAPI_FILENAME
+    repo_path = repo_root / "openapi" / DEFAULT_OPENAPI_FILENAME
+    if repo_path.is_file():
+        return repo_path
+
+    raise OpenAPILoadError(
+        f"OpenAPI spec not found. Searched: package data ({pkg_path}), "
+        f"repo root ({repo_path}). Set {OPENAPI_PATH_ENV_VAR} to override.",
+    )
 
 
 def load_openapi_spec() -> dict[str, Any]:
     """Load and parse the OpenAPI specification.
 
     Resolution:
-    - Uses IDIS_OPENAPI_PATH env var if set, else repo-root openapi/IDIS_OpenAPI_v6_3.yaml.
+    - IDIS_OPENAPI_PATH env var → package data (idis._openapi) → repo-root fallback.
 
     Returns:
         Parsed OpenAPI spec as a dictionary.

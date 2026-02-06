@@ -1,0 +1,23 @@
+{
+  "prompt_id": "EXTRACT_CLAIMS_V1",
+  "name": "Claim Extraction",
+  "version": "1.0.0",
+  "status": "DRAFT",
+  "owner": "extraction/TBD",
+  "created_at": "2026-02-06T00:00:00Z",
+  "updated_at": "2026-02-06T00:00:00Z",
+  "change_summary": "Initial version of claim extraction prompt",
+  "risk_class": "HIGH",
+  "model_requirements": {
+    "min_context_window": 16000,
+    "tool_calling_support": false,
+    "json_mode_support": true
+  },
+  "tool_contracts": [],
+  "input_schema_ref": "schemas/extraction/extract_claims_input.json",
+  "output_schema_ref": "schemas/extraction/extract_claims_output.json",
+  "validation_gates_required": [1, 2, 3],
+  "fallback_policy": ["gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"],
+  "evaluation_results_ref": "evals/extract_claims/1.0.0/results.json",
+  "security_notes": "Input may contain PII from deal documents. Output claims may reference financial data."
+}

@@ -3,12 +3,17 @@
 Provides POST /v1/deals/{dealId}/runs and GET /v1/runs/{runId} per OpenAPI spec.
 
 Supports both Postgres persistence (when configured) and in-memory fallback.
+
+SNAPSHOT mode: Runs extraction pipeline synchronously and returns result.
+FULL mode: Fail-closed until Phase 4 pipeline orchestration is implemented.
 """
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -16,6 +21,9 @@ from pydantic import BaseModel
 
 from idis.api.auth import RequireTenantContext
 from idis.api.errors import IdisHttpError
+from idis.persistence.repositories.deals import InMemoryDealsRepository
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1", tags=["Runs"])
 
@@ -198,6 +206,14 @@ async def start_run(
             idempotency_key=idempotency_key,
         )
     else:
+        deals_repo = InMemoryDealsRepository(tenant_ctx.tenant_id)
+        if deals_repo.get(deal_id) is None:
+            raise IdisHttpError(
+                status_code=404,
+                code="NOT_FOUND",
+                message="Deal not found",
+            )
+
         now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         run_data = {
             "run_id": run_id,
@@ -212,6 +228,46 @@ async def start_run(
         _IN_MEMORY_RUNS[run_id] = run_data
 
     request.state.audit_resource_id = run_id
+
+    if request_body.mode == "SNAPSHOT":
+        documents = _gather_snapshot_documents(request, tenant_ctx.tenant_id, deal_id)
+        if not documents:
+            raise IdisHttpError(
+                status_code=400,
+                code="NO_INGESTED_DOCUMENTS",
+                message=(
+                    "No ingested documents found for this deal. "
+                    "Ingest at least one document before running extraction."
+                ),
+            )
+
+        extractor_configured = getattr(request.app.state, "extractor_configured", True)
+        if not extractor_configured:
+            raise IdisHttpError(
+                status_code=503,
+                code="EXTRACTOR_NOT_CONFIGURED",
+                message="No claim extractor is configured. Cannot proceed.",
+            )
+
+        pipeline_result = _run_snapshot_extraction(
+            run_id=run_id,
+            tenant_id=tenant_ctx.tenant_id,
+            deal_id=deal_id,
+            documents=documents,
+        )
+        run_data["status"] = pipeline_result.get("status", "COMPLETED")
+        run_data["finished_at"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        if db_conn is None:
+            _IN_MEMORY_RUNS[run_id] = run_data
+
+        _emit_run_completed_audit(request, run_id, tenant_ctx.tenant_id, run_data["status"])
+
+    elif request_body.mode == "FULL":
+        raise IdisHttpError(
+            status_code=501,
+            code="NOT_IMPLEMENTED",
+            message="FULL mode is not yet implemented (Phase 4). Use SNAPSHOT mode.",
+        )
 
     return RunRef(
         run_id=run_data["run_id"],
@@ -256,6 +312,240 @@ def get_run(
         started_at=run_data["started_at"],
         finished_at=run_data.get("finished_at"),
     )
+
+
+def _gather_snapshot_documents(
+    request: Request,
+    tenant_id: str,
+    deal_id: str,
+) -> list[dict[str, Any]]:
+    """Gather ingested document spans for SNAPSHOT extraction.
+
+    Checks request.state.snapshot_documents first (for testing),
+    then falls back to IngestionService if available.
+
+    Args:
+        request: FastAPI request.
+        tenant_id: Tenant UUID.
+        deal_id: Deal UUID.
+
+    Returns:
+        List of document dicts with doc_type, document_id, spans.
+    """
+    test_docs: list[dict[str, Any]] = getattr(
+        request.state,
+        "snapshot_documents",
+        [],
+    )
+    if test_docs:
+        return test_docs
+
+    deal_documents: dict[str, list[dict[str, Any]]] = getattr(
+        request.app.state,
+        "deal_documents",
+        {},
+    )
+    if deal_id in deal_documents:
+        return deal_documents[deal_id]
+
+    ingestion_service = getattr(request.app.state, "ingestion_service", None)
+    if ingestion_service is None:
+        return []
+
+    documents: list[dict[str, Any]] = []
+    for _key, doc in ingestion_service._documents.items():
+        if str(doc.deal_id) != deal_id:
+            continue
+        if str(doc.tenant_id) != tenant_id:
+            continue
+        spans = ingestion_service.get_spans(doc.tenant_id, doc.document_id)
+        if not spans:
+            continue
+        span_dicts = [
+            {
+                "span_id": str(s.span_id),
+                "text_excerpt": s.text_excerpt,
+                "locator": s.locator if isinstance(s.locator, dict) else {},
+                "span_type": (
+                    s.span_type.value if hasattr(s.span_type, "value") else str(s.span_type)
+                ),
+            }
+            for s in spans
+        ]
+        documents.append(
+            {
+                "document_id": str(doc.document_id),
+                "doc_type": (
+                    doc.doc_type.value if hasattr(doc.doc_type, "value") else str(doc.doc_type)
+                ),
+                "document_name": str(doc.document_id),
+                "spans": span_dicts,
+            }
+        )
+
+    return documents
+
+
+def _emit_run_completed_audit(
+    request: Request,
+    run_id: str,
+    tenant_id: str,
+    status: str,
+) -> None:
+    """Emit deal.run.completed audit event after pipeline finishes.
+
+    Args:
+        request: FastAPI request for audit sink access.
+        run_id: Pipeline run UUID.
+        tenant_id: Tenant UUID.
+        status: Final run status.
+    """
+    from idis.audit.sink import InMemoryAuditSink
+
+    audit_sink = getattr(request.app.state, "audit_sink", None)
+    if audit_sink is None:
+        audit_sink = InMemoryAuditSink()
+
+    event = {
+        "event_type": "deal.run.completed",
+        "tenant_id": tenant_id,
+        "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "details": {
+            "run_id": run_id,
+            "status": status,
+        },
+        "resource": {
+            "resource_type": "deal",
+            "resource_id": run_id,
+        },
+    }
+    try:
+        audit_sink.emit(event)
+    except Exception as exc:
+        logger.warning("Failed to emit run.completed audit: %s", exc)
+
+
+def _run_snapshot_extraction(
+    *,
+    run_id: str,
+    tenant_id: str,
+    deal_id: str,
+    documents: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Execute SNAPSHOT extraction pipeline synchronously.
+
+    Args:
+        run_id: Pipeline run UUID.
+        tenant_id: Tenant context.
+        deal_id: Deal UUID.
+        documents: List of document dicts with doc_type, document_id, spans.
+
+    Returns:
+        Dict with pipeline result status and stats.
+    """
+    from idis.audit.sink import InMemoryAuditSink
+    from idis.services.claims.service import ClaimService
+    from idis.services.extraction.chunking.service import ChunkingService
+    from idis.services.extraction.confidence.scorer import ConfidenceScorer
+    from idis.services.extraction.extractors.claim_extractor import LLMClaimExtractor
+    from idis.services.extraction.extractors.llm_client import DeterministicLLMClient
+    from idis.services.extraction.pipeline import ExtractionPipeline
+    from idis.services.extraction.resolution.conflict_detector import ConflictDetector
+    from idis.services.extraction.resolution.deduplicator import Deduplicator
+
+    prompt_text = _get_extraction_prompt()
+    output_schema = _get_extraction_output_schema()
+
+    llm_client = DeterministicLLMClient()
+    scorer = ConfidenceScorer()
+    extractor = LLMClaimExtractor(
+        llm_client=llm_client,
+        prompt_text=prompt_text,
+        output_schema=output_schema,
+        confidence_scorer=scorer,
+    )
+
+    audit_sink = InMemoryAuditSink()
+    claim_service = ClaimService(
+        tenant_id=tenant_id,
+        audit_sink=audit_sink,
+    )
+
+    pipeline = ExtractionPipeline(
+        chunking_service=ChunkingService(),
+        claim_extractor=extractor,
+        deduplicator=Deduplicator(),
+        conflict_detector=ConflictDetector(),
+        claim_service=claim_service,
+        audit_sink=audit_sink,
+    )
+
+    result = pipeline.run(
+        run_id=run_id,
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        documents=documents,
+    )
+
+    return {
+        "status": result.status,
+        "created_claim_ids": result.created_claim_ids,
+        "chunk_count": result.chunk_count,
+        "unique_claim_count": result.unique_claim_count,
+        "conflict_count": result.conflict_count,
+    }
+
+
+def _find_project_root() -> Path:
+    """Walk up from this file to find the directory containing pyproject.toml.
+
+    Returns:
+        Path to the project root.
+
+    Raises:
+        FileNotFoundError: If pyproject.toml cannot be found.
+    """
+    current = Path(__file__).resolve().parent
+    while current != current.parent:
+        if (current / "pyproject.toml").exists():
+            return current
+        current = current.parent
+    msg = "Cannot locate project root (no pyproject.toml found above %s)"
+    raise FileNotFoundError(msg % Path(__file__).resolve())
+
+
+def _get_extraction_prompt() -> str:
+    """Load EXTRACT_CLAIMS_V1 prompt text from disk.
+
+    Fail-closed: raises FileNotFoundError if prompt file is missing.
+
+    Returns:
+        Prompt template string.
+    """
+    root = _find_project_root()
+    prompt_path = root / "prompts" / "extract_claims" / "1.0.0" / "prompt.md"
+    if not prompt_path.exists():
+        raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
+    return prompt_path.read_text(encoding="utf-8")
+
+
+def _get_extraction_output_schema() -> dict[str, Any]:
+    """Load EXTRACT_CLAIMS_V1 output schema from disk.
+
+    Fail-closed: raises FileNotFoundError if schema file is missing.
+
+    Returns:
+        JSON schema dict.
+    """
+    import json
+
+    root = _find_project_root()
+    schema_path = root / "schemas" / "extraction" / "extract_claims_output.json"
+    if not schema_path.exists():
+        raise FileNotFoundError(f"Schema file not found: {schema_path}")
+    with open(schema_path, encoding="utf-8") as f:
+        result: dict[str, Any] = json.load(f)
+        return result
 
 
 def clear_runs_store() -> None:

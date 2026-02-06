@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ExtractClaimsInput",
+  "description": "Input schema for EXTRACT_CLAIMS_V1 prompt",
+  "type": "object",
+  "required": ["document_type", "document_name", "chunk_locator", "chunk_content", "output_schema"],
+  "properties": {
+    "document_type": {
+      "type": "string",
+      "enum": ["PDF", "XLSX", "DOCX", "PPTX"],
+      "description": "Type of the source document"
+    },
+    "document_name": {
+      "type": "string",
+      "description": "Original filename of the document"
+    },
+    "chunk_locator": {
+      "type": "object",
+      "description": "Page/sheet/paragraph locator for the chunk"
+    },
+    "chunk_content": {
+      "type": "string",
+      "description": "Text content of the chunk to extract claims from"
+    },
+    "output_schema": {
+      "type": "string",
+      "description": "JSON schema string for the expected output format"
+    }
+  },
+  "additionalProperties": false
+}

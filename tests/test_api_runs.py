@@ -65,19 +65,36 @@ def client(
     clear_deals_store()
     clear_runs_store()
     app = create_app(audit_sink=audit_sink, service_region="us-east-1")
+    app.state.deal_documents = {}
     return TestClient(app)
 
 
 @pytest.fixture
 def deal_id(client: TestClient) -> str:
-    """Create a deal and return its ID."""
+    """Create a deal and seed a minimal document so SNAPSHOT runs pass."""
     response = client.post(
         "/v1/deals",
         json={"name": "Test Deal", "company_name": "Test Company"},
         headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
     )
     assert response.status_code == 201
-    return response.json()["deal_id"]
+    did = response.json()["deal_id"]
+    client.app.state.deal_documents[did] = [
+        {
+            "document_id": "doc-test-001",
+            "doc_type": "PDF",
+            "document_name": "test.pdf",
+            "spans": [
+                {
+                    "span_id": "span-test-001",
+                    "text_excerpt": "Revenue was $5M in 2024.",
+                    "locator": {"page": 1, "line": 1},
+                    "span_type": "PAGE_TEXT",
+                }
+            ],
+        }
+    ]
+    return did
 
 
 class TestRunsAPIHappyPath:
@@ -94,14 +111,14 @@ class TestRunsAPIHappyPath:
         assert response.status_code == 202
         body = response.json()
         assert "run_id" in body
-        assert body["status"] == "QUEUED"
+        assert body["status"] == "COMPLETED"
         uuid.UUID(body["run_id"])
 
     def test_get_run_returns_run_status(self, client: TestClient, deal_id: str) -> None:
         """GET /v1/runs/{runId} returns RunStatus."""
         create_resp = client.post(
             f"/v1/deals/{deal_id}/runs",
-            json={"mode": "FULL"},
+            json={"mode": "SNAPSHOT"},
             headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
         )
         run_id = create_resp.json()["run_id"]
@@ -114,7 +131,7 @@ class TestRunsAPIHappyPath:
         assert response.status_code == 200
         body = response.json()
         assert body["run_id"] == run_id
-        assert body["status"] == "QUEUED"
+        assert body["status"] == "COMPLETED"
         assert "started_at" in body
 
 

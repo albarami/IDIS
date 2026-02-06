@@ -834,6 +834,7 @@ class DefectsRepository:
 _claims_in_memory_store: dict[str, dict[str, Any]] = {}
 _sanad_in_memory_store: dict[str, dict[str, Any]] = {}
 _defects_in_memory_store: dict[str, dict[str, Any]] = {}
+_evidence_in_memory_store: dict[str, dict[str, Any]] = {}
 
 
 class InMemoryClaimsRepository:
@@ -1195,11 +1196,17 @@ def clear_defects_in_memory_store() -> None:
     _defects_in_memory_store.clear()
 
 
+def clear_evidence_in_memory_store() -> None:
+    """Clear the in-memory evidence store. For testing only."""
+    _evidence_in_memory_store.clear()
+
+
 def clear_all_claims_stores() -> None:
     """Clear all in-memory stores. For testing only."""
     clear_claims_in_memory_store()
     clear_sanad_in_memory_store()
     clear_defects_in_memory_store()
+    clear_evidence_in_memory_store()
 
 
 def seed_claim_in_memory(claim_data: dict[str, Any]) -> None:
@@ -1215,3 +1222,88 @@ def seed_sanad_in_memory(sanad_data: dict[str, Any]) -> None:
 def seed_defect_in_memory(defect_data: dict[str, Any]) -> None:
     """Seed a defect into the in-memory store. For testing only."""
     _defects_in_memory_store[defect_data["defect_id"]] = defect_data
+
+
+def seed_evidence_in_memory(evidence_data: dict[str, Any]) -> None:
+    """Seed evidence into the in-memory store. For testing only."""
+    _evidence_in_memory_store[evidence_data["evidence_id"]] = evidence_data
+
+
+class InMemoryEvidenceRepository:
+    """In-memory fallback repository for evidence items."""
+
+    def __init__(self, tenant_id: str) -> None:
+        """Initialize with tenant context.
+
+        Args:
+            tenant_id: Tenant UUID for scoping.
+        """
+        self._tenant_id = tenant_id
+
+    def create(
+        self,
+        *,
+        evidence_id: str,
+        tenant_id: str,
+        deal_id: str,
+        claim_id: str,
+        source_span_id: str,
+        source_grade: str = "D",
+        verification_status: str = "UNVERIFIED",
+    ) -> dict[str, Any]:
+        """Create an evidence record in memory.
+
+        Args:
+            evidence_id: UUID for the evidence item.
+            tenant_id: Tenant UUID.
+            deal_id: Deal UUID.
+            claim_id: Parent claim UUID.
+            source_span_id: Source span UUID.
+            source_grade: Sanad grade (default D).
+            verification_status: Verification state.
+
+        Returns:
+            Created evidence dict.
+        """
+        now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        evidence = {
+            "evidence_id": evidence_id,
+            "tenant_id": tenant_id,
+            "deal_id": deal_id,
+            "claim_id": claim_id,
+            "source_span_id": source_span_id,
+            "source_grade": source_grade,
+            "verification_status": verification_status,
+            "created_at": now,
+        }
+        _evidence_in_memory_store[evidence_id] = evidence
+        return evidence
+
+    def get(self, evidence_id: str) -> dict[str, Any] | None:
+        """Get evidence by ID.
+
+        Args:
+            evidence_id: UUID of the evidence item.
+
+        Returns:
+            Evidence dict or None.
+        """
+        ev = _evidence_in_memory_store.get(evidence_id)
+        if ev is None or ev.get("tenant_id") != self._tenant_id:
+            return None
+        return ev
+
+    def get_by_claim(self, claim_id: str) -> list[dict[str, Any]]:
+        """Get all evidence items for a claim.
+
+        Args:
+            claim_id: Parent claim UUID.
+
+        Returns:
+            List of evidence dicts for this claim and tenant.
+        """
+        return [
+            ev
+            for ev in _evidence_in_memory_store.values()
+            if ev.get("claim_id") == claim_id and ev.get("tenant_id") == self._tenant_id
+        ]

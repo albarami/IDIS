@@ -389,6 +389,113 @@ Independence MUST be computed using:
 
 Store computed `corroboration_status` on the `Sanad` node.
 
+### 4.4 Graph Query Patterns (Cypher Examples)
+
+The following patterns are normative for any graph DB implementation (Neo4j syntax shown; adapt for Neptune/Arango).
+
+#### 4.4.1 Full Sanad Chain for a Claim
+
+Retrieve the complete provenance chain from source document through to claim.
+
+```cypher
+MATCH path = (doc:Document)-[:HAS_SPAN]->(span:Span)
+              <-[:INPUT]-(tn:TransmissionNode)-[:OUTPUT]->(claim:Claim)
+WHERE claim.claim_id = $claim_id AND claim.tenant_id = $tenant_id
+RETURN doc, span, tn, claim,
+       [node IN nodes(path) | labels(node)] AS node_types,
+       length(path) AS chain_depth
+ORDER BY tn.timestamp ASC
+```
+
+#### 4.4.2 All Claims for a Deal with Sanad Grades
+
+```cypher
+MATCH (deal:Deal {deal_id: $deal_id, tenant_id: $tenant_id})
+      -[:HAS_DOCUMENT]->(doc:Document)
+      -[:HAS_SPAN]->(span:Span)
+      <-[:SUPPORTED_BY]-(claim:Claim)
+OPTIONAL MATCH (claim)-[:HAS_DEFECT]->(defect:Defect)
+RETURN claim.claim_id, claim.claim_text, claim.claim_grade,
+       claim.claim_verdict, claim.materiality,
+       collect(DISTINCT doc.document_id) AS source_docs,
+       collect(DISTINCT {type: defect.defect_type, severity: defect.severity}) AS defects
+ORDER BY claim.materiality DESC, claim.claim_grade ASC
+```
+
+#### 4.4.3 Independence Clusters (Corroboration Assessment)
+
+Find independent evidence groups for Tawatur classification.
+
+```cypher
+MATCH (claim:Claim {claim_id: $claim_id, tenant_id: $tenant_id})
+      -[:SUPPORTED_BY]->(ev:EvidenceItem)
+WITH claim, ev,
+     ev.source_system + '|' + coalesce(ev.upstream_origin_id, ev.evidence_id) AS independence_key
+WITH claim, independence_key, collect(ev) AS group_members, count(ev) AS group_size
+RETURN claim.claim_id,
+       count(independence_key) AS independent_source_count,
+       CASE
+         WHEN count(independence_key) >= 3 THEN 'MUTAWATIR'
+         WHEN count(independence_key) = 2 THEN 'AHAD_2'
+         WHEN count(independence_key) = 1 THEN 'AHAD_1'
+         ELSE 'NONE'
+       END AS corroboration_status,
+       collect({key: independence_key, count: group_size}) AS clusters
+```
+
+#### 4.4.4 Weakest Link in Transmission Chain
+
+Identify the lowest-grade node in a Sanad chain (determines base grade).
+
+```cypher
+MATCH (claim:Claim {claim_id: $claim_id, tenant_id: $tenant_id})
+      -[:HAS_SANAD_STEP]->(tn:TransmissionNode)
+      -[:INPUT]->(ev:EvidenceItem)
+WITH tn, ev,
+     CASE ev.source_grade
+       WHEN 'A' THEN 0 WHEN 'B' THEN 1
+       WHEN 'C' THEN 2 WHEN 'D' THEN 3
+     END AS grade_rank
+ORDER BY grade_rank DESC
+LIMIT 1
+RETURN tn.node_id AS weakest_node,
+       ev.evidence_id AS weakest_evidence,
+       ev.source_grade AS min_grade,
+       ev.source_system AS source_system
+```
+
+#### 4.4.5 Defect Impact Analysis
+
+Find all claims affected by a specific defect and their downstream calculations.
+
+```cypher
+MATCH (defect:Defect {defect_id: $defect_id, tenant_id: $tenant_id})
+      <-[:HAS_DEFECT]-(claim:Claim)
+OPTIONAL MATCH (calc:Calculation)-[:DERIVED_FROM]->(claim)
+RETURN defect.defect_type, defect.severity,
+       collect(DISTINCT {
+         claim_id: claim.claim_id,
+         claim_text: claim.claim_text,
+         materiality: claim.materiality,
+         grade: claim.claim_grade
+       }) AS affected_claims,
+       collect(DISTINCT calc.calc_id) AS affected_calculations
+```
+
+#### 4.4.6 Cross-Document Entity Co-occurrence
+
+Find entities mentioned across multiple documents (supports entity resolution).
+
+```cypher
+MATCH (entity:Entity)-[:MENTIONED_IN]->(span:Span)
+      <-[:HAS_SPAN]-(doc:Document)
+      <-[:HAS_DOCUMENT]-(deal:Deal {deal_id: $deal_id, tenant_id: $tenant_id})
+WITH entity, collect(DISTINCT doc.document_id) AS docs, count(DISTINCT doc) AS doc_count
+WHERE doc_count >= 2
+RETURN entity.name, entity.type, doc_count, docs
+ORDER BY doc_count DESC
+```
+
 ---
 
 ## 5. JSON Schemas (Key Objects)

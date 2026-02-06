@@ -178,3 +178,138 @@ Required endpoints (minimum):
 - Claim detail drawer should prefetch evidence thumbnails asynchronously
 - Use virtualization for large tables
 
+---
+
+## 7. Implementation Completion Checklist
+
+### 7.1 Screens — Implemented (Legacy Baseline)
+
+| Screen | Route | Status | Tests | Acceptance |
+|--------|-------|--------|-------|------------|
+| Deals List | `/` | ✅ Done | UI tests pass | Lists deals, links to truth dashboard |
+| Truth Dashboard | `/deals/[dealId]/truth-dashboard` | ✅ Done | UI tests pass | Shows claims, grades, verdicts; sort/filter |
+| Claim Detail + Sanad | `/deals/[dealId]/truth-dashboard` (drawer) | ✅ Done | UI tests pass | Claim text, grade, sanad chain, defects |
+| Audit Events | `/audit` | ✅ Done | UI tests pass | Lists/filters audit events |
+| HumanGate Interface | `/deals/[dealId]/truth-dashboard` | ✅ Done | UI tests pass | Approve/reject functional |
+| Run Status | `/runs/[runId]` | ✅ Done | UI tests pass | Basic status display |
+| Debate Transcript | `/runs/[runId]` (section) | ✅ Done | 16 test cases | Formatted messages, raw JSON toggle |
+| Deliverables Page | `/deals/[dealId]/deliverables` | ✅ Done | UI tests pass | List, download, generate |
+| Runs List | `/runs` | ✅ Done | UI tests pass | Deal selector, navigation |
+
+### 7.2 Screens — Requiring Completion (Rebuild)
+
+| Screen | Route | Priority | Spec Section | Acceptance Criteria |
+|--------|-------|----------|--------------|---------------------|
+| **Triage Queue** | `/` (enhance) | 🟡 HIGH | §2.1 | Stage/sector filters, red-flag count, Sanad coverage %, ingestion status badge |
+| **Deal Overview** | `/deals/[dealId]` | 🟡 HIGH | §2.2 | Headline calc-backed metrics, recommendation status, critical defect banner, last run timestamp |
+| **Claim Detail Drawer (full)** | `/deals/[dealId]/truth-dashboard` | 🔴 CRITICAL | §2.4 | Source span preview, transmission chain timeline, corroboration explanation, defect list with cure actions, "Request Evidence" / "Mark Cured" / "Waive" buttons |
+| **Sanad Graph Visualization** | `/deals/[dealId]/sanad-graph` | 🟢 NICE | §2.5 | Interactive graph: EvidenceItem/TransmissionNode/Claim nodes, weakest-link highlight, defect locations, independence clusters |
+| **Debate Viewer (enhanced)** | `/runs/[runId]` (enhance) | 🟡 HIGH | §2.6 | Round markers, agent role colors, inline claim/calc refs (clickable), stop reason display, utility score summary |
+| **Muhasabah Log Viewer** | `/runs/[runId]/muhasabah` | 🟡 HIGH | §2.7 | Per-agent: supported_claim_ids, evidence summary, uncertainties, falsifiability, confidence, PASS/REJECT status |
+| **Deliverables Viewer (enhanced)** | `/deals/[dealId]/deliverables` | 🟡 HIGH | §2.8 | Preview modal, dissent section, audit appendix toggle, format selector (PDF/DOCX) |
+| **Governance Dashboard** | `/admin/governance` | 🟢 NICE | §2.9 | Sanad coverage %, grade distribution chart, defect histogram, Muhasabah reject trend, NFF violations, drift metrics |
+
+### 7.3 Components — Requiring Completion
+
+| Component | Used By | Priority | Acceptance Criteria |
+|-----------|---------|----------|---------------------|
+| **GradeBadge** | Truth Dashboard, Claim Drawer, Deliverables | 🔴 CRITICAL | Consistent A/B/C/D color coding (green/blue/amber/red), tooltip with grade rationale |
+| **EvidenceSpanPreview** | Claim Drawer | 🔴 CRITICAL | PDF: page thumbnail + bbox highlight; XLSX: sheet+cell grid; DOCX: paragraph excerpt; PPTX: slide thumbnail |
+| **TransmissionChainTimeline** | Claim Drawer, Sanad Graph | 🟡 HIGH | Vertical timeline showing each node: type, actor, timestamp, confidence; weakest node highlighted |
+| **DefectCard** | Claim Drawer, Governance | 🟡 HIGH | Type, severity badge, description, cure protocol, status; action buttons (Cure/Waive) with role check |
+| **RunProgressStepper** | Run Status | 🟡 HIGH | Step indicators: parse → extract → grade → calc → enrich → debate → deliver; current step highlighted, error state for failed steps |
+| **ClaimRefLink** | Debate Viewer, Deliverables | 🟡 HIGH | Inline clickable `claim_id` / `calc_id` references that open the Claim Drawer |
+| **MaterialityFilter** | Truth Dashboard | 🟡 HIGH | Toggle: ALL / LOW / MEDIUM / HIGH / CRITICAL; persisted in URL query params |
+| **BulkExportButton** | Truth Dashboard | 🟢 NICE | CSV export of filtered claims with grades, verdicts, evidence counts |
+
+### 7.4 UX States — Required for All Screens
+
+| State | Requirement |
+|-------|-------------|
+| **Loading** | Skeleton loaders matching final layout shape |
+| **Empty** | Descriptive empty state with action prompt (e.g., "No claims yet. Upload a document to start.") |
+| **Error** | `ErrorCallout` component with `request_id`, RFC 7807 error details, retry button |
+| **Pagination** | Cursor-based; "Load more" or infinite scroll; never client-side only |
+| **Mobile** | Responsive breakpoints at 640px, 768px, 1024px; drawer becomes full-screen on mobile |
+
+---
+
+## 8. Screen Wireframe Descriptions
+
+### 8.1 Triage Queue (Enhanced Deals List)
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  IDIS — Triage Queue                    [+ New Deal]     │
+├──────────────────────────────────────────────────────────┤
+│  Filters: [Stage ▾] [Sector ▾] [Status ▾] [Search...]   │
+├──────────────────────────────────────────────────────────┤
+│  Company        Stage    Status     Red Flags  Sanad %   │
+│  ─────────────  ───────  ─────────  ─────────  ───────   │
+│  Acme Robotics  Ser. A   IN_REVIEW  2 🔴       87%       │
+│  Beta Health    Seed     SCREENING  0          95%       │
+│  Gamma AI       Ser. B   IC_READY   1 🟡       100%      │
+└──────────────────────────────────────────────────────────┘
+```
+
+### 8.2 Claim Detail Drawer
+
+```
+┌─────────────────────────────────────┐
+│  ← Back to Truth Dashboard          │
+│                                     │
+│  "ARR of $4.2M as of Q3 2025"      │
+│  Grade: [B]  Verdict: VERIFIED      │
+│  Materiality: HIGH                  │
+│                                     │
+│  ── Source Span ──────────────────  │
+│  📄 pitch_deck_v3.pdf, Page 12      │
+│  [Page thumbnail with highlight]    │
+│                                     │
+│  ── Transmission Chain ───────────  │
+│  INGEST → EXTRACT → NORMALIZE      │
+│  (timeline with timestamps)         │
+│                                     │
+│  ── Corroboration ────────────────  │
+│  AHAD_2 (2 independent sources)     │
+│  • Pitch deck (SADUQ)              │
+│  • Bank statement (THIQAH_THABIT)   │
+│                                     │
+│  ── Defects (1) ──────────────────  │
+│  ⚠️ STALENESS (MINOR)               │
+│  "Source is >6 months old"          │
+│  Cure: REQUEST_SOURCE               │
+│                                     │
+│  [Request Evidence] [Mark Cured]    │
+│  [Waive (requires reason)]          │
+└─────────────────────────────────────┘
+```
+
+### 8.3 Governance Dashboard
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  IDIS — Governance Dashboard                             │
+├──────────────────────────────────────────────────────────┤
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐      │
+│  │ Sanad Covg  │  │ NFF Violns  │  │ Muhasabah   │      │
+│  │   94.2%     │  │      3      │  │ Pass: 97.1% │      │
+│  └─────────────┘  └─────────────┘  └─────────────┘      │
+│                                                          │
+│  Grade Distribution          Defect Histogram            │
+│  ┌──────────────┐           ┌──────────────┐             │
+│  │ A ████████ 42│           │ FATAL  ██ 4  │             │
+│  │ B ██████ 31  │           │ MAJOR  ████ 12│            │
+│  │ C ████ 18    │           │ MINOR  ██████ 28│          │
+│  │ D ██ 9       │           └──────────────┘             │
+│  └──────────────┘                                        │
+│                                                          │
+│  Muhasabah Reject Reasons (30d)                          │
+│  ┌──────────────────────────────┐                        │
+│  │ No-Free-Facts      ████ 8   │                        │
+│  │ Overconfidence      ██ 3    │                        │
+│  │ Missing Falsif.     █ 2     │                        │
+│  └──────────────────────────────┘                        │
+└──────────────────────────────────────────────────────────┘
+```
+

@@ -613,7 +613,87 @@ def grade_sanad_v2(
     )
 ```
 
-### 8.2 Grade Order
+### 8.2 Worked Examples
+
+#### Example 1: Strong Claim — Audited Revenue (Grade A)
+
+**Scenario:** "FY2024 revenue of $12.3M" from audited financial statements, corroborated by bank statements and Stripe export.
+
+| Step | Input | Result |
+|------|-------|--------|
+| 1. Source tier | `AUDITED_FINANCIAL` → Tier 1 (`ATHBAT_AL_NAS`) | `base_grade = A` |
+| 2. Dabt score | doc=0.95, trans=0.92, temp=0.90, cog=null | `dabt = 0.923` (EXCELLENT, no cap) |
+| 3. Tawatur | 3 sources: audit, bank, Stripe; all different `upstream_origin_id` | `MUTAWATIR` (collusion_risk=0.10) |
+| 4. I'lal | No chain breaks, no grafting, no chronology issues | No defects |
+| 5. Shudhudh | All values: $12.3M (within 0.1% rounding) | Reconciled, no anomaly |
+| 6. COI | No COI on any source | No defects |
+| 7. Major count | 0 | No downgrade |
+| 8. Tawatur upgrade | Already A, cannot upgrade beyond A | Grade stays A |
+| **Final** | | **Grade A** |
+
+#### Example 2: Pitch Deck Claim with Single Source (Grade C)
+
+**Scenario:** "TAM of $8.5B" from pitch deck only, no corroboration.
+
+| Step | Input | Result |
+|------|-------|--------|
+| 1. Source tier | `PITCH_DECK` → Tier 4 (`SADUQ`) | `base_grade = B` |
+| 2. Dabt score | doc=0.60, trans=0.80, temp=0.40, cog=0.50 | `dabt = 0.593` (FAIR, warning but no cap) |
+| 3. Tawatur | 1 source only | `AHAD_1` |
+| 4. I'lal | No defects | — |
+| 5. Shudhudh | Only one value, nothing to compare | No anomaly |
+| 6. COI | Founder is CEO of target company; HIGH, disclosed | Requires MUTAWATIR; only AHAD_1 → `COI_HIGH_UNCURED` (MAJOR) |
+| 7. Major count | 1 (COI) | Downgrade B → C |
+| 8. Tawatur upgrade | Not MUTAWATIR | No upgrade |
+| **Final** | | **Grade C** |
+
+#### Example 3: Contradicted Metric — Broken Chain (Grade D)
+
+**Scenario:** "Monthly burn rate $450K" from financial model, but transmission chain has a missing node.
+
+| Step | Input | Result |
+|------|-------|--------|
+| 1. Source tier | `FINANCIAL_MODEL` → Tier 3 (`THIQAH`) | `base_grade = B` |
+| 2. Dabt score | doc=0.70, trans=0.30, temp=0.80, cog=null | `dabt = 0.567` (FAIR) |
+| 3. Tawatur | 2 sources | `AHAD_2` |
+| 4. I'lal | **`ILAL_CHAIN_BREAK`** — node N3 references parent N1 but N1 not in chain | **FATAL defect → immediate Grade D** |
+| **Final** | | **Grade D** (FATAL I'lal, algorithm exits early) |
+
+#### Example 4: Corroboration Upgrade — B to A (Grade A)
+
+**Scenario:** "NRR of 125%" from internal report, corroborated by Stripe data, bank reconciliation, and customer survey.
+
+| Step | Input | Result |
+|------|-------|--------|
+| 1. Source tier | `INTERNAL_REPORT` → Tier 3 (`THIQAH`) | `base_grade = B` |
+| 2. Dabt score | doc=0.85, trans=0.88, temp=0.95, cog=0.80 | `dabt = 0.876` (GOOD, no cap) |
+| 3. Tawatur | 4 sources, all independent systems | `MUTAWATIR` (collusion_risk=0.08) |
+| 4. I'lal | No defects | — |
+| 5. Shudhudh | Values: 125%, 124.8%, 125.1%, 126% → within 1% | Reconciled via rounding heuristic |
+| 6. COI | No COI | — |
+| 7. Major count | 0 | No downgrade |
+| 8. Tawatur upgrade | Grade=B, MUTAWATIR, major_count=0 → **upgrade B → A** | Grade A |
+| **Final** | | **Grade A** |
+
+#### Example 5: Multiple MAJOR Defects (Grade D via Downgrade)
+
+**Scenario:** "Customer count 5,000" from press release, with stale data and value conflict with newer internal report.
+
+| Step | Input | Result |
+|------|-------|--------|
+| 1. Source tier | `PRESS_RELEASE` → Tier 5 (`SHAYKH`) | `base_grade = C` |
+| 2. Dabt score | doc=0.40, trans=0.50, temp=0.20, cog=null | `dabt = 0.357` (POOR → cap at B, but already C so no effect) |
+| 3. Tawatur | 2 sources (press release + internal report) | `AHAD_2` |
+| 4. I'lal | `ILAL_VERSION_DRIFT` — press release cites old count (5,000) but internal report says 4,200 | MAJOR defect |
+| 5. Shudhudh | Values: 5,000 vs 4,200 → 19% difference, reconciliation fails | `SHUDHUDH_ANOMALY` (MAJOR) |
+| 6. COI | No COI | — |
+| 7. Major count | 2 (version drift + shudhudh) | Downgrade C → D → D (capped at D) |
+| 8. Tawatur upgrade | Not MUTAWATIR, has MAJORs | No upgrade |
+| **Final** | | **Grade D** |
+
+---
+
+### 8.3 Grade Order
 
 ```python
 GRADE_ORDER = {"A": 0, "B": 1, "C": 2, "D": 3}

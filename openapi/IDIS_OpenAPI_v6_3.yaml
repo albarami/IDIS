@@ -110,6 +110,13 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/CreateDealRequest"
+            example:
+              name: "Series A — Acme Robotics"
+              company_name: "Acme Robotics Inc."
+              stage: "SERIES_A"
+              tags: ["deep-tech", "robotics", "MENA"]
+              external_refs:
+                dealcloud_id: "DC-4821"
       responses:
         "201":
           description: Deal created
@@ -117,6 +124,15 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Deal"
+              example:
+                deal_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                name: "Series A — Acme Robotics"
+                company_name: "Acme Robotics Inc."
+                status: "NEW"
+                stage: "SERIES_A"
+                tags: ["deep-tech", "robotics", "MENA"]
+                created_at: "2026-02-06T08:00:00Z"
+                updated_at: "2026-02-06T08:00:00Z"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -231,6 +247,13 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/CreateDocumentRequest"
+            example:
+              doc_type: "PITCH_DECK"
+              title: "Acme Robotics Series A Deck v3"
+              source_system: "DocSend"
+              uri: "https://docsend.com/view/abc123"
+              sha256: "e3b0c44298fc1c149afbf4c8996fb924..."
+              auto_ingest: true
       responses:
         "201":
           description: Document created
@@ -238,6 +261,16 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DocumentArtifact"
+              example:
+                doc_id: "d1e2f3a4-b5c6-7890-abcd-ef1234567890"
+                deal_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                doc_type: "PITCH_DECK"
+                title: "Acme Robotics Series A Deck v3"
+                source_system: "DocSend"
+                version_id: "v3"
+                ingested_at: "2026-02-06T08:05:00Z"
+                sha256: "e3b0c44298fc1c149afbf4c8996fb924..."
+                uri: "s3://idis-artifacts/tenant-01/deals/a1b2/docs/d1e2.pdf"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -266,6 +299,8 @@ paths:
                   type: string
                   enum: [LOW, NORMAL, HIGH]
                   default: NORMAL
+            example:
+              priority: "HIGH"
       responses:
         "202":
           description: Ingestion started
@@ -273,6 +308,9 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RunRef"
+              example:
+                run_id: "r1a2b3c4-d5e6-7890-abcd-ef1234567890"
+                status: "QUEUED"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
@@ -408,6 +446,23 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/CreateClaimRequest"
+            example:
+              claim_class: "FINANCIAL"
+              claim_text: "ARR of $4.2M as of Q3 2025"
+              predicate: "ARR"
+              value:
+                value: 4200000
+                unit: "USD"
+                currency: "USD"
+                as_of: "2025-09-30"
+                time_window:
+                  label: "Q3 2025"
+                  start_date: "2025-07-01"
+                  end_date: "2025-09-30"
+              evidence_ids:
+                - "e1a2b3c4-d5e6-7890-abcd-000000000001"
+              materiality: "HIGH"
+              ic_bound: true
       responses:
         "201":
           description: Claim created
@@ -415,6 +470,28 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Claim"
+              example:
+                claim_id: "c1a2b3c4-d5e6-7890-abcd-ef1234567890"
+                deal_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                claim_class: "FINANCIAL"
+                claim_text: "ARR of $4.2M as of Q3 2025"
+                predicate: "ARR"
+                value:
+                  value: 4200000
+                  unit: "USD"
+                  currency: "USD"
+                  as_of: "2025-09-30"
+                sanad_id: null
+                claim_grade: "C"
+                corroboration:
+                  level: "AHAD"
+                  independent_chain_count: 1
+                claim_verdict: "UNVERIFIED"
+                claim_action: "NONE"
+                defect_ids: []
+                materiality: "HIGH"
+                ic_bound: true
+                created_at: "2026-02-06T08:10:00Z"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -803,6 +880,8 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/StartRunRequest"
+            example:
+              mode: "FULL"
       responses:
         "202":
           description: Run started
@@ -810,6 +889,9 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RunRef"
+              example:
+                run_id: "f1a2b3c4-d5e6-7890-abcd-ef1234567890"
+                status: "QUEUED"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -851,6 +933,9 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/StartDebateRequest"
+            example:
+              protocol_version: "1.0"
+              max_rounds: 5
       responses:
         "202":
           description: |
@@ -860,6 +945,9 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RunRef"
+              example:
+                run_id: "db1a2b3c-d5e6-7890-abcd-ef1234567890"
+                status: "QUEUED"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -989,6 +1077,9 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/GenerateDeliverableRequest"
+            example:
+              deliverable_type: "IC_MEMO"
+              format: "PDF"
       responses:
         "202":
           description: Deliverable generation started
@@ -1166,6 +1257,13 @@ components:
           type: object
           additionalProperties: true
         request_id: { type: string, example: "req_123" }
+      example:
+        code: "not_found"
+        message: "Deal a1b2c3d4-e5f6-7890-abcd-ef1234567890 not found"
+        details:
+          resource_type: "deal"
+          resource_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        request_id: "req_8f3a2b1c-0000-0000-0000-000000000001"
 
     TenantContext:
       type: object

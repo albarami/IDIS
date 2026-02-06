@@ -1,0 +1,4 @@
+*.pdf  -text
+*.xlsx -text
+*.docx -text
+*.pptx -text

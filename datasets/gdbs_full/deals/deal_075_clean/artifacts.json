@@ -8,8 +8,8 @@
       "filename": "pitch_deck.pdf",
       "storage_uri": "file://datasets/gdbs_full/deals/deal_075_clean/artifacts/pitch_deck.pdf",
       "connector_type": "Upload",
-      "sha256": "86fe2ff60c36e73da438e10d94ac1a11e8c1e453f4492e46aeff0a192c645601",
-      "file_size_bytes": 2356,
+      "sha256": "904b886d17d9e36c9fc9950f79f97c30a3b9ee07dccf6632a348a55fc4bb7d95",
+      "file_size_bytes": 2430,
       "ingested_at": "2026-01-05T09:00:00Z",
       "created_at": "2026-01-05T09:00:00Z",
       "updated_at": "2026-01-05T09:00:00Z"

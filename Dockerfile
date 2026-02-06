@@ -19,19 +19,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Install Python dependencies first (cache layer)
+# Copy all source and data files (must precede pip install for hatchling force-include)
 COPY pyproject.toml ./
 COPY README.md ./
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -e .
-
-# Copy application source
-COPY src/ ./src/
 COPY openapi/ ./openapi/
+COPY src/ ./src/
+COPY prompts/ ./prompts/
 COPY schemas/ ./schemas/
 
 # Install the package (non-editable so runtime has in-venv code)
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir .
 
 # Compile Python files for faster startup (optional verification)
 RUN python -m compileall -q src/

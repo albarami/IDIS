@@ -29,12 +29,14 @@ from idis.persistence.repositories.deals import (
     get_deals_repository,
 )
 from idis.persistence.repositories.evidence import (
+    EvidenceRepo,
     PostgresEvidenceRepository,
     get_evidence_repository,
 )
 from idis.persistence.repositories.run_steps import (
     InMemoryRunStepsRepository,
     PostgresRunStepsRepository,
+    RunStepsRepo,
     clear_run_steps_store,
     get_run_steps_repository,
 )
@@ -58,8 +60,10 @@ __all__ = [
     "InMemoryRunsRepository",
     "InMemoryRunStepsRepository",
     "InMemorySanadsRepository",
+    "EvidenceRepo",
     "PostgresEvidenceRepository",
     "PostgresRunStepsRepository",
+    "RunStepsRepo",
     "PostgresRunsRepository",
     "SanadsRepository",
     "clear_all_claims_stores",

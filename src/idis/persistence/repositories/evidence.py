@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from sqlalchemy import text
 
@@ -19,6 +19,32 @@ if TYPE_CHECKING:
     from sqlalchemy import Connection
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class EvidenceRepo(Protocol):
+    """Structural interface for evidence repositories.
+
+    Both InMemoryEvidenceRepository and PostgresEvidenceRepository
+    satisfy this protocol. Use this type in function signatures
+    that accept either backend.
+    """
+
+    def create(
+        self,
+        *,
+        evidence_id: str,
+        tenant_id: str,
+        deal_id: str,
+        claim_id: str,
+        source_span_id: str,
+        source_grade: str = ...,
+        verification_status: str = ...,
+    ) -> dict[str, Any]: ...
+
+    def get(self, evidence_id: str) -> dict[str, Any] | None: ...
+
+    def get_by_claim(self, claim_id: str) -> list[dict[str, Any]]: ...
 
 
 class PostgresEvidenceRepository:

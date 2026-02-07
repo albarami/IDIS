@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from sqlalchemy import text
 
@@ -20,6 +20,25 @@ if TYPE_CHECKING:
     from sqlalchemy import Connection
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class RunStepsRepo(Protocol):
+    """Structural interface for RunStep repositories.
+
+    Both InMemoryRunStepsRepository and PostgresRunStepsRepository
+    satisfy this protocol. Use this type in function signatures
+    that accept either backend.
+    """
+
+    def create(self, step: RunStep) -> RunStep: ...
+
+    def get_by_run_id(self, run_id: str) -> list[RunStep]: ...
+
+    def get_step(self, run_id: str, step_name: StepName) -> RunStep | None: ...
+
+    def update(self, step: RunStep) -> RunStep: ...
+
 
 _run_steps_store: dict[str, dict[str, Any]] = {}
 """Global in-memory store keyed by step_id."""
@@ -174,7 +193,11 @@ class PostgresRunStepsRepository:
                 "step_id": step.step_id,
                 "tenant_id": step.tenant_id,
                 "run_id": step.run_id,
-                "step_name": step.step_name.value if hasattr(step.step_name, "value") else step.step_name,
+                "step_name": (
+                    step.step_name.value
+                    if hasattr(step.step_name, "value")
+                    else step.step_name
+                ),
                 "step_order": step.step_order,
                 "status": step.status.value if hasattr(step.status, "value") else step.status,
                 "started_at": step.started_at,

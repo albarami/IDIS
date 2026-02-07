@@ -27,7 +27,7 @@ from idis.models.run_step import (
     StepName,
     StepStatus,
 )
-from idis.persistence.repositories.run_steps import InMemoryRunStepsRepository
+from idis.persistence.repositories.run_steps import RunStepsRepo
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +97,7 @@ class RunOrchestrator:
         self,
         *,
         audit_sink: AuditSink,
-        run_steps_repo: InMemoryRunStepsRepository,
+        run_steps_repo: RunStepsRepo,
     ) -> None:
         """Initialize the orchestrator.
 

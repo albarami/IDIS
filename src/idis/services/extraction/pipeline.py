@@ -25,6 +25,7 @@ from typing import Any
 
 from idis.audit.sink import AuditSink, InMemoryAuditSink
 from idis.persistence.repositories.claims import InMemoryEvidenceRepository
+from idis.persistence.repositories.evidence import EvidenceRepo
 from idis.services.claims.service import ClaimService, CreateClaimInput
 from idis.services.extraction.chunking.service import ChunkingService
 from idis.services.extraction.confidence.scorer import (
@@ -94,7 +95,7 @@ class ExtractionPipeline:
         deduplicator: Deduplicator,
         conflict_detector: ConflictDetector,
         claim_service: ClaimService,
-        evidence_repo: InMemoryEvidenceRepository | None = None,
+        evidence_repo: EvidenceRepo | None = None,
         audit_sink: AuditSink | None = None,
     ) -> None:
         """Initialize the extraction pipeline.

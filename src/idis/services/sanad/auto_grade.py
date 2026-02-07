@@ -25,6 +25,7 @@ from idis.persistence.repositories.claims import (
     InMemoryClaimsRepository,
     InMemoryEvidenceRepository,
 )
+from idis.persistence.repositories.evidence import EvidenceRepo
 from idis.services.defects.service import CreateDefectInput, DefectService
 from idis.services.sanad.chain_builder import ChainBuildError, build_sanad_chain
 from idis.services.sanad.grader import grade_sanad_v2
@@ -115,7 +116,7 @@ def auto_grade_claims_for_run(
     tenant_id: str,
     deal_id: str,
     created_claim_ids: list[str],
-    evidence_repo: InMemoryEvidenceRepository | None = None,
+    evidence_repo: EvidenceRepo | None = None,
     sanad_service: SanadService | None = None,
     defect_service: DefectService | None = None,
     audit_sink: AuditSink,
@@ -195,7 +196,7 @@ def _grade_single_claim(
     tenant_id: str,
     deal_id: str,
     claim_id: str,
-    evidence_repo: InMemoryEvidenceRepository,
+    evidence_repo: EvidenceRepo,
     sanad_service: SanadService,
     defect_service: DefectService,
     audit_sink: AuditSink,

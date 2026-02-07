@@ -1,8 +1,9 @@
-"""Tests for RunOrchestrator resume/idempotency — Phase 4 orchestration.
+"""Tests for RunOrchestrator resume/idempotency — Phase 5 orchestration.
 
 Covers:
 - Retry EXTRACT step is idempotent (no duplicate claims)
 - Retry GRADE step is idempotent (no duplicate sanads)
+- Retry CALC step is idempotent (no duplicate calcs)
 """
 
 from __future__ import annotations
@@ -21,6 +22,21 @@ from idis.persistence.repositories.run_steps import (
 from idis.services.runs.orchestrator import RunContext, RunOrchestrator
 
 TENANT_A = "11111111-1111-1111-1111-111111111111"
+
+
+def _stub_calc(
+    *,
+    run_id: str,
+    tenant_id: str,
+    deal_id: str,
+    created_claim_ids: list[str],
+    calc_types: list[Any] | None = None,
+) -> dict[str, Any]:
+    """Deterministic calc stub returning fixed calc IDs."""
+    return {
+        "calc_ids": ["calc-001"],
+        "reproducibility_hashes": ["hash-aaa"],
+    }
 
 
 def _make_documents() -> list[dict[str, Any]]:
@@ -100,6 +116,7 @@ class TestRetryExtractStepIdempotentNoDuplicateClaims:
             documents=_make_documents(),
             extract_fn=counting_extract,
             grade_fn=stub_grade,
+            calc_fn=_stub_calc,
         )
 
         result1 = orchestrator.execute(ctx)
@@ -166,6 +183,7 @@ class TestRetryGradeStepIdempotentNoDuplicateSanads:
             documents=_make_documents(),
             extract_fn=stub_extract,
             grade_fn=counting_grade,
+            calc_fn=_stub_calc,
         )
 
         result1 = orchestrator.execute(ctx)
@@ -178,3 +196,83 @@ class TestRetryGradeStepIdempotentNoDuplicateSanads:
 
         grade_steps = [s for s in result2.steps if s.step_name == StepName.GRADE]
         assert len(grade_steps) == 1, "Only one GRADE step record should exist"
+
+
+class TestRetryCalcStepIdempotentNoDuplicateCalcs:
+    """test_retry_calc_step_idempotent_no_duplicate_calcs."""
+
+    def test_retry_calc_step_idempotent_no_duplicate_calcs(self) -> None:
+        """Re-running orchestrator skips completed CALC; no duplicate calcs."""
+        calc_call_count = 0
+
+        def stub_extract(
+            *,
+            run_id: str,
+            tenant_id: str,
+            deal_id: str,
+            documents: list[dict[str, Any]],
+        ) -> dict[str, Any]:
+            return {
+                "status": "COMPLETED",
+                "created_claim_ids": ["claim-001"],
+                "chunk_count": 1,
+                "unique_claim_count": 1,
+                "conflict_count": 0,
+            }
+
+        def stub_grade(
+            *,
+            run_id: str,
+            tenant_id: str,
+            deal_id: str,
+            created_claim_ids: list[str],
+            audit_sink: Any,
+        ) -> dict[str, Any]:
+            return {
+                "graded_count": len(created_claim_ids),
+                "failed_count": 0,
+                "total_defects": 0,
+                "all_failed": False,
+            }
+
+        def counting_calc(
+            *,
+            run_id: str,
+            tenant_id: str,
+            deal_id: str,
+            created_claim_ids: list[str],
+            calc_types: list[Any] | None = None,
+        ) -> dict[str, Any]:
+            nonlocal calc_call_count
+            calc_call_count += 1
+            return {
+                "calc_ids": ["calc-001"],
+                "reproducibility_hashes": ["hash-aaa"],
+            }
+
+        run_id = str(uuid.uuid4())
+        audit_sink = InMemoryAuditSink()
+        repo = InMemoryRunStepsRepository(TENANT_A)
+        orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
+
+        ctx = RunContext(
+            run_id=run_id,
+            tenant_id=TENANT_A,
+            deal_id=str(uuid.uuid4()),
+            mode="SNAPSHOT",
+            documents=_make_documents(),
+            extract_fn=stub_extract,
+            grade_fn=stub_grade,
+            calc_fn=counting_calc,
+        )
+
+        result1 = orchestrator.execute(ctx)
+        assert result1.status == "COMPLETED"
+        assert calc_call_count == 1
+
+        result2 = orchestrator.execute(ctx)
+        assert result2.status == "COMPLETED"
+        assert calc_call_count == 1, "CALC must not re-run when already COMPLETED"
+
+        calc_steps = [s for s in result2.steps if s.step_name == StepName.CALC]
+        assert len(calc_steps) == 1, "Only one CALC step record should exist"

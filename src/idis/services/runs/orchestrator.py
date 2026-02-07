@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from idis.audit.sink import AuditSink, AuditSinkError
+from idis.models.deterministic_calculation import CalcType
 from idis.models.run_step import (
     FULL_STEPS,
     IMPLEMENTED_STEPS,
@@ -64,6 +65,8 @@ class RunContext:
         documents: Ingested document dicts gathered by the route handler.
         extract_fn: Callable that executes extraction, returns result dict.
         grade_fn: Callable that executes grading, returns summary dict.
+        calc_fn: Optional callable that executes calculations, returns result dict.
+        calc_types: Optional list of CalcType to run. None means run all registered.
     """
 
     run_id: str
@@ -73,6 +76,8 @@ class RunContext:
     documents: list[dict[str, Any]]
     extract_fn: Callable[..., dict[str, Any]]
     grade_fn: Callable[..., dict[str, Any]]
+    calc_fn: Callable[..., dict[str, Any]] | None = None
+    calc_types: list[CalcType] | None = None
 
 
 class RunOrchestrator:
@@ -105,8 +110,8 @@ class RunOrchestrator:
     def execute(self, ctx: RunContext) -> OrchestratorResult:
         """Execute all pipeline steps for the given run context.
 
-        For SNAPSHOT: INGEST_CHECK -> EXTRACT -> GRADE.
-        For FULL: INGEST_CHECK -> EXTRACT -> GRADE -> DEBATE (BLOCKED).
+        For SNAPSHOT: INGEST_CHECK -> EXTRACT -> GRADE -> CALC.
+        For FULL: INGEST_CHECK -> EXTRACT -> GRADE -> CALC -> DEBATE (BLOCKED).
 
         Skips steps that are already COMPLETED (idempotent resume).
         Fails closed on audit emission errors.
@@ -195,6 +200,8 @@ class RunOrchestrator:
             return self._execute_extract(ctx)
         if step_name == StepName.GRADE:
             return self._execute_grade(ctx, accumulated)
+        if step_name == StepName.CALC:
+            return self._execute_calc(ctx, accumulated)
         raise ValueError(f"No handler for step: {step_name.value}")
 
     def _execute_ingest_check(self, ctx: RunContext) -> dict[str, Any]:
@@ -250,6 +257,37 @@ class RunOrchestrator:
             deal_id=ctx.deal_id,
             created_claim_ids=created_claim_ids,
             audit_sink=self._audit,
+        )
+
+    def _execute_calc(
+        self,
+        ctx: RunContext,
+        accumulated: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Run deterministic calculations via injected callable.
+
+        Fail-closed: raises ValueError if calc_fn is not provided.
+
+        Args:
+            ctx: Run context with optional calc_fn and calc_types.
+            accumulated: Must contain created_claim_ids from EXTRACT step.
+
+        Returns:
+            Calculation result dict including calc_ids and hashes.
+
+        Raises:
+            ValueError: If ctx.calc_fn is None (fail-closed).
+        """
+        if ctx.calc_fn is None:
+            raise ValueError("calc_fn not provided")
+
+        created_claim_ids = accumulated.get("created_claim_ids", [])
+        return ctx.calc_fn(
+            run_id=ctx.run_id,
+            tenant_id=ctx.tenant_id,
+            deal_id=ctx.deal_id,
+            created_claim_ids=created_claim_ids,
+            calc_types=ctx.calc_types,
         )
 
     def _start_step(

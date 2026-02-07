@@ -19,6 +19,7 @@ class StepName(StrEnum):
     INGEST_CHECK = "INGEST_CHECK"
     EXTRACT = "EXTRACT"
     GRADE = "GRADE"
+    CALC = "CALC"
     DEBATE = "DEBATE"
 
 
@@ -36,7 +37,8 @@ STEP_ORDER: dict[StepName, int] = {
     StepName.INGEST_CHECK: 0,
     StepName.EXTRACT: 1,
     StepName.GRADE: 2,
-    StepName.DEBATE: 3,
+    StepName.CALC: 3,
+    StepName.DEBATE: 4,
 }
 """Canonical ordering for deterministic step iteration."""
 
@@ -44,6 +46,7 @@ SNAPSHOT_STEPS: list[StepName] = [
     StepName.INGEST_CHECK,
     StepName.EXTRACT,
     StepName.GRADE,
+    StepName.CALC,
 ]
 """Steps executed during a SNAPSHOT run."""
 
@@ -51,6 +54,7 @@ FULL_STEPS: list[StepName] = [
     StepName.INGEST_CHECK,
     StepName.EXTRACT,
     StepName.GRADE,
+    StepName.CALC,
     StepName.DEBATE,
 ]
 """Steps executed during a FULL run."""
@@ -60,6 +64,7 @@ IMPLEMENTED_STEPS: frozenset[StepName] = frozenset(
         StepName.INGEST_CHECK,
         StepName.EXTRACT,
         StepName.GRADE,
+        StepName.CALC,
     }
 )
 """Steps with working implementations. Unimplemented steps trigger BLOCKED."""

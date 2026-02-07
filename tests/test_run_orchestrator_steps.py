@@ -1,9 +1,9 @@
-"""Tests for RunOrchestrator step ledger — Phase 4 orchestration.
+"""Tests for RunOrchestrator step ledger — Phase 5 orchestration.
 
 Covers:
-- SNAPSHOT records three steps in order
+- SNAPSHOT records four steps in order (INGEST_CHECK → EXTRACT → GRADE → CALC)
 - Step errors persisted and returned
-- FULL blocks on DEBATE step with reason
+- FULL blocks on DEBATE step with reason (after CALC)
 - Cross-tenant run step read returns 404 (no existence leak)
 - Audit failure aborts run fail-closed
 """
@@ -91,6 +91,21 @@ def _stub_grade(
     }
 
 
+def _stub_calc(
+    *,
+    run_id: str,
+    tenant_id: str,
+    deal_id: str,
+    created_claim_ids: list[str],
+    calc_types: list[Any] | None = None,
+) -> dict[str, Any]:
+    """Deterministic calc stub returning fixed calc IDs."""
+    return {
+        "calc_ids": ["calc-001", "calc-002"],
+        "reproducibility_hashes": ["hash-aaa", "hash-bbb"],
+    }
+
+
 def _stub_extract_failing(**kwargs: Any) -> dict[str, Any]:
     """Extraction stub that always raises."""
     raise RuntimeError("Extraction service unavailable")
@@ -123,11 +138,11 @@ def _clear_stores() -> None:
     clear_run_steps_store()
 
 
-class TestSnapshotRecordsThreeStepsInOrder:
-    """test_snapshot_records_three_steps_in_order."""
+class TestSnapshotRecordsFourStepsInOrder:
+    """test_snapshot_records_four_steps_in_order."""
 
-    def test_snapshot_records_three_steps_in_order(self) -> None:
-        """SNAPSHOT run records INGEST_CHECK, EXTRACT, GRADE in canonical order."""
+    def test_snapshot_records_four_steps_in_order(self) -> None:
+        """SNAPSHOT run records INGEST_CHECK, EXTRACT, GRADE, CALC in canonical order."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -140,14 +155,20 @@ class TestSnapshotRecordsThreeStepsInOrder:
             documents=_make_documents(),
             extract_fn=_stub_extract,
             grade_fn=_stub_grade,
+            calc_fn=_stub_calc,
         )
 
         result = orchestrator.execute(ctx)
 
         assert result.status == "COMPLETED"
-        assert len(result.steps) == 3
+        assert len(result.steps) == 4
 
-        expected_names = [StepName.INGEST_CHECK, StepName.EXTRACT, StepName.GRADE]
+        expected_names = [
+            StepName.INGEST_CHECK,
+            StepName.EXTRACT,
+            StepName.GRADE,
+            StepName.CALC,
+        ]
         for i, step in enumerate(result.steps):
             assert step.step_name == expected_names[i]
             assert step.status == StepStatus.COMPLETED
@@ -173,6 +194,7 @@ class TestSnapshotStepErrorsPersistedAndReturned:
             documents=_make_documents(),
             extract_fn=_stub_extract_failing,
             grade_fn=_stub_grade,
+            calc_fn=_stub_calc,
         )
 
         result = orchestrator.execute(ctx)
@@ -196,7 +218,7 @@ class TestFullBlocksOnDebateStepWithReason:
     """test_full_blocks_on_debate_step_with_reason."""
 
     def test_full_blocks_on_debate_step_with_reason(self) -> None:
-        """FULL run completes INGEST_CHECK/EXTRACT/GRADE then BLOCKED at DEBATE."""
+        """FULL run completes INGEST_CHECK/EXTRACT/GRADE/CALC then BLOCKED at DEBATE."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -209,6 +231,7 @@ class TestFullBlocksOnDebateStepWithReason:
             documents=_make_documents(),
             extract_fn=_stub_extract,
             grade_fn=_stub_grade,
+            calc_fn=_stub_calc,
         )
 
         result = orchestrator.execute(ctx)
@@ -217,11 +240,12 @@ class TestFullBlocksOnDebateStepWithReason:
         assert result.block_reason == "DEBATE_NOT_IMPLEMENTED"
 
         completed = [s for s in result.steps if s.status == StepStatus.COMPLETED]
-        assert len(completed) == 3
+        assert len(completed) == 4
         assert [s.step_name for s in completed] == [
             StepName.INGEST_CHECK,
             StepName.EXTRACT,
             StepName.GRADE,
+            StepName.CALC,
         ]
 
         blocked = [s for s in result.steps if s.status == StepStatus.BLOCKED]
@@ -296,6 +320,7 @@ class TestAuditFailureAbortsRunFailClosed:
             documents=_make_documents(),
             extract_fn=_stub_extract,
             grade_fn=_stub_grade,
+            calc_fn=_stub_calc,
         )
 
         with pytest.raises(AuditSinkError, match="Disk full"):

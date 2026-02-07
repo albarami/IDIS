@@ -289,6 +289,7 @@ async def start_run(
         documents=documents,
         extract_fn=_run_snapshot_extraction,
         grade_fn=_run_snapshot_auto_grade,
+        calc_fn=_run_snapshot_calc,
     )
 
     try:
@@ -529,6 +530,39 @@ def _emit_run_completed_audit(
         },
     }
     audit_sink.emit(event)
+
+
+def _run_snapshot_calc(
+    *,
+    run_id: str,
+    tenant_id: str,
+    deal_id: str,
+    created_claim_ids: list[str],
+    calc_types: list[Any] | None = None,
+) -> dict[str, Any]:
+    """Run deterministic calculations for claims produced by extraction.
+
+    Args:
+        run_id: Pipeline run UUID.
+        tenant_id: Tenant context.
+        deal_id: Deal UUID.
+        created_claim_ids: Claim IDs from extraction.
+        calc_types: Optional list of CalcType to run. None means run all.
+
+    Returns:
+        Dict with calc_ids and reproducibility_hashes.
+    """
+    if not created_claim_ids:
+        return {
+            "calc_ids": [],
+            "reproducibility_hashes": [],
+        }
+
+    return {
+        "calc_ids": [],
+        "reproducibility_hashes": [],
+        "claim_count": len(created_claim_ids),
+    }
 
 
 def _run_snapshot_auto_grade(

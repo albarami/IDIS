@@ -342,6 +342,7 @@ def verify_tables_exist(db_url: str) -> None:
         "documents",
         "document_spans",
         # 0005: calculations
+        "tenants",
         "deterministic_calculations",
         "calc_sanads",
         # 0007: claims/sanad/defects

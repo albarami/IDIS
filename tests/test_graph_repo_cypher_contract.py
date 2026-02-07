@@ -11,32 +11,56 @@ from __future__ import annotations
 
 from idis.persistence.cypher.q_4_4_1_full_chain import (
     QUERY as Q_4_4_1,
+)
+from idis.persistence.cypher.q_4_4_1_full_chain import (
     REQUIRED_PARAMS as RP_4_4_1,
+)
+from idis.persistence.cypher.q_4_4_1_full_chain import (
     build_full_chain_query,
 )
 from idis.persistence.cypher.q_4_4_2_deal_claims_grades import (
     QUERY as Q_4_4_2,
+)
+from idis.persistence.cypher.q_4_4_2_deal_claims_grades import (
     REQUIRED_PARAMS as RP_4_4_2,
+)
+from idis.persistence.cypher.q_4_4_2_deal_claims_grades import (
     build_deal_claims_grades_query,
 )
 from idis.persistence.cypher.q_4_4_3_independence_clusters import (
     QUERY as Q_4_4_3,
+)
+from idis.persistence.cypher.q_4_4_3_independence_clusters import (
     REQUIRED_PARAMS as RP_4_4_3,
+)
+from idis.persistence.cypher.q_4_4_3_independence_clusters import (
     build_independence_clusters_query,
 )
 from idis.persistence.cypher.q_4_4_4_weakest_link import (
     QUERY as Q_4_4_4,
+)
+from idis.persistence.cypher.q_4_4_4_weakest_link import (
     REQUIRED_PARAMS as RP_4_4_4,
+)
+from idis.persistence.cypher.q_4_4_4_weakest_link import (
     build_weakest_link_query,
 )
 from idis.persistence.cypher.q_4_4_5_defect_impact import (
     QUERY as Q_4_4_5,
+)
+from idis.persistence.cypher.q_4_4_5_defect_impact import (
     REQUIRED_PARAMS as RP_4_4_5,
+)
+from idis.persistence.cypher.q_4_4_5_defect_impact import (
     build_defect_impact_query,
 )
 from idis.persistence.cypher.q_4_4_6_entity_cooccurrence import (
     QUERY as Q_4_4_6,
+)
+from idis.persistence.cypher.q_4_4_6_entity_cooccurrence import (
     REQUIRED_PARAMS as RP_4_4_6,
+)
+from idis.persistence.cypher.q_4_4_6_entity_cooccurrence import (
     build_entity_cooccurrence_query,
 )
 
@@ -67,9 +91,7 @@ class TestQuery441FullChain:
         assert "ORDER BY tn.timestamp ASC" in Q_4_4_1
 
     def test_builder_returns_query_and_params(self) -> None:
-        query, params = build_full_chain_query(
-            claim_id=CLAIM_A, tenant_id=TENANT_A
-        )
+        query, params = build_full_chain_query(claim_id=CLAIM_A, tenant_id=TENANT_A)
         assert query == Q_4_4_1
         assert params["tenant_id"] == TENANT_A
         assert params["claim_id"] == CLAIM_A
@@ -95,9 +117,7 @@ class TestQuery442DealClaimsGrades:
         assert "ORDER BY claim.materiality DESC, claim.claim_grade ASC" in Q_4_4_2
 
     def test_builder_returns_query_and_params(self) -> None:
-        query, params = build_deal_claims_grades_query(
-            deal_id=DEAL_A, tenant_id=TENANT_A
-        )
+        query, params = build_deal_claims_grades_query(deal_id=DEAL_A, tenant_id=TENANT_A)
         assert query == Q_4_4_2
         assert params["tenant_id"] == TENANT_A
         assert params["deal_id"] == DEAL_A
@@ -126,9 +146,7 @@ class TestQuery443IndependenceClusters:
         assert "NONE" in Q_4_4_3
 
     def test_builder_returns_query_and_params(self) -> None:
-        query, params = build_independence_clusters_query(
-            claim_id=CLAIM_A, tenant_id=TENANT_A
-        )
+        query, params = build_independence_clusters_query(claim_id=CLAIM_A, tenant_id=TENANT_A)
         assert query == Q_4_4_3
         assert params["tenant_id"] == TENANT_A
         assert params["claim_id"] == CLAIM_A
@@ -157,9 +175,7 @@ class TestQuery444WeakestLink:
         assert "WHEN 'D' THEN 3" in Q_4_4_4
 
     def test_builder_returns_query_and_params(self) -> None:
-        query, params = build_weakest_link_query(
-            claim_id=CLAIM_A, tenant_id=TENANT_A
-        )
+        query, params = build_weakest_link_query(claim_id=CLAIM_A, tenant_id=TENANT_A)
         assert query == Q_4_4_4
         assert params["tenant_id"] == TENANT_A
 
@@ -185,9 +201,7 @@ class TestQuery445DefectImpact:
         assert "DERIVED_FROM" in Q_4_4_5
 
     def test_builder_returns_query_and_params(self) -> None:
-        query, params = build_defect_impact_query(
-            defect_id=DEFECT_A, tenant_id=TENANT_A
-        )
+        query, params = build_defect_impact_query(defect_id=DEFECT_A, tenant_id=TENANT_A)
         assert query == Q_4_4_5
         assert params["tenant_id"] == TENANT_A
         assert params["defect_id"] == DEFECT_A
@@ -212,9 +226,7 @@ class TestQuery446EntityCooccurrence:
         assert "doc_count >= 2" in Q_4_4_6
 
     def test_builder_returns_query_and_params(self) -> None:
-        query, params = build_entity_cooccurrence_query(
-            deal_id=DEAL_A, tenant_id=TENANT_A
-        )
+        query, params = build_entity_cooccurrence_query(deal_id=DEAL_A, tenant_id=TENANT_A)
         assert query == Q_4_4_6
         assert params["tenant_id"] == TENANT_A
         assert params["deal_id"] == DEAL_A

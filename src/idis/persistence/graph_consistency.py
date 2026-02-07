@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Protocol
 
@@ -91,7 +91,7 @@ def _build_audit_event(
             "projection_target": "neo4j",
             "status": status.value,
         },
-        "occurred_at": datetime.now(timezone.utc).isoformat(),
+        "occurred_at": datetime.now(UTC).isoformat(),
     }
     if error:
         event["payload"]["error"] = error
@@ -176,7 +176,7 @@ class GraphProjectionService:
                 entity_type="deal",
                 entity_id=deal_id,
                 tenant_id=tenant_id,
-                timestamp=datetime.now(timezone.utc).isoformat(),
+                timestamp=datetime.now(UTC).isoformat(),
             )
 
         try:
@@ -193,7 +193,7 @@ class GraphProjectionService:
                 entity_type="deal",
                 entity_id=deal_id,
                 tenant_id=tenant_id,
-                timestamp=datetime.now(timezone.utc).isoformat(),
+                timestamp=datetime.now(UTC).isoformat(),
             )
 
             audit_event = _build_audit_event(
@@ -208,9 +208,7 @@ class GraphProjectionService:
 
         except GraphProjectionError as exc:
             error_msg = str(exc)
-            logger.error(
-                "Graph projection failed for deal %s: %s", deal_id, error_msg
-            )
+            logger.error("Graph projection failed for deal %s: %s", deal_id, error_msg)
 
             audit_event = _build_audit_event(
                 tenant_id=tenant_id,
@@ -229,7 +227,7 @@ class GraphProjectionService:
                     entity_id=deal_id,
                     tenant_id=tenant_id,
                     error=f"Projection failed AND audit emission failed: {error_msg}",
-                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    timestamp=datetime.now(UTC).isoformat(),
                 )
 
             return ProjectionResult(
@@ -238,7 +236,7 @@ class GraphProjectionService:
                 entity_id=deal_id,
                 tenant_id=tenant_id,
                 error=error_msg,
-                timestamp=datetime.now(timezone.utc).isoformat(),
+                timestamp=datetime.now(UTC).isoformat(),
             )
 
     def project_claim_sanad(
@@ -272,7 +270,7 @@ class GraphProjectionService:
                 entity_type="claim_sanad",
                 entity_id=claim_id,
                 tenant_id=tenant_id,
-                timestamp=datetime.now(timezone.utc).isoformat(),
+                timestamp=datetime.now(UTC).isoformat(),
             )
 
         try:
@@ -290,7 +288,7 @@ class GraphProjectionService:
                 entity_type="claim_sanad",
                 entity_id=claim_id,
                 tenant_id=tenant_id,
-                timestamp=datetime.now(timezone.utc).isoformat(),
+                timestamp=datetime.now(UTC).isoformat(),
             )
 
             audit_event = _build_audit_event(
@@ -305,9 +303,7 @@ class GraphProjectionService:
 
         except GraphProjectionError as exc:
             error_msg = str(exc)
-            logger.error(
-                "Graph projection failed for claim %s: %s", claim_id, error_msg
-            )
+            logger.error("Graph projection failed for claim %s: %s", claim_id, error_msg)
 
             audit_event = _build_audit_event(
                 tenant_id=tenant_id,
@@ -326,7 +322,7 @@ class GraphProjectionService:
                     entity_id=claim_id,
                     tenant_id=tenant_id,
                     error=f"Projection failed AND audit emission failed: {error_msg}",
-                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    timestamp=datetime.now(UTC).isoformat(),
                 )
 
             return ProjectionResult(
@@ -335,7 +331,7 @@ class GraphProjectionService:
                 entity_id=claim_id,
                 tenant_id=tenant_id,
                 error=error_msg,
-                timestamp=datetime.now(timezone.utc).isoformat(),
+                timestamp=datetime.now(UTC).isoformat(),
             )
 
 
@@ -380,13 +376,13 @@ def create_claim_projection_saga(
             defects=defects,
             calculations=calculations,
         )
-        return claim.get("claim_id", "")
+        return str(claim.get("claim_id", ""))
 
     def graph_delete(ctx: dict[str, Any], result: str) -> None:
         logger.info("Compensating graph projection for claim %s", result)
 
     return (
-        DualWriteSagaExecutor(f"claim-projection-{claim.get('claim_id', '')}")
+        DualWriteSagaExecutor(f"claim-projection-{claim.get('claim_id', '')!s}")
         .add_postgres_step("postgres_claim_insert", postgres_insert, postgres_delete)
         .add_graph_step("graph_claim_projection", graph_insert, graph_delete)
     )

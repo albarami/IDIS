@@ -103,9 +103,7 @@ def _validate_config() -> tuple[str, str, str]:
     password = os.environ.get(NEO4J_PASSWORD_ENV, "")
 
     if not uri:
-        raise Neo4jConfigError(
-            f"{NEO4J_URI_ENV} is not set. Neo4j is not configured."
-        )
+        raise Neo4jConfigError(f"{NEO4J_URI_ENV} is not set. Neo4j is not configured.")
 
     missing = []
     if not username:

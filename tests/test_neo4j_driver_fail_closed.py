@@ -47,30 +47,38 @@ class TestValidateConfig:
 
     def test_missing_uri_raises(self) -> None:
         """No URI → Neo4jConfigError."""
-        with patch.dict(os.environ, {}, clear=True):
-            with pytest.raises(Neo4jConfigError, match="NEO4J_URI is not set"):
-                _validate_config()
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            pytest.raises(Neo4jConfigError, match="NEO4J_URI is not set"),
+        ):
+            _validate_config()
 
     def test_uri_set_missing_username_raises(self) -> None:
         """URI set, username missing → fail-closed."""
         env = {"NEO4J_URI": "bolt://localhost:7687", "NEO4J_PASSWORD": "secret"}
-        with patch.dict(os.environ, env, clear=True):
-            with pytest.raises(Neo4jConfigError, match="NEO4J_USERNAME"):
-                _validate_config()
+        with (
+            patch.dict(os.environ, env, clear=True),
+            pytest.raises(Neo4jConfigError, match="NEO4J_USERNAME"),
+        ):
+            _validate_config()
 
     def test_uri_set_missing_password_raises(self) -> None:
         """URI set, password missing → fail-closed."""
         env = {"NEO4J_URI": "bolt://localhost:7687", "NEO4J_USERNAME": "neo4j"}
-        with patch.dict(os.environ, env, clear=True):
-            with pytest.raises(Neo4jConfigError, match="NEO4J_PASSWORD"):
-                _validate_config()
+        with (
+            patch.dict(os.environ, env, clear=True),
+            pytest.raises(Neo4jConfigError, match="NEO4J_PASSWORD"),
+        ):
+            _validate_config()
 
     def test_uri_set_missing_both_creds_raises(self) -> None:
         """URI set, both creds missing → fail-closed with both listed."""
         env = {"NEO4J_URI": "bolt://localhost:7687"}
-        with patch.dict(os.environ, env, clear=True):
-            with pytest.raises(Neo4jConfigError, match="incomplete"):
-                _validate_config()
+        with (
+            patch.dict(os.environ, env, clear=True),
+            pytest.raises(Neo4jConfigError, match="incomplete"),
+        ):
+            _validate_config()
 
     def test_complete_config_returns_tuple(self) -> None:
         """All three vars set → returns (uri, username, password)."""
@@ -119,7 +127,7 @@ class TestSchemaConstants:
             "Market",
             "Sector",
         }
-        assert VALID_NODE_LABELS == expected
+        assert expected == VALID_NODE_LABELS
 
     def test_no_tenant_node_label(self) -> None:
         """No Tenant node per spec — tenant isolation via property."""
@@ -140,7 +148,7 @@ class TestSchemaConstants:
             "COMPETES_WITH",
             "IN_SECTOR",
         }
-        assert VALID_EDGE_TYPES == expected
+        assert expected == VALID_EDGE_TYPES
 
     def test_no_invented_edge_types(self) -> None:
         """No HAS_CLAIM/HAS_SANAD or other invented edges."""

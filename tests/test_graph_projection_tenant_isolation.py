@@ -18,13 +18,11 @@ import pytest
 
 from idis.persistence.graph_consistency import (
     GraphProjectionService,
-    ProjectionResult,
     ProjectionStatus,
     _build_audit_event,
     _emit_audit_or_fail,
 )
 from idis.persistence.graph_repo import GraphProjectionError, GraphRepository
-from idis.persistence.neo4j_driver import is_neo4j_configured
 
 TENANT_A = "00000000-0000-0000-0000-000000000001"
 TENANT_B = "00000000-0000-0000-0000-000000000002"
@@ -64,12 +62,14 @@ class FakeGraphRepo(GraphRepository):
     ) -> None:
         if self._should_fail:
             raise GraphProjectionError("Simulated projection failure")
-        self.deal_projections.append({
-            "tenant_id": tenant_id,
-            "deal_id": deal_id,
-            "documents": documents,
-            "spans": spans,
-        })
+        self.deal_projections.append(
+            {
+                "tenant_id": tenant_id,
+                "deal_id": deal_id,
+                "documents": documents,
+                "spans": spans,
+            }
+        )
 
     def upsert_claim_sanad_projection(
         self,
@@ -83,12 +83,14 @@ class FakeGraphRepo(GraphRepository):
     ) -> None:
         if self._should_fail:
             raise GraphProjectionError("Simulated projection failure")
-        self.claim_projections.append({
-            "tenant_id": tenant_id,
-            "claim": claim,
-            "evidence_items": evidence_items,
-            "transmission_nodes": transmission_nodes,
-        })
+        self.claim_projections.append(
+            {
+                "tenant_id": tenant_id,
+                "claim": claim,
+                "evidence_items": evidence_items,
+                "transmission_nodes": transmission_nodes,
+            }
+        )
 
 
 class TestProjectionSkipsWhenNotConfigured:
@@ -188,9 +190,7 @@ class TestTenantIsolation:
         assert len(repo.deal_projections) == 1
         assert repo.deal_projections[0]["tenant_id"] == TENANT_A
 
-        tenant_b_projections = [
-            p for p in repo.deal_projections if p["tenant_id"] == TENANT_B
-        ]
+        tenant_b_projections = [p for p in repo.deal_projections if p["tenant_id"] == TENANT_B]
         assert len(tenant_b_projections) == 0
 
     def test_projection_result_carries_correct_tenant(self) -> None:

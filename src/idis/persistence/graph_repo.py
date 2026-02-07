@@ -83,12 +83,15 @@ WITH doc
 MATCH (deal:{NodeLabel.DEAL} {{deal_id: $deal_id, tenant_id: $tenant_id}})
 MERGE (deal)-[:{EdgeType.HAS_DOCUMENT}]->(doc)
 """
-                execute_write(query, {
-                    "document_id": doc["document_id"],
-                    "doc_type": doc.get("doc_type", ""),
-                    "deal_id": deal_id,
-                    "tenant_id": tenant_id,
-                })
+                execute_write(
+                    query,
+                    {
+                        "document_id": doc["document_id"],
+                        "doc_type": doc.get("doc_type", ""),
+                        "deal_id": deal_id,
+                        "tenant_id": tenant_id,
+                    },
+                )
 
             for span in spans:
                 query = f"""\
@@ -98,24 +101,30 @@ WITH span
 MATCH (doc:{NodeLabel.DOCUMENT} {{document_id: $document_id, tenant_id: $tenant_id}})
 MERGE (doc)-[:{EdgeType.HAS_SPAN}]->(span)
 """
-                execute_write(query, {
-                    "span_id": span["span_id"],
-                    "span_type": span.get("span_type", ""),
-                    "document_id": span["document_id"],
-                    "tenant_id": tenant_id,
-                })
+                execute_write(
+                    query,
+                    {
+                        "span_id": span["span_id"],
+                        "span_type": span.get("span_type", ""),
+                        "document_id": span["document_id"],
+                        "tenant_id": tenant_id,
+                    },
+                )
 
             for entity in entities or []:
                 query = f"""\
 MERGE (e:{NodeLabel.ENTITY} {{entity_id: $entity_id, tenant_id: $tenant_id}})
 SET e.name = $name, e.type = $entity_type, e.updated_at = datetime()
 """
-                execute_write(query, {
-                    "entity_id": entity["entity_id"],
-                    "name": entity.get("name", ""),
-                    "entity_type": entity.get("type", ""),
-                    "tenant_id": tenant_id,
-                })
+                execute_write(
+                    query,
+                    {
+                        "entity_id": entity["entity_id"],
+                        "name": entity.get("name", ""),
+                        "entity_type": entity.get("type", ""),
+                        "tenant_id": tenant_id,
+                    },
+                )
 
                 for span_id in entity.get("span_ids", []):
                     link_query = f"""\
@@ -123,11 +132,14 @@ MATCH (e:{NodeLabel.ENTITY} {{entity_id: $entity_id, tenant_id: $tenant_id}})
 MATCH (span:{NodeLabel.SPAN} {{span_id: $span_id, tenant_id: $tenant_id}})
 MERGE (e)-[:{EdgeType.MENTIONED_IN}]->(span)
 """
-                    execute_write(link_query, {
-                        "entity_id": entity["entity_id"],
-                        "span_id": span_id,
-                        "tenant_id": tenant_id,
-                    })
+                    execute_write(
+                        link_query,
+                        {
+                            "entity_id": entity["entity_id"],
+                            "span_id": span_id,
+                            "tenant_id": tenant_id,
+                        },
+                    )
 
             logger.info(
                 "Deal graph projection complete: deal=%s docs=%d spans=%d",
@@ -180,15 +192,18 @@ SET c.claim_text = $claim_text,
     c.claim_class = $claim_class,
     c.updated_at = datetime()
 """
-            execute_write(claim_query, {
-                "claim_id": claim_id,
-                "claim_text": claim.get("claim_text", ""),
-                "claim_grade": claim.get("claim_grade", "D"),
-                "claim_verdict": claim.get("claim_verdict", "UNVERIFIED"),
-                "materiality": claim.get("materiality", "MEDIUM"),
-                "claim_class": claim.get("claim_class", "OTHER"),
-                "tenant_id": tenant_id,
-            })
+            execute_write(
+                claim_query,
+                {
+                    "claim_id": claim_id,
+                    "claim_text": claim.get("claim_text", ""),
+                    "claim_grade": claim.get("claim_grade", "D"),
+                    "claim_verdict": claim.get("claim_verdict", "UNVERIFIED"),
+                    "materiality": claim.get("materiality", "MEDIUM"),
+                    "claim_class": claim.get("claim_class", "OTHER"),
+                    "tenant_id": tenant_id,
+                },
+            )
 
             for ev in evidence_items:
                 ev_query = f"""\
@@ -201,14 +216,17 @@ WITH ev
 MATCH (c:{NodeLabel.CLAIM} {{claim_id: $claim_id, tenant_id: $tenant_id}})
 MERGE (c)-[:{EdgeType.SUPPORTED_BY}]->(ev)
 """
-                execute_write(ev_query, {
-                    "evidence_id": ev["evidence_id"],
-                    "source_grade": ev.get("source_grade", "D"),
-                    "source_system": ev.get("source_system", ""),
-                    "upstream_origin_id": ev.get("upstream_origin_id", ""),
-                    "claim_id": claim_id,
-                    "tenant_id": tenant_id,
-                })
+                execute_write(
+                    ev_query,
+                    {
+                        "evidence_id": ev["evidence_id"],
+                        "source_grade": ev.get("source_grade", "D"),
+                        "source_system": ev.get("source_system", ""),
+                        "upstream_origin_id": ev.get("upstream_origin_id", ""),
+                        "claim_id": claim_id,
+                        "tenant_id": tenant_id,
+                    },
+                )
 
             for tn in transmission_nodes:
                 tn_query = f"""\
@@ -219,23 +237,29 @@ WITH tn
 MATCH (c:{NodeLabel.CLAIM} {{claim_id: $claim_id, tenant_id: $tenant_id}})
 MERGE (c)-[:{EdgeType.HAS_SANAD_STEP}]->(tn)
 """
-                execute_write(tn_query, {
-                    "node_id": tn["node_id"],
-                    "timestamp": tn.get("timestamp", ""),
-                    "claim_id": claim_id,
-                    "tenant_id": tenant_id,
-                })
+                execute_write(
+                    tn_query,
+                    {
+                        "node_id": tn["node_id"],
+                        "timestamp": tn.get("timestamp", ""),
+                        "claim_id": claim_id,
+                        "tenant_id": tenant_id,
+                    },
+                )
 
                 tn_query_output = f"""\
 MATCH (tn:{NodeLabel.TRANSMISSION_NODE} {{node_id: $node_id, tenant_id: $tenant_id}})
 MATCH (c:{NodeLabel.CLAIM} {{claim_id: $claim_id, tenant_id: $tenant_id}})
 MERGE (tn)-[:{EdgeType.OUTPUT}]->(c)
 """
-                execute_write(tn_query_output, {
-                    "node_id": tn["node_id"],
-                    "claim_id": claim_id,
-                    "tenant_id": tenant_id,
-                })
+                execute_write(
+                    tn_query_output,
+                    {
+                        "node_id": tn["node_id"],
+                        "claim_id": claim_id,
+                        "tenant_id": tenant_id,
+                    },
+                )
 
                 for input_ref in tn.get("input_refs", []):
                     ref_type = input_ref.get("type", "")
@@ -267,11 +291,14 @@ MERGE (tn)-[:{EdgeType.INPUT}]->(calc)
                     else:
                         continue
 
-                    execute_write(input_q, {
-                        "node_id": tn["node_id"],
-                        "ref_id": ref_id,
-                        "tenant_id": tenant_id,
-                    })
+                    execute_write(
+                        input_q,
+                        {
+                            "node_id": tn["node_id"],
+                            "ref_id": ref_id,
+                            "tenant_id": tenant_id,
+                        },
+                    )
 
             for defect in defects or []:
                 defect_query = f"""\
@@ -283,13 +310,16 @@ WITH d
 MATCH (c:{NodeLabel.CLAIM} {{claim_id: $claim_id, tenant_id: $tenant_id}})
 MERGE (c)-[:{EdgeType.HAS_DEFECT}]->(d)
 """
-                execute_write(defect_query, {
-                    "defect_id": defect["defect_id"],
-                    "defect_type": defect.get("defect_type", ""),
-                    "severity": defect.get("severity", "MINOR"),
-                    "claim_id": claim_id,
-                    "tenant_id": tenant_id,
-                })
+                execute_write(
+                    defect_query,
+                    {
+                        "defect_id": defect["defect_id"],
+                        "defect_type": defect.get("defect_type", ""),
+                        "severity": defect.get("severity", "MINOR"),
+                        "claim_id": claim_id,
+                        "tenant_id": tenant_id,
+                    },
+                )
 
             for calc in calculations or []:
                 calc_query = f"""\
@@ -300,12 +330,15 @@ WITH calc
 MATCH (c:{NodeLabel.CLAIM} {{claim_id: $claim_id, tenant_id: $tenant_id}})
 MERGE (calc)-[:{EdgeType.DERIVED_FROM}]->(c)
 """
-                execute_write(calc_query, {
-                    "calc_id": calc["calc_id"],
-                    "calc_type": calc.get("calc_type", ""),
-                    "claim_id": claim_id,
-                    "tenant_id": tenant_id,
-                })
+                execute_write(
+                    calc_query,
+                    {
+                        "calc_id": calc["calc_id"],
+                        "calc_type": calc.get("calc_type", ""),
+                        "claim_id": claim_id,
+                        "tenant_id": tenant_id,
+                    },
+                )
 
             logger.info(
                 "Claim Sanad projection complete: claim=%s evidence=%d tns=%d",
@@ -336,9 +369,7 @@ MERGE (calc)-[:{EdgeType.DERIVED_FROM}]->(c)
         Returns:
             List of chain records ordered by transmission node timestamp ASC.
         """
-        query, params = build_full_chain_query(
-            claim_id=claim_id, tenant_id=tenant_id
-        )
+        query, params = build_full_chain_query(claim_id=claim_id, tenant_id=tenant_id)
         return execute_read(query, params)
 
     def get_deal_claims_with_grades(
@@ -356,9 +387,7 @@ MERGE (calc)-[:{EdgeType.DERIVED_FROM}]->(c)
         Returns:
             List of claim records ordered by materiality DESC, grade ASC.
         """
-        query, params = build_deal_claims_grades_query(
-            deal_id=deal_id, tenant_id=tenant_id
-        )
+        query, params = build_deal_claims_grades_query(deal_id=deal_id, tenant_id=tenant_id)
         return execute_read(query, params)
 
     def get_independence_clusters(
@@ -376,9 +405,7 @@ MERGE (calc)-[:{EdgeType.DERIVED_FROM}]->(c)
         Returns:
             List with corroboration status and cluster details.
         """
-        query, params = build_independence_clusters_query(
-            claim_id=claim_id, tenant_id=tenant_id
-        )
+        query, params = build_independence_clusters_query(claim_id=claim_id, tenant_id=tenant_id)
         return execute_read(query, params)
 
     def get_weakest_link(
@@ -396,9 +423,7 @@ MERGE (calc)-[:{EdgeType.DERIVED_FROM}]->(c)
         Returns:
             Single-record list with weakest node details, or empty.
         """
-        query, params = build_weakest_link_query(
-            claim_id=claim_id, tenant_id=tenant_id
-        )
+        query, params = build_weakest_link_query(claim_id=claim_id, tenant_id=tenant_id)
         return execute_read(query, params)
 
     def get_defect_impact(
@@ -416,9 +441,7 @@ MERGE (calc)-[:{EdgeType.DERIVED_FROM}]->(c)
         Returns:
             List with affected claims and downstream calculations.
         """
-        query, params = build_defect_impact_query(
-            defect_id=defect_id, tenant_id=tenant_id
-        )
+        query, params = build_defect_impact_query(defect_id=defect_id, tenant_id=tenant_id)
         return execute_read(query, params)
 
     def get_entity_cooccurrence(
@@ -436,7 +459,5 @@ MERGE (calc)-[:{EdgeType.DERIVED_FROM}]->(c)
         Returns:
             List of entities appearing in 2+ documents, ordered by doc_count DESC.
         """
-        query, params = build_entity_cooccurrence_query(
-            deal_id=deal_id, tenant_id=tenant_id
-        )
+        query, params = build_entity_cooccurrence_query(deal_id=deal_id, tenant_id=tenant_id)
         return execute_read(query, params)

@@ -248,6 +248,117 @@ class TestConsensus:
         assert result == StopReason.MAX_ROUNDS
 
 
+class TestPositionBasedConsensus:
+    """Tests for position-based consensus (Fix 3 enhancement)."""
+
+    def test_unanimous_position_triggers_consensus(self) -> None:
+        """CONSENSUS triggers when all 3+ agents share the same non-empty position."""
+        positions = {
+            "agent-1": "go",
+            "agent-2": "go",
+            "agent-3": "go",
+        }
+        history = [
+            PositionSnapshot(
+                round_number=1,
+                agent_positions=positions,
+                agent_confidences={"agent-1": 0.30, "agent-2": 0.90, "agent-3": 0.60},
+            ),
+        ]
+        # Spread confidences wide so confidence-based path does NOT trigger
+        outputs = [
+            create_agent_output(round_number=1, confidence=0.30, agent_id="agent-1"),
+            create_agent_output(round_number=1, confidence=0.90, agent_id="agent-2"),
+            create_agent_output(round_number=1, confidence=0.60, agent_id="agent-3"),
+        ]
+        state = create_test_state(
+            round_number=1,
+            agent_outputs=outputs,
+            position_history=history,
+        )
+        result = check_stop_condition(state)
+        assert result == StopReason.CONSENSUS
+
+    def test_empty_positions_not_counted(self) -> None:
+        """Agents with empty position_hash are excluded from position consensus."""
+        positions = {
+            "agent-1": "go",
+            "agent-2": "",
+            "agent-3": "go",
+        }
+        history = [
+            PositionSnapshot(
+                round_number=1,
+                agent_positions=positions,
+                agent_confidences={},
+            ),
+        ]
+        outputs = [
+            create_agent_output(round_number=1, confidence=0.30, agent_id="agent-1"),
+            create_agent_output(round_number=1, confidence=0.90, agent_id="agent-2"),
+        ]
+        state = create_test_state(
+            round_number=1,
+            agent_outputs=outputs,
+            position_history=history,
+        )
+        result = check_stop_condition(state)
+        # Only 2 agents with non-empty positions, need >=3, so no consensus
+        assert result != StopReason.CONSENSUS
+
+    def test_fewer_than_3_agents_no_position_consensus(self) -> None:
+        """Position consensus requires at least 3 agents."""
+        positions = {
+            "agent-1": "go",
+            "agent-2": "go",
+        }
+        history = [
+            PositionSnapshot(
+                round_number=1,
+                agent_positions=positions,
+                agent_confidences={},
+            ),
+        ]
+        outputs = [
+            create_agent_output(round_number=1, confidence=0.30, agent_id="agent-1"),
+            create_agent_output(round_number=1, confidence=0.90, agent_id="agent-2"),
+        ]
+        state = create_test_state(
+            round_number=1,
+            agent_outputs=outputs,
+            position_history=history,
+        )
+        result = check_stop_condition(state)
+        assert result != StopReason.CONSENSUS
+
+    def test_mixed_positions_no_consensus(self) -> None:
+        """Different positions across agents should NOT trigger consensus."""
+        positions = {
+            "agent-1": "go",
+            "agent-2": "no-go",
+            "agent-3": "go",
+        }
+        history = [
+            PositionSnapshot(
+                round_number=1,
+                agent_positions=positions,
+                agent_confidences={},
+            ),
+        ]
+        outputs = [
+            create_agent_output(round_number=1, confidence=0.30, agent_id="agent-1"),
+            create_agent_output(round_number=1, confidence=0.90, agent_id="agent-2"),
+            create_agent_output(round_number=1, confidence=0.60, agent_id="agent-3"),
+        ]
+        state = create_test_state(
+            round_number=1,
+            agent_outputs=outputs,
+            position_history=history,
+        )
+        result = check_stop_condition(state)
+        assert result != StopReason.CONSENSUS
+
+
 class TestStableDissent:
     """Tests for STABLE_DISSENT stop condition (priority 4)."""
 

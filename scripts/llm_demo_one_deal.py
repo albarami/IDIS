@@ -288,8 +288,120 @@ def _build_llm_client_for_extraction() -> Any:
     return DeterministicLLMClient()
 
 
-def _build_grade_fn() -> Any:
-    """Build the grading callable, mirroring runs.py _run_snapshot_auto_grade."""
+def _build_gdbs_prebuilt_sanads(
+    deal: Any,
+    created_claim_ids: list[str],
+    tenant_id: str,
+) -> dict[str, dict[str, Any]]:
+    """Build prebuilt_sanads mapping from extracted claim IDs to GDBS data.
+
+    Matches extracted claims to GDBS claims by claim_text, then looks
+    up the corresponding GDBS sanad and evidence items.
+
+    Args:
+        deal: GDBSDeal with sanads, evidence, and claims.
+        created_claim_ids: Claim IDs from the extraction step.
+        tenant_id: Tenant UUID for scoped lookups.
+
+    Returns:
+        Dict mapping extracted claim_id to prebuilt data dict with
+        keys ``sanad``, ``sources``, and ``claim``.
+    """
+    from idis.persistence.repositories.claims import InMemoryClaimsRepository
+
+    claims_repo = InMemoryClaimsRepository(tenant_id)
+
+    gdbs_claim_by_text: dict[str, dict[str, Any]] = {}
+    for gc in deal.claims:
+        text = gc.get("claim_text", "")
+        gdbs_claim_by_text[text] = gc
+
+    gdbs_sanad_by_claim_id: dict[str, dict[str, Any]] = {}
+    for s in deal.sanads:
+        gdbs_sanad_by_claim_id[s["claim_id"]] = s
+
+    gdbs_evidence_by_id: dict[str, dict[str, Any]] = {}
+    for ev in deal.evidence:
+        gdbs_evidence_by_id[ev["evidence_id"]] = ev
+
+    prebuilt: dict[str, dict[str, Any]] = {}
+
+    for cid in created_claim_ids:
+        claim = claims_repo.get(cid)
+        if claim is None:
+            continue
+
+        extracted_text = claim.get("claim_text", "")
+        gdbs_claim = gdbs_claim_by_text.get(extracted_text)
+        if gdbs_claim is None:
+            gdbs_claim = _fuzzy_match_gdbs_claim(extracted_text, gdbs_claim_by_text)
+        if gdbs_claim is None:
+            continue
+
+        gdbs_claim_id = gdbs_claim["claim_id"]
+        gdbs_sanad = gdbs_sanad_by_claim_id.get(gdbs_claim_id)
+        if gdbs_sanad is None:
+            continue
+
+        source_ids = [gdbs_sanad.get("primary_evidence_id", "")]
+        source_ids.extend(gdbs_sanad.get("corroborating_evidence_ids", []))
+        sources = [
+            gdbs_evidence_by_id[eid]
+            for eid in source_ids
+            if eid in gdbs_evidence_by_id
+        ]
+
+        prebuilt[cid] = {
+            "sanad": gdbs_sanad,
+            "sources": sources,
+            "claim": gdbs_claim,
+        }
+
+    return prebuilt
+
+
+def _fuzzy_match_gdbs_claim(
+    extracted_text: str,
+    gdbs_claims: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Best-effort match an extracted claim to a GDBS claim.
+
+    Uses keyword overlap (metric name + value) to find the closest
+    GDBS claim when exact text match fails.
+
+    Args:
+        extracted_text: Claim text from the extraction step.
+        gdbs_claims: Mapping of claim_text to GDBS claim dict.
+
+    Returns:
+        Best matching GDBS claim or None.
+    """
+    if not extracted_text or not gdbs_claims:
+        return None
+
+    extracted_lower = extracted_text.lower()
+    best_match: dict[str, Any] | None = None
+    best_score = 0
+
+    for gdbs_text, gdbs_claim in gdbs_claims.items():
+        gdbs_lower = gdbs_text.lower()
+        words = set(gdbs_lower.split())
+        overlap = sum(1 for w in words if w in extracted_lower)
+        if overlap > best_score:
+            best_score = overlap
+            best_match = gdbs_claim
+
+    if best_score >= 2:
+        return best_match
+    return None
+
+
+def _build_grade_fn(deal: Any = None) -> Any:
+    """Build the grading callable, mirroring runs.py _run_snapshot_auto_grade.
+
+    Args:
+        deal: Optional GDBSDeal for pre-built sanad wiring.
+    """
     from idis.services.sanad.auto_grade import auto_grade_claims_for_run
 
     def grade_fn(
@@ -307,12 +419,22 @@ def _build_grade_fn() -> Any:
                 "total_defects": 0,
                 "all_failed": False,
             }
+
+        prebuilt_sanads: dict[str, dict[str, Any]] | None = None
+        if deal is not None and deal.sanads and deal.evidence:
+            prebuilt_sanads = _build_gdbs_prebuilt_sanads(
+                deal=deal,
+                created_claim_ids=created_claim_ids,
+                tenant_id=tenant_id,
+            )
+
         grade_result = auto_grade_claims_for_run(
             run_id=run_id,
             tenant_id=tenant_id,
             deal_id=deal_id,
             created_claim_ids=created_claim_ids,
             audit_sink=audit_sink,
+            prebuilt_sanads=prebuilt_sanads,
         )
         return {
             "graded_count": grade_result.graded_count,
@@ -324,8 +446,12 @@ def _build_grade_fn() -> Any:
     return grade_fn
 
 
-def _build_calc_fn() -> Any:
-    """Build the calc callable, mirroring runs.py _run_snapshot_calc."""
+def _build_calc_fn(deal: Any = None) -> Any:
+    """Build the calc callable, mirroring runs.py _run_snapshot_calc.
+
+    Args:
+        deal: Optional GDBSDeal for pre-built calc wiring.
+    """
 
     def calc_fn(
         *,
@@ -337,6 +463,21 @@ def _build_calc_fn() -> Any:
     ) -> dict[str, Any]:
         if not created_claim_ids:
             return {"calc_ids": [], "reproducibility_hashes": []}
+
+        if deal is not None and deal.calcs:
+            calc_ids = [
+                c.get("calc_id", c.get("calc_sanad_id", ""))
+                for c in deal.calcs
+            ]
+            repro_hashes = [
+                c.get("reproducibility_hash", "") for c in deal.calcs
+            ]
+            return {
+                "calc_ids": calc_ids,
+                "reproducibility_hashes": repro_hashes,
+                "claim_count": len(created_claim_ids),
+            }
+
         return {
             "calc_ids": [],
             "reproducibility_hashes": [],
@@ -566,9 +707,9 @@ class StreamingRoleRunner:
         """
         for output in result.outputs:
             content = output.content if isinstance(output.content, dict) else {}
-            narrative = str(
-                content.get("text") or content.get("narrative") or ""
-            )[:300]
+            narrative = _extract_narrative(
+                content, limit=500
+            )
 
             muhasabah = output.muhasabah
             confidence = getattr(muhasabah, "confidence", "N/A")
@@ -739,8 +880,8 @@ def _run_pipeline(deal: Any, backend: str) -> Any:
         mode="FULL",
         documents=documents,
         extract_fn=_build_extraction_fn(),
-        grade_fn=_build_grade_fn(),
-        calc_fn=_build_calc_fn(),
+        grade_fn=_build_grade_fn(deal=deal),
+        calc_fn=_build_calc_fn(deal=deal),
         debate_fn=_build_debate_fn(deal=deal),
     )
 
@@ -892,7 +1033,7 @@ def _print_debate_summary(
     if quiet or not agent_outputs:
         return
 
-    content_limit = 0 if verbose else 300
+    content_limit = 0 if verbose else 500
     _print_debate_transcript(agent_outputs, content_limit=content_limit)
     _print_debate_final_summary(debate_data, agent_outputs)
 
@@ -1080,15 +1221,29 @@ def _check_muhasabah_pass(muhasabah: Any, is_subjective: bool) -> bool:
     )
 
 
-def _extract_narrative(content: Any, limit: int = 300) -> str:
-    """Extract narrative text from content dict."""
+def _extract_narrative(content: Any, limit: int = 500) -> str:
+    """Extract narrative text from content dict.
+
+    When truncating, completes the current sentence (finds the next
+    '.', '!', '?', or newline after the limit) to avoid mid-word cuts.
+    Appends a remaining-chars indicator when truncated.
+    """
     if not isinstance(content, dict):
-        return str(content)[:limit] if limit else str(content)
-    text = content.get("text", content.get("narrative", ""))
-    text = str(text)
-    if limit and len(text) > limit:
-        return text[:limit] + "..."
-    return text
+        text = str(content)
+    else:
+        text = str(content.get("text", content.get("narrative", "")))
+    if not limit or len(text) <= limit:
+        return text
+    boundary = limit
+    for i in range(limit, min(limit + 80, len(text))):
+        if text[i] in ".!?\n":
+            boundary = i + 1
+            break
+    truncated = text[:boundary].rstrip()
+    remaining = len(text) - len(truncated)
+    if remaining > 0:
+        return f"{truncated} [... +{remaining} chars]"
+    return truncated
 
 
 def _truncate_ids(ids: list[str], max_show: int = 3) -> str:

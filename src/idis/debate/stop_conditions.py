@@ -125,17 +125,37 @@ class StopConditionChecker:
     def _check_consensus(self, state: DebateState) -> bool:
         """Check if all agents within consensus threshold (priority 3).
 
-        Consensus is reached when the max - min confidence across all
-        agent outputs in the current round is <= consensus_threshold (0.10).
+        Two consensus paths (either triggers True):
 
-        Returns False if no confidence data is available (conservative).
+        1. **Confidence-spread**: max - min confidence across current
+           round outputs is <= consensus_threshold (0.10).
+        2. **Position-based**: all agents in the latest position_history
+           snapshot hold the same non-empty position, with at least 3
+           agents reporting.  This catches unanimous agreement even when
+           confidence values are spread (e.g. Advocate reports low
+           confidence in evidence quality while agreeing on verdict).
+
+        Returns False if no confidence data AND no position data
+        is available (conservative / fail-closed).
         """
         confidences = self._collect_current_round_confidences(state)
-        if not confidences:
-            return False
+        if confidences:
+            confidence_spread = max(confidences) - min(confidences)
+            if confidence_spread <= self.config.consensus_threshold:
+                return True
 
-        confidence_spread = max(confidences) - min(confidences)
-        return confidence_spread <= self.config.consensus_threshold
+        if state.position_history:
+            current = state.position_history[-1]
+            non_empty = {
+                agent: p
+                for agent, p in current.agent_positions.items()
+                if p
+            }
+            unique_positions = set(non_empty.values())
+            if len(unique_positions) == 1 and len(non_empty) >= 3:
+                return True
+
+        return False
 
     def _check_stable_dissent(self, state: DebateState) -> bool:
         """Check if positions unchanged for N rounds (priority 4).

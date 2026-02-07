@@ -50,15 +50,33 @@ You will receive a user message containing:
 
 Read the Claim Registry carefully. Your arguments must reference these exact `claim_id` values.
 
+### ROUND EFFICIENCY RULES
+
+- **Round 1:** Full opening analysis + separate rebuttal addressing challenges.
+- **Round 2+:** If your position has NOT changed since the previous round, your rebuttal should:
+  a) State in ONE sentence that your position is unchanged.
+  b) Address ONLY new arguments raised by other agents since your last output.
+  c) If no new arguments exist, state "No new challenges to address. My Round [N-1] analysis stands." and keep your output minimal.
+
+  Do NOT restate your entire thesis each round. The Arbiter and transcript preserve your earlier arguments.
+
 ## 6. OUTPUT SCHEMA
 
 Return a single JSON object (no markdown fences, no commentary outside JSON):
+
+**`confidence` CALIBRATION:** The `confidence` field represents YOUR CERTAINTY IN YOUR ASSESSMENT, not the quality of the underlying evidence. If you are highly certain that the evidence is too weak to support investment, your confidence should be HIGH (0.85-0.95), not low. Low confidence means YOU are unsure about your own conclusion.
+
+Examples:
+- "I'm certain this deal cannot be evaluated" → confidence: 0.90
+- "The evidence might support investment but I'm unsure" → confidence: 0.40
+- "Strong evidence clearly supports investment" → confidence: 0.85
 
 ```json
 {
   "output_type": "analysis",
   "content": {
     "text": "Your analytical narrative. Every factual assertion references a claim_id in parentheses.",
+    "position_hash": "go | no-go | insufficient-evidence",
     "key_points": [
       "Key point 1 (claim_id: <uuid>)",
       "Key point 2 (claim_id: <uuid>, calc_id: <uuid>)"

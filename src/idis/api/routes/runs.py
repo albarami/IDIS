@@ -4,8 +4,8 @@ Provides POST /v1/deals/{dealId}/runs and GET /v1/runs/{runId} per OpenAPI spec.
 
 Supports both Postgres persistence (when configured) and in-memory fallback.
 
-SNAPSHOT mode: Runs INGEST_CHECK -> EXTRACT -> GRADE via RunOrchestrator.
-FULL mode: Runs through implemented steps, then BLOCKED at DEBATE.
+SNAPSHOT mode: Runs INGEST_CHECK -> EXTRACT -> GRADE -> CALC via RunOrchestrator.
+FULL mode: Runs INGEST_CHECK -> EXTRACT -> GRADE -> CALC -> DEBATE via RunOrchestrator.
 """
 
 from __future__ import annotations
@@ -290,6 +290,7 @@ async def start_run(
         extract_fn=_run_snapshot_extraction,
         grade_fn=_run_snapshot_auto_grade,
         calc_fn=_run_snapshot_calc,
+        debate_fn=_run_full_debate if request_body.mode == "FULL" else None,
     )
 
     try:
@@ -530,6 +531,56 @@ def _emit_run_completed_audit(
         },
     }
     audit_sink.emit(event)
+
+
+def _run_full_debate(
+    *,
+    run_id: str,
+    tenant_id: str,
+    deal_id: str,
+    created_claim_ids: list[str],
+    calc_ids: list[str],
+) -> dict[str, Any]:
+    """Run DebateOrchestrator for a FULL pipeline run.
+
+    Constructs a DebateState from pipeline context, executes the debate,
+    and converts the returned DebateState to a dict summary for the step ledger.
+
+    Args:
+        run_id: Pipeline run UUID.
+        tenant_id: Tenant context.
+        deal_id: Deal UUID.
+        created_claim_ids: Claim IDs from extraction/grading.
+        calc_ids: Calc IDs from calculation step.
+
+    Returns:
+        Dict with debate_id, stop_reason, round_number, muhasabah_passed,
+        and agent_output_count.
+    """
+    from idis.debate.orchestrator import DebateOrchestrator
+    from idis.models.debate import DebateConfig, DebateState
+
+    state = DebateState(
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        claim_registry_ref=f"claims://{run_id}",
+        sanad_graph_ref=f"sanad://{run_id}",
+        round_number=1,
+    )
+
+    orchestrator = DebateOrchestrator(config=DebateConfig())
+    final_state = orchestrator.run(state)
+
+    gate_failure = orchestrator.get_gate_failure()
+    muhasabah_passed = gate_failure is None
+
+    return {
+        "debate_id": run_id,
+        "stop_reason": (final_state.stop_reason.value if final_state.stop_reason else None),
+        "round_number": final_state.round_number,
+        "muhasabah_passed": muhasabah_passed,
+        "agent_output_count": len(final_state.agent_outputs),
+    }
 
 
 def _run_snapshot_calc(

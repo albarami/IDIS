@@ -78,6 +78,7 @@ class RunContext:
     grade_fn: Callable[..., dict[str, Any]]
     calc_fn: Callable[..., dict[str, Any]] | None = None
     calc_types: list[CalcType] | None = None
+    debate_fn: Callable[..., dict[str, Any]] | None = None
 
 
 class RunOrchestrator:
@@ -111,7 +112,7 @@ class RunOrchestrator:
         """Execute all pipeline steps for the given run context.
 
         For SNAPSHOT: INGEST_CHECK -> EXTRACT -> GRADE -> CALC.
-        For FULL: INGEST_CHECK -> EXTRACT -> GRADE -> CALC -> DEBATE (BLOCKED).
+        For FULL: INGEST_CHECK -> EXTRACT -> GRADE -> CALC -> DEBATE.
 
         Skips steps that are already COMPLETED (idempotent resume).
         Fails closed on audit emission errors.
@@ -202,6 +203,8 @@ class RunOrchestrator:
             return self._execute_grade(ctx, accumulated)
         if step_name == StepName.CALC:
             return self._execute_calc(ctx, accumulated)
+        if step_name == StepName.DEBATE:
+            return self._execute_debate(ctx, accumulated)
         raise ValueError(f"No handler for step: {step_name.value}")
 
     def _execute_ingest_check(self, ctx: RunContext) -> dict[str, Any]:
@@ -288,6 +291,38 @@ class RunOrchestrator:
             deal_id=ctx.deal_id,
             created_claim_ids=created_claim_ids,
             calc_types=ctx.calc_types,
+        )
+
+    def _execute_debate(
+        self,
+        ctx: RunContext,
+        accumulated: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Run debate via injected callable.
+
+        Fail-closed: raises ValueError if debate_fn is not provided.
+
+        Args:
+            ctx: Run context with optional debate_fn.
+            accumulated: Must contain created_claim_ids and calc_ids from prior steps.
+
+        Returns:
+            Debate result dict including stop_reason and muhasabah_passed.
+
+        Raises:
+            ValueError: If ctx.debate_fn is None (fail-closed).
+        """
+        if ctx.debate_fn is None:
+            raise ValueError("debate_fn not provided")
+
+        created_claim_ids = accumulated.get("created_claim_ids", [])
+        calc_ids = accumulated.get("calc_ids", [])
+        return ctx.debate_fn(
+            run_id=ctx.run_id,
+            tenant_id=ctx.tenant_id,
+            deal_id=ctx.deal_id,
+            created_claim_ids=created_claim_ids,
+            calc_ids=calc_ids,
         )
 
     def _start_step(

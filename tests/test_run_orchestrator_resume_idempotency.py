@@ -276,3 +276,87 @@ class TestRetryCalcStepIdempotentNoDuplicateCalcs:
 
         calc_steps = [s for s in result2.steps if s.step_name == StepName.CALC]
         assert len(calc_steps) == 1, "Only one CALC step record should exist"
+
+
+class TestRetryDebateStepIdempotentNoDuplicateDebate:
+    """test_retry_debate_step_idempotent_no_duplicate_debate."""
+
+    def test_retry_debate_step_idempotent_no_duplicate_debate(self) -> None:
+        """Re-running orchestrator skips completed DEBATE; no duplicate debate runs."""
+        debate_call_count = 0
+
+        def stub_extract(
+            *,
+            run_id: str,
+            tenant_id: str,
+            deal_id: str,
+            documents: list[dict[str, Any]],
+        ) -> dict[str, Any]:
+            return {
+                "status": "COMPLETED",
+                "created_claim_ids": ["claim-001"],
+                "chunk_count": 1,
+                "unique_claim_count": 1,
+                "conflict_count": 0,
+            }
+
+        def stub_grade(
+            *,
+            run_id: str,
+            tenant_id: str,
+            deal_id: str,
+            created_claim_ids: list[str],
+            audit_sink: Any,
+        ) -> dict[str, Any]:
+            return {
+                "graded_count": len(created_claim_ids),
+                "failed_count": 0,
+                "total_defects": 0,
+                "all_failed": False,
+            }
+
+        def counting_debate(
+            *,
+            run_id: str,
+            tenant_id: str,
+            deal_id: str,
+            created_claim_ids: list[str],
+            calc_ids: list[str],
+        ) -> dict[str, Any]:
+            nonlocal debate_call_count
+            debate_call_count += 1
+            return {
+                "debate_id": run_id,
+                "stop_reason": "MAX_ROUNDS",
+                "round_number": 5,
+                "muhasabah_passed": True,
+                "agent_output_count": 10,
+            }
+
+        run_id = str(uuid.uuid4())
+        audit_sink = InMemoryAuditSink()
+        repo = InMemoryRunStepsRepository(TENANT_A)
+        orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
+
+        ctx = RunContext(
+            run_id=run_id,
+            tenant_id=TENANT_A,
+            deal_id=str(uuid.uuid4()),
+            mode="FULL",
+            documents=_make_documents(),
+            extract_fn=stub_extract,
+            grade_fn=stub_grade,
+            calc_fn=_stub_calc,
+            debate_fn=counting_debate,
+        )
+
+        result1 = orchestrator.execute(ctx)
+        assert result1.status == "COMPLETED"
+        assert debate_call_count == 1
+
+        result2 = orchestrator.execute(ctx)
+        assert result2.status == "COMPLETED"
+        assert debate_call_count == 1, "DEBATE must not re-run when already COMPLETED"
+
+        debate_steps = [s for s in result2.steps if s.step_name == StepName.DEBATE]
+        assert len(debate_steps) == 1, "Only one DEBATE step record should exist"

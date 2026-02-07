@@ -65,6 +65,7 @@ IMPLEMENTED_STEPS: frozenset[StepName] = frozenset(
         StepName.EXTRACT,
         StepName.GRADE,
         StepName.CALC,
+        StepName.DEBATE,
     }
 )
 """Steps with working implementations. Unimplemented steps trigger BLOCKED."""

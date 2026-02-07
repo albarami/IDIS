@@ -214,11 +214,29 @@ class TestSnapshotStepErrorsPersistedAndReturned:
         assert completed_steps[0].step_name == StepName.INGEST_CHECK
 
 
-class TestFullBlocksOnDebateStepWithReason:
-    """test_full_blocks_on_debate_step_with_reason."""
+def _stub_debate(
+    *,
+    run_id: str,
+    tenant_id: str,
+    deal_id: str,
+    created_claim_ids: list[str],
+    calc_ids: list[str],
+) -> dict[str, Any]:
+    """Deterministic debate stub returning fixed output."""
+    return {
+        "debate_id": run_id,
+        "stop_reason": "MAX_ROUNDS",
+        "round_number": 5,
+        "muhasabah_passed": True,
+        "agent_output_count": 10,
+    }
 
-    def test_full_blocks_on_debate_step_with_reason(self) -> None:
-        """FULL run completes INGEST_CHECK/EXTRACT/GRADE/CALC then BLOCKED at DEBATE."""
+
+class TestFullCompletesAllStepsIncludingDebate:
+    """test_full_completes_all_steps_including_debate."""
+
+    def test_full_completes_all_five_steps(self) -> None:
+        """FULL run completes INGEST_CHECK/EXTRACT/GRADE/CALC/DEBATE."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -232,26 +250,23 @@ class TestFullBlocksOnDebateStepWithReason:
             extract_fn=_stub_extract,
             grade_fn=_stub_grade,
             calc_fn=_stub_calc,
+            debate_fn=_stub_debate,
         )
 
         result = orchestrator.execute(ctx)
 
-        assert result.status == "BLOCKED"
-        assert result.block_reason == "DEBATE_NOT_IMPLEMENTED"
+        assert result.status == "COMPLETED"
+        assert result.block_reason is None
 
         completed = [s for s in result.steps if s.status == StepStatus.COMPLETED]
-        assert len(completed) == 4
+        assert len(completed) == 5
         assert [s.step_name for s in completed] == [
             StepName.INGEST_CHECK,
             StepName.EXTRACT,
             StepName.GRADE,
             StepName.CALC,
+            StepName.DEBATE,
         ]
-
-        blocked = [s for s in result.steps if s.status == StepStatus.BLOCKED]
-        assert len(blocked) == 1
-        assert blocked[0].step_name == StepName.DEBATE
-        assert blocked[0].error_code == "DEBATE_NOT_IMPLEMENTED"
 
 
 class TestCrossTenantRunStepReadReturns404:

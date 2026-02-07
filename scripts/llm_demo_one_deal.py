@@ -68,6 +68,16 @@ def _parse_args() -> argparse.Namespace:
         choices=VALID_BACKENDS,
         help="LLM backend: deterministic or anthropic (default: anthropic).",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Show full agent output content (not truncated).",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Show minimal debate summary only.",
+    )
     return parser.parse_args()
 
 
@@ -127,23 +137,27 @@ def _build_documents_from_deal(deal: Any) -> list[dict[str, Any]]:
     for span in deal.spans:
         artifact_id = span.get("artifact_id")
         if artifact_id and artifact_id in docs_by_id:
-            docs_by_id[artifact_id]["spans"].append({
-                "span_id": span.get("span_id", str(uuid.uuid4())),
-                "text_excerpt": span.get("text_excerpt", ""),
-                "locator": span.get("locator", {}),
-                "span_type": span.get("span_type", "TEXT"),
-            })
+            docs_by_id[artifact_id]["spans"].append(
+                {
+                    "span_id": span.get("span_id", str(uuid.uuid4())),
+                    "text_excerpt": span.get("text_excerpt", ""),
+                    "locator": span.get("locator", {}),
+                    "span_type": span.get("span_type", "TEXT"),
+                }
+            )
         elif artifact_id:
             docs_by_id[artifact_id] = {
                 "document_id": artifact_id,
                 "doc_type": "PPTX",
                 "document_name": artifact_id,
-                "spans": [{
-                    "span_id": span.get("span_id", str(uuid.uuid4())),
-                    "text_excerpt": span.get("text_excerpt", ""),
-                    "locator": span.get("locator", {}),
-                    "span_type": span.get("span_type", "TEXT"),
-                }],
+                "spans": [
+                    {
+                        "span_id": span.get("span_id", str(uuid.uuid4())),
+                        "text_excerpt": span.get("text_excerpt", ""),
+                        "locator": span.get("locator", {}),
+                        "span_type": span.get("span_type", "TEXT"),
+                    }
+                ],
             }
 
     documents = [doc for doc in docs_by_id.values() if doc["spans"]]
@@ -159,12 +173,14 @@ def _build_documents_from_deal(deal: Any) -> list[dict[str, Any]]:
             }
             for s in deal.spans
         ]
-        documents = [{
-            "document_id": fallback_doc_id,
-            "doc_type": "PPTX",
-            "document_name": "gdbs_combined",
-            "spans": span_dicts,
-        }]
+        documents = [
+            {
+                "document_id": fallback_doc_id,
+                "doc_type": "PPTX",
+                "document_name": "gdbs_combined",
+                "spans": span_dicts,
+            }
+        ]
 
     return documents
 
@@ -179,8 +195,7 @@ def _configure_backend(backend: str) -> None:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         if not api_key:
             logger.error(
-                "ANTHROPIC_API_KEY not set. "
-                "Either export it or use --backend deterministic."
+                "ANTHROPIC_API_KEY not set. Either export it or use --backend deterministic."
             )
             sys.exit(1)
         os.environ["IDIS_EXTRACT_BACKEND"] = "anthropic"
@@ -331,9 +346,14 @@ def _build_calc_fn() -> Any:
     return calc_fn
 
 
-def _build_debate_fn() -> Any:
-    """Build the debate callable, mirroring runs.py _run_full_debate."""
-    from idis.debate.orchestrator import DebateOrchestrator, RoleRunners
+def _build_debate_fn(deal: Any = None) -> Any:
+    """Build the debate callable, mirroring runs.py _run_full_debate.
+
+    Args:
+        deal: Optional GDBSDeal for rich context metadata.
+    """
+    from idis.debate.orchestrator import DebateOrchestrator
+    from idis.debate.roles.llm_role_runner import DebateContext
     from idis.models.debate import DebateConfig, DebateState
 
     def debate_fn(
@@ -344,6 +364,34 @@ def _build_debate_fn() -> Any:
         created_claim_ids: list[str],
         calc_ids: list[str],
     ) -> dict[str, Any]:
+        context = DebateContext(
+            deal_name=deal.company_name if deal else deal_id,
+            deal_sector=deal.sector if deal else "Unknown",
+            deal_stage=deal.stage if deal else "Unknown",
+            deal_summary=deal.scenario if deal else "",
+            claims=[
+                {
+                    "claim_id": cid,
+                    "claim_text": "",
+                    "claim_class": "",
+                    "sanad_grade": "",
+                    "source_doc": "",
+                    "confidence": 0.0,
+                }
+                for cid in created_claim_ids
+            ],
+            calc_results=[
+                {
+                    "calc_id": cid,
+                    "calc_name": "",
+                    "result_value": "",
+                    "input_claim_ids": [],
+                }
+                for cid in calc_ids
+            ],
+            conflicts=[],
+        )
+
         state = DebateState(
             tenant_id=tenant_id,
             deal_id=deal_id,
@@ -351,19 +399,15 @@ def _build_debate_fn() -> Any:
             sanad_graph_ref=f"sanad://{run_id}",
             round_number=1,
         )
-        role_runners = _build_debate_role_runners()
-        orchestrator = DebateOrchestrator(
-            config=DebateConfig(), role_runners=role_runners
-        )
+        role_runners = _build_debate_role_runners(context=context)
+        orchestrator = DebateOrchestrator(config=DebateConfig(), role_runners=role_runners)
         final_state = orchestrator.run(state)
         gate_failure = orchestrator.get_gate_failure()
         muhasabah_passed = gate_failure is None
 
         return {
             "debate_id": run_id,
-            "stop_reason": (
-                final_state.stop_reason.value if final_state.stop_reason else None
-            ),
+            "stop_reason": (final_state.stop_reason.value if final_state.stop_reason else None),
             "round_number": final_state.round_number,
             "muhasabah_passed": muhasabah_passed,
             "agent_output_count": len(final_state.agent_outputs),
@@ -373,8 +417,12 @@ def _build_debate_fn() -> Any:
     return debate_fn
 
 
-def _build_debate_role_runners() -> Any:
-    """Build role runners mirroring runs.py _build_debate_role_runners."""
+def _build_debate_role_runners(context: Any = None) -> Any:
+    """Build role runners mirroring runs.py _build_debate_role_runners.
+
+    Args:
+        context: Optional DebateContext with rich pipeline data for LLM agents.
+    """
     from idis.debate.orchestrator import RoleRunners
 
     backend = os.environ.get("IDIS_DEBATE_BACKEND", "deterministic")
@@ -389,9 +437,7 @@ def _build_debate_role_runners() -> Any:
     default_model = os.environ.get(
         "IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT", "claude-sonnet-4-20250514"
     )
-    arbiter_model = os.environ.get(
-        "IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER", "claude-opus-4-20250514"
-    )
+    arbiter_model = os.environ.get("IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER", "claude-opus-4-20250514")
 
     prompts = _load_debate_prompts()
     default_client = AnthropicLLMClient(model=default_model)
@@ -402,26 +448,31 @@ def _build_debate_role_runners() -> Any:
             role=DebateRole.ADVOCATE,
             llm_client=default_client,
             system_prompt=prompts["advocate"],
+            context=context,
         ),
         sanad_breaker=LLMRoleRunner(
             role=DebateRole.SANAD_BREAKER,
             llm_client=default_client,
             system_prompt=prompts["sanad_breaker"],
+            context=context,
         ),
         contradiction_finder=LLMRoleRunner(
             role=DebateRole.CONTRADICTION_FINDER,
             llm_client=default_client,
             system_prompt=prompts["contradiction_finder"],
+            context=context,
         ),
         risk_officer=LLMRoleRunner(
             role=DebateRole.RISK_OFFICER,
             llm_client=default_client,
             system_prompt=prompts["risk_officer"],
+            context=context,
         ),
         arbiter=LLMRoleRunner(
             role=DebateRole.ARBITER,
             llm_client=arbiter_client,
             system_prompt=prompts["arbiter"],
+            context=context,
         ),
     )
 
@@ -489,7 +540,7 @@ def _run_pipeline(deal: Any, backend: str) -> Any:
         extract_fn=_build_extraction_fn(),
         grade_fn=_build_grade_fn(),
         calc_fn=_build_calc_fn(),
-        debate_fn=_build_debate_fn(),
+        debate_fn=_build_debate_fn(deal=deal),
     )
 
     logger.info("Starting pipeline run %s (mode=FULL, backend=%s)", run_id, backend)
@@ -499,12 +550,20 @@ def _run_pipeline(deal: Any, backend: str) -> Any:
     return result
 
 
-def _print_summary(result: Any, deal: Any) -> None:
+def _print_summary(
+    result: Any,
+    deal: Any,
+    *,
+    verbose: bool = False,
+    quiet: bool = False,
+) -> None:
     """Print a human-readable summary of the pipeline result.
 
     Args:
         result: OrchestratorResult.
         deal: GDBSDeal instance.
+        verbose: Show full agent output content.
+        quiet: Show minimal debate summary only.
     """
     print(f"\n{SEPARATOR}")
     print("IDIS PIPELINE DEMO — SINGLE DEAL RESULT")
@@ -531,14 +590,12 @@ def _print_summary(result: Any, deal: Any) -> None:
     print(f"{'─' * 72}")
     for step in result.steps:
         status_val = step.status.value if hasattr(step.status, "value") else step.status
-        name_val = (
-            step.step_name.value if hasattr(step.step_name, "value") else step.step_name
-        )
+        name_val = step.step_name.value if hasattr(step.step_name, "value") else step.step_name
         print(f"    {name_val:<16} {status_val:<12} retries={step.retry_count}")
 
     _print_extraction_summary(result)
     _print_calc_summary(result)
-    _print_debate_summary(result)
+    _print_debate_summary(result, verbose=verbose, quiet=quiet)
 
     print(f"\n{SEPARATOR}")
     print("END OF DEMO")
@@ -558,9 +615,7 @@ def _count_steps_by_status(steps: list[Any], status: str) -> int:
 def _get_step_result(steps: list[Any], step_name: str) -> dict[str, Any]:
     """Get the result_summary dict for a specific step."""
     for step in steps:
-        name_val = (
-            step.step_name.value if hasattr(step.step_name, "value") else step.step_name
-        )
+        name_val = step.step_name.value if hasattr(step.step_name, "value") else step.step_name
         if name_val == step_name:
             return step.result_summary
     return {}
@@ -603,35 +658,245 @@ def _print_calc_summary(result: Any) -> None:
     print(f"    Claim Count:     {calc_data.get('claim_count', 0)}")
 
 
-def _print_debate_summary(result: Any) -> None:
-    """Print debate step details."""
+def _print_debate_summary(
+    result: Any,
+    *,
+    verbose: bool = False,
+    quiet: bool = False,
+) -> None:
+    """Print debate step details with full transcript.
+
+    Args:
+        result: OrchestratorResult.
+        verbose: Show full content (not truncated).
+        quiet: Show minimal summary only.
+    """
     debate_data = _get_step_result(result.steps, "DEBATE")
     if not debate_data:
         return
 
+    stop_reason = debate_data.get("stop_reason", "N/A")
+    round_count = debate_data.get("round_number", 0)
+    muhasabah_passed = debate_data.get("muhasabah_passed", False)
+    agent_outputs = debate_data.get("agent_outputs", [])
+
     print(f"\n{'─' * 72}")
     print("  DEBATE")
     print(f"{'─' * 72}")
-    print(f"    Stop Reason:     {debate_data.get('stop_reason', 'N/A')}")
-    print(f"    Round Count:     {debate_data.get('round_number', 0)}")
-    print(f"    Muhasabah:       {'PASSED' if debate_data.get('muhasabah_passed') else 'FAILED'}")
-    print(f"    Agent Outputs:   {debate_data.get('agent_output_count', 0)}")
+    print(f"    Stop Reason:     {stop_reason}")
+    print(f"    Round Count:     {round_count}")
+    print(f"    Muhasabah:       {'PASSED' if muhasabah_passed else 'FAILED'}")
+    print(f"    Agent Outputs:   {len(agent_outputs)}")
 
-    agent_outputs = debate_data.get("agent_outputs", [])
-    if agent_outputs:
-        sample = agent_outputs[:2]
-        print(f"    Sample Agent Outputs ({min(2, len(agent_outputs))} of {len(agent_outputs)}):")
-        for output in sample:
-            if isinstance(output, dict):
-                role_val = output.get("role", "unknown")
-                content = output.get("content", {})
-            else:
-                role_val = output.role.value if hasattr(output.role, "value") else output.role
-                content = output.content if hasattr(output, "content") else {}
-            narrative = ""
-            if isinstance(content, dict):
-                narrative = str(content.get("narrative", ""))[:120]
-            print(f"      [{role_val}] {narrative or '(no narrative)'}")
+    if quiet or not agent_outputs:
+        return
+
+    content_limit = 0 if verbose else 300
+    _print_debate_transcript(agent_outputs, content_limit=content_limit)
+    _print_debate_final_summary(debate_data, agent_outputs)
+
+
+def _print_debate_transcript(
+    agent_outputs: list[Any],
+    *,
+    content_limit: int = 300,
+) -> None:
+    """Print round-by-round agent outputs.
+
+    Args:
+        agent_outputs: List of AgentOutput objects or dicts.
+        content_limit: Max chars for content display. 0 = unlimited.
+    """
+    grouped: dict[int, list[Any]] = {}
+    for output in agent_outputs:
+        rn = _output_field(output, "round_number", 0)
+        grouped.setdefault(rn, []).append(output)
+
+    for round_num in sorted(grouped):
+        print(f"\n    {'═' * 60}")
+        print(f"    ROUND {round_num}")
+        print(f"    {'═' * 60}")
+
+        for output in grouped[round_num]:
+            _print_agent_output(output, content_limit=content_limit)
+
+
+def _print_agent_output(output: Any, *, content_limit: int = 300) -> None:
+    """Print a single agent output with Muhasabah details.
+
+    Args:
+        output: AgentOutput object or dict.
+        content_limit: Max chars for content. 0 = unlimited.
+    """
+    role_val = _output_field(output, "role", "unknown")
+    if hasattr(role_val, "value"):
+        role_val = role_val.value
+    output_type = _output_field(output, "output_type", "")
+    content = _output_field(output, "content", {})
+
+    muhasabah = _output_field(output, "muhasabah", None)
+    confidence = _muhasabah_field(muhasabah, "confidence", "N/A")
+    claim_refs = _muhasabah_field(muhasabah, "supported_claim_ids", [])
+    calc_refs = _muhasabah_field(muhasabah, "supported_calc_ids", [])
+    uncertainties = _muhasabah_field(muhasabah, "uncertainties", [])
+    falsifiability = _muhasabah_field(muhasabah, "falsifiability_tests", [])
+    failure_modes = _muhasabah_field(muhasabah, "failure_modes", [])
+    is_subjective = _muhasabah_field(muhasabah, "is_subjective", False)
+
+    muhasabah_ok = _check_muhasabah_pass(muhasabah, is_subjective)
+
+    print(f"\n      [{role_val.upper()}] type={output_type}")
+
+    narrative = _extract_narrative(content, content_limit)
+    if narrative:
+        print(f"        Content: {narrative}")
+
+    print(f"        Muhasabah:  {'PASS' if muhasabah_ok else 'FAIL'}")
+    print(f"        Confidence: {confidence}")
+    print(f"        Claims:     {len(claim_refs)} refs {_truncate_ids(claim_refs)}")
+
+    if calc_refs:
+        print(f"        Calcs:      {len(calc_refs)} refs {_truncate_ids(calc_refs)}")
+    if uncertainties:
+        print(f"        Uncertainties: {len(uncertainties)}")
+        for u in uncertainties[:3]:
+            desc = u.get("uncertainty", u.get("description", "")) if isinstance(u, dict) else str(u)
+            print(f"          - {str(desc)[:80]}")
+    if falsifiability:
+        print(f"        Falsifiability: {len(falsifiability)} tests")
+    if failure_modes:
+        print(f"        Failure Modes: {', '.join(str(f) for f in failure_modes[:5])}")
+
+    _print_role_specific(role_val, content)
+
+
+def _print_role_specific(role: str, content: Any) -> None:
+    """Print role-specific content details.
+
+    Args:
+        role: Role name string.
+        content: Content dict.
+    """
+    if not isinstance(content, dict):
+        return
+
+    role_lower = str(role).lower()
+    if "sanad" in role_lower:
+        challenged = content.get("challenged_claim_ids", [])
+        if challenged:
+            print(f"        Challenged Claims: {len(challenged)}")
+        defects = content.get("defects_found", content.get("defects", []))
+        if defects:
+            print(f"        Defects Found: {len(defects)}")
+        cures = content.get("cure_protocols", [])
+        if cures:
+            print(f"        Cure Protocols: {len(cures)}")
+
+    elif "arbiter" in role_lower:
+        rulings = content.get("rulings", content.get("challenges_validated", []))
+        if rulings:
+            print(f"        Rulings: {len(rulings)}")
+        utility = content.get("utility_adjustments", {})
+        if utility:
+            print(f"        Utility Updates: {utility}")
+        dissent = content.get("dissent_preserved", [])
+        if dissent:
+            print(f"        Dissent Preserved: {len(dissent)}")
+        stop = content.get("stop_condition", "")
+        if stop:
+            print(f"        Stop Condition: {stop}")
+
+    elif "contradiction" in role_lower:
+        contradictions = content.get("contradictions_found", [])
+        if contradictions:
+            print(f"        Contradictions: {len(contradictions)}")
+
+    elif "risk" in role_lower:
+        risks = content.get("risks_identified", [])
+        if risks:
+            print(f"        Risks: {len(risks)}")
+        fraud = content.get("fraud_indicators", [])
+        if fraud:
+            print(f"        Fraud Indicators: {len(fraud)}")
+
+
+def _print_debate_final_summary(
+    debate_data: dict[str, Any],
+    agent_outputs: list[Any],
+) -> None:
+    """Print final debate summary with aggregate stats.
+
+    Args:
+        debate_data: Debate step result dict.
+        agent_outputs: List of agent outputs.
+    """
+    print(f"\n    {'─' * 60}")
+    print("    DEBATE SUMMARY")
+    print(f"    {'─' * 60}")
+    print(f"      Rounds Completed: {debate_data.get('round_number', 0)}")
+    print(f"      Stop Reason:      {debate_data.get('stop_reason', 'N/A')}")
+    print(
+        f"      Muhasabah:        {'PASSED' if debate_data.get('muhasabah_passed') else 'FAILED'}"
+    )
+
+    role_counts: dict[str, int] = {}
+    for output in agent_outputs:
+        rv = _output_field(output, "role", "unknown")
+        if hasattr(rv, "value"):
+            rv = rv.value
+        role_counts[rv] = role_counts.get(rv, 0) + 1
+    if role_counts:
+        print(f"      Outputs by Role:  {role_counts}")
+
+
+def _output_field(output: Any, field: str, default: Any = None) -> Any:
+    """Extract a field from an AgentOutput (object or dict)."""
+    if isinstance(output, dict):
+        return output.get(field, default)
+    return getattr(output, field, default)
+
+
+def _muhasabah_field(muhasabah: Any, field: str, default: Any = None) -> Any:
+    """Extract a field from a MuhasabahRecord (object or dict)."""
+    if muhasabah is None:
+        return default
+    if isinstance(muhasabah, dict):
+        return muhasabah.get(field, default)
+    return getattr(muhasabah, field, default)
+
+
+def _check_muhasabah_pass(muhasabah: Any, is_subjective: bool) -> bool:
+    """Quick heuristic check if muhasabah would pass validation."""
+    if muhasabah is None:
+        return False
+    claim_refs = _muhasabah_field(muhasabah, "supported_claim_ids", [])
+    confidence = _muhasabah_field(muhasabah, "confidence", 0.0)
+    uncertainties = _muhasabah_field(muhasabah, "uncertainties", [])
+    if not is_subjective and not claim_refs:
+        return False
+    return not (
+        isinstance(confidence, (int, float)) and confidence > 0.80 and not uncertainties
+    )
+
+
+def _extract_narrative(content: Any, limit: int = 300) -> str:
+    """Extract narrative text from content dict."""
+    if not isinstance(content, dict):
+        return str(content)[:limit] if limit else str(content)
+    text = content.get("text", content.get("narrative", ""))
+    text = str(text)
+    if limit and len(text) > limit:
+        return text[:limit] + "..."
+    return text
+
+
+def _truncate_ids(ids: list[str], max_show: int = 3) -> str:
+    """Format a list of IDs for compact display."""
+    if not ids:
+        return "[]"
+    shown = [s[:12] + "..." if len(s) > 16 else s for s in ids[:max_show]]
+    suffix = f" +{len(ids) - max_show} more" if len(ids) > max_show else ""
+    return "[" + ", ".join(shown) + suffix + "]"
 
 
 def main() -> None:
@@ -641,7 +906,7 @@ def main() -> None:
     _configure_backend(args.backend)
 
     print(f"\n{SEPARATOR}")
-    print(f"  IDIS Single-Deal LLM Demo")
+    print("  IDIS Single-Deal LLM Demo")
     print(f"  Backend: {args.backend}")
     print(f"  Deal Key: {args.deal_key or '(first in manifest)'}")
     print(SEPARATOR)
@@ -656,7 +921,7 @@ def main() -> None:
     )
 
     result = _run_pipeline(deal, args.backend)
-    _print_summary(result, deal)
+    _print_summary(result, deal, verbose=args.verbose, quiet=args.quiet)
 
 
 if __name__ == "__main__":

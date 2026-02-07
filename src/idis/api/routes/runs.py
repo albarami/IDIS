@@ -558,7 +558,36 @@ def _run_full_debate(
         and agent_output_count.
     """
     from idis.debate.orchestrator import DebateOrchestrator
+    from idis.debate.roles.llm_role_runner import DebateContext
     from idis.models.debate import DebateConfig, DebateState
+
+    context = DebateContext(
+        deal_name=deal_id,
+        deal_sector="Unknown",
+        deal_stage="Unknown",
+        deal_summary="",
+        claims=[
+            {
+                "claim_id": cid,
+                "claim_text": "",
+                "claim_class": "",
+                "sanad_grade": "",
+                "source_doc": "",
+                "confidence": 0.0,
+            }
+            for cid in created_claim_ids
+        ],
+        calc_results=[
+            {
+                "calc_id": cid,
+                "calc_name": "",
+                "result_value": "",
+                "input_claim_ids": [],
+            }
+            for cid in calc_ids
+        ],
+        conflicts=[],
+    )
 
     state = DebateState(
         tenant_id=tenant_id,
@@ -568,7 +597,7 @@ def _run_full_debate(
         round_number=1,
     )
 
-    role_runners = _build_debate_role_runners()
+    role_runners = _build_debate_role_runners(context=context)
     orchestrator = DebateOrchestrator(config=DebateConfig(), role_runners=role_runners)
     final_state = orchestrator.run(state)
 
@@ -812,11 +841,14 @@ def _build_extraction_llm_client() -> Any:
     return DeterministicLLMClient()
 
 
-def _build_debate_role_runners() -> Any:
+def _build_debate_role_runners(context: Any = None) -> Any:
     """Build role runners for debate based on env configuration.
 
     Reads IDIS_DEBATE_BACKEND (default: deterministic).
     Fail-closed: raises ValueError if anthropic backend selected but key missing.
+
+    Args:
+        context: Optional DebateContext with rich pipeline data for LLM agents.
 
     Returns:
         RoleRunners instance (deterministic or LLM-backed).
@@ -852,26 +884,31 @@ def _build_debate_role_runners() -> Any:
             role=DebateRole.ADVOCATE,
             llm_client=default_client,
             system_prompt=prompts["advocate"],
+            context=context,
         ),
         sanad_breaker=LLMRoleRunner(
             role=DebateRole.SANAD_BREAKER,
             llm_client=default_client,
             system_prompt=prompts["sanad_breaker"],
+            context=context,
         ),
         contradiction_finder=LLMRoleRunner(
             role=DebateRole.CONTRADICTION_FINDER,
             llm_client=default_client,
             system_prompt=prompts["contradiction_finder"],
+            context=context,
         ),
         risk_officer=LLMRoleRunner(
             role=DebateRole.RISK_OFFICER,
             llm_client=default_client,
             system_prompt=prompts["risk_officer"],
+            context=context,
         ),
         arbiter=LLMRoleRunner(
             role=DebateRole.ARBITER,
             llm_client=arbiter_client,
             system_prompt=prompts["arbiter"],
+            context=context,
         ),
     )
 

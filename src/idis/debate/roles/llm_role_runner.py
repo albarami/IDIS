@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid5
@@ -32,6 +33,27 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _IDIS_NAMESPACE = UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+
+MAX_CLAIM_TEXT_LENGTH = 200
+
+_GRADE_SORT_ORDER: dict[str, int] = {"D": 0, "C": 1, "B": 2, "A": 3, "": 4}
+
+
+@dataclass
+class DebateContext:
+    """Rich context injected into LLM debate prompts.
+
+    Assembled by the pipeline from extraction + grading + calc results.
+    Gives debate agents actual evidence to reason over.
+    """
+
+    deal_name: str
+    deal_sector: str
+    deal_stage: str
+    deal_summary: str
+    claims: list[dict]
+    calc_results: list[dict]
+    conflicts: list[dict]
 
 
 def _deterministic_id(prefix: str, *, seed: str) -> str:
@@ -92,6 +114,7 @@ class LLMRoleRunner(RoleRunner):
         llm_client: LLMClient,
         system_prompt: str,
         agent_id: str | None = None,
+        context: DebateContext | None = None,
     ) -> None:
         """Initialize the LLM role runner.
 
@@ -100,11 +123,13 @@ class LLMRoleRunner(RoleRunner):
             llm_client: Provider-agnostic LLM client.
             system_prompt: Role-specific system prompt text.
             agent_id: Optional agent identifier override.
+            context: Optional rich debate context from pipeline results.
         """
         resolved_agent_id = agent_id or f"{role.value}-llm"
         super().__init__(role=role, agent_id=resolved_agent_id)
         self._llm_client = llm_client
         self._system_prompt = system_prompt
+        self._context = context
 
     def run(self, state: DebateState) -> RoleResult:
         """Execute the role by calling the LLM and validating output.
@@ -180,7 +205,9 @@ class LLMRoleRunner(RoleRunner):
             timestamp=timestamp,
         )
 
-        narrative = content.get("narrative", "") if isinstance(content, dict) else ""
+        narrative = ""
+        if isinstance(content, dict):
+            narrative = str(content.get("text") or content.get("narrative") or "")
         message = DebateMessage(
             message_id=message_id,
             role=self.role,
@@ -199,32 +226,119 @@ class LLMRoleRunner(RoleRunner):
         )
 
     def _build_user_prompt(self, state: DebateState) -> str:
-        """Build the user prompt from debate state.
+        """Build the user prompt from debate state and optional context.
 
         Args:
             state: Current debate state.
 
         Returns:
-            Formatted user prompt string.
+            Formatted user prompt string with deal context and debate state.
         """
-        prior_messages = []
+        parts: list[str] = []
+
+        if self._context is not None:
+            parts.append(self._serialize_context())
+
+        parts.append(self._serialize_debate_state(state))
+
+        return "\n\n".join(parts)
+
+    def _serialize_context(self) -> str:
+        """Serialize DebateContext into a readable text block for the LLM.
+
+        Returns:
+            Markdown-formatted context string with deal overview,
+            claim registry table, conflicts, and calc results.
+        """
+        ctx = self._context
+        if ctx is None:
+            return ""
+
+        lines: list[str] = [
+            "## DEAL OVERVIEW",
+            f"Company: {ctx.deal_name}",
+            f"Sector: {ctx.deal_sector}",
+            f"Stage: {ctx.deal_stage}",
+        ]
+        if ctx.deal_summary:
+            lines.append(f"Summary: {ctx.deal_summary}")
+
+        lines.append("")
+        lines.append(f"## CLAIM REGISTRY ({len(ctx.claims)} claims extracted)")
+        if ctx.claims:
+            lines.append("| claim_id | claim_text | class | sanad_grade | source | confidence |")
+            lines.append("|----------|-----------|-------|-------------|--------|------------|")
+            sorted_claims = sorted(
+                ctx.claims,
+                key=lambda c: _GRADE_SORT_ORDER.get(str(c.get("sanad_grade", "")), 4),
+            )
+            for claim in sorted_claims:
+                cid = claim.get("claim_id", "")
+                text = str(claim.get("claim_text", ""))[:MAX_CLAIM_TEXT_LENGTH]
+                cls = claim.get("claim_class", "")
+                grade = claim.get("sanad_grade", "")
+                source = claim.get("source_doc", "")
+                conf = claim.get("confidence", 0.0)
+                lines.append(f"| {cid} | {text} | {cls} | {grade} | {source} | {conf} |")
+
+        lines.append("")
+        lines.append(f"## CONFLICTS DETECTED ({len(ctx.conflicts)})")
+        for conflict in ctx.conflicts:
+            a = conflict.get("claim_id_a", "")
+            b = conflict.get("claim_id_b", "")
+            desc = conflict.get("description", "")
+            lines.append(f"- {a} vs {b}: {desc}")
+
+        lines.append("")
+        lines.append(f"## CALC RESULTS ({len(ctx.calc_results)})")
+        if ctx.calc_results:
+            for calc in ctx.calc_results:
+                cid = calc.get("calc_id", "")
+                name = calc.get("calc_name", "")
+                val = calc.get("result_value", "")
+                lines.append(f"- {cid}: {name} = {val}")
+        else:
+            lines.append("(no deterministic calculations produced for this run)")
+
+        return "\n".join(lines)
+
+    def _serialize_debate_state(self, state: DebateState) -> str:
+        """Serialize DebateState into a readable text block for the LLM.
+
+        Args:
+            state: Current debate state.
+
+        Returns:
+            Markdown-formatted debate state string.
+        """
+        prior_messages: list[str] = []
         for msg in state.messages[-10:]:
             prior_messages.append(f"[{msg.role.value}] {msg.content}")
 
-        return json.dumps(
-            {
-                "round_number": state.round_number,
-                "tenant_id": state.tenant_id,
-                "deal_id": state.deal_id,
-                "claim_registry_ref": state.claim_registry_ref,
-                "sanad_graph_ref": state.sanad_graph_ref,
-                "prior_messages_count": len(state.messages),
-                "recent_messages": prior_messages,
-                "agent_outputs_count": len(state.agent_outputs),
-                "open_questions": state.open_questions[:5],
-            },
-            indent=2,
-        )
+        lines: list[str] = [
+            "## DEBATE STATE",
+            f"Round: {state.round_number}",
+            f"Deal ID: {state.deal_id}",
+            f"Claim Registry Ref: {state.claim_registry_ref}",
+            f"Sanad Graph Ref: {state.sanad_graph_ref}",
+            f"Agent Outputs So Far: {len(state.agent_outputs)}",
+        ]
+
+        if prior_messages:
+            lines.append(
+                f"\nRecent Messages (last {len(prior_messages)} of {len(state.messages)} total):"
+            )
+            for msg_line in prior_messages:
+                lines.append(f"  {msg_line}")
+        else:
+            lines.append("\nPrior Messages: (none \u2014 this is the opening round)")
+
+        if state.open_questions[:5]:
+            lines.append(f"\nOpen Questions ({len(state.open_questions)}):")
+            for q in state.open_questions[:5]:
+                lines.append(f"  - {q}")
+
+        return "\n".join(lines)
 
     def _parse_response(self, raw: str) -> dict[str, Any]:
         """Parse LLM response as JSON, fail-closed on invalid.

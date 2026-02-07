@@ -148,10 +148,7 @@ class TestRetrieveClaimsForDebate:
         """All claims in a batch are looked up and populated."""
         from idis.api.routes.runs import _retrieve_claims_for_debate
 
-        ids = [
-            _seed_claim(claim_id=str(uuid.uuid4()), claim_text=f"Claim {i}")
-            for i in range(5)
-        ]
+        ids = [_seed_claim(claim_id=str(uuid.uuid4()), claim_text=f"Claim {i}") for i in range(5)]
         result = _retrieve_claims_for_debate(TENANT_ID, ids)
 
         assert len(result) == 5

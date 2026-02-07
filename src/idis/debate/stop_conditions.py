@@ -146,11 +146,7 @@ class StopConditionChecker:
 
         if state.position_history:
             current = state.position_history[-1]
-            non_empty = {
-                agent: p
-                for agent, p in current.agent_positions.items()
-                if p
-            }
+            non_empty = {agent: p for agent, p in current.agent_positions.items() if p}
             unique_positions = set(non_empty.values())
             if len(unique_positions) == 1 and len(non_empty) >= 3:
                 return True

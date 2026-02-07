@@ -181,9 +181,7 @@ def auto_grade_claims_for_run(
 
         if claim_result.status == "graded":
             result.graded_count += 1
-            _update_claim_grade(
-                claims_repo, claim_id, claim_result.grade, claim_result.sanad_id
-            )
+            _update_claim_grade(claims_repo, claim_id, claim_result.grade, claim_result.sanad_id)
         else:
             result.failed_count += 1
         result.total_defects += len(claim_result.defect_ids)
@@ -366,9 +364,7 @@ def _grade_single_claim_prebuilt(
     claim_dict = prebuilt.get("claim")
 
     if not sanad_data:
-        logger.error(
-            "Prebuilt sanad data missing for claim %s — grade_failed", claim_id
-        )
+        logger.error("Prebuilt sanad data missing for claim %s — grade_failed", claim_id)
         return ClaimGradeResult(
             claim_id=claim_id,
             status="grade_failed",
@@ -384,9 +380,7 @@ def _grade_single_claim_prebuilt(
         "primary_evidence_id": primary_evidence_id,
         "extraction_confidence": sanad_data.get("extraction_confidence"),
         "dhabt_score": sanad_data.get("dhabt_score"),
-        "corroborating_evidence_ids": sanad_data.get(
-            "corroborating_evidence_ids", []
-        ),
+        "corroborating_evidence_ids": sanad_data.get("corroborating_evidence_ids", []),
     }
 
     grade_result = grade_sanad_v2(

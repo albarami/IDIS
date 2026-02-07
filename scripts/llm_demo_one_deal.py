@@ -345,11 +345,7 @@ def _build_gdbs_prebuilt_sanads(
 
         source_ids = [gdbs_sanad.get("primary_evidence_id", "")]
         source_ids.extend(gdbs_sanad.get("corroborating_evidence_ids", []))
-        sources = [
-            gdbs_evidence_by_id[eid]
-            for eid in source_ids
-            if eid in gdbs_evidence_by_id
-        ]
+        sources = [gdbs_evidence_by_id[eid] for eid in source_ids if eid in gdbs_evidence_by_id]
 
         prebuilt[cid] = {
             "sanad": gdbs_sanad,
@@ -465,13 +461,8 @@ def _build_calc_fn(deal: Any = None) -> Any:
             return {"calc_ids": [], "reproducibility_hashes": []}
 
         if deal is not None and deal.calcs:
-            calc_ids = [
-                c.get("calc_id", c.get("calc_sanad_id", ""))
-                for c in deal.calcs
-            ]
-            repro_hashes = [
-                c.get("reproducibility_hash", "") for c in deal.calcs
-            ]
+            calc_ids = [c.get("calc_id", c.get("calc_sanad_id", "")) for c in deal.calcs]
+            repro_hashes = [c.get("reproducibility_hash", "") for c in deal.calcs]
             return {
                 "calc_ids": calc_ids,
                 "reproducibility_hashes": repro_hashes,
@@ -519,14 +510,16 @@ def _retrieve_claims_for_debate(
         claim = claims_repo.get(cid)
         if claim is None:
             logger.warning("Claim %s not found in store for debate context", cid)
-            debate_claims.append({
-                "claim_id": cid,
-                "claim_text": "",
-                "claim_class": "",
-                "sanad_grade": "",
-                "source_doc": "",
-                "confidence": 0.0,
-            })
+            debate_claims.append(
+                {
+                    "claim_id": cid,
+                    "claim_text": "",
+                    "claim_class": "",
+                    "sanad_grade": "",
+                    "source_doc": "",
+                    "confidence": 0.0,
+                }
+            )
             continue
 
         sanad = sanads_repo.get_by_claim(cid)
@@ -538,14 +531,16 @@ def _retrieve_claims_for_debate(
                 sanad.get("extraction_confidence", 0.0),
             )
 
-        debate_claims.append({
-            "claim_id": cid,
-            "claim_text": claim.get("claim_text", ""),
-            "claim_class": claim.get("claim_class", ""),
-            "sanad_grade": claim.get("claim_grade", ""),
-            "source_doc": claim.get("primary_span_id", "") or "",
-            "confidence": float(confidence),
-        })
+        debate_claims.append(
+            {
+                "claim_id": cid,
+                "claim_text": claim.get("claim_text", ""),
+                "claim_class": claim.get("claim_class", ""),
+                "sanad_grade": claim.get("claim_grade", ""),
+                "source_doc": claim.get("primary_span_id", "") or "",
+                "confidence": float(confidence),
+            }
+        )
 
     return debate_claims
 
@@ -685,9 +680,7 @@ class StreamingRoleRunner:
 
         if current_round != self._last_round:
             print(
-                f"\n{'=' * 64}\n"
-                f"  ROUND {current_round} of {self._max_rounds}\n"
-                f"{'=' * 64}",
+                f"\n{'=' * 64}\n  ROUND {current_round} of {self._max_rounds}\n{'=' * 64}",
                 flush=True,
             )
             self._last_round = current_round
@@ -708,9 +701,7 @@ class StreamingRoleRunner:
         """
         for output in result.outputs:
             content = output.content if isinstance(output.content, dict) else {}
-            narrative = _extract_narrative(
-                content, limit=500
-            )
+            narrative = _extract_narrative(content, limit=500)
 
             muhasabah = output.muhasabah
             confidence = getattr(muhasabah, "confidence", "N/A")
@@ -787,36 +778,46 @@ def _build_debate_role_runners(
         return runner
 
     return RoleRunners(
-        advocate=_wrap(LLMRoleRunner(
-            role=DebateRole.ADVOCATE,
-            llm_client=default_client,
-            system_prompt=prompts["advocate"],
-            context=context,
-        )),
-        sanad_breaker=_wrap(LLMRoleRunner(
-            role=DebateRole.SANAD_BREAKER,
-            llm_client=default_client,
-            system_prompt=prompts["sanad_breaker"],
-            context=context,
-        )),
-        contradiction_finder=_wrap(LLMRoleRunner(
-            role=DebateRole.CONTRADICTION_FINDER,
-            llm_client=default_client,
-            system_prompt=prompts["contradiction_finder"],
-            context=context,
-        )),
-        risk_officer=_wrap(LLMRoleRunner(
-            role=DebateRole.RISK_OFFICER,
-            llm_client=default_client,
-            system_prompt=prompts["risk_officer"],
-            context=context,
-        )),
-        arbiter=_wrap(LLMRoleRunner(
-            role=DebateRole.ARBITER,
-            llm_client=arbiter_client,
-            system_prompt=prompts["arbiter"],
-            context=context,
-        )),
+        advocate=_wrap(
+            LLMRoleRunner(
+                role=DebateRole.ADVOCATE,
+                llm_client=default_client,
+                system_prompt=prompts["advocate"],
+                context=context,
+            )
+        ),
+        sanad_breaker=_wrap(
+            LLMRoleRunner(
+                role=DebateRole.SANAD_BREAKER,
+                llm_client=default_client,
+                system_prompt=prompts["sanad_breaker"],
+                context=context,
+            )
+        ),
+        contradiction_finder=_wrap(
+            LLMRoleRunner(
+                role=DebateRole.CONTRADICTION_FINDER,
+                llm_client=default_client,
+                system_prompt=prompts["contradiction_finder"],
+                context=context,
+            )
+        ),
+        risk_officer=_wrap(
+            LLMRoleRunner(
+                role=DebateRole.RISK_OFFICER,
+                llm_client=default_client,
+                system_prompt=prompts["risk_officer"],
+                context=context,
+            )
+        ),
+        arbiter=_wrap(
+            LLMRoleRunner(
+                role=DebateRole.ARBITER,
+                llm_client=arbiter_client,
+                system_prompt=prompts["arbiter"],
+                context=context,
+            )
+        ),
     )
 
 
@@ -1217,9 +1218,7 @@ def _check_muhasabah_pass(muhasabah: Any, is_subjective: bool) -> bool:
     uncertainties = _muhasabah_field(muhasabah, "uncertainties", [])
     if not is_subjective and not claim_refs:
         return False
-    return not (
-        isinstance(confidence, (int, float)) and confidence > 0.80 and not uncertainties
-    )
+    return not (isinstance(confidence, (int, float)) and confidence > 0.80 and not uncertainties)
 
 
 def _extract_narrative(content: Any, limit: int = 500) -> str:

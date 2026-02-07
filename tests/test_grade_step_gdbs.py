@@ -100,14 +100,16 @@ class TestPrebuiltSanadGrading:
         """Prebuilt sanad with grade B should produce grade B, not D."""
         sink, ev_repo, sanad_svc, defect_svc = _setup()
         claim_id = CLAIM_ID_B
-        seed_claim_in_memory({
-            "claim_id": claim_id,
-            "tenant_id": TENANT_ID,
-            "deal_id": DEAL_ID,
-            "claim_class": "FINANCIAL",
-            "claim_text": "ARR is $4,500,000",
-            "claim_grade": "D",
-        })
+        seed_claim_in_memory(
+            {
+                "claim_id": claim_id,
+                "tenant_id": TENANT_ID,
+                "deal_id": DEAL_ID,
+                "claim_class": "FINANCIAL",
+                "claim_text": "ARR is $4,500,000",
+                "claim_grade": "D",
+            }
+        )
 
         prebuilt_sanads = {
             claim_id: {
@@ -143,14 +145,16 @@ class TestPrebuiltSanadGrading:
         """Prebuilt sanad with grade C (no corroboration) should produce C."""
         sink, ev_repo, sanad_svc, defect_svc = _setup()
         claim_id = CLAIM_ID_C
-        seed_claim_in_memory({
-            "claim_id": claim_id,
-            "tenant_id": TENANT_ID,
-            "deal_id": DEAL_ID,
-            "claim_class": "FINANCIAL",
-            "claim_text": "Runway is 22.5 months",
-            "claim_grade": "D",
-        })
+        seed_claim_in_memory(
+            {
+                "claim_id": claim_id,
+                "tenant_id": TENANT_ID,
+                "deal_id": DEAL_ID,
+                "claim_class": "FINANCIAL",
+                "claim_text": "Runway is 22.5 months",
+                "claim_grade": "D",
+            }
+        )
 
         prebuilt_sanads = {
             claim_id: {
@@ -179,14 +183,16 @@ class TestPrebuiltSanadGrading:
         """After grading, claim_grade in the in-memory store should be updated."""
         sink, ev_repo, sanad_svc, defect_svc = _setup()
         claim_id = CLAIM_ID_UPD
-        seed_claim_in_memory({
-            "claim_id": claim_id,
-            "tenant_id": TENANT_ID,
-            "deal_id": DEAL_ID,
-            "claim_class": "FINANCIAL",
-            "claim_text": "Gross Margin is 72.50%",
-            "claim_grade": "D",
-        })
+        seed_claim_in_memory(
+            {
+                "claim_id": claim_id,
+                "tenant_id": TENANT_ID,
+                "deal_id": DEAL_ID,
+                "claim_class": "FINANCIAL",
+                "claim_text": "Gross Margin is 72.50%",
+                "claim_grade": "D",
+            }
+        )
 
         prebuilt_sanads = {
             claim_id: {
@@ -216,14 +222,16 @@ class TestPrebuiltSanadGrading:
         """Empty sanad dict in prebuilt data should result in grade_failed."""
         sink, ev_repo, sanad_svc, defect_svc = _setup()
         claim_id = CLAIM_ID_EMPTY
-        seed_claim_in_memory({
-            "claim_id": claim_id,
-            "tenant_id": TENANT_ID,
-            "deal_id": DEAL_ID,
-            "claim_class": "FINANCIAL",
-            "claim_text": "Test claim",
-            "claim_grade": "D",
-        })
+        seed_claim_in_memory(
+            {
+                "claim_id": claim_id,
+                "tenant_id": TENANT_ID,
+                "deal_id": DEAL_ID,
+                "claim_class": "FINANCIAL",
+                "claim_text": "Test claim",
+                "claim_grade": "D",
+            }
+        )
 
         prebuilt_sanads = {
             claim_id: {
@@ -254,22 +262,26 @@ class TestPrebuiltSanadGrading:
         claim_prebuilt = CLAIM_ID_PRE
         claim_normal = CLAIM_ID_NORM
 
-        seed_claim_in_memory({
-            "claim_id": claim_prebuilt,
-            "tenant_id": TENANT_ID,
-            "deal_id": DEAL_ID,
-            "claim_class": "FINANCIAL",
-            "claim_text": "ARR",
-            "claim_grade": "D",
-        })
-        seed_claim_in_memory({
-            "claim_id": claim_normal,
-            "tenant_id": TENANT_ID,
-            "deal_id": DEAL_ID,
-            "claim_class": "FINANCIAL",
-            "claim_text": "Burn rate",
-            "claim_grade": "D",
-        })
+        seed_claim_in_memory(
+            {
+                "claim_id": claim_prebuilt,
+                "tenant_id": TENANT_ID,
+                "deal_id": DEAL_ID,
+                "claim_class": "FINANCIAL",
+                "claim_text": "ARR",
+                "claim_grade": "D",
+            }
+        )
+        seed_claim_in_memory(
+            {
+                "claim_id": claim_normal,
+                "tenant_id": TENANT_ID,
+                "deal_id": DEAL_ID,
+                "claim_class": "FINANCIAL",
+                "claim_text": "Burn rate",
+                "claim_grade": "D",
+            }
+        )
 
         prebuilt_sanads = {
             claim_prebuilt: {
@@ -301,14 +313,16 @@ class TestPrebuiltSanadGrading:
         """Prebuilt grading should emit sanad.created and sanad.graded audit events."""
         sink, ev_repo, sanad_svc, defect_svc = _setup()
         claim_id = CLAIM_ID_AUDIT
-        seed_claim_in_memory({
-            "claim_id": claim_id,
-            "tenant_id": TENANT_ID,
-            "deal_id": DEAL_ID,
-            "claim_class": "FINANCIAL",
-            "claim_text": "NRR is 115%",
-            "claim_grade": "D",
-        })
+        seed_claim_in_memory(
+            {
+                "claim_id": claim_id,
+                "tenant_id": TENANT_ID,
+                "deal_id": DEAL_ID,
+                "claim_class": "FINANCIAL",
+                "claim_text": "NRR is 115%",
+                "claim_grade": "D",
+            }
+        )
 
         prebuilt_sanads = {
             claim_id: {

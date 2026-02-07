@@ -32,6 +32,13 @@ GDBS_FULL_PATH = PROJECT_ROOT / "datasets" / "gdbs_full"
 VALID_BACKENDS = ("deterministic", "anthropic")
 SEPARATOR = "=" * 72
 
+SEMANTIC_TO_FORMAT_DOC_TYPE: dict[str, str] = {
+    "PITCH_DECK": "PPTX",
+    "FINANCIAL_MODEL": "XLSX",
+    "TERM_SHEET": "PDF",
+    "DATA_ROOM": "PDF",
+}
+
 
 def _find_project_root() -> Path:
     """Walk up from this file to find pyproject.toml."""
@@ -106,7 +113,8 @@ def _build_documents_from_deal(deal: Any) -> list[dict[str, Any]]:
 
     for artifact in deal.artifacts:
         doc_id = artifact.get("artifact_id", str(uuid.uuid4()))
-        doc_type = artifact.get("doc_type", "PITCH_DECK")
+        raw_doc_type = artifact.get("doc_type", "PITCH_DECK")
+        doc_type = SEMANTIC_TO_FORMAT_DOC_TYPE.get(raw_doc_type, raw_doc_type)
         docs_by_id[doc_id] = {
             "document_id": doc_id,
             "doc_type": doc_type,
@@ -126,7 +134,7 @@ def _build_documents_from_deal(deal: Any) -> list[dict[str, Any]]:
         elif artifact_id:
             docs_by_id[artifact_id] = {
                 "document_id": artifact_id,
-                "doc_type": "PITCH_DECK",
+                "doc_type": "PPTX",
                 "document_name": artifact_id,
                 "spans": [{
                     "span_id": span.get("span_id", str(uuid.uuid4())),
@@ -151,7 +159,7 @@ def _build_documents_from_deal(deal: Any) -> list[dict[str, Any]]:
         ]
         documents = [{
             "document_id": fallback_doc_id,
-            "doc_type": "PITCH_DECK",
+            "doc_type": "PPTX",
             "document_name": "gdbs_combined",
             "spans": span_dicts,
         }]
@@ -612,12 +620,16 @@ def _print_debate_summary(result: Any) -> None:
         sample = agent_outputs[:2]
         print(f"    Sample Agent Outputs ({min(2, len(agent_outputs))} of {len(agent_outputs)}):")
         for output in sample:
-            role = output.role.value if hasattr(output.role, "value") else output.role
-            content = output.content if hasattr(output, "content") else {}
+            if isinstance(output, dict):
+                role_val = output.get("role", "unknown")
+                content = output.get("content", {})
+            else:
+                role_val = output.role.value if hasattr(output.role, "value") else output.role
+                content = output.content if hasattr(output, "content") else {}
             narrative = ""
             if isinstance(content, dict):
                 narrative = str(content.get("narrative", ""))[:120]
-            print(f"      [{role}] {narrative or '(no narrative)'}")
+            print(f"      [{role_val}] {narrative or '(no narrative)'}")
 
 
 def main() -> None:

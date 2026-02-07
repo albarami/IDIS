@@ -568,7 +568,8 @@ def _run_full_debate(
         round_number=1,
     )
 
-    orchestrator = DebateOrchestrator(config=DebateConfig())
+    role_runners = _build_debate_role_runners()
+    orchestrator = DebateOrchestrator(config=DebateConfig(), role_runners=role_runners)
     final_state = orchestrator.run(state)
 
     gate_failure = orchestrator.get_gate_failure()
@@ -685,7 +686,6 @@ def _run_snapshot_extraction(
     from idis.services.extraction.chunking.service import ChunkingService
     from idis.services.extraction.confidence.scorer import ConfidenceScorer
     from idis.services.extraction.extractors.claim_extractor import LLMClaimExtractor
-    from idis.services.extraction.extractors.llm_client import DeterministicLLMClient
     from idis.services.extraction.pipeline import ExtractionPipeline
     from idis.services.extraction.resolution.conflict_detector import ConflictDetector
     from idis.services.extraction.resolution.deduplicator import Deduplicator
@@ -693,7 +693,7 @@ def _run_snapshot_extraction(
     prompt_text = _get_extraction_prompt()
     output_schema = _get_extraction_output_schema()
 
-    llm_client = DeterministicLLMClient()
+    llm_client = _build_extraction_llm_client()
     scorer = ConfidenceScorer()
     extractor = LLMClaimExtractor(
         llm_client=llm_client,
@@ -783,6 +783,125 @@ def _get_extraction_output_schema() -> dict[str, Any]:
     with open(schema_path, encoding="utf-8") as f:
         result: dict[str, Any] = json.load(f)
         return result
+
+
+def _build_extraction_llm_client() -> Any:
+    """Build the LLM client for extraction based on env configuration.
+
+    Reads IDIS_EXTRACT_BACKEND (default: deterministic).
+    Fail-closed: raises ValueError if anthropic backend selected but key missing.
+
+    Returns:
+        An LLMClient implementation instance.
+
+    Raises:
+        ValueError: If IDIS_EXTRACT_BACKEND=anthropic but ANTHROPIC_API_KEY is unset.
+    """
+    import os
+
+    backend = os.environ.get("IDIS_EXTRACT_BACKEND", "deterministic")
+
+    if backend == "anthropic":
+        from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
+
+        model = os.environ.get("IDIS_ANTHROPIC_MODEL_EXTRACT", "claude-sonnet-4-20250514")
+        return AnthropicLLMClient(model=model)
+
+    from idis.services.extraction.extractors.llm_client import DeterministicLLMClient
+
+    return DeterministicLLMClient()
+
+
+def _build_debate_role_runners() -> Any:
+    """Build role runners for debate based on env configuration.
+
+    Reads IDIS_DEBATE_BACKEND (default: deterministic).
+    Fail-closed: raises ValueError if anthropic backend selected but key missing.
+
+    Returns:
+        RoleRunners instance (deterministic or LLM-backed).
+
+    Raises:
+        ValueError: If IDIS_DEBATE_BACKEND=anthropic but ANTHROPIC_API_KEY is unset.
+    """
+    import os
+
+    from idis.debate.orchestrator import RoleRunners
+
+    backend = os.environ.get("IDIS_DEBATE_BACKEND", "deterministic")
+
+    if backend != "anthropic":
+        return RoleRunners()
+
+    from idis.debate.roles.llm_role_runner import LLMRoleRunner
+    from idis.models.debate import DebateRole
+    from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
+
+    default_model = os.environ.get(
+        "IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT", "claude-sonnet-4-20250514"
+    )
+    arbiter_model = os.environ.get("IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER", "claude-opus-4-20250514")
+
+    prompts = _load_debate_prompts()
+
+    default_client = AnthropicLLMClient(model=default_model)
+    arbiter_client = AnthropicLLMClient(model=arbiter_model)
+
+    return RoleRunners(
+        advocate=LLMRoleRunner(
+            role=DebateRole.ADVOCATE,
+            llm_client=default_client,
+            system_prompt=prompts["advocate"],
+        ),
+        sanad_breaker=LLMRoleRunner(
+            role=DebateRole.SANAD_BREAKER,
+            llm_client=default_client,
+            system_prompt=prompts["sanad_breaker"],
+        ),
+        contradiction_finder=LLMRoleRunner(
+            role=DebateRole.CONTRADICTION_FINDER,
+            llm_client=default_client,
+            system_prompt=prompts["contradiction_finder"],
+        ),
+        risk_officer=LLMRoleRunner(
+            role=DebateRole.RISK_OFFICER,
+            llm_client=default_client,
+            system_prompt=prompts["risk_officer"],
+        ),
+        arbiter=LLMRoleRunner(
+            role=DebateRole.ARBITER,
+            llm_client=arbiter_client,
+            system_prompt=prompts["arbiter"],
+        ),
+    )
+
+
+def _load_debate_prompts() -> dict[str, str]:
+    """Load debate role prompt texts from disk.
+
+    Reads from prompts/<role>/1.0.0/prompt.md for each role.
+    Fail-closed: raises FileNotFoundError if any prompt is missing.
+
+    Returns:
+        Dict mapping role name to prompt text.
+    """
+    root = _find_project_root()
+    role_dirs = {
+        "advocate": "debate_advocate",
+        "sanad_breaker": "debate_sanad_breaker",
+        "contradiction_finder": "debate_contradiction_finder",
+        "risk_officer": "debate_risk_officer",
+        "arbiter": "debate_arbiter",
+    }
+
+    prompts: dict[str, str] = {}
+    for role_key, dir_name in role_dirs.items():
+        prompt_path = root / "prompts" / dir_name / "1.0.0" / "prompt.md"
+        if not prompt_path.exists():
+            raise FileNotFoundError(f"Debate prompt file not found: {prompt_path}")
+        prompts[role_key] = prompt_path.read_text(encoding="utf-8")
+
+    return prompts
 
 
 def clear_runs_store() -> None:

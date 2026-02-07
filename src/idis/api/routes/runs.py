@@ -533,6 +533,69 @@ def _emit_run_completed_audit(
     audit_sink.emit(event)
 
 
+def _retrieve_claims_for_debate(
+    tenant_id: str,
+    created_claim_ids: list[str],
+) -> list[dict[str, Any]]:
+    """Look up full claim data from the in-memory store for debate context.
+
+    Maps repository field names to DebateContext expected fields:
+      claim_grade → sanad_grade
+      primary_span_id → source_doc
+      extraction_confidence (from sanad) → confidence
+
+    Args:
+        tenant_id: Tenant UUID for scoped lookups.
+        created_claim_ids: Claim IDs produced by extraction/grading.
+
+    Returns:
+        List of claim dicts with keys matching DebateContext serialization:
+        claim_id, claim_text, claim_class, sanad_grade, source_doc, confidence.
+    """
+    from idis.persistence.repositories.claims import (
+        InMemoryClaimsRepository,
+        InMemorySanadsRepository,
+    )
+
+    claims_repo = InMemoryClaimsRepository(tenant_id)
+    sanads_repo = InMemorySanadsRepository(tenant_id)
+
+    debate_claims: list[dict[str, Any]] = []
+    for cid in created_claim_ids:
+        claim = claims_repo.get(cid)
+        if claim is None:
+            logger.warning("Claim %s not found in store for debate context", cid)
+            debate_claims.append({
+                "claim_id": cid,
+                "claim_text": "",
+                "claim_class": "",
+                "sanad_grade": "",
+                "source_doc": "",
+                "confidence": 0.0,
+            })
+            continue
+
+        sanad = sanads_repo.get_by_claim(cid)
+        confidence = 0.0
+        if sanad is not None:
+            computed = sanad.get("computed", {})
+            confidence = computed.get(
+                "extraction_confidence",
+                sanad.get("extraction_confidence", 0.0),
+            )
+
+        debate_claims.append({
+            "claim_id": cid,
+            "claim_text": claim.get("claim_text", ""),
+            "claim_class": claim.get("claim_class", ""),
+            "sanad_grade": claim.get("claim_grade", ""),
+            "source_doc": claim.get("primary_span_id", "") or "",
+            "confidence": float(confidence),
+        })
+
+    return debate_claims
+
+
 def _run_full_debate(
     *,
     run_id: str,
@@ -561,22 +624,14 @@ def _run_full_debate(
     from idis.debate.roles.llm_role_runner import DebateContext
     from idis.models.debate import DebateConfig, DebateState
 
+    debate_claims = _retrieve_claims_for_debate(tenant_id, created_claim_ids)
+
     context = DebateContext(
         deal_name=deal_id,
         deal_sector="Unknown",
         deal_stage="Unknown",
         deal_summary="",
-        claims=[
-            {
-                "claim_id": cid,
-                "claim_text": "",
-                "claim_class": "",
-                "sanad_grade": "",
-                "source_doc": "",
-                "confidence": 0.0,
-            }
-            for cid in created_claim_ids
-        ],
+        claims=debate_claims,
         calc_results=[
             {
                 "calc_id": cid,

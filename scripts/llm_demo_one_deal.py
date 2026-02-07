@@ -346,6 +346,69 @@ def _build_calc_fn() -> Any:
     return calc_fn
 
 
+def _retrieve_claims_for_debate(
+    tenant_id: str,
+    created_claim_ids: list[str],
+) -> list[dict[str, Any]]:
+    """Look up full claim data from the in-memory store for debate context.
+
+    Maps repository field names to DebateContext expected fields:
+      claim_grade → sanad_grade
+      primary_span_id → source_doc
+      extraction_confidence (from sanad) → confidence
+
+    Args:
+        tenant_id: Tenant UUID for scoped lookups.
+        created_claim_ids: Claim IDs produced by extraction/grading.
+
+    Returns:
+        List of claim dicts with keys matching DebateContext serialization:
+        claim_id, claim_text, claim_class, sanad_grade, source_doc, confidence.
+    """
+    from idis.persistence.repositories.claims import (
+        InMemoryClaimsRepository,
+        InMemorySanadsRepository,
+    )
+
+    claims_repo = InMemoryClaimsRepository(tenant_id)
+    sanads_repo = InMemorySanadsRepository(tenant_id)
+
+    debate_claims: list[dict[str, Any]] = []
+    for cid in created_claim_ids:
+        claim = claims_repo.get(cid)
+        if claim is None:
+            logger.warning("Claim %s not found in store for debate context", cid)
+            debate_claims.append({
+                "claim_id": cid,
+                "claim_text": "",
+                "claim_class": "",
+                "sanad_grade": "",
+                "source_doc": "",
+                "confidence": 0.0,
+            })
+            continue
+
+        sanad = sanads_repo.get_by_claim(cid)
+        confidence = 0.0
+        if sanad is not None:
+            computed = sanad.get("computed", {})
+            confidence = computed.get(
+                "extraction_confidence",
+                sanad.get("extraction_confidence", 0.0),
+            )
+
+        debate_claims.append({
+            "claim_id": cid,
+            "claim_text": claim.get("claim_text", ""),
+            "claim_class": claim.get("claim_class", ""),
+            "sanad_grade": claim.get("claim_grade", ""),
+            "source_doc": claim.get("primary_span_id", "") or "",
+            "confidence": float(confidence),
+        })
+
+    return debate_claims
+
+
 def _build_debate_fn(deal: Any = None) -> Any:
     """Build the debate callable, mirroring runs.py _run_full_debate.
 
@@ -364,22 +427,14 @@ def _build_debate_fn(deal: Any = None) -> Any:
         created_claim_ids: list[str],
         calc_ids: list[str],
     ) -> dict[str, Any]:
+        debate_claims = _retrieve_claims_for_debate(tenant_id, created_claim_ids)
+
         context = DebateContext(
             deal_name=deal.company_name if deal else deal_id,
             deal_sector=deal.sector if deal else "Unknown",
             deal_stage=deal.stage if deal else "Unknown",
             deal_summary=deal.scenario if deal else "",
-            claims=[
-                {
-                    "claim_id": cid,
-                    "claim_text": "",
-                    "claim_class": "",
-                    "sanad_grade": "",
-                    "source_doc": "",
-                    "confidence": 0.0,
-                }
-                for cid in created_claim_ids
-            ],
+            claims=debate_claims,
             calc_results=[
                 {
                     "calc_id": cid,
@@ -399,9 +454,33 @@ def _build_debate_fn(deal: Any = None) -> Any:
             sanad_graph_ref=f"sanad://{run_id}",
             round_number=1,
         )
-        role_runners = _build_debate_role_runners(context=context)
-        orchestrator = DebateOrchestrator(config=DebateConfig(), role_runners=role_runners)
+        config = DebateConfig()
+        role_runners = _build_debate_role_runners(
+            context=context,
+            streaming=True,
+            max_rounds=config.max_rounds,
+        )
+        orchestrator = DebateOrchestrator(config=config, role_runners=role_runners)
+
+        print(
+            f"\n{'\u2500' * 72}\n"
+            f"  LIVE DEBATE — {context.deal_name} ({context.deal_sector})\n"
+            f"  {len(debate_claims)} claims | "
+            f"max {config.max_rounds} rounds\n"
+            f"{'\u2500' * 72}",
+            flush=True,
+        )
+
         final_state = orchestrator.run(state)
+
+        print(
+            f"\n{'=' * 64}\n"
+            f"  DEBATE ENDED — "
+            f"Stop: {final_state.stop_reason.value if final_state.stop_reason else 'N/A'} | "
+            f"Rounds: {final_state.round_number}\n"
+            f"{'=' * 64}",
+            flush=True,
+        )
         gate_failure = orchestrator.get_gate_failure()
         muhasabah_passed = gate_failure is None
 
@@ -417,11 +496,128 @@ def _build_debate_fn(deal: Any = None) -> Any:
     return debate_fn
 
 
-def _build_debate_role_runners(context: Any = None) -> Any:
+class StreamingRoleRunner:
+    """Wrapper that prints real-time output before/after each role runner call.
+
+    Satisfies RoleRunnerProtocol so it plugs into the existing orchestrator
+    without any changes to the orchestrator, role runners, or LLM client.
+    """
+
+    def __init__(
+        self,
+        inner: Any,
+        *,
+        max_rounds: int = 5,
+    ) -> None:
+        """Initialize the streaming wrapper.
+
+        Args:
+            inner: The actual role runner to wrap.
+            max_rounds: Max debate rounds for display (e.g. "Round 2 of 5").
+        """
+        self._inner = inner
+        self._max_rounds = max_rounds
+        self._last_round: int = 0
+
+    @property
+    def role(self) -> Any:
+        """The debate role this runner implements."""
+        return self._inner.role
+
+    @property
+    def agent_id(self) -> str:
+        """Unique identifier for this agent instance."""
+        return self._inner.agent_id
+
+    def run(self, state: Any) -> Any:
+        """Execute the inner runner with real-time output.
+
+        Args:
+            state: Current debate state.
+
+        Returns:
+            RoleResult from the inner runner (unmodified).
+        """
+        role_name = self.role.value.upper()
+        current_round = state.round_number
+
+        if current_round != self._last_round:
+            print(
+                f"\n{'=' * 64}\n"
+                f"  ROUND {current_round} of {self._max_rounds}\n"
+                f"{'=' * 64}",
+                flush=True,
+            )
+            self._last_round = current_round
+
+        print(f"\n  [{role_name}] is speaking...", flush=True)
+
+        result = self._inner.run(state)
+
+        self._print_live_result(result, role_name)
+        return result
+
+    def _print_live_result(self, result: Any, role_name: str) -> None:
+        """Print agent output immediately after it returns.
+
+        Args:
+            result: RoleResult from the role runner.
+            role_name: Display name for the role.
+        """
+        for output in result.outputs:
+            content = output.content if isinstance(output.content, dict) else {}
+            narrative = str(
+                content.get("text") or content.get("narrative") or ""
+            )[:300]
+
+            muhasabah = output.muhasabah
+            confidence = getattr(muhasabah, "confidence", "N/A")
+            claim_refs = list(getattr(muhasabah, "supported_claim_ids", []))
+            uncertainties = list(getattr(muhasabah, "uncertainties", []))
+            is_subjective = getattr(muhasabah, "is_subjective", False)
+
+            if narrative:
+                print(f"    {narrative}", flush=True)
+
+            refs_display = _truncate_ids(claim_refs)
+            print(
+                f"    Confidence: {confidence}  |  "
+                f"Claims: {len(claim_refs)} {refs_display}  |  "
+                f"Subjective: {is_subjective}",
+                flush=True,
+            )
+
+            if uncertainties:
+                for u in uncertainties[:2]:
+                    desc = (
+                        u.get("uncertainty", u.get("description", ""))
+                        if isinstance(u, dict)
+                        else str(u)
+                    )
+                    print(f"    Uncertainty: {str(desc)[:80]}", flush=True)
+
+            # Print arbiter-specific stop decision
+            if "arbiter" in role_name.lower():
+                stop = content.get("stop_condition", "")
+                if stop:
+                    print(f"    Stop Decision: {stop}", flush=True)
+                dissent = content.get("dissent_preserved", [])
+                if dissent:
+                    print(f"    Dissent Preserved: {len(dissent)}", flush=True)
+
+
+def _build_debate_role_runners(
+    context: Any = None,
+    *,
+    streaming: bool = False,
+    max_rounds: int = 5,
+) -> Any:
     """Build role runners mirroring runs.py _build_debate_role_runners.
 
     Args:
         context: Optional DebateContext with rich pipeline data for LLM agents.
+        streaming: If True, wrap runners with StreamingRoleRunner for live output.
+        max_rounds: Max debate rounds (used for streaming display).
     """
     from idis.debate.orchestrator import RoleRunners
 
@@ -443,37 +639,42 @@ def _build_debate_role_runners(context: Any = None) -> Any:
     default_client = AnthropicLLMClient(model=default_model)
     arbiter_client = AnthropicLLMClient(model=arbiter_model)
 
+    def _wrap(runner: Any) -> Any:
+        if streaming:
+            return StreamingRoleRunner(runner, max_rounds=max_rounds)
+        return runner
+
     return RoleRunners(
-        advocate=LLMRoleRunner(
+        advocate=_wrap(LLMRoleRunner(
             role=DebateRole.ADVOCATE,
             llm_client=default_client,
             system_prompt=prompts["advocate"],
             context=context,
-        ),
-        sanad_breaker=LLMRoleRunner(
+        )),
+        sanad_breaker=_wrap(LLMRoleRunner(
             role=DebateRole.SANAD_BREAKER,
             llm_client=default_client,
             system_prompt=prompts["sanad_breaker"],
             context=context,
-        ),
-        contradiction_finder=LLMRoleRunner(
+        )),
+        contradiction_finder=_wrap(LLMRoleRunner(
             role=DebateRole.CONTRADICTION_FINDER,
             llm_client=default_client,
             system_prompt=prompts["contradiction_finder"],
             context=context,
-        ),
-        risk_officer=LLMRoleRunner(
+        )),
+        risk_officer=_wrap(LLMRoleRunner(
             role=DebateRole.RISK_OFFICER,
             llm_client=default_client,
             system_prompt=prompts["risk_officer"],
             context=context,
-        ),
-        arbiter=LLMRoleRunner(
+        )),
+        arbiter=_wrap(LLMRoleRunner(
             role=DebateRole.ARBITER,
             llm_client=arbiter_client,
             system_prompt=prompts["arbiter"],
             context=context,
-        ),
+        )),
     )
 
 

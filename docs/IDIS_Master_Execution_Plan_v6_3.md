@@ -65,6 +65,32 @@ Zero cross-tenant leakage. Scoped caches/idempotency.
 
 ---
 
+## 1c) Phase Terminology and Mapping
+
+The **Data Architecture v3.1** document uses product-level phase names (Phase 1 / 2A / 2B) that describe *licensing and commercial readiness*. The **Master Execution Plan** uses engineering phase numbers (Phase 0–7) that describe *implementation milestones*. They are **not** the same numbering system.
+
+| Data Architecture Phase | Engineering Phase(s) | Relationship |
+|-------------------------|---------------------|--------------|
+| Phase 1 (Dev / Prototype — 21 APIs, $0) | Phases 0–4 (Foundation → Orchestration readiness) | GREEN sources available for dev from day one; YELLOW/RED used in dev only |
+| Phase 2A (Commercial Launch Pack — 3 RED upgrades) | Phase 7.C (Enrichment connectors under licensing gate) | RED adapters build-time blocked in PROD until commercial licenses acquired |
+| Phase 2B (BYOL Premium Stack — 9 APIs) | Phase 7.C (BYOL connector enablement + rights gates) | BYOL connectors require tenant-scoped credentials + rights-class enforcement |
+
+> **Note:** Postgres local setup is a preflight prerequisite (parallel enablement), not a numbered engineering phase. See `IDIS_Local_Dev_Databases_Runbook_v6_3.md`.
+
+---
+
+## 1d) Compliance Binding Note — Rights-Class Guardrails
+
+The following guardrails (sourced from `IDIS_Data_Architecture_v3_1.md` §Deployment Guardrails and `IDIS_Data_Residency_and_Compliance_Model_v6_3.md` §7) are **hard-gated** and enforced deterministically:
+
+1. **Environment gating:** DEV may use GREEN / YELLOW / RED adapters. PROD may use GREEN and approved YELLOW only. RED adapters **must** be build-time blocked in PROD configuration.
+2. **CI enforcement:** CI **must** fail if any RED adapter is enabled in a production-targeted build. Enforcement point: adapter registry + CI config validation.
+3. **Data lineage tagging:** Every normalized field carries `source_id` and `rights_class` (GREEN / YELLOW / RED). Fields without lineage tags are rejected by the ingestion validators.
+4. **UI gating:** Client-facing features render only fields whose `rights_class` permits client display. RED-sourced fields are never shown to end users.
+5. **Quarterly re-verification:** YELLOW and RED source terms must be re-verified quarterly. The verification date is recorded in `IDIS_API_Phased_Integration_Plan_v3_1.md` and enforced by review cadence.
+
+---
+
 ## 2) State of the Repo
 
 ### 2.1 Completed (Phase 0 → 2.5)
@@ -169,13 +195,14 @@ Zero cross-tenant leakage. Scoped caches/idempotency.
 - SSO, BYOK, data residency
 - SOC2 readiness
 - Prompt registry with audited promotion/rollback
-- **7.A Neo4j Wiring** — Neo4j driver + tenant-safe repository + Cypher queries + Postgres↔Neo4j consistency checks (see `IDIS_Local_Dev_Databases_Runbook_v6_3.md` for local setup)
-- **7.B Enrichment Connector Framework** — adapter contracts + cache policy + rights gating (GREEN→YELLOW→RED rollout) per `IDIS_Enrichment_Connector_Framework_v0_1.md` and `IDIS_API_Phased_Integration_Plan_v3_1.md`  
+- **7.A Persistence Cutover** — move off in-memory repos to Postgres/RLS for all remaining routes (deals, claims, sanad, defects); close any in-memory store usage in production paths
+- **7.B Neo4j Wiring** — Neo4j driver + tenant-safe repository + Cypher queries + Postgres↔Neo4j consistency checks (see `IDIS_Local_Dev_Databases_Runbook_v6_3.md` for local setup)
+- **7.C Enrichment Connector Framework** — adapter contracts + cache policy + rights-class enforcement (GREEN→YELLOW→RED rollout) per `IDIS_Enrichment_Connector_Framework_v0_1.md` and `IDIS_API_Phased_Integration_Plan_v3_1.md`  
 **Exit Gate:** Gate 4 (human review 10-deal sample)  
 **Acceptance:** Security review passed, pilot fund onboarded  
 **Go-Live Blocker:** All Gate 0-4 passed
 
-**Graph DB Decision (Closed):** Neo4j Aura is the baseline graph store. Neptune/Memgraph are acceptable alternatives if cloud-provider constraints dictate, but the codebase assumes a Bolt-protocol-compatible graph DB. Driver abstraction in `persistence/` must support swap without service-layer changes.
+**Neo4j Decision (Closed):** Neo4j is the Phase 7.B graph persistence target; until then, Sanad traversal remains in Postgres/in-memory representations. Neo4j Aura is the baseline graph store. Neptune/Memgraph are acceptable alternatives if cloud-provider constraints dictate, but the codebase assumes a Bolt-protocol-compatible graph DB. Driver abstraction in `persistence/` must support swap without service-layer changes.
 
 ---
 
@@ -257,4 +284,5 @@ After Codex approval of this doc:
 |------|---------|---------|
 | 2026-01-07 | 1.0 | Initial creation |
 | 2026-01-07 | 1.1 | Added backlog mapping, per-phase exit gates, audited prompt registry, Muḥāsabah fail-closed, Calc-Sanad tests |
-| 2026-02-07 | 1.2 | Added §1b Key Reference Documents (Data Architecture v3.1, API Phased Plan, Enrichment Connector Framework, Local Dev Runbook). Assigned Neo4j wiring (7.A) and enrichment connectors (7.B) to Phase 7. Closed Graph DB open decision (Neo4j Aura baseline). |
+| 2026-02-07 | 1.2 | Added §1b Key Reference Documents (Data Architecture v3.1, API Phased Plan, Enrichment Connector Framework, Local Dev Runbook). Assigned Neo4j wiring and enrichment connectors to Phase 7. Closed Graph DB open decision (Neo4j Aura baseline). |
+| 2026-02-07 | 1.3 | Added §1c Phase Terminology and Mapping (product Phase 1/2A/2B ↔ engineering Phase 0–7). Added §1d Compliance Binding Note (rights-class guardrails: env gating, CI enforcement, data lineage, UI gating, quarterly re-verification). Relabeled Phase 7 subtasks: 7.A Persistence Cutover, 7.B Neo4j Wiring, 7.C Enrichment Connector Framework. Added Neo4j clarity statement. |

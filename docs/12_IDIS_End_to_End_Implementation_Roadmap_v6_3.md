@@ -855,7 +855,7 @@ docs(phase-6): update roadmap with Phase 6 completion
 - Traceability test `test_customer_key_used` verifies BYOK at storage boundary
 - Tests: `tests/test_data_residency.py`, `tests/test_byok.py`, `tests/test_retention_hold.py`
 
-#### Task 7.7: Neo4j Wiring ⏳ NOT STARTED
+#### Task 7.7: Neo4j Wiring (Phase 7.B) ⏳ NOT STARTED
 | Deliverable | Module | Status |
 |-------------|--------|--------|
 | Neo4j async driver wrapper | `src/idis/persistence/neo4j_driver.py` | ⏳ |
@@ -865,12 +865,12 @@ docs(phase-6): update roadmap with Phase 6 completion
 | Unit + integration tests | `tests/test_neo4j_*.py` | ⏳ |
 
 **Implementation Notes:**
-- **Decision (Closed):** Neo4j Aura is the baseline graph store. Neptune/Memgraph acceptable if cloud-provider constraints dictate; codebase assumes Bolt-protocol-compatible driver. Abstraction in `persistence/` must support swap without service-layer changes.
+- **Decision (Closed):** Neo4j is the Phase 7.B graph persistence target; until then, Sanad traversal remains in Postgres/in-memory representations. Neo4j Aura is the baseline graph store. Neptune/Memgraph acceptable if cloud-provider constraints dictate; codebase assumes Bolt-protocol-compatible driver. Abstraction in `persistence/` must support swap without service-layer changes.
 - Local dev setup: see `IDIS_Local_Dev_Databases_Runbook_v6_3.md` (Docker Compose includes `neo4j:5-community` service)
 - Dual-write saga already exists (`persistence/saga.py`) — extend for graph writes
 - All graph queries tenant-scoped; no cross-tenant traversal
 
-#### Task 7.8: Enrichment Connector Framework ⏳ NOT STARTED
+#### Task 7.8: Enrichment Connector Framework (Phase 7.C) ⏳ NOT STARTED
 | Deliverable | Module | Status |
 |-------------|--------|--------|
 | `EnrichmentProviderRegistry` | `src/idis/services/enrichment/registry.py` | ⏳ |
@@ -1045,3 +1045,4 @@ Based on current state and blocking dependencies:
 | 2026-01-07 | 1.0 | Initial creation |
 | 2026-01-12 | 2.0 | **Major update:** Corrected implementation status based on codebase audit. Marked RBAC, rate limiting, idempotency 409, OTel, object storage, webhook signing as COMPLETE. Updated Phase 4 (Calc Engines) and Phase 5 (Debate) to COMPLETE. Added testing requirements and git commit guidance for all phases. Identified core pipeline gaps (ingestion, Sanad models, Postgres wiring). Updated Next Steps with correct priorities. |
 | 2026-02-07 | 2.1 | Added Data Architecture v3.1, API Phased Plan, Enrichment Connector Framework, Local Dev Runbook to derived-from references. Added Task 7.7 (Neo4j Wiring) and Task 7.8 (Enrichment Connector Framework) to Phase 7. Closed Graph DB open decision (Neo4j Aura baseline with Bolt abstraction). |
+| 2026-02-07 | 2.2 | Added parenthetical Phase 7.B label to Task 7.7 (Neo4j Wiring) and Phase 7.C label to Task 7.8 (Enrichment Connector Framework). Added Neo4j clarity statement. Aligned with Master Execution Plan v1.3 (7.A/7.B/7.C lettering). |

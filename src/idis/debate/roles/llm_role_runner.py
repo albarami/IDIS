@@ -343,6 +343,9 @@ class LLMRoleRunner(RoleRunner):
     def _parse_response(self, raw: str) -> dict[str, Any]:
         """Parse LLM response as JSON, fail-closed on invalid.
 
+        Strips markdown code fences before parsing, since some models
+        (especially Opus) wrap JSON in ```json ... ``` blocks.
+
         Args:
             raw: Raw response string.
 
@@ -352,8 +355,9 @@ class LLMRoleRunner(RoleRunner):
         Raises:
             ValueError: If response is not valid JSON or not a dict.
         """
+        cleaned = self._strip_markdown_fences(raw)
         try:
-            parsed = json.loads(raw)
+            parsed = json.loads(cleaned)
         except json.JSONDecodeError as exc:
             raise ValueError(f"LLM returned invalid JSON for {self.role.value}: {exc}") from exc
 
@@ -363,6 +367,33 @@ class LLMRoleRunner(RoleRunner):
             )
 
         return parsed
+
+    @staticmethod
+    def _strip_markdown_fences(text: str) -> str:
+        """Strip markdown code fences from LLM response text.
+
+        Some models (especially Opus) wrap JSON in ```json ... ``` blocks
+        or add prose before/after the JSON. This method extracts the JSON
+        content from within fences, or returns the original text if no
+        fences are found.
+
+        Args:
+            text: Raw LLM response text.
+
+        Returns:
+            Text with markdown fences removed, trimmed.
+        """
+        import re
+
+        stripped = text.strip()
+        fence_pattern = re.compile(
+            r"```(?:json)?\s*\n?(.*?)\n?\s*```",
+            re.DOTALL,
+        )
+        match = fence_pattern.search(stripped)
+        if match:
+            return match.group(1).strip()
+        return stripped
 
     def _extract_muhasabah(self, parsed: dict[str, Any]) -> dict[str, Any]:
         """Extract and validate the muhasabah object from parsed LLM response.

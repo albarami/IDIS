@@ -20,6 +20,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -634,6 +636,7 @@ def _print_debate_summary(result: Any) -> None:
 
 def main() -> None:
     """Entry point for the demo script."""
+    load_dotenv()
     args = _parse_args()
     _configure_backend(args.backend)
 

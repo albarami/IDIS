@@ -324,9 +324,9 @@ class TestNoIngestedDocumentsReturns400:
         )
         assert response.status_code == 400
 
-        from idis.api.routes.runs import _IN_MEMORY_RUNS
+        from idis.persistence.repositories.runs import _in_memory_runs_store
 
-        for run_data in _IN_MEMORY_RUNS.values():
+        for run_data in _in_memory_runs_store.values():
             assert run_data["deal_id"] != empty_deal_id, (
                 "Run record must not be created for deal with no ingested documents"
             )

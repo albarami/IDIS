@@ -329,13 +329,35 @@ def verify_tables_exist(db_url: str) -> None:
     url = _normalize_url_for_psycopg2(db_url)
 
     required_tables = [
+        # 0001: foundation
+        "audit_events",
+        "idempotency_records",
         "deals",
+        "alembic_version",
+        # 0003: webhooks
+        "webhooks",
+        "webhook_delivery_attempts",
+        # 0004: ingestion
+        "document_artifacts",
+        "documents",
+        "document_spans",
+        # 0005: calculations
+        "deterministic_calculations",
+        "calc_sanads",
+        # 0007: claims/sanad/defects
         "claims",
         "sanads",
         "defects",
-        "audit_events",
-        "idempotency_records",
-        "alembic_version",
+        # 0009: runs + debate + deliverables + human gates + overrides
+        "runs",
+        "debate_sessions",
+        "deliverables",
+        "human_gates",
+        "human_gate_actions",
+        "overrides",
+        # 0010: run_steps + evidence_items
+        "run_steps",
+        "evidence_items",
     ]
 
     conn = psycopg2.connect(url)

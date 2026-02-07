@@ -22,15 +22,13 @@ from pydantic import BaseModel, Field
 from idis.api.auth import RequireTenantContext
 from idis.api.errors import IdisHttpError
 from idis.audit.sink import AuditSink, AuditSinkError
-from idis.persistence.repositories.deals import InMemoryDealsRepository
-from idis.persistence.repositories.run_steps import InMemoryRunStepsRepository
+from idis.persistence.repositories.run_steps import get_run_steps_repository
+from idis.persistence.repositories.runs import get_runs_repository
 from idis.services.runs.orchestrator import RunContext, RunOrchestrator
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1", tags=["Runs"])
-
-_IN_MEMORY_RUNS: dict[str, dict[str, Any]] = {}
 
 
 class StartRunRequest(BaseModel):
@@ -75,93 +73,6 @@ class RunStatus(BaseModel):
     finished_at: str | None = None
     steps: list[RunStepResponse] = Field(default_factory=list)
     block_reason: str | None = None
-
-
-def _get_run_from_postgres(conn: Any, run_id: str) -> dict[str, Any] | None:
-    """Get run from Postgres."""
-    from sqlalchemy import text
-
-    result = conn.execute(
-        text(
-            """
-            SELECT run_id, tenant_id, deal_id, mode, status, started_at, finished_at, created_at
-            FROM runs
-            WHERE run_id = :run_id
-            """
-        ),
-        {"run_id": run_id},
-    )
-    row = result.fetchone()
-    if row is None:
-        return None
-    return {
-        "run_id": str(row.run_id),
-        "tenant_id": str(row.tenant_id),
-        "deal_id": str(row.deal_id),
-        "mode": row.mode,
-        "status": row.status,
-        "started_at": row.started_at.isoformat().replace("+00:00", "Z") if row.started_at else None,
-        "finished_at": row.finished_at.isoformat().replace("+00:00", "Z")
-        if row.finished_at
-        else None,
-        "created_at": row.created_at.isoformat().replace("+00:00", "Z") if row.created_at else None,
-    }
-
-
-def _create_run_in_postgres(
-    conn: Any,
-    run_id: str,
-    tenant_id: str,
-    deal_id: str,
-    mode: str,
-    idempotency_key: str | None,
-) -> dict[str, Any]:
-    """Create run in Postgres."""
-    from sqlalchemy import text
-
-    now = datetime.now(UTC)
-    conn.execute(
-        text(
-            """
-            INSERT INTO runs
-                (run_id, tenant_id, deal_id, mode, status, started_at,
-                 idempotency_key, created_at)
-            VALUES
-                (:run_id, :tenant_id, :deal_id, :mode, 'QUEUED', :started_at,
-                 :idempotency_key, :created_at)
-            """
-        ),
-        {
-            "run_id": run_id,
-            "tenant_id": tenant_id,
-            "deal_id": deal_id,
-            "mode": mode,
-            "started_at": now,
-            "idempotency_key": idempotency_key,
-            "created_at": now,
-        },
-    )
-    return {
-        "run_id": run_id,
-        "tenant_id": tenant_id,
-        "deal_id": deal_id,
-        "mode": mode,
-        "status": "QUEUED",
-        "started_at": now.isoformat().replace("+00:00", "Z"),
-        "finished_at": None,
-        "created_at": now.isoformat().replace("+00:00", "Z"),
-    }
-
-
-def _deal_exists_in_postgres(conn: Any, deal_id: str) -> bool:
-    """Check if deal exists in Postgres (RLS enforced)."""
-    from sqlalchemy import text
-
-    result = conn.execute(
-        text("SELECT 1 FROM deals WHERE deal_id = :deal_id"),
-        {"deal_id": deal_id},
-    )
-    return result.fetchone() is not None
 
 
 def _validate_start_run_body(body: dict[str, Any] | None) -> StartRunRequest:
@@ -219,17 +130,9 @@ async def start_run(
     db_conn = getattr(request.state, "db_conn", None)
     idempotency_key = request.headers.get("Idempotency-Key")
 
-    if db_conn is not None:
-        if not _deal_exists_in_postgres(db_conn, deal_id):
-            raise IdisHttpError(status_code=404, code="NOT_FOUND", message="Deal not found")
-    else:
-        deals_repo = InMemoryDealsRepository(tenant_ctx.tenant_id)
-        if deals_repo.get(deal_id) is None:
-            raise IdisHttpError(
-                status_code=404,
-                code="NOT_FOUND",
-                message="Deal not found",
-            )
+    runs_repo = get_runs_repository(db_conn, tenant_ctx.tenant_id)
+    if not runs_repo.deal_exists(deal_id):
+        raise IdisHttpError(status_code=404, code="NOT_FOUND", message="Deal not found")
 
     documents = _gather_snapshot_documents(request, tenant_ctx.tenant_id, deal_id)
     if not documents:
@@ -241,28 +144,12 @@ async def start_run(
             ),
         )
 
-    if db_conn is not None:
-        run_data = _create_run_in_postgres(
-            conn=db_conn,
-            run_id=run_id,
-            tenant_id=tenant_ctx.tenant_id,
-            deal_id=deal_id,
-            mode=request_body.mode,
-            idempotency_key=idempotency_key,
-        )
-    else:
-        now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-        run_data = {
-            "run_id": run_id,
-            "tenant_id": tenant_ctx.tenant_id,
-            "deal_id": deal_id,
-            "mode": request_body.mode,
-            "status": "QUEUED",
-            "started_at": now,
-            "finished_at": None,
-            "created_at": now,
-        }
-        _IN_MEMORY_RUNS[run_id] = run_data
+    run_data = runs_repo.create(
+        run_id=run_id,
+        deal_id=deal_id,
+        mode=request_body.mode,
+        idempotency_key=idempotency_key,
+    )
 
     request.state.audit_resource_id = run_id
 
@@ -275,7 +162,7 @@ async def start_run(
         )
 
     audit_sink = _get_audit_sink(request)
-    run_steps_repo = InMemoryRunStepsRepository(tenant_ctx.tenant_id)
+    run_steps_repo = get_run_steps_repository(db_conn, tenant_ctx.tenant_id)
     orchestrator = RunOrchestrator(
         audit_sink=audit_sink,
         run_steps_repo=run_steps_repo,
@@ -303,11 +190,15 @@ async def start_run(
             message="Run aborted: audit event emission failed",
         ) from exc
 
+    finished_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     run_data["status"] = orch_result.status
-    run_data["finished_at"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    run_data["finished_at"] = finished_at
     run_data["block_reason"] = orch_result.block_reason
-    if db_conn is None:
-        _IN_MEMORY_RUNS[run_id] = run_data
+    runs_repo.update_status(
+        run_id,
+        status=orch_result.status,
+        finished_at=finished_at,
+    )
 
     try:
         _emit_run_completed_audit(request, run_id, tenant_ctx.tenant_id, run_data["status"])
@@ -350,17 +241,13 @@ def get_run(
     """
     db_conn = getattr(request.state, "db_conn", None)
 
-    if db_conn is not None:
-        run_data = _get_run_from_postgres(db_conn, run_id)
-    else:
-        run_data = _IN_MEMORY_RUNS.get(run_id)
-        if run_data is not None and run_data.get("tenant_id") != tenant_ctx.tenant_id:
-            run_data = None
+    runs_repo = get_runs_repository(db_conn, tenant_ctx.tenant_id)
+    run_data = runs_repo.get(run_id)
 
     if run_data is None:
         raise IdisHttpError(status_code=404, code="NOT_FOUND", message="Run not found")
 
-    run_steps_repo = InMemoryRunStepsRepository(tenant_ctx.tenant_id)
+    run_steps_repo = get_run_steps_repository(db_conn, tenant_ctx.tenant_id)
     steps = run_steps_repo.get_by_run_id(run_id)
     step_responses = _build_step_responses(steps)
 
@@ -998,4 +885,6 @@ def _load_debate_prompts() -> dict[str, str]:
 
 def clear_runs_store() -> None:
     """Clear the in-memory runs store. For testing only."""
-    _IN_MEMORY_RUNS.clear()
+    from idis.persistence.repositories.runs import clear_in_memory_runs_store
+
+    clear_in_memory_runs_store()

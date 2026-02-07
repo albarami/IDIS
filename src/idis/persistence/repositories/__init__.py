@@ -10,6 +10,7 @@ from idis.persistence.repositories.claims import (
     DefectsRepository,
     InMemoryClaimsRepository,
     InMemoryDefectsRepository,
+    InMemoryEvidenceRepository,
     InMemorySanadsRepository,
     SanadsRepository,
     clear_all_claims_stores,
@@ -27,6 +28,22 @@ from idis.persistence.repositories.deals import (
     clear_in_memory_store,
     get_deals_repository,
 )
+from idis.persistence.repositories.evidence import (
+    PostgresEvidenceRepository,
+    get_evidence_repository,
+)
+from idis.persistence.repositories.run_steps import (
+    InMemoryRunStepsRepository,
+    PostgresRunStepsRepository,
+    clear_run_steps_store,
+    get_run_steps_repository,
+)
+from idis.persistence.repositories.runs import (
+    InMemoryRunsRepository,
+    PostgresRunsRepository,
+    clear_in_memory_runs_store,
+    get_runs_repository,
+)
 
 __all__ = [
     "ClaimNotFoundError",
@@ -37,14 +54,25 @@ __all__ = [
     "InMemoryClaimsRepository",
     "InMemoryDealsRepository",
     "InMemoryDefectsRepository",
+    "InMemoryEvidenceRepository",
+    "InMemoryRunsRepository",
+    "InMemoryRunStepsRepository",
     "InMemorySanadsRepository",
+    "PostgresEvidenceRepository",
+    "PostgresRunStepsRepository",
+    "PostgresRunsRepository",
     "SanadsRepository",
     "clear_all_claims_stores",
     "clear_claims_in_memory_store",
     "clear_defects_in_memory_store",
+    "clear_in_memory_runs_store",
     "clear_in_memory_store",
+    "clear_run_steps_store",
     "clear_sanad_in_memory_store",
     "get_deals_repository",
+    "get_evidence_repository",
+    "get_run_steps_repository",
+    "get_runs_repository",
     "seed_claim_in_memory",
     "seed_defect_in_memory",
     "seed_sanad_in_memory",

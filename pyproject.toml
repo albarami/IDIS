@@ -29,6 +29,7 @@ dependencies = [
     "python-pptx>=0.6.23",
     "anthropic>=0.39.0",
     "python-dotenv>=1.0.0",
+    "neo4j>=5.14.0",
 ]
 
 [project.optional-dependencies]
@@ -124,6 +125,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["google.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["neo4j.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

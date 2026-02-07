@@ -467,3 +467,122 @@ class TestEmptySaga:
         assert result.is_success
         assert result.status == SagaStatus.COMPLETED
         assert len(result.step_results) == 0
+
+
+class TestGraphProjectionSagaIntegration:
+    """Tests for saga integration with graph projection (Phase 7.B).
+
+    Validates:
+    - Postgres write + Neo4j projection both succeed → COMPLETED
+    - Postgres write succeeds + Neo4j projection fails → COMPENSATED + audit
+    """
+
+    def test_both_succeed(self) -> None:
+        """Postgres + graph projection succeed → saga COMPLETED."""
+        executed: list[str] = []
+
+        def pg_insert(ctx: dict[str, Any]) -> str:
+            executed.append("pg_insert")
+            return "claim-pg-001"
+
+        def pg_delete(ctx: dict[str, Any], result: str) -> None:
+            executed.append(f"pg_delete:{result}")
+
+        def graph_project(ctx: dict[str, Any]) -> str:
+            executed.append("graph_project")
+            return "claim-graph-001"
+
+        def graph_delete(ctx: dict[str, Any], result: str) -> None:
+            executed.append(f"graph_delete:{result}")
+
+        saga = (
+            DualWriteSagaExecutor("claim-projection-001")
+            .add_postgres_step("postgres_claim_insert", pg_insert, pg_delete)
+            .add_graph_step("graph_claim_projection", graph_project, graph_delete)
+        )
+
+        result = saga.execute({"tenant_id": "tenant-001"})
+
+        assert result.is_success
+        assert result.status == SagaStatus.COMPLETED
+        assert executed == ["pg_insert", "graph_project"]
+
+    def test_graph_fails_postgres_compensated(self) -> None:
+        """Postgres succeeds, graph fails → saga COMPENSATED, Postgres rolled back."""
+        executed: list[str] = []
+
+        def pg_insert(ctx: dict[str, Any]) -> str:
+            executed.append("pg_insert")
+            return "claim-pg-001"
+
+        def pg_delete(ctx: dict[str, Any], result: str) -> None:
+            executed.append(f"pg_delete:{result}")
+
+        def graph_project(ctx: dict[str, Any]) -> str:
+            executed.append("graph_project")
+            raise RuntimeError("Neo4j connection refused")
+
+        def graph_delete(ctx: dict[str, Any], result: str) -> None:
+            executed.append("graph_delete")
+
+        saga = (
+            DualWriteSagaExecutor("claim-projection-002")
+            .add_postgres_step("postgres_claim_insert", pg_insert, pg_delete)
+            .add_graph_step("graph_claim_projection", graph_project, graph_delete)
+        )
+
+        result = saga.execute({"tenant_id": "tenant-001"})
+
+        assert not result.is_success
+        assert result.is_compensated
+        assert result.status == SagaStatus.COMPENSATED
+        assert executed == [
+            "pg_insert",
+            "graph_project",
+            "pg_delete:claim-pg-001",
+        ]
+        assert "Neo4j connection refused" in str(result.error)
+
+    def test_saga_with_multiple_graph_steps(self) -> None:
+        """Multi-step saga: PG + graph deal + graph claim."""
+        executed: list[str] = []
+
+        def pg_insert(ctx: dict[str, Any]) -> str:
+            executed.append("pg_insert")
+            return "pg-001"
+
+        def pg_delete(ctx: dict[str, Any], result: str) -> None:
+            executed.append("pg_delete")
+
+        def graph_deal(ctx: dict[str, Any]) -> str:
+            executed.append("graph_deal")
+            return "deal-graph-001"
+
+        def graph_deal_del(ctx: dict[str, Any], result: str) -> None:
+            executed.append("graph_deal_del")
+
+        def graph_claim(ctx: dict[str, Any]) -> str:
+            executed.append("graph_claim")
+            raise RuntimeError("Claim projection failed")
+
+        def graph_claim_del(ctx: dict[str, Any], result: str) -> None:
+            executed.append("graph_claim_del")
+
+        saga = (
+            DualWriteSagaExecutor("multi-projection-001")
+            .add_postgres_step("pg", pg_insert, pg_delete)
+            .add_graph_step("graph_deal", graph_deal, graph_deal_del)
+            .add_graph_step("graph_claim", graph_claim, graph_claim_del)
+        )
+
+        result = saga.execute({"tenant_id": "tenant-001"})
+
+        assert not result.is_success
+        assert result.is_compensated
+        assert executed == [
+            "pg_insert",
+            "graph_deal",
+            "graph_claim",
+            "graph_deal_del",
+            "pg_delete",
+        ]

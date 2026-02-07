@@ -15,7 +15,6 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import Any
 
 import anthropic
 
@@ -84,9 +83,7 @@ class AnthropicLLMClient:
                 "no code fences. Output raw JSON."
             )
 
-        messages: list[anthropic.types.MessageParam] = [
-            {"role": "user", "content": prompt}
-        ]
+        messages: list[anthropic.types.MessageParam] = [{"role": "user", "content": prompt}]
 
         last_error: Exception | None = None
         for attempt in range(MAX_RETRIES + 1):

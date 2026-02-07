@@ -135,61 +135,38 @@ class LLMRoleRunner(RoleRunner):
         parsed = self._parse_response(raw_response)
 
         content = parsed.get("content", {})
-        muhasabah_raw = parsed.get("muhasabah", {})
         output_type = parsed.get("output_type", role_name)
 
-        claim_refs = self._extract_list(muhasabah_raw, "supported_claim_ids")
-        calc_refs = self._extract_list(muhasabah_raw, "supported_calc_ids")
-        is_subjective = muhasabah_raw.get("is_subjective", False)
-        if not claim_refs and not is_subjective:
-            is_subjective = True
+        muhasabah_raw = self._extract_muhasabah(parsed)
 
-        confidence = self._clamp_confidence(muhasabah_raw.get("confidence", 0.5))
+        muhasabah_raw["record_id"] = record_id
+        muhasabah_raw["agent_id"] = self.agent_id
+        muhasabah_raw["output_id"] = output_id
+        muhasabah_raw["timestamp"] = timestamp.isoformat()
 
-        falsifiability_tests = self._ensure_falsifiability_tests(
-            muhasabah_raw.get("falsifiability_tests", []),
-            role_name,
-            state.round_number,
-        )
-        uncertainties = self._ensure_uncertainties(
-            muhasabah_raw.get("uncertainties", []),
-            confidence,
-            role_name,
-            state.round_number,
-        )
-        failure_modes = muhasabah_raw.get(
-            "failure_modes", [f"llm_output_round_{state.round_number}"]
-        )
-        if not isinstance(failure_modes, list):
-            failure_modes = [f"llm_output_round_{state.round_number}"]
-
-        muhasabah = MuhasabahRecord(
-            record_id=record_id,
-            agent_id=self.agent_id,
-            output_id=output_id,
-            supported_claim_ids=sorted(claim_refs),
-            supported_calc_ids=sorted(calc_refs),
-            falsifiability_tests=falsifiability_tests,
-            uncertainties=uncertainties,
-            confidence=confidence,
-            failure_modes=failure_modes,
-            timestamp=timestamp,
-            is_subjective=is_subjective,
-        )
+        try:
+            muhasabah = MuhasabahRecord(**muhasabah_raw)
+        except Exception as exc:
+            raise ValueError(
+                f"Muhasabah record construction failed for {role_name}: {exc}"
+            ) from exc
 
         self._validate_muhasabah_record(muhasabah, output_id)
+
+        claim_refs = list(muhasabah.supported_claim_ids)
+        calc_refs = list(muhasabah.supported_calc_ids)
 
         content_summary = f"llm|claims:{len(claim_refs)}|calcs:{len(calc_refs)}"
         pos_hash = _position_hash(role_name, state.round_number, content_summary)
 
         if isinstance(content, dict):
             content["position_hash"] = pos_hash
-            content["is_subjective"] = is_subjective
+            content["is_subjective"] = muhasabah.is_subjective
         else:
             content = {
                 "raw": str(content),
                 "position_hash": pos_hash,
-                "is_subjective": is_subjective,
+                "is_subjective": muhasabah.is_subjective,
             }
 
         output = AgentOutput(
@@ -273,129 +250,38 @@ class LLMRoleRunner(RoleRunner):
 
         return parsed
 
-    def _extract_list(self, data: dict[str, Any], key: str) -> list[str]:
-        """Safely extract a list of strings from a dict.
+    def _extract_muhasabah(self, parsed: dict[str, Any]) -> dict[str, Any]:
+        """Extract and validate the muhasabah object from parsed LLM response.
+
+        Fail-closed checks:
+        1. Missing "muhasabah" key → ValueError
+        2. "muhasabah" not a dict → ValueError
+        3. Missing required fields (supported_claim_ids, confidence,
+           uncertainties) → ValueError
 
         Args:
-            data: Source dict.
-            key: Key to extract.
+            parsed: Parsed LLM response dict.
 
         Returns:
-            List of strings (empty if key missing or wrong type).
+            The muhasabah dict (validated for required keys).
+
+        Raises:
+            ValueError: If muhasabah is missing, not a dict, or incomplete.
         """
-        value = data.get(key, [])
-        if not isinstance(value, list):
-            return []
-        return [str(v) for v in value if isinstance(v, str)]
+        if "muhasabah" not in parsed:
+            raise ValueError("LLM response missing muhasabah record")
 
-    def _clamp_confidence(self, value: Any) -> float:
-        """Clamp confidence to [0.0, 1.0].
+        muhasabah_raw = parsed["muhasabah"]
 
-        Args:
-            value: Raw confidence value.
+        if not isinstance(muhasabah_raw, dict):
+            raise ValueError("LLM response muhasabah must be an object")
 
-        Returns:
-            Float in [0.0, 1.0].
-        """
-        try:
-            conf = float(value)
-        except (TypeError, ValueError):
-            return 0.5
-        return max(0.0, min(1.0, conf))
+        required_keys = {"supported_claim_ids", "confidence", "uncertainties"}
+        missing = required_keys - muhasabah_raw.keys()
+        if missing:
+            raise ValueError(f"muhasabah missing required fields: {sorted(missing)}")
 
-    def _ensure_falsifiability_tests(
-        self,
-        tests: Any,
-        role_name: str,
-        round_number: int,
-    ) -> list[dict[str, Any]]:
-        """Ensure at least one valid falsifiability test exists.
-
-        Args:
-            tests: Raw falsifiability tests from LLM.
-            role_name: Role name for default test.
-            round_number: Current round.
-
-        Returns:
-            List with at least one valid test dict.
-        """
-        if not isinstance(tests, list) or not tests:
-            return [
-                {
-                    "test_description": (f"Validate {role_name} output for round {round_number}"),
-                    "required_evidence": "Cross-reference with claim registry",
-                    "pass_fail_rule": "All referenced claims must be valid",
-                }
-            ]
-
-        valid: list[dict[str, Any]] = []
-        required_keys = {"test_description", "required_evidence", "pass_fail_rule"}
-        for test in tests:
-            if (
-                isinstance(test, dict)
-                and required_keys.issubset(test.keys())
-                and all(test.get(k) for k in required_keys)
-            ):
-                valid.append(test)
-
-        if not valid:
-            return [
-                {
-                    "test_description": (f"Validate {role_name} output for round {round_number}"),
-                    "required_evidence": "Cross-reference with claim registry",
-                    "pass_fail_rule": "All referenced claims must be valid",
-                }
-            ]
-
-        return valid
-
-    def _ensure_uncertainties(
-        self,
-        uncertainties: Any,
-        confidence: float,
-        role_name: str,
-        round_number: int,
-    ) -> list[dict[str, Any]]:
-        """Ensure uncertainties list is valid; required if confidence > 0.80.
-
-        Args:
-            uncertainties: Raw uncertainties from LLM.
-            confidence: Confidence score.
-            role_name: Role name for default uncertainty.
-            round_number: Current round.
-
-        Returns:
-            Validated list of uncertainty dicts.
-        """
-        valid: list[dict[str, Any]] = []
-        required_keys = {"uncertainty", "impact", "mitigation"}
-        valid_impacts = {"HIGH", "MEDIUM", "LOW"}
-
-        if isinstance(uncertainties, list):
-            for unc in uncertainties:
-                if (
-                    isinstance(unc, dict)
-                    and required_keys.issubset(unc.keys())
-                    and all(unc.get(k) for k in required_keys)
-                ):
-                    impact = unc.get("impact", "MEDIUM")
-                    if impact not in valid_impacts:
-                        unc = {**unc, "impact": "MEDIUM"}
-                    valid.append(unc)
-
-        if confidence > 0.80 and not valid:
-            valid.append(
-                {
-                    "uncertainty": (
-                        f"High confidence output from {role_name} "
-                        f"in round {round_number} may not account for all factors"
-                    ),
-                    "impact": "MEDIUM",
-                    "mitigation": "Cross-validate with other agents",
-                }
-            )
-
-        return valid
+        return dict(muhasabah_raw)
 
     def _validate_muhasabah_record(
         self,

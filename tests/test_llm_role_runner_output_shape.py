@@ -73,7 +73,7 @@ class _FakeValidLLMClient:
 
 
 class _FakeHighConfidenceLLMClient:
-    """Fake LLM client returning high confidence output (requires uncertainties)."""
+    """Fake LLM client returning high confidence output with explicit uncertainties."""
 
     def call(self, prompt: str, *, json_mode: bool = False) -> str:
         return json.dumps(
@@ -96,7 +96,13 @@ class _FakeHighConfidenceLLMClient:
                             "pass_fail_rule": "Must hold under scrutiny",
                         }
                     ],
-                    "uncertainties": [],
+                    "uncertainties": [
+                        {
+                            "uncertainty": "Market conditions may shift",
+                            "impact": "HIGH",
+                            "mitigation": "Quarterly review",
+                        }
+                    ],
                     "failure_modes": ["overconfidence"],
                     "is_subjective": False,
                 },
@@ -116,6 +122,34 @@ class _FakeNonDictJsonLLMClient:
 
     def call(self, prompt: str, *, json_mode: bool = False) -> str:
         return json.dumps([1, 2, 3])
+
+
+class _FakeMissingMuhasabahLLMClient:
+    """Fake LLM client returning valid JSON but without muhasabah key."""
+
+    def call(self, prompt: str, *, json_mode: bool = False) -> str:
+        return json.dumps(
+            {
+                "output_type": "opening_thesis",
+                "content": {"narrative": "Analysis without muhasabah."},
+            }
+        )
+
+
+class _FakePartialMuhasabahLLMClient:
+    """Fake LLM client returning muhasabah missing required fields."""
+
+    def call(self, prompt: str, *, json_mode: bool = False) -> str:
+        return json.dumps(
+            {
+                "output_type": "opening_thesis",
+                "content": {"narrative": "Analysis with partial muhasabah."},
+                "muhasabah": {
+                    "supported_claim_ids": ["00000000-0000-0000-0000-000000000001"],
+                    "confidence": 0.70,
+                },
+            }
+        )
 
 
 class _FakeSubjectiveLLMClient:
@@ -199,8 +233,8 @@ class TestLLMRoleRunnerOutputShape:
         validation = validate_muhasabah(record_dict)
         assert validation.passed, f"Muhasabah validation failed: {validation.errors}"
 
-    def test_high_confidence_gets_uncertainties(self) -> None:
-        """High confidence (>0.80) output gets auto-injected uncertainties."""
+    def test_high_confidence_with_uncertainties_passes(self) -> None:
+        """High confidence output with LLM-provided uncertainties passes."""
         runner = LLMRoleRunner(
             role=DebateRole.ADVOCATE,
             llm_client=_FakeHighConfidenceLLMClient(),
@@ -296,3 +330,23 @@ class TestLLMRoleRunnerOutputShape:
         assert isinstance(runner, RoleRunnerProtocol)
         assert runner.role == DebateRole.ADVOCATE
         assert runner.agent_id == "advocate-llm"
+
+    def test_missing_muhasabah_object_fails_closed(self) -> None:
+        """LLM response without muhasabah key raises ValueError (fail-closed)."""
+        runner = LLMRoleRunner(
+            role=DebateRole.ADVOCATE,
+            llm_client=_FakeMissingMuhasabahLLMClient(),
+            system_prompt="Test system prompt.",
+        )
+        with pytest.raises(ValueError, match="missing muhasabah"):
+            runner.run(_make_state())
+
+    def test_muhasabah_missing_required_fields_fails_closed(self) -> None:
+        """Partial muhasabah missing required fields raises ValueError."""
+        runner = LLMRoleRunner(
+            role=DebateRole.ADVOCATE,
+            llm_client=_FakePartialMuhasabahLLMClient(),
+            system_prompt="Test system prompt.",
+        )
+        with pytest.raises(ValueError, match="uncertainties"):
+            runner.run(_make_state())

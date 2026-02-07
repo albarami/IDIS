@@ -172,19 +172,27 @@ The following guardrails (sourced from `IDIS_Data_Architecture_v3_1.md` §Deploy
 
 ### Phase 5 — Debate + Muḥāsabah (Weeks 17-22) ⏳
 **Backlog:** M3 (Multi-Agent Debate)  
+**Layer:** Layer 1 — Evidence Trust Debate  
 **Deliverables:**
-- LangGraph orchestration
-- Agent roles, stop conditions
-- Muḥāsabah integration (fail-closed)  
+- LangGraph orchestration (Layer 1: Evidence Trust Court)
+- Agent roles (Advocate, Sanad Breaker, Contradiction Finder, Risk Officer, Arbiter), stop conditions
+- Muḥāsabah integration (fail-closed)
+- **Layer 1 Output: Validated Evidence Package** — trusted claims + defects + contradictions + dissent  
 **Exit Gate:** Gate 3 (debate completion≥98%, Muḥāsabah≥98%)  
 **Acceptance:** Outputs blocked if Muḥāsabah missing or No-Free-Facts violated  
 **Go-Live Blocker:** Debate required for IC memo generation
 
+> **Two-Layer Debate Architecture:** Phase 5 implements Layer 1 (Evidence Trust Debate) only. Layer 1 is always required, stage-agnostic, and produces the Validated Evidence Package. Layer 2 (Investment Committee) is future work that depends on Phase 7.C enrichment connectors — see "Future Work" section below.
+
 ### Phase 6 — Deliverables (Weeks 23-28) ⏳
 **Backlog:** M3 (Deliverables Generator)  
 **Deliverables:**
-- Screening Snapshot, IC Memo
+- Screening Snapshot, IC Memo (both consume Layer 1 Validated Evidence Package)
 - Frontend Truth Dashboard  
+
+**Layer 1 Deliverable = Validated Evidence Package:**  
+Phase 6 deliverables consume the Validated Evidence Package produced by Phase 5 (Layer 1 debate). This package contains all claims that survived the evidence trust debate, with their final Sanad grades, identified defects, contradictions, and preserved dissent records. It is self-contained and sufficient for screening snapshots and evidence-only IC memos.
+
 **Exit Gate:** Gate 3 (GDBS-F pass≥95%)  
 **Acceptance:** Every fact in memo has claim_id/calc_id reference  
 **Go-Live Blocker:** Deliverables generator required for production
@@ -197,12 +205,44 @@ The following guardrails (sourced from `IDIS_Data_Architecture_v3_1.md` §Deploy
 - Prompt registry with audited promotion/rollback
 - **7.A Persistence Cutover** — move off in-memory repos to Postgres/RLS for all remaining routes (deals, claims, sanad, defects); close any in-memory store usage in production paths
 - **7.B Neo4j Wiring** — Neo4j driver + tenant-safe repository + Cypher queries + Postgres↔Neo4j consistency checks (see `IDIS_Local_Dev_Databases_Runbook_v6_3.md` for local setup)
-- **7.C Enrichment Connector Framework** — adapter contracts + cache policy + rights-class enforcement (GREEN→YELLOW→RED rollout) per `IDIS_Enrichment_Connector_Framework_v0_1.md` and `IDIS_API_Phased_Integration_Plan_v3_1.md`  
+- **7.C Enrichment Connector Framework** — adapter contracts + cache policy + rights-class enforcement (GREEN→YELLOW→RED rollout) per `IDIS_Enrichment_Connector_Framework_v0_1.md` and `IDIS_API_Phased_Integration_Plan_v3_1.md`
+  > **Note:** Enrichment connectors (Phase 7.C) are prerequisite inputs for Layer 2 Investment Committee mode. Layer 2 cannot operate without external enrichment data feeding into the specialist agents.  
 **Exit Gate:** Gate 4 (human review 10-deal sample)  
 **Acceptance:** Security review passed, pilot fund onboarded  
 **Go-Live Blocker:** All Gate 0-4 passed
 
 **Neo4j Decision (Closed):** Neo4j is the Phase 7.B graph persistence target; until then, Sanad traversal remains in Postgres/in-memory representations. Neo4j Aura is the baseline graph store. Neptune/Memgraph are acceptable alternatives if cloud-provider constraints dictate, but the codebase assumes a Bolt-protocol-compatible graph DB. Driver abstraction in `persistence/` must support swap without service-layer changes.
+
+### Future Work (Post-Phase 7 Gate): Layer 2 — Investment Committee Mode
+
+Layer 2 is a future capability that builds on the Validated Evidence Package produced by Layer 1 (Phase 5) and the enrichment connectors implemented in Phase 7.C. It is **not** a gated phase and does **not** introduce new phase numbers.
+
+**Purpose:** Domain specialist analysis + IC mechanism to produce an invest/no-invest package.
+
+**Specialist agent set (future):**
+- Financial Agent — unit economics, revenue model, burn rate analysis
+- Market Agent — TAM/SAM/SOM validation, competitive landscape
+- Technical Agent — architecture review, technical risk assessment
+- Terms Agent — term sheet analysis, governance, liquidation preferences
+- Team Agent — founder track record, team composition gaps
+- Historian Agent — comparable deal outcomes, vintage analysis
+- Sector Specialist Agent — vertical-specific domain expertise
+
+**IC mechanism roles (future):**
+- IC Advocate — thesis construction from Validated Evidence Package
+- IC Challenger — stress-tests thesis with counter-evidence
+- IC Arbiter — synthesizes GO / CONDITIONAL / NO-GO with rationale
+- IC Risk Officer — portfolio-level and strategic risk (if distinct from Layer 1 Risk Officer)
+
+**Stage-specific weighting packs** (future config, not implemented):
+- Pre-seed / Seed / Series A / Series B+ weight profiles that adjust specialist agent influence on the final IC recommendation.
+
+**Dependencies:**
+- Requires Phase 7.C enrichment connectors for external data inputs.
+- Consumes Layer 1 "Validated Evidence Package" as its trust-verified input.
+- All Layer 1 trust invariants (No-Free-Facts, Muḥāsabah, Sanad integrity) remain enforced.
+
+**Deliverable:** IC-Ready Package (GO / CONDITIONAL / NO-GO + rationale + questions).
 
 ---
 
@@ -286,3 +326,4 @@ After Codex approval of this doc:
 | 2026-01-07 | 1.1 | Added backlog mapping, per-phase exit gates, audited prompt registry, Muḥāsabah fail-closed, Calc-Sanad tests |
 | 2026-02-07 | 1.2 | Added §1b Key Reference Documents (Data Architecture v3.1, API Phased Plan, Enrichment Connector Framework, Local Dev Runbook). Assigned Neo4j wiring and enrichment connectors to Phase 7. Closed Graph DB open decision (Neo4j Aura baseline). |
 | 2026-02-07 | 1.3 | Added §1c Phase Terminology and Mapping (product Phase 1/2A/2B ↔ engineering Phase 0–7). Added §1d Compliance Binding Note (rights-class guardrails: env gating, CI enforcement, data lineage, UI gating, quarterly re-verification). Relabeled Phase 7 subtasks: 7.A Persistence Cutover, 7.B Neo4j Wiring, 7.C Enrichment Connector Framework. Added Neo4j clarity statement. |
+| 2026-02-07 | 1.4 | Clarified two-layer debate architecture: Phase 5 = Layer 1 (Evidence Trust Debate, Validated Evidence Package); Phase 6 consumes Layer 1 output. Added enrichment prerequisite note under Phase 7.C. Added "Future Work (Post-Phase 7 Gate)" section for Layer 2 Investment Committee mode (specialist agents, IC mechanism, stage-specific weighting). No new phase numbers. |

@@ -104,17 +104,26 @@ Each prompt stored as an immutable artifact:
 ### 3.3 Deterministic Calc Narrative Prompts
 - `CALC_INTERPRETER_V1` (drafts narrative from deterministic outputs; no new numbers)
 
-### 3.4 Specialist Agents
-- `AGENT_FINANCIAL_V1`
-- `AGENT_MARKET_V1`
-- `AGENT_TEAM_V1`
-- `AGENT_TECHNICAL_V1`
-- `AGENT_TERMS_V1`
-- `AGENT_RISK_V1`
-- `AGENT_HISTORIAN_V1`
-- `AGENT_SECTOR_V1` (optional)
+### 3.4 Specialist Agents (Layer 2 — IC; Future)
 
-### 3.5 Debate Roles
+> **Layer:** Layer 2 (IC). These prompts are **not implemented**. They are placeholder registry entries for the future Investment Committee mode. Layer 2 requires Phase 7.C enrichment connectors.
+
+| Prompt ID | Layer | Inputs | Output Schema | Status |
+|-----------|-------|--------|---------------|--------|
+| `AGENT_FINANCIAL_V1` | Layer 2 (IC) | Validated Evidence Package + enrichment context | IC analysis record (TBD) | Placeholder |
+| `AGENT_MARKET_V1` | Layer 2 (IC) | Validated Evidence Package + enrichment context | IC analysis record (TBD) | Placeholder |
+| `AGENT_TEAM_V1` | Layer 2 (IC) | Validated Evidence Package + enrichment context | IC analysis record (TBD) | Placeholder |
+| `AGENT_TECHNICAL_V1` | Layer 2 (IC) | Validated Evidence Package + enrichment context | IC analysis record (TBD) | Placeholder |
+| `AGENT_TERMS_V1` | Layer 2 (IC) | Validated Evidence Package + enrichment context | IC analysis record (TBD) | Placeholder |
+| `AGENT_RISK_V1` | Layer 2 (IC) | Validated Evidence Package + enrichment context | IC analysis record (TBD) | Placeholder |
+| `AGENT_HISTORIAN_V1` | Layer 2 (IC) | Validated Evidence Package + enrichment context | IC analysis record (TBD) | Placeholder |
+| `AGENT_SECTOR_V1` | Layer 2 (IC) | Validated Evidence Package + enrichment context | IC analysis record (TBD) | Placeholder (optional) |
+| `IC_RISK_OFFICER_V1` | Layer 2 (IC) | Validated Evidence Package + enrichment context | IC analysis record (TBD) | Placeholder (if distinct from Layer 1 Risk Officer) |
+
+### 3.5 Debate Roles (Layer 1 — Evidence Trust)
+
+> **Layer:** Layer 1 (Evidence Trust). These are the current debate roles for evidence integrity validation.
+
 - `DEBATE_ADVOCATE_V1`
 - `DEBATE_SANAD_BREAKER_V1`
 - `DEBATE_COUNTER_ADVOCATE_V1` (recommended)
@@ -125,7 +134,17 @@ Each prompt stored as an immutable artifact:
 - `MUHASABAH_VALIDATOR_V1` (must produce strict JSON)
 - `NO_FREE_FACTS_CHECKER_V1` (must output pass/fail + violations)
 
-### 3.7 Deliverables
+### 3.7 IC Mechanism Prompts (Layer 2 — IC; Future)
+
+> **Layer:** Layer 2 (IC). These prompts are **not implemented**. They are placeholder registry entries for the future Investment Committee mechanism. Layer 2 requires Phase 7.C enrichment connectors and consumes the Validated Evidence Package from Layer 1.
+
+| Prompt ID | Layer | Inputs | Output Schema | Status |
+|-----------|-------|--------|---------------|--------|
+| `IC_ADVOCATE_THESIS_V1` | Layer 2 (IC) | Validated Evidence Package + enrichment context | IC thesis record (TBD) | Placeholder |
+| `IC_CHALLENGER_V1` | Layer 2 (IC) | Validated Evidence Package + IC thesis | IC challenge record (TBD) | Placeholder |
+| `IC_ARBITER_V1` | Layer 2 (IC) | Validated Evidence Package + IC thesis + challenges | IC-Ready Package: GO / CONDITIONAL / NO-GO (TBD) | Placeholder |
+
+### 3.8 Deliverables
 - `IC_MEMO_GENERATOR_V1`
 - `SCREENING_SNAPSHOT_GENERATOR_V1`
 - `TRUTH_DASHBOARD_GENERATOR_V1`
@@ -301,3 +320,11 @@ Prompt registry and model policy are production-ready when:
 - rollback is one-click and audited
 - prompt changes cannot bypass trust invariants
 
+---
+
+## 13) Revision History
+
+| Date | Version | Changes |
+|------|---------|--------|
+| 2026-01-06 | 1.0 | Initial creation (v6.3 baseline) |
+| 2026-02-07 | 1.1 | Added two-layer debate architecture annotations: §3.4 Specialist Agents marked as Layer 2 (IC) placeholders with input/output schema table. §3.5 Debate Roles annotated as Layer 1 (Evidence Trust). Added §3.7 IC Mechanism Prompts (Layer 2 placeholders: IC_ADVOCATE_THESIS, IC_CHALLENGER, IC_ARBITER). Renumbered §3.7 Deliverables to §3.8. No implementation changes. |

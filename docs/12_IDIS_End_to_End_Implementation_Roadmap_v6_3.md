@@ -507,7 +507,9 @@ docs(phase-3): update roadmap with Phase 3 completion
 
 ### Phase 5 — Multi-Agent Debate + Muḥāsabah ✅ COMPLETE
 
-**Scope:** Implement LangGraph debate orchestration with trust gates.
+**Scope:** Implement LangGraph debate orchestration with trust gates (Layer 1: Evidence Trust Debate).
+
+> **Layer 1 — Evidence Trust Debate:** Phase 5 implements the evidence trust court. Its output is the **Validated Evidence Package** (trusted claims + defects + contradictions + dissent). Layer 1 is always required, stage-agnostic, and enforces Muḥāsabah + No-Free-Facts. It does not perform domain-specialist investment analysis — that is Layer 2 (future, see below).
 
 #### Task 5.1: LangGraph Orchestration ✅ COMPLETE
 | Deliverable | Module | Status | Test |
@@ -560,7 +562,7 @@ docs(phase-3): update roadmap with Phase 3 completion
 
 ### Phase 6 — Deliverables Generator + Frontend ⚠️ PARTIALLY COMPLETE
 
-**Scope:** Generate IC-ready outputs with evidence linking.
+**Scope:** Generate IC-ready outputs with evidence linking. Phase 6 deliverables consume the **Validated Evidence Package** produced by Phase 5 (Layer 1 debate).
 
 #### Task 6.1: Deliverables Generator ✅ COMPLETE
 | Deliverable | Module | Status | Test |
@@ -887,6 +889,8 @@ docs(phase-6): update roadmap with Phase 6 completion
 - No live external calls in CI; use recorded fixtures (VCR-like) or contract stubs
 - Audit events on every provider call attempt (including blocked), cache hit/miss, persisted writes
 
+> **Layer 2 Prerequisite:** Enrichment connectors (Phase 7.C) are prerequisite inputs for the future Layer 2 Investment Committee mode. Layer 2 cannot operate without external enrichment data feeding into its specialist agents.
+
 #### Task 7.6: Infrastructure ✅ COMPLETE (Codex Review Pending)
 | Deliverable | Location | Status |
 |-------------|----------|--------|
@@ -941,6 +945,24 @@ docs(phase-7): update roadmap with Phase 7 completion
 - [ ] Infrastructure artifacts complete
 - [x] Runbooks published
 - [ ] Gate 4 (human review 10-deal sample)
+
+---
+
+### Future: Investment Committee Mode (Layer 2)
+
+Layer 2 is a future capability that produces an **IC-Ready Package** (GO / CONDITIONAL / NO-GO + rationale + questions) by applying domain-specialist analysis on top of the Layer 1 **Validated Evidence Package**.
+
+**Dependencies:**
+- Requires Phase 7.C enrichment connector framework for external data inputs.
+- Consumes the Layer 1 "Validated Evidence Package" produced by Phase 5 (debate).
+- All Layer 1 trust invariants (No-Free-Facts, Muḥāsabah, Sanad integrity) remain enforced.
+
+**Scope (not implemented):**
+- **Specialist agents:** Financial, Market, Technical, Terms, Team, Historian, Sector Specialist
+- **IC mechanism roles:** IC Advocate (thesis), IC Challenger (stress-test), IC Arbiter (GO/CONDITIONAL/NO-GO), IC Risk Officer (portfolio-level risk)
+- **Stage-specific weighting packs:** Pre-seed / Seed / Series A / Series B+ weight profiles (future config)
+
+**No new phase numbers or gates.** This is future work beyond the Phase 7 gate.
 
 ---
 
@@ -1046,3 +1068,4 @@ Based on current state and blocking dependencies:
 | 2026-01-12 | 2.0 | **Major update:** Corrected implementation status based on codebase audit. Marked RBAC, rate limiting, idempotency 409, OTel, object storage, webhook signing as COMPLETE. Updated Phase 4 (Calc Engines) and Phase 5 (Debate) to COMPLETE. Added testing requirements and git commit guidance for all phases. Identified core pipeline gaps (ingestion, Sanad models, Postgres wiring). Updated Next Steps with correct priorities. |
 | 2026-02-07 | 2.1 | Added Data Architecture v3.1, API Phased Plan, Enrichment Connector Framework, Local Dev Runbook to derived-from references. Added Task 7.7 (Neo4j Wiring) and Task 7.8 (Enrichment Connector Framework) to Phase 7. Closed Graph DB open decision (Neo4j Aura baseline with Bolt abstraction). |
 | 2026-02-07 | 2.2 | Added parenthetical Phase 7.B label to Task 7.7 (Neo4j Wiring) and Phase 7.C label to Task 7.8 (Enrichment Connector Framework). Added Neo4j clarity statement. Aligned with Master Execution Plan v1.3 (7.A/7.B/7.C lettering). |
+| 2026-02-07 | 2.3 | Clarified two-layer debate architecture: Phase 5 = Layer 1 (Evidence Trust Debate, Validated Evidence Package); Phase 6 consumes Layer 1 output. Added "Future: Investment Committee Mode (Layer 2)" subsection after Phase 7. Enrichment prerequisite note added to Task 7.8. No new phase numbers or gates. |

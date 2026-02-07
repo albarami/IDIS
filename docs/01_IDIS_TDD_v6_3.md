@@ -203,9 +203,27 @@ Mutawātir threshold (normative):
 
 ---
 
-## 6. Debate Orchestration (LangGraph Spec)
+## 6. Two-Layer Debate Architecture
 
-### 6.1 Roles (Minimum Set)
+IDIS employs two distinct debate layers with separate purposes, inputs, and outputs:
+
+**Layer 1 — Evidence Trust Debate (Phase 6):**
+- **Inputs:** extracted claims + Sanad grades + calc outputs (with provenance)
+- **Output:** **Validated Evidence Package** — trusted claims + defects + contradictions + dissent
+- Always required and stage-agnostic. Runs on every deal regardless of investment stage or enrichment availability.
+
+**Layer 2 — Investment Committee (Future / post-Phase 7.C dependency):**
+- **Inputs:** Validated Evidence Package + enrichment connectors + stage priors/weights
+- **Output:** **IC-Ready Package** — GO / CONDITIONAL / NO-GO + rationale + questions
+- Stage-dependent and requires enrichment/context beyond the dataset. Not implemented until enrichment connectors (Phase 7.C) are operational.
+
+**Deliverable Boundaries:**
+- **Validated Evidence Package:** The deliverable boundary between Layer 1 and Layer 2. Contains all claims that survived the evidence trust debate, with their final Sanad grades, identified defects, contradictions, and preserved dissent records. This package is self-contained and sufficient for screening snapshots and evidence-only IC memos.
+- **IC-Ready Package:** The future deliverable produced by Layer 2. Combines the Validated Evidence Package with domain specialist analysis to produce an investment recommendation with full rationale, counter-hypotheses, and open questions for IC discussion.
+
+### 6.1 Layer 1: Evidence Trust Court (Current — Phase 6)
+
+#### 6.1.1 Roles (Minimum Set)
 
 - Advocate (proposes best-supported thesis)
 - Sanad Breaker (attacks weak chains, missing links)
@@ -213,7 +231,9 @@ Mutawātir threshold (normative):
 - Risk Officer (downside, fraud, regulatory risk)
 - Arbiter (rules enforcement; validates challenges; assigns utility; preserves dissent)
 
-### 6.2 Normative Node Graph
+Layer 1 enforces **Muḥāsabah** and **No-Free-Facts** at every agent output. Its sole concern is evidence integrity and provenance — it does not perform domain-specialist investment analysis.
+
+#### 6.1.2 Normative Node Graph
 
 ```text
 START -> advocate_opening()
@@ -227,7 +247,7 @@ START -> advocate_opening()
       -> finalize_outputs() -> END
 ```
 
-### 6.3 Stop Conditions (Normative)
+#### 6.1.3 Stop Conditions (Normative)
 
 Priority order:
 1. CRITICAL_DEFECT: any claim has grade D in a **material position** → escalate to human
@@ -236,7 +256,7 @@ Priority order:
 4. STABLE_DISSENT: positions unchanged for 2 rounds → preserve dissent
 5. EVIDENCE_EXHAUSTED: no new evidence available
 
-### 6.4 Incentive Alignment (Utility)
+#### 6.1.4 Incentive Alignment (Utility)
 
 Utility design (normative principles):
 - Reward calibrated probabilities using **Brier score**
@@ -246,6 +266,33 @@ Utility design (normative principles):
 No-Free-Facts enforcement points (normative):
 - Tool wrapper/output parser rejects factual statements without claim_id/calc_id references
 - Muḥāsabah validator rejects empty `supported_claim_ids` when facts are present
+
+### 6.2 Layer 2: Multi-Agent Analysis Engine — Specialist Agents (Future)
+
+Layer 2 is the **Investment Committee** mode. It consumes the Validated Evidence Package produced by Layer 1 and applies domain-specialist analysis to produce an IC-Ready Package.
+
+**Specialist agent set (future):**
+- Financial Agent — unit economics, revenue model, burn rate analysis
+- Market Agent — TAM/SAM/SOM validation, competitive landscape
+- Technical Agent — architecture review, technical risk assessment
+- Terms Agent — term sheet analysis, governance, liquidation preferences
+- Team Agent — founder track record, team composition gaps
+- Historian Agent — comparable deal outcomes, vintage analysis
+- Sector Specialist Agent — vertical-specific domain expertise
+
+**IC mechanism roles (future):**
+- IC Advocate (thesis construction from Validated Evidence Package)
+- IC Challenger (stress-tests thesis with counter-evidence)
+- IC Arbiter (synthesizes GO / CONDITIONAL / NO-GO with rationale)
+- IC Risk Officer (if distinct from Layer 1 Risk Officer — focuses on portfolio-level and strategic risk)
+
+**Stage-specific weighting packs** (future config, not implemented):
+- Pre-seed / Seed / Series A / Series B+ weight profiles that adjust specialist agent influence on the final IC recommendation.
+
+**Dependencies:**
+- Requires Phase 7.C enrichment connectors for external data inputs.
+- Consumes Layer 1 Validated Evidence Package as its trust-verified input.
+- No new phase numbers — Layer 2 is future work beyond the current Phase 7 gate.
 
 ---
 
@@ -346,20 +393,49 @@ This section is “engineering recommendation” to implement the v6.3 spec clea
 
 ---
 
-## 10. Implementation Notes for the AI Coder
+## 10. Multi-Agent Analysis Engine — Specialist Agents (Layer 2)
+
+§10 describes the **Layer 2: Investment Committee** system. This is the future multi-agent analysis engine that uses specialist agents for IC-level domain analysis. It is **not** the evidence provenance layer (see §11).
+
+Layer 2 consumes the **Validated Evidence Package** produced by Layer 1 (§11) and combines it with enrichment data to produce an **IC-Ready Package** (GO / CONDITIONAL / NO-GO + rationale + questions).
+
+Layer 2 is stage-dependent and requires enrichment/context beyond the dataset. It is not operational until Phase 7.C enrichment connectors are implemented.
+
+See §6.2 for the specialist agent set, IC mechanism roles, and stage-specific weighting packs.
+
+---
+
+## 11. Debate Layer — Evidence Trust Court (Layer 1)
+
+§11 describes the **Layer 1: Evidence Trust Debate**. This layer validates evidence integrity and provenance using the following roles: Advocate, Sanad Breaker, Contradiction Finder, Risk Officer, and Arbiter.
+
+Layer 1 enforces Muḥāsabah + No-Free-Facts at every output boundary. Its purpose is to preserve dissent, surface contradictions, and produce a **Validated Evidence Package** of trusted claims with defects and provenance chains.
+
+**Layer 1 is always required and stage-agnostic.** It runs on every deal regardless of investment stage, enrichment availability, or IC context. It does not perform domain-specialist investment analysis — that is Layer 2 (§10).
+
+**Layer 2 is stage-dependent and requires enrichment/context beyond the dataset.** It cannot operate without the Validated Evidence Package from Layer 1, and it requires Phase 7.C enrichment connectors for external data inputs.
+
+See §6.1 for the normative node graph, stop conditions, and incentive alignment.
+
+---
+
+## 12. Implementation Notes for the AI Coder
 
 When implementing, follow these rules:
 
-1. **Implement the data contracts first** (Claim, EvidenceItem, Sanad, Defect, MuḥāsabahRecord, DebateState).
-2. **Build validation as code, not prompts**:
+1. **Respect the two-layer debate architecture** (§6, §10, §11):
+   - Layer 1 (Evidence Trust Court) is always required; implement first.
+   - Layer 2 (Investment Committee) is future work; depends on Phase 7.C enrichment.
+2. **Implement the data contracts first** (Claim, EvidenceItem, Sanad, Defect, MuḥāsabahRecord, DebateState).
+3. **Build validation as code, not prompts**:
    - No-Free-Facts validator must be deterministic.
    - Muḥāsabah validator must be deterministic.
-3. **Never compute financial numbers in the LLM**:
+4. **Never compute financial numbers in the LLM**:
    - LLM may explain numbers but never derive them.
-4. **Fail closed**:
+5. **Fail closed**:
    - If grade=D in material claim → stop and escalate.
    - If extraction_confidence < 0.95 → require human verification before calc/debate propagation.
-5. **Persist everything**:
+6. **Persist everything**:
    - Every intermediate output is an audit artifact.
 
 ---

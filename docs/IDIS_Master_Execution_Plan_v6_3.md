@@ -54,6 +54,17 @@ Zero cross-tenant leakage. Scoped caches/idempotency.
 
 ---
 
+## 1b) Key Reference Documents
+
+| Document | Scope |
+|----------|-------|
+| `IDIS_Data_Architecture_v3_1.md` | 21-source API selection, licensing matrix (GREEN/YELLOW/RED), BYOL model, Phase 1→2A→2B cost structure |
+| `IDIS_API_Phased_Integration_Plan_v3_1.md` | Standalone licensing matrix + phased integration timeline |
+| `IDIS_Enrichment_Connector_Framework_v0_1.md` | Adapter contract, rights-class gating, caching policy (TTL/no-store), testing strategy |
+| `IDIS_Local_Dev_Databases_Runbook_v6_3.md` | Local Postgres + Neo4j setup, env vars, docker compose, bootstrap + migrations |
+
+---
+
 ## 2) State of the Repo
 
 ### 2.1 Completed (Phase 0 → 2.5)
@@ -157,10 +168,14 @@ Zero cross-tenant leakage. Scoped caches/idempotency.
 **Deliverables:**
 - SSO, BYOK, data residency
 - SOC2 readiness
-- Prompt registry with audited promotion/rollback  
+- Prompt registry with audited promotion/rollback
+- **7.A Neo4j Wiring** — Neo4j driver + tenant-safe repository + Cypher queries + Postgres↔Neo4j consistency checks (see `IDIS_Local_Dev_Databases_Runbook_v6_3.md` for local setup)
+- **7.B Enrichment Connector Framework** — adapter contracts + cache policy + rights gating (GREEN→YELLOW→RED rollout) per `IDIS_Enrichment_Connector_Framework_v0_1.md` and `IDIS_API_Phased_Integration_Plan_v3_1.md`  
 **Exit Gate:** Gate 4 (human review 10-deal sample)  
 **Acceptance:** Security review passed, pilot fund onboarded  
 **Go-Live Blocker:** All Gate 0-4 passed
+
+**Graph DB Decision (Closed):** Neo4j Aura is the baseline graph store. Neptune/Memgraph are acceptable alternatives if cloud-provider constraints dictate, but the codebase assumes a Bolt-protocol-compatible graph DB. Driver abstraction in `persistence/` must support swap without service-layer changes.
 
 ---
 
@@ -242,3 +257,4 @@ After Codex approval of this doc:
 |------|---------|---------|
 | 2026-01-07 | 1.0 | Initial creation |
 | 2026-01-07 | 1.1 | Added backlog mapping, per-phase exit gates, audited prompt registry, Muḥāsabah fail-closed, Calc-Sanad tests |
+| 2026-02-07 | 1.2 | Added §1b Key Reference Documents (Data Architecture v3.1, API Phased Plan, Enrichment Connector Framework, Local Dev Runbook). Assigned Neo4j wiring (7.A) and enrichment connectors (7.B) to Phase 7. Closed Graph DB open decision (Neo4j Aura baseline). |

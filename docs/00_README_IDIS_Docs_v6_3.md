@@ -25,7 +25,13 @@ This folder contains the enterprise-grade documentation set required to build ID
 - `IDIS_Evaluation_Harness_and_Release_Gates_v6_3.md`
 - `IDIS_Prompt_Registry_and_Model_Policy_v6_3.md`
 
-6) **Execution & Traceability**
+6) **Data Architecture & Integration**
+- `IDIS_Data_Architecture_v3_1.md` — Data layer architecture: 21-source API selection, licensing matrix (GREEN/YELLOW/RED), BYOL model, Phase 1→2A→2B rollout
+- `IDIS_API_Phased_Integration_Plan_v3_1.md` — Standalone licensing matrix + phased integration timeline (extracted from Data Architecture v3.1)
+- `IDIS_Enrichment_Connector_Framework_v0_1.md` — Adapter contract, rights-class gating, caching policy (TTL/no-store), testing strategy
+- `IDIS_Local_Dev_Databases_Runbook_v6_3.md` — Local Postgres + Neo4j setup, env vars, docker compose, bootstrap + migration commands
+
+7) **Execution & Traceability**
 - `12_IDIS_End_to_End_Implementation_Roadmap_v6_3.md` — **Task-level** WBS with acceptance criteria, controls, and go-live checklist
 - `IDIS_Master_Execution_Plan_v6_3.md` — **Authoritative** phase roadmap (Phase 0→7), invariants, Go-Live checklist
 - `IDIS_v6_3_Traceability_Matrix.md` — **Authoritative** Requirements → Code → Tests → Phase gates mapping

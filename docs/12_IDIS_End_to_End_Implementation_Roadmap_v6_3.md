@@ -41,6 +41,10 @@ Example: feat(phase-1): implement PDF parser with span generation
 - `IDIS_Evaluation_Harness_and_Release_Gates_v6_3.md` — Release gates
 - `IDIS_Data_Residency_and_Compliance_Model_v6_3.md` — Tenant isolation
 - `IDIS_SLO_SLA_Runbooks_v6_3.md` — Monitoring, DR, runbooks
+- `IDIS_Data_Architecture_v3_1.md` — 21-source API selection, licensing matrix (GREEN/YELLOW/RED), BYOL model, Phase 1→2A→2B cost structure
+- `IDIS_API_Phased_Integration_Plan_v3_1.md` — Standalone licensing matrix + phased integration timeline
+- `IDIS_Enrichment_Connector_Framework_v0_1.md` — Adapter contract, rights-class gating, caching policy, testing strategy
+- `IDIS_Local_Dev_Databases_Runbook_v6_3.md` — Local Postgres + Neo4j setup, env vars, docker compose, bootstrap + migrations
 
 ---
 
@@ -851,6 +855,38 @@ docs(phase-6): update roadmap with Phase 6 completion
 - Traceability test `test_customer_key_used` verifies BYOK at storage boundary
 - Tests: `tests/test_data_residency.py`, `tests/test_byok.py`, `tests/test_retention_hold.py`
 
+#### Task 7.7: Neo4j Wiring ⏳ NOT STARTED
+| Deliverable | Module | Status |
+|-------------|--------|--------|
+| Neo4j async driver wrapper | `src/idis/persistence/neo4j_driver.py` | ⏳ |
+| Tenant-safe graph repository | `src/idis/persistence/graph_repo.py` | ⏳ |
+| Cypher query templates (Sanad chain, entity graph) | `src/idis/persistence/cypher/` | ⏳ |
+| Postgres↔Neo4j consistency checks | `src/idis/persistence/graph_consistency.py` | ⏳ |
+| Unit + integration tests | `tests/test_neo4j_*.py` | ⏳ |
+
+**Implementation Notes:**
+- **Decision (Closed):** Neo4j Aura is the baseline graph store. Neptune/Memgraph acceptable if cloud-provider constraints dictate; codebase assumes Bolt-protocol-compatible driver. Abstraction in `persistence/` must support swap without service-layer changes.
+- Local dev setup: see `IDIS_Local_Dev_Databases_Runbook_v6_3.md` (Docker Compose includes `neo4j:5-community` service)
+- Dual-write saga already exists (`persistence/saga.py`) — extend for graph writes
+- All graph queries tenant-scoped; no cross-tenant traversal
+
+#### Task 7.8: Enrichment Connector Framework ⏳ NOT STARTED
+| Deliverable | Module | Status |
+|-------------|--------|--------|
+| `EnrichmentProviderRegistry` | `src/idis/services/enrichment/registry.py` | ⏳ |
+| `EnrichmentService` orchestrator | `src/idis/services/enrichment/service.py` | ⏳ |
+| Rights-class gating (GREEN/YELLOW/RED) | `src/idis/services/enrichment/rights_gate.py` | ⏳ |
+| Cache policy engine (TTL + no-store) | `src/idis/services/enrichment/cache_policy.py` | ⏳ |
+| First GREEN connectors (SEC EDGAR, Companies House) | `src/idis/services/enrichment/connectors/` | ⏳ |
+| Unit tests (rights gate, cache, recorded fixtures) | `tests/test_enrichment_*.py` | ⏳ |
+
+**Implementation Notes:**
+- Spec: `IDIS_Enrichment_Connector_Framework_v0_1.md` (adapter contract, caching rules, testing strategy)
+- Licensing matrix: `IDIS_Data_Architecture_v3_1.md` and `IDIS_API_Phased_Integration_Plan_v3_1.md`
+- Rollout order: GREEN sources first → approved YELLOW → RED only after Phase 2A commercial upgrades or via BYOL
+- No live external calls in CI; use recorded fixtures (VCR-like) or contract stubs
+- Audit events on every provider call attempt (including blocked), cache hit/miss, persisted writes
+
 #### Task 7.6: Infrastructure ✅ COMPLETE (Codex Review Pending)
 | Deliverable | Location | Status |
 |-------------|----------|--------|
@@ -996,7 +1032,7 @@ Based on current state and blocking dependencies:
 | Decision | Status | Notes |
 |----------|--------|-------|
 | Cloud provider (AWS/GCP/Azure) | Open | Security doc notes explicit flexibility |
-| Graph DB choice (Neo4j/Neptune) | Open | Tech Stack recommends but doesn't mandate |
+| Graph DB choice (Neo4j/Neptune) | **Closed** | Neo4j Aura baseline; Bolt-protocol abstraction allows swap (see Task 7.7) |
 | Temporal vs Celery | Open | Tech Stack lists both as acceptable |
 | SSO provider (Okta vs Azure AD) | Open | Security doc lists both |
 
@@ -1008,3 +1044,4 @@ Based on current state and blocking dependencies:
 |------|---------|---------|
 | 2026-01-07 | 1.0 | Initial creation |
 | 2026-01-12 | 2.0 | **Major update:** Corrected implementation status based on codebase audit. Marked RBAC, rate limiting, idempotency 409, OTel, object storage, webhook signing as COMPLETE. Updated Phase 4 (Calc Engines) and Phase 5 (Debate) to COMPLETE. Added testing requirements and git commit guidance for all phases. Identified core pipeline gaps (ingestion, Sanad models, Postgres wiring). Updated Next Steps with correct priorities. |
+| 2026-02-07 | 2.1 | Added Data Architecture v3.1, API Phased Plan, Enrichment Connector Framework, Local Dev Runbook to derived-from references. Added Task 7.7 (Neo4j Wiring) and Task 7.8 (Enrichment Connector Framework) to Phase 7. Closed Graph DB open decision (Neo4j Aura baseline with Bolt abstraction). |

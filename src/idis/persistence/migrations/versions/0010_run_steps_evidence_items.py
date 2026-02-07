@@ -44,8 +44,7 @@ def upgrade() -> None:
         """
     )
     op.execute(
-        "CREATE INDEX IF NOT EXISTS idx_run_steps_tenant_run "
-        "ON run_steps(tenant_id, run_id)"
+        "CREATE INDEX IF NOT EXISTS idx_run_steps_tenant_run ON run_steps(tenant_id, run_id)"
     )
     op.execute(
         "CREATE INDEX IF NOT EXISTS idx_run_steps_tenant_run_order "

@@ -452,14 +452,16 @@ def _retrieve_claims_for_debate(
         claim = claims_repo.get(cid)
         if claim is None:
             logger.warning("Claim %s not found in store for debate context", cid)
-            debate_claims.append({
-                "claim_id": cid,
-                "claim_text": "",
-                "claim_class": "",
-                "sanad_grade": "",
-                "source_doc": "",
-                "confidence": 0.0,
-            })
+            debate_claims.append(
+                {
+                    "claim_id": cid,
+                    "claim_text": "",
+                    "claim_class": "",
+                    "sanad_grade": "",
+                    "source_doc": "",
+                    "confidence": 0.0,
+                }
+            )
             continue
 
         sanad = sanads_repo.get_by_claim(cid)
@@ -471,14 +473,16 @@ def _retrieve_claims_for_debate(
                 sanad.get("extraction_confidence", 0.0),
             )
 
-        debate_claims.append({
-            "claim_id": cid,
-            "claim_text": claim.get("claim_text", ""),
-            "claim_class": claim.get("claim_class", ""),
-            "sanad_grade": claim.get("claim_grade", ""),
-            "source_doc": claim.get("primary_span_id", "") or "",
-            "confidence": float(confidence),
-        })
+        debate_claims.append(
+            {
+                "claim_id": cid,
+                "claim_text": claim.get("claim_text", ""),
+                "claim_class": claim.get("claim_class", ""),
+                "sanad_grade": claim.get("claim_grade", ""),
+                "source_doc": claim.get("primary_span_id", "") or "",
+                "confidence": float(confidence),
+            }
+        )
 
     return debate_claims
 

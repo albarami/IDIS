@@ -194,9 +194,7 @@ class PostgresRunStepsRepository:
                 "tenant_id": step.tenant_id,
                 "run_id": step.run_id,
                 "step_name": (
-                    step.step_name.value
-                    if hasattr(step.step_name, "value")
-                    else step.step_name
+                    step.step_name.value if hasattr(step.step_name, "value") else step.step_name
                 ),
                 "step_order": step.step_order,
                 "status": step.status.value if hasattr(step.status, "value") else step.status,

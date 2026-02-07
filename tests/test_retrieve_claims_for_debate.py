@@ -20,7 +20,6 @@ from idis.persistence.repositories.claims import (
     _sanad_in_memory_store,
 )
 
-
 TENANT_ID = "00000000-0000-0000-0000-tenant000001"
 DEAL_ID = "00000000-0000-0000-0000-deal00000001"
 

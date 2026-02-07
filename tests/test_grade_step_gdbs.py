@@ -9,13 +9,10 @@ Verifies that:
 
 from __future__ import annotations
 
-import pytest
-
 from idis.audit.sink import InMemoryAuditSink
 from idis.persistence.repositories.claims import (
     InMemoryClaimsRepository,
     InMemoryEvidenceRepository,
-    InMemorySanadsRepository,
     clear_all_claims_stores,
     seed_claim_in_memory,
 )

@@ -603,12 +603,13 @@ def _build_debate_fn(deal: Any = None) -> Any:
         )
         orchestrator = DebateOrchestrator(config=config, role_runners=role_runners)
 
+        _HLINE = "\u2500" * 72
         print(
-            f"\n{'\u2500' * 72}\n"
+            f"\n{_HLINE}\n"
             f"  LIVE DEBATE — {context.deal_name} ({context.deal_sector})\n"
             f"  {len(debate_claims)} claims | "
             f"max {config.max_rounds} rounds\n"
-            f"{'\u2500' * 72}",
+            f"{_HLINE}",
             flush=True,
         )
 

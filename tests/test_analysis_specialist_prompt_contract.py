@@ -1,7 +1,7 @@
-"""Prompt contract guard tests for specialist analysis agents — Phase 8.B.
+"""Prompt contract guard tests for specialist analysis agents — Phase 8.B / 8.C-1.
 
-Asserts that both prompt files contain all required AgentReport schema keys,
-a JSON marker, and Muḥāsibī metacognitive discipline keywords.
+Asserts that all prompt files contain all required AgentReport schema keys,
+a JSON marker, and Muhāsibī metacognitive discipline keywords.
 If a prompt file is missing, the test fails with a clear message.
 """
 
@@ -15,6 +15,9 @@ _PROMPTS_ROOT = Path(__file__).resolve().parents[1] / "prompts"
 
 _FINANCIAL_PROMPT_PATH = _PROMPTS_ROOT / "financial_agent" / "1.0.0" / "prompt.md"
 _MARKET_PROMPT_PATH = _PROMPTS_ROOT / "market_agent" / "1.0.0" / "prompt.md"
+_TECHNICAL_PROMPT_PATH = _PROMPTS_ROOT / "technical_agent" / "1.0.0" / "prompt.md"
+_TERMS_PROMPT_PATH = _PROMPTS_ROOT / "terms_agent" / "1.0.0" / "prompt.md"
+_TEAM_PROMPT_PATH = _PROMPTS_ROOT / "team_agent" / "1.0.0" / "prompt.md"
 
 _REQUIRED_KEYS = [
     "supported_claim_ids",
@@ -122,4 +125,113 @@ class TestMarketPromptContract:
         content = _read_prompt(_MARKET_PROMPT_PATH)
         assert keyword in content, (
             f"Market agent prompt missing Muh\u0101sib\u012b keyword: '{keyword}'"
+        )
+
+
+class TestTechnicalPromptContract:
+    """Technical agent prompt must contain all required schema keys."""
+
+    def test_prompt_file_exists(self) -> None:
+        assert _TECHNICAL_PROMPT_PATH.exists(), (
+            f"Technical agent prompt missing: {_TECHNICAL_PROMPT_PATH}"
+        )
+
+    @pytest.mark.parametrize("key", _REQUIRED_KEYS)
+    def test_prompt_contains_required_key(self, key: str) -> None:
+        content = _read_prompt(_TECHNICAL_PROMPT_PATH)
+        assert key in content, f"Technical agent prompt missing required key: '{key}'"
+
+    def test_prompt_contains_json_marker(self) -> None:
+        content = _read_prompt(_TECHNICAL_PROMPT_PATH)
+        assert "```json" in content, (
+            "Technical agent prompt missing JSON code block marker (```json)"
+        )
+
+    def test_prompt_mentions_provider_id(self) -> None:
+        content = _read_prompt(_TECHNICAL_PROMPT_PATH)
+        assert "provider_id" in content, (
+            "Technical agent prompt missing enrichment provenance key: provider_id"
+        )
+
+    def test_prompt_mentions_source_id(self) -> None:
+        content = _read_prompt(_TECHNICAL_PROMPT_PATH)
+        assert "source_id" in content, (
+            "Technical agent prompt missing enrichment provenance key: source_id"
+        )
+
+    @pytest.mark.parametrize("keyword", _MUHASIBI_KEYWORDS)
+    def test_prompt_contains_muhasibi_keyword(self, keyword: str) -> None:
+        content = _read_prompt(_TECHNICAL_PROMPT_PATH)
+        assert keyword in content, (
+            f"Technical agent prompt missing Muh\u0101sib\u012b keyword: '{keyword}'"
+        )
+
+
+class TestTermsPromptContract:
+    """Terms agent prompt must contain all required schema keys."""
+
+    def test_prompt_file_exists(self) -> None:
+        assert _TERMS_PROMPT_PATH.exists(), f"Terms agent prompt missing: {_TERMS_PROMPT_PATH}"
+
+    @pytest.mark.parametrize("key", _REQUIRED_KEYS)
+    def test_prompt_contains_required_key(self, key: str) -> None:
+        content = _read_prompt(_TERMS_PROMPT_PATH)
+        assert key in content, f"Terms agent prompt missing required key: '{key}'"
+
+    def test_prompt_contains_json_marker(self) -> None:
+        content = _read_prompt(_TERMS_PROMPT_PATH)
+        assert "```json" in content, "Terms agent prompt missing JSON code block marker (```json)"
+
+    def test_prompt_mentions_provider_id(self) -> None:
+        content = _read_prompt(_TERMS_PROMPT_PATH)
+        assert "provider_id" in content, (
+            "Terms agent prompt missing enrichment provenance key: provider_id"
+        )
+
+    def test_prompt_mentions_source_id(self) -> None:
+        content = _read_prompt(_TERMS_PROMPT_PATH)
+        assert "source_id" in content, (
+            "Terms agent prompt missing enrichment provenance key: source_id"
+        )
+
+    @pytest.mark.parametrize("keyword", _MUHASIBI_KEYWORDS)
+    def test_prompt_contains_muhasibi_keyword(self, keyword: str) -> None:
+        content = _read_prompt(_TERMS_PROMPT_PATH)
+        assert keyword in content, (
+            f"Terms agent prompt missing Muh\u0101sib\u012b keyword: '{keyword}'"
+        )
+
+
+class TestTeamPromptContract:
+    """Team agent prompt must contain all required schema keys."""
+
+    def test_prompt_file_exists(self) -> None:
+        assert _TEAM_PROMPT_PATH.exists(), f"Team agent prompt missing: {_TEAM_PROMPT_PATH}"
+
+    @pytest.mark.parametrize("key", _REQUIRED_KEYS)
+    def test_prompt_contains_required_key(self, key: str) -> None:
+        content = _read_prompt(_TEAM_PROMPT_PATH)
+        assert key in content, f"Team agent prompt missing required key: '{key}'"
+
+    def test_prompt_contains_json_marker(self) -> None:
+        content = _read_prompt(_TEAM_PROMPT_PATH)
+        assert "```json" in content, "Team agent prompt missing JSON code block marker (```json)"
+
+    def test_prompt_mentions_provider_id(self) -> None:
+        content = _read_prompt(_TEAM_PROMPT_PATH)
+        assert "provider_id" in content, (
+            "Team agent prompt missing enrichment provenance key: provider_id"
+        )
+
+    def test_prompt_mentions_source_id(self) -> None:
+        content = _read_prompt(_TEAM_PROMPT_PATH)
+        assert "source_id" in content, (
+            "Team agent prompt missing enrichment provenance key: source_id"
+        )
+
+    @pytest.mark.parametrize("keyword", _MUHASIBI_KEYWORDS)
+    def test_prompt_contains_muhasibi_keyword(self, keyword: str) -> None:
+        content = _read_prompt(_TEAM_PROMPT_PATH)
+        assert keyword in content, (
+            f"Team agent prompt missing Muh\u0101sib\u012b keyword: '{keyword}'"
         )

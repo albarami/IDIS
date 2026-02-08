@@ -263,3 +263,78 @@ class TestMuhasabahValid:
 
         bundle = engine.run(_make_context(), ["agent-1"])
         assert len(bundle.reports) == 1
+
+
+class TestConfidenceJustificationRequired:
+    """confidence_justification must be required and non-empty on AgentReport."""
+
+    def test_missing_confidence_justification_raises(self) -> None:
+        """Omitting confidence_justification must fail at construction."""
+        with pytest.raises((TypeError, ValueError)):
+            AgentReport(
+                agent_id="agent-1",
+                agent_type="example_agent",
+                supported_claim_ids=[CLAIM_1],
+                supported_calc_ids=[CALC_1],
+                analysis_sections={"summary": "Test"},
+                risks=[],
+                questions_for_founder=[],
+                confidence=0.75,
+                # confidence_justification intentionally omitted
+                muhasabah=_make_valid_muhasabah(),
+            )
+
+    def test_empty_confidence_justification_raises(self) -> None:
+        """Empty-string confidence_justification must fail (min_length=1)."""
+        with pytest.raises(ValueError):
+            AgentReport(
+                agent_id="agent-1",
+                agent_type="example_agent",
+                supported_claim_ids=[CLAIM_1],
+                supported_calc_ids=[CALC_1],
+                analysis_sections={"summary": "Test"},
+                risks=[],
+                questions_for_founder=[],
+                confidence=0.75,
+                confidence_justification="",
+                muhasabah=_make_valid_muhasabah(),
+            )
+
+
+_VALID_KWARGS: dict[str, object] = {
+    "agent_id": "agent-1",
+    "agent_type": "example_agent",
+    "supported_claim_ids": [CLAIM_1],
+    "supported_calc_ids": [CALC_1],
+    "analysis_sections": {"summary": "Test"},
+    "risks": [],
+    "questions_for_founder": [],
+    "confidence": 0.75,
+    "confidence_justification": "Justified",
+}
+
+_TDD_REQUIRED_FIELDS = [
+    "supported_claim_ids",
+    "supported_calc_ids",
+    "analysis_sections",
+    "risks",
+    "questions_for_founder",
+    "confidence",
+    "confidence_justification",
+    "muhasabah",
+]
+
+
+class TestTdd102Completeness:
+    """Every TDD §10.2 required field must be non-optional on AgentReport."""
+
+    @pytest.mark.parametrize("field", _TDD_REQUIRED_FIELDS)
+    def test_omitting_required_field_raises(self, field: str) -> None:
+        """Dropping any single TDD §10.2 field must fail at construction."""
+        kwargs: dict[str, object] = {
+            **_VALID_KWARGS,
+            "muhasabah": _make_valid_muhasabah(),
+        }
+        kwargs.pop(field)
+        with pytest.raises((TypeError, ValueError)):
+            AgentReport(**kwargs)  # type: ignore[arg-type]

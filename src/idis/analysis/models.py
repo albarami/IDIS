@@ -61,6 +61,9 @@ class AnalysisContext(BaseModel):
         default_factory=dict,
         description="Enrichment references keyed by ref_id, each with full provenance",
     )
+    company_name: str = Field(default="", description="Company name for deal context")
+    stage: str = Field(default="", description="Deal stage (e.g. Series A, Seed)")
+    sector: str = Field(default="", description="Company sector / industry")
 
 
 class Risk(BaseModel):

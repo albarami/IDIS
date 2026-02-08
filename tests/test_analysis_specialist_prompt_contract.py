@@ -1,7 +1,8 @@
 """Prompt contract guard tests for specialist analysis agents — Phase 8.B.
 
-Asserts that both prompt files contain all required AgentReport schema keys
-and a JSON marker. If a prompt file is missing, the test fails with a clear message.
+Asserts that both prompt files contain all required AgentReport schema keys,
+a JSON marker, and Muḥāsibī metacognitive discipline keywords.
+If a prompt file is missing, the test fails with a clear message.
 """
 
 from __future__ import annotations
@@ -24,6 +25,15 @@ _REQUIRED_KEYS = [
     "confidence",
     "confidence_justification",
     "muhasabah",
+]
+
+_MUHASIBI_KEYWORDS = [
+    "nafs_check",
+    "Muj\u0101hada",
+    "insight_type",
+    "conventional",
+    "deal_specific",
+    "contradictory",
 ]
 
 
@@ -72,6 +82,13 @@ class TestFinancialPromptContract:
             "Financial agent prompt missing enrichment provenance key: source_id"
         )
 
+    @pytest.mark.parametrize("keyword", _MUHASIBI_KEYWORDS)
+    def test_prompt_contains_muhasibi_keyword(self, keyword: str) -> None:
+        content = _read_prompt(_FINANCIAL_PROMPT_PATH)
+        assert keyword in content, (
+            f"Financial agent prompt missing Muh\u0101sib\u012b keyword: '{keyword}'"
+        )
+
 
 class TestMarketPromptContract:
     """Market agent prompt must contain all required schema keys."""
@@ -98,4 +115,11 @@ class TestMarketPromptContract:
         content = _read_prompt(_MARKET_PROMPT_PATH)
         assert "source_id" in content, (
             "Market agent prompt missing enrichment provenance key: source_id"
+        )
+
+    @pytest.mark.parametrize("keyword", _MUHASIBI_KEYWORDS)
+    def test_prompt_contains_muhasibi_keyword(self, keyword: str) -> None:
+        content = _read_prompt(_MARKET_PROMPT_PATH)
+        assert keyword in content, (
+            f"Market agent prompt missing Muh\u0101sib\u012b keyword: '{keyword}'"
         )

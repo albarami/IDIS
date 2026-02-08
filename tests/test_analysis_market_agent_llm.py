@@ -79,9 +79,7 @@ def _valid_market_response(
             "Who are your top three competitors by revenue?",
         ],
         "confidence": 0.62,
-        "confidence_justification": (
-            "Limited market data; TAM claims self-reported"
-        ),
+        "confidence_justification": ("Limited market data; TAM claims self-reported"),
         "muhasabah": {
             "agent_id": "market-agent-01",
             "output_id": "mkt-output-001",
@@ -105,9 +103,7 @@ def _valid_market_response(
             ],
             "failure_modes": ["market_timing", "competitive_response"],
             "confidence": 0.62,
-            "confidence_justification": (
-                "Limited market data; TAM claims self-reported"
-            ),
+            "confidence_justification": ("Limited market data; TAM claims self-reported"),
             "timestamp": TIMESTAMP,
             "is_subjective": False,
         },

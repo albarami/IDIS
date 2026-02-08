@@ -31,6 +31,7 @@ from idis.api.routes.debate import router as debate_router
 from idis.api.routes.defects import router as defects_router
 from idis.api.routes.deliverables import router as deliverables_router
 from idis.api.routes.documents import router as documents_router
+from idis.api.routes.enrichment import router as enrichment_router
 from idis.api.routes.health import router as health_router
 from idis.api.routes.human_gates import router as human_gates_router
 from idis.api.routes.overrides import router as overrides_router
@@ -168,5 +169,6 @@ def create_app(
     app.include_router(deliverables_router)
     app.include_router(human_gates_router)
     app.include_router(overrides_router)
+    app.include_router(enrichment_router)
 
     return app

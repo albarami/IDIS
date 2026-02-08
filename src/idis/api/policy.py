@@ -175,6 +175,12 @@ POLICY_RULES: dict[str, PolicyRule] = {
         allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=False
     ),
     "createWebhook": PolicyRule(allowed_roles=ADMIN_ONLY, is_mutation=True, is_deal_scoped=False),
+    "fetchEnrichment": PolicyRule(
+        allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=False
+    ),
+    "listEnrichmentProviders": PolicyRule(
+        allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=False
+    ),
 }
 
 

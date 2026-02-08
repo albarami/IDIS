@@ -30,6 +30,7 @@ tags:
   - name: Deliverables
   - name: Audit
   - name: Integrations
+  - name: Enrichment
   - name: Webhooks
 
 security:
@@ -1166,6 +1167,44 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /v1/enrichment/fetch:
+    post:
+      tags: [Enrichment]
+      summary: Fetch enrichment data from a registered provider
+      operationId: fetchEnrichment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnrichmentFetchRequest"
+      responses:
+        "200":
+          description: Enrichment result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrichmentFetchResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/enrichment/providers:
+    get:
+      tags: [Enrichment]
+      summary: List registered enrichment providers
+      operationId: listEnrichmentProviders
+      responses:
+        "200":
+          description: Provider list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrichmentProviderListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /v1/integrations:
     get:
       tags: [Integrations]
@@ -1957,3 +1996,75 @@ components:
           $ref: "#/components/schemas/TruthDashboardSummary"
         claims:
           $ref: "#/components/schemas/PaginatedClaimList"
+
+    EnrichmentQuery:
+      type: object
+      properties:
+        cik: { type: string, nullable: true }
+        company_name: { type: string, nullable: true }
+        ticker: { type: string, nullable: true }
+        lei: { type: string, nullable: true }
+        jurisdiction: { type: string, nullable: true }
+
+    EnrichmentFetchRequest:
+      type: object
+      required: [provider_id, entity_type, query]
+      properties:
+        provider_id: { type: string }
+        entity_type: { type: string, enum: [COMPANY, PERSON, DEAL] }
+        query: { $ref: "#/components/schemas/EnrichmentQuery" }
+        requested_fields:
+          type: array
+          items: { type: string }
+          nullable: true
+        purpose:
+          type: string
+          enum: [SANAD_EVIDENCE, KYC, DUE_DILIGENCE]
+          default: DUE_DILIGENCE
+
+    EnrichmentProvenance:
+      type: object
+      required: [source_id, retrieved_at, rights_class, raw_ref_hash]
+      properties:
+        source_id: { type: string }
+        retrieved_at: { type: string, format: date-time }
+        rights_class: { type: string, enum: [GREEN, YELLOW, RED] }
+        raw_ref_hash: { type: string }
+        identifiers_used:
+          type: object
+          additionalProperties: { type: string }
+
+    EnrichmentFetchResponse:
+      type: object
+      required: [status, normalized]
+      properties:
+        status:
+          type: string
+          enum: [HIT, MISS, ERROR, BLOCKED_RIGHTS, BLOCKED_MISSING_BYOL]
+        normalized:
+          type: object
+          additionalProperties: true
+        provenance:
+          $ref: "#/components/schemas/EnrichmentProvenance"
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    EnrichmentProviderInfo:
+      type: object
+      required: [provider_id, rights_class, requires_byol, cache_ttl_seconds, cache_no_store]
+      properties:
+        provider_id: { type: string }
+        rights_class: { type: string, enum: [GREEN, YELLOW, RED] }
+        requires_byol: { type: boolean }
+        cache_ttl_seconds: { type: integer }
+        cache_no_store: { type: boolean }
+
+    EnrichmentProviderListResponse:
+      type: object
+      required: [providers]
+      properties:
+        providers:
+          type: array
+          items: { $ref: "#/components/schemas/EnrichmentProviderInfo" }

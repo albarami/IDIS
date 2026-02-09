@@ -14,6 +14,7 @@ Tests:
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -39,7 +40,13 @@ from idis.deliverables.generator import (
     DeliverablesGenerator,
     DeliverablesGeneratorError,
 )
-from idis.models.deliverables import DeliverablesBundle
+from idis.models.deliverables import (
+    AuditAppendix,
+    DeliverablesBundle,
+    DeliverableSection,
+    QABrief,
+    QAItem,
+)
 
 _TIMESTAMP = "2026-02-09T10:00:00Z"
 
@@ -404,6 +411,75 @@ class TestDeliverablesGeneratorFailClosed:
         """Test that exactly 8 agent types are required."""
         assert len(REQUIRED_AGENT_TYPES) == 8
 
+    def test_missing_scorecard_raises(self) -> None:
+        """Generator must raise ValueError when scorecard is None."""
+        sink = InMemoryAuditSink()
+        generator = DeliverablesGenerator(audit_sink=sink)
+
+        with pytest.raises(ValueError, match="scorecard"):
+            generator.generate(
+                ctx=_make_context(),
+                bundle=_make_bundle(),
+                scorecard=None,  # type: ignore[arg-type]
+                deal_name="Acme Corp",
+                generated_at=_TIMESTAMP,
+                deliverable_id_prefix="del-run001",
+            )
+
+    def test_generator_rejects_nff_violation_in_qa_brief(self) -> None:
+        """Generator must fail-closed if assembled QA items lack evidence refs."""
+        sink = InMemoryAuditSink()
+        generator = DeliverablesGenerator(audit_sink=sink)
+
+        ungrounded_qa = QABrief(
+            deliverable_id="qa-ungrounded",
+            tenant_id="tenant-001",
+            deal_id="deal-001",
+            deal_name="Acme Corp",
+            items=[
+                QAItem(
+                    agent_type="financial_agent",
+                    topic="Revenue",
+                    question="What is your MRR breakdown?",
+                    rationale="Need clarity",
+                    claim_refs=[],
+                    calc_refs=[],
+                    priority="MEDIUM",
+                ),
+            ],
+            summary_section=DeliverableSection(
+                section_id="qa-ungrounded-summary",
+                title="QA Brief Summary",
+                facts=[],
+            ),
+            audit_appendix=AuditAppendix(
+                entries=[],
+                generated_at=_TIMESTAMP,
+                deal_id="deal-001",
+                tenant_id="tenant-001",
+            ),
+            generated_at=_TIMESTAMP,
+        )
+
+        with (
+            patch.object(generator, "_build_qa_brief", return_value=ungrounded_qa),
+            pytest.raises(DeliverablesGeneratorError) as exc_info,
+        ):
+            generator.generate(
+                ctx=_make_context(),
+                bundle=_make_bundle(),
+                scorecard=_make_scorecard(),
+                deal_name="Acme Corp",
+                generated_at=_TIMESTAMP,
+                deliverable_id_prefix="del-run001",
+            )
+
+        assert exc_info.value.code == "NFF_VIOLATION"
+        assert "QA Brief item" in exc_info.value.message
+
+        event_types = [e["event_type"] for e in sink.events]
+        assert "deliverable.generation.failed" in event_types
+
 
 class TestDeliverablesGeneratorAudit:
     """Tests for audit event emission."""
@@ -510,3 +586,18 @@ class TestDeliverablesGeneratorAudit:
         assert len(completed) == 1
         assert completed[0]["deliverable_count"] == 4
         assert completed[0]["has_decline_letter"] is False
+
+
+class TestDeliverablesGeneratorStructural:
+    """Structural invariant tests."""
+
+    def test_no_parallel_deliverables_package_exists(self) -> None:
+        """Structural guard: src/idis/analysis/deliverables/ must not exist."""
+        from pathlib import Path
+
+        forbidden_path = Path("src/idis/analysis/deliverables")
+        assert not forbidden_path.exists(), (
+            f"Forbidden parallel deliverables package detected at {forbidden_path}. "
+            "All deliverable code must live in src/idis/deliverables/ "
+            "and src/idis/models/deliverables.py"
+        )

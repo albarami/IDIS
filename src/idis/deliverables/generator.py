@@ -140,6 +140,9 @@ class DeliverablesGenerator:
             DeliverablesGeneratorError: On missing inputs or validation failure.
             AuditSinkError: On audit sink failure (fatal).
         """
+        if scorecard is None:
+            raise ValueError("scorecard is required and must not be None")
+
         self._emit_audit(
             "deliverable.generation.started",
             {
@@ -615,6 +618,38 @@ class DeliverablesGenerator:
                     ),
                     code="NFF_VIOLATION",
                 ) from exc
+
+        self._validate_qa_items_grounded(qa)
+
+    @staticmethod
+    def _validate_qa_items_grounded(qa: QABrief) -> None:
+        """Validate that all QA items have evidence grounding.
+
+        The general-purpose NFF validator relaxes QA items (they are questions),
+        but the generator enforces stricter grounding: every QA item must trace
+        back to at least one claim or calc that prompted the question.
+
+        Args:
+            qa: The QA brief to validate.
+
+        Raises:
+            DeliverablesGeneratorError: If any QA item lacks evidence refs.
+        """
+        items = getattr(qa, "items", []) or []
+        for i, item in enumerate(items):
+            item_claim_refs = getattr(item, "claim_refs", []) or []
+            item_calc_refs = getattr(item, "calc_refs", []) or []
+            if not item_claim_refs and not item_calc_refs:
+                question = getattr(item, "question", "")
+                display = question[:50] + "..." if len(question) > 50 else question
+                raise DeliverablesGeneratorError(
+                    message=(
+                        f"QA Brief item [{i}] has no claim_refs or calc_refs — "
+                        f"NFF violation at generator boundary. "
+                        f"Question: '{display}'"
+                    ),
+                    code="NFF_VIOLATION",
+                )
 
     @staticmethod
     def _score_to_verdict(score: float) -> str:

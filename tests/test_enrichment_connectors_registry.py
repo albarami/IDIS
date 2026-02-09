@@ -1,7 +1,7 @@
 """Tests for enrichment connector registry completeness.
 
 Verifies all expected connectors are registered in the default registry,
-and that ESCWA ISPAR is explicitly NOT registered (no documented REST API).
+including ESCWA ISPAR via the Arab Development Portal (data.arabdevelopmentportal.org).
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ EXPECTED_PROVIDER_IDS = frozenset(
         "fmp",
         "world_bank",
         "escwa_catalog",
+        "escwa_ispar",
         "qatar_open_data",
         "hackernews",
         "gdelt",
@@ -35,9 +36,9 @@ class TestDefaultRegistryCompleteness:
         registry = _build_default_registry()
         assert registry.provider_ids == EXPECTED_PROVIDER_IDS
 
-    def test_registry_has_14_providers(self) -> None:
+    def test_registry_has_15_providers(self) -> None:
         registry = _build_default_registry()
-        assert len(registry.list_providers()) == 14
+        assert len(registry.list_providers()) == 15
 
     def test_each_provider_id_resolves(self) -> None:
         registry = _build_default_registry()
@@ -46,20 +47,23 @@ class TestDefaultRegistryCompleteness:
             assert descriptor.provider_id == pid
 
 
-class TestIsparNotRegistered:
-    """ESCWA ISPAR is not registered: ispar.unescwa.org is an HTML/ASPX site
-    with no documented REST/JSON API. This exclusion is deterministic and explicit.
+class TestIsparRegistered:
+    """ESCWA ISPAR is registered via the Arab Development Portal
+    (data.arabdevelopmentportal.org). The ADP provides API query support
+    for 200k+ datasets covering 22 Arab states.
     """
 
-    def test_ispar_not_in_registry(self) -> None:
+    def test_ispar_in_registry(self) -> None:
         registry = _build_default_registry()
-        assert "escwa_ispar" not in registry.provider_ids, (
-            "ESCWA ISPAR must not be registered: ispar.unescwa.org has no "
-            "documented REST/JSON API (HTML/ASPX web application only)"
-        )
+        assert "escwa_ispar" in registry.provider_ids
 
-    def test_ispar_not_in_expected_set(self) -> None:
-        assert "escwa_ispar" not in EXPECTED_PROVIDER_IDS
+    def test_ispar_is_green(self) -> None:
+        registry = _build_default_registry()
+        assert registry.get("escwa_ispar").rights_class.value == "GREEN"
+
+    def test_ispar_no_byol(self) -> None:
+        registry = _build_default_registry()
+        assert registry.get("escwa_ispar").requires_byol is False
 
 
 class TestRedProvidersMarkedCorrectly:
@@ -106,6 +110,7 @@ class TestByolProviders:
             "sec_edgar",
             "world_bank",
             "escwa_catalog",
+            "escwa_ispar",
             "qatar_open_data",
             "hackernews",
             "gdelt",

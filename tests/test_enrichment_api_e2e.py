@@ -105,6 +105,7 @@ class TestListProviders:
             "fmp",
             "world_bank",
             "escwa_catalog",
+            "escwa_ispar",
             "qatar_open_data",
             "hackernews",
             "gdelt",

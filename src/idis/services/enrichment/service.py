@@ -357,6 +357,7 @@ def _build_default_registry() -> EnrichmentProviderRegistry:
     from idis.services.enrichment.connectors.companies_house import CompaniesHouseConnector
     from idis.services.enrichment.connectors.edgar import EdgarConnector
     from idis.services.enrichment.connectors.escwa_catalog import EscwaCatalogConnector
+    from idis.services.enrichment.connectors.escwa_ispar import EscwaIsparConnector
     from idis.services.enrichment.connectors.finnhub import FinnhubConnector
     from idis.services.enrichment.connectors.fmp import FmpConnector
     from idis.services.enrichment.connectors.fred import FredConnector
@@ -379,6 +380,7 @@ def _build_default_registry() -> EnrichmentProviderRegistry:
     registry.register(FmpConnector(), requires_byol=True)
     registry.register(WorldBankConnector(), requires_byol=False)
     registry.register(EscwaCatalogConnector(), requires_byol=False)
+    registry.register(EscwaIsparConnector(), requires_byol=False)
     registry.register(QatarOpenDataConnector(), requires_byol=False)
     registry.register(HackerNewsConnector(), requires_byol=False)
     registry.register(GdeltConnector(), requires_byol=False)

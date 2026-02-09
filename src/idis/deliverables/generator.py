@@ -152,7 +152,10 @@ class DeliverablesGenerator:
 
         try:
             if scorecard is None:
-                raise ValueError("scorecard is required and must not be None")
+                raise DeliverablesGeneratorError(
+                    message="Scorecard is required and must not be None",
+                    code="MISSING_SCORECARD",
+                )
 
             reports_by_type = self._validate_preconditions(bundle, scorecard)
 
@@ -232,26 +235,15 @@ class DeliverablesGenerator:
 
         except AuditSinkError:
             raise
-        except ValueError as exc:
+        except DeliverablesGeneratorError as exc:
             self._emit_audit(
                 "deliverable.generation.failed",
                 {
                     "deal_id": ctx.deal_id,
                     "tenant_id": ctx.tenant_id,
                     "run_id": ctx.run_id,
-                    "error_type": "precondition_failed",
-                    "error": str(exc),
-                },
-            )
-            raise
-        except DeliverablesGeneratorError:
-            self._emit_audit(
-                "deliverable.generation.failed",
-                {
-                    "deal_id": ctx.deal_id,
-                    "tenant_id": ctx.tenant_id,
-                    "run_id": ctx.run_id,
-                    "error_type": "generator_error",
+                    "error_type": exc.code,
+                    "error": exc.message,
                 },
             )
             raise
@@ -262,12 +254,13 @@ class DeliverablesGenerator:
                     "deal_id": ctx.deal_id,
                     "tenant_id": ctx.tenant_id,
                     "run_id": ctx.run_id,
+                    "error_type": "INTERNAL_ERROR",
                     "error": str(exc),
                 },
             )
             raise DeliverablesGeneratorError(
-                message=f"Deliverables generation failed: {exc}",
-                code="GENERATION_FAILED",
+                message=f"Unexpected error during generation: {exc}",
+                code="INTERNAL_ERROR",
             ) from exc
 
     def _validate_preconditions(

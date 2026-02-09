@@ -412,11 +412,14 @@ class TestDeliverablesGeneratorFailClosed:
         assert len(REQUIRED_AGENT_TYPES) == 8
 
     def test_missing_scorecard_raises(self) -> None:
-        """Generator must raise ValueError when scorecard is None, with audit trail."""
+        """Generator must raise DeliverablesGeneratorError when scorecard is None.
+
+        Audit trail must include both started and failed events.
+        """
         sink = InMemoryAuditSink()
         generator = DeliverablesGenerator(audit_sink=sink)
 
-        with pytest.raises(ValueError, match="scorecard"):
+        with pytest.raises(DeliverablesGeneratorError) as exc_info:
             generator.generate(
                 ctx=_make_context(),
                 bundle=_make_bundle(),
@@ -426,9 +429,15 @@ class TestDeliverablesGeneratorFailClosed:
                 deliverable_id_prefix="del-run001",
             )
 
+        assert exc_info.value.code == "MISSING_SCORECARD"
+        assert "Scorecard" in exc_info.value.message
+
         event_types = [e["event_type"] for e in sink.events]
         assert "deliverable.generation.started" in event_types
         assert "deliverable.generation.failed" in event_types
+
+        failed = [e for e in sink.events if e["event_type"] == "deliverable.generation.failed"]
+        assert failed[0]["error_type"] == "MISSING_SCORECARD"
 
     def test_generator_rejects_nff_violation_in_qa_brief(self) -> None:
         """Generator must fail-closed if assembled QA items lack evidence refs."""
@@ -483,6 +492,35 @@ class TestDeliverablesGeneratorFailClosed:
 
         event_types = [e["event_type"] for e in sink.events]
         assert "deliverable.generation.failed" in event_types
+
+    def test_internal_error_not_labeled_precondition(self) -> None:
+        """Internal ValueError from a builder must surface as INTERNAL_ERROR, not precondition."""
+        sink = InMemoryAuditSink()
+        generator = DeliverablesGenerator(audit_sink=sink)
+
+        with (
+            patch.object(
+                generator,
+                "_build_screening_snapshot",
+                side_effect=ValueError("synthetic builder explosion"),
+            ),
+            pytest.raises(DeliverablesGeneratorError) as exc_info,
+        ):
+            generator.generate(
+                ctx=_make_context(),
+                bundle=_make_bundle(),
+                scorecard=_make_scorecard(),
+                deal_name="Acme Corp",
+                generated_at=_TIMESTAMP,
+                deliverable_id_prefix="del-run001",
+            )
+
+        assert exc_info.value.code == "INTERNAL_ERROR"
+        assert "synthetic builder explosion" in exc_info.value.message
+
+        failed = [e for e in sink.events if e["event_type"] == "deliverable.generation.failed"]
+        assert len(failed) == 1
+        assert failed[0]["error_type"] == "INTERNAL_ERROR"
 
 
 class TestDeliverablesGeneratorAudit:

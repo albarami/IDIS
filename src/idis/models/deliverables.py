@@ -283,6 +283,205 @@ class ICMemo(BaseModel):
     generated_at: str = Field(..., description="ISO timestamp (passed in, not generated)")
 
 
+class TruthRow(BaseModel):
+    """A single row in the Truth Dashboard.
+
+    Each row represents a claim-level truth assertion with a verdict,
+    grounded to evidence via claim_refs/calc_refs.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    dimension: str = Field(..., description="Scorecard dimension this row belongs to")
+    assertion: str = Field(..., description="The truth assertion text")
+    verdict: str = Field(..., description="Verdict: CONFIRMED, DISPUTED, UNVERIFIED, REFUTED")
+    claim_refs: list[str] = Field(
+        default_factory=list,
+        description="Supporting claim_ids (sorted lexicographically)",
+    )
+    calc_refs: list[str] = Field(
+        default_factory=list,
+        description="Supporting calc_ids (sorted lexicographically)",
+    )
+    sanad_grade: str | None = Field(
+        default=None,
+        description="Grade of the primary supporting claim (A/B/C/D)",
+    )
+    confidence: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Confidence in this assertion (0.0-1.0)",
+    )
+
+    @field_validator("claim_refs", "calc_refs", mode="before")
+    @classmethod
+    def sort_refs(cls, v: list[str]) -> list[str]:
+        """Sort refs lexicographically for stable output."""
+        if isinstance(v, list):
+            return sorted(v)
+        return v
+
+
+class TruthDashboard(BaseModel):
+    """Truth Dashboard deliverable — claim-level truth matrix.
+
+    Per v6.3: maps every key assertion to its evidence verdict,
+    organized by scorecard dimension. Deterministic row ordering
+    by (dimension, assertion) for stable output.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    deliverable_type: Literal["TRUTH_DASHBOARD"] = "TRUTH_DASHBOARD"
+    deliverable_id: str = Field(..., description="Unique deliverable identifier")
+    tenant_id: str = Field(..., description="Tenant scope")
+    deal_id: str = Field(..., description="Deal this dashboard is for")
+    deal_name: str = Field(..., description="Human-readable deal name")
+
+    rows: list[TruthRow] = Field(
+        default_factory=list,
+        description="Truth rows sorted by (dimension, assertion)",
+    )
+
+    summary_section: DeliverableSection = Field(..., description="Dashboard summary section")
+
+    audit_appendix: AuditAppendix = Field(..., description="Evidence appendix with all refs")
+
+    generated_at: str = Field(..., description="ISO timestamp (passed in, not generated)")
+
+
+class QAItem(BaseModel):
+    """A single question-answer item in the QA Brief.
+
+    Questions are extracted from agent reports and grouped by topic.
+    Each item is grounded to evidence that prompted the question.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    agent_type: str = Field(..., description="Agent that raised this question")
+    topic: str = Field(..., description="Topic/category for grouping")
+    question: str = Field(..., description="The question for the founder")
+    rationale: str = Field(
+        default="",
+        description="Why this question matters (evidence context)",
+    )
+    claim_refs: list[str] = Field(
+        default_factory=list,
+        description="Claims that prompted this question (sorted)",
+    )
+    calc_refs: list[str] = Field(
+        default_factory=list,
+        description="Calcs that prompted this question (sorted)",
+    )
+    priority: str = Field(
+        default="MEDIUM",
+        description="Priority: HIGH, MEDIUM, LOW",
+    )
+
+    @field_validator("claim_refs", "calc_refs", mode="before")
+    @classmethod
+    def sort_refs(cls, v: list[str]) -> list[str]:
+        """Sort refs lexicographically for stable output."""
+        if isinstance(v, list):
+            return sorted(v)
+        return v
+
+
+class QABrief(BaseModel):
+    """QA Brief deliverable — founder questions extracted from analysis.
+
+    Per v6.3: compiles all questions_for_founder from agent reports,
+    organized by topic with evidence grounding. Deterministic ordering
+    by (topic, agent_type, question) for stable output.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    deliverable_type: Literal["QA_BRIEF"] = "QA_BRIEF"
+    deliverable_id: str = Field(..., description="Unique deliverable identifier")
+    tenant_id: str = Field(..., description="Tenant scope")
+    deal_id: str = Field(..., description="Deal this brief is for")
+    deal_name: str = Field(..., description="Human-readable deal name")
+
+    items: list[QAItem] = Field(
+        default_factory=list,
+        description="QA items sorted by (topic, agent_type, question)",
+    )
+
+    summary_section: DeliverableSection = Field(..., description="Brief summary section")
+
+    audit_appendix: AuditAppendix = Field(..., description="Evidence appendix with all refs")
+
+    generated_at: str = Field(..., description="ISO timestamp (passed in, not generated)")
+
+
+class DeclineLetter(BaseModel):
+    """Decline Letter deliverable — evidence-backed decline rationale.
+
+    Per v6.3: generated only when scorecard routing=DECLINE.
+    Contains structured decline reasoning with evidence references.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    deliverable_type: Literal["DECLINE_LETTER"] = "DECLINE_LETTER"
+    deliverable_id: str = Field(..., description="Unique deliverable identifier")
+    tenant_id: str = Field(..., description="Tenant scope")
+    deal_id: str = Field(..., description="Deal this letter is for")
+    deal_name: str = Field(..., description="Human-readable deal name")
+
+    rationale_section: DeliverableSection = Field(
+        ..., description="Primary decline rationale with evidence"
+    )
+    key_concerns_section: DeliverableSection = Field(
+        ..., description="Key concerns that drove the decline decision"
+    )
+    missing_info_section: DeliverableSection = Field(
+        ..., description="Information gaps that contributed to decline"
+    )
+
+    composite_score: float = Field(
+        ..., ge=0.0, le=100.0, description="Composite score that triggered decline"
+    )
+    score_band: str = Field(..., description="Score band (expected: LOW)")
+
+    additional_sections: list[DeliverableSection] = Field(
+        default_factory=list,
+        description="Additional custom sections",
+    )
+
+    audit_appendix: AuditAppendix = Field(..., description="Evidence appendix with all refs")
+
+    generated_at: str = Field(..., description="ISO timestamp (passed in, not generated)")
+
+
+class DeliverablesBundle(BaseModel):
+    """Bundle of all generated deliverables for a deal.
+
+    Contains the 5 standard deliverables (DeclineLetter only when routing=DECLINE).
+    All deliverables share the same deal/tenant/run context.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    deal_id: str = Field(..., description="Deal these deliverables are for")
+    tenant_id: str = Field(..., description="Tenant scope")
+    run_id: str = Field(..., description="Analysis run identifier")
+
+    screening_snapshot: ScreeningSnapshot = Field(..., description="Partner-ready one-pager")
+    ic_memo: ICMemo = Field(..., description="Full IC memo")
+    truth_dashboard: TruthDashboard = Field(..., description="Claim-level truth matrix")
+    qa_brief: QABrief = Field(..., description="Founder questions brief")
+    decline_letter: DeclineLetter | None = Field(
+        default=None,
+        description="Decline letter (only when routing=DECLINE)",
+    )
+
+    generated_at: str = Field(..., description="ISO timestamp (passed in, not generated)")
+
+
 class DeliverableExportFormat(StrEnum):
     """Supported export formats for deliverables."""
 

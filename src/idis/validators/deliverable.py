@@ -258,6 +258,99 @@ class DeliverableValidator:
             return DeliverableValidationResult.fail(errors)
         return DeliverableValidationResult.success()
 
+    def validate_truth_dashboard(
+        self,
+        dashboard: Any,
+    ) -> DeliverableValidationResult:
+        """Validate a TruthDashboard for No-Free-Facts compliance.
+
+        Rules:
+        - Each TruthRow with non-empty assertion is treated as factual;
+          rows must have claim_refs or calc_refs.
+        - Summary section validated per standard section rules.
+        """
+        errors: list[ValidationError] = []
+
+        rows = getattr(dashboard, "rows", []) or []
+        for i, row in enumerate(rows):
+            claim_refs = getattr(row, "claim_refs", []) or []
+            calc_refs = getattr(row, "calc_refs", []) or []
+            if not claim_refs and not calc_refs:
+                assertion = getattr(row, "assertion", "") or ""
+                display = assertion[:50] + "..." if len(assertion) > 50 else assertion
+                errors.append(
+                    ValidationError(
+                        code="NO_FREE_FACTS_UNREFERENCED_TRUTH_ROW",
+                        message=(
+                            f"Truth row has no claim_refs or calc_refs. Assertion: '{display}'"
+                        ),
+                        path=f"$.rows[{i}]",
+                    )
+                )
+
+        summary = getattr(dashboard, "summary_section", None)
+        if summary is not None:
+            section_errors = self._validate_section(summary, "$.summary_section")
+            errors.extend(section_errors)
+
+        if errors:
+            return DeliverableValidationResult.fail(errors)
+        return DeliverableValidationResult.success()
+
+    def validate_qa_brief(
+        self,
+        brief: Any,
+    ) -> DeliverableValidationResult:
+        """Validate a QABrief for No-Free-Facts compliance.
+
+        Rules:
+        - Each QAItem is treated as a question (non-factual), so NFF is relaxed.
+        - Summary section validated per standard section rules.
+        """
+        errors: list[ValidationError] = []
+
+        summary = getattr(brief, "summary_section", None)
+        if summary is not None:
+            section_errors = self._validate_section(summary, "$.summary_section")
+            errors.extend(section_errors)
+
+        if errors:
+            return DeliverableValidationResult.fail(errors)
+        return DeliverableValidationResult.success()
+
+    def validate_decline_letter(
+        self,
+        letter: Any,
+    ) -> DeliverableValidationResult:
+        """Validate a DeclineLetter for No-Free-Facts compliance.
+
+        Rules:
+        - rationale_section and key_concerns_section are factual → validated.
+        - missing_info_section is subjective → standard section validation.
+        - Additional sections validated per standard rules.
+        """
+        errors: list[ValidationError] = []
+
+        sections_to_validate = [
+            ("$.rationale_section", getattr(letter, "rationale_section", None)),
+            ("$.key_concerns_section", getattr(letter, "key_concerns_section", None)),
+            ("$.missing_info_section", getattr(letter, "missing_info_section", None)),
+        ]
+
+        for path, section in sections_to_validate:
+            if section is not None:
+                section_errors = self._validate_section(section, path)
+                errors.extend(section_errors)
+
+        additional = getattr(letter, "additional_sections", []) or []
+        for i, section in enumerate(additional):
+            section_errors = self._validate_section(section, f"$.additional_sections[{i}]")
+            errors.extend(section_errors)
+
+        if errors:
+            return DeliverableValidationResult.fail(errors)
+        return DeliverableValidationResult.success()
+
     def validate(
         self,
         deliverable: Any,
@@ -272,6 +365,12 @@ class DeliverableValidator:
             return self.validate_screening_snapshot(deliverable)
         elif deliverable_type == "IC_MEMO":
             return self.validate_ic_memo(deliverable)
+        elif deliverable_type == "TRUTH_DASHBOARD":
+            return self.validate_truth_dashboard(deliverable)
+        elif deliverable_type == "QA_BRIEF":
+            return self.validate_qa_brief(deliverable)
+        elif deliverable_type == "DECLINE_LETTER":
+            return self.validate_decline_letter(deliverable)
         else:
             return DeliverableValidationResult.fail(
                 [

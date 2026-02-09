@@ -325,7 +325,7 @@ def create_default_enrichment_service(
     audit_sink: AuditSink,
     environment: EnvironmentMode = EnvironmentMode.DEV,
 ) -> EnrichmentService:
-    """Create an EnrichmentService with the default registry and EDGAR connector.
+    """Create an EnrichmentService with all registered connectors.
 
     Args:
         audit_sink: Audit sink for event emission.
@@ -334,10 +334,7 @@ def create_default_enrichment_service(
     Returns:
         Configured EnrichmentService instance.
     """
-    from idis.services.enrichment.connectors.edgar import EdgarConnector
-
-    registry = EnrichmentProviderRegistry()
-    registry.register(EdgarConnector(), requires_byol=False)
+    registry = _build_default_registry()
 
     credential_repo = InMemoryCredentialRepository()
     cache_store = EnrichmentCacheStore()
@@ -349,3 +346,44 @@ def create_default_enrichment_service(
         cache_store=cache_store,
         environment=environment,
     )
+
+
+def _build_default_registry() -> EnrichmentProviderRegistry:
+    """Build the default provider registry with all connectors.
+
+    Returns:
+        Registry with all enrichment connectors registered.
+    """
+    from idis.services.enrichment.connectors.companies_house import CompaniesHouseConnector
+    from idis.services.enrichment.connectors.edgar import EdgarConnector
+    from idis.services.enrichment.connectors.escwa_catalog import EscwaCatalogConnector
+    from idis.services.enrichment.connectors.finnhub import FinnhubConnector
+    from idis.services.enrichment.connectors.fmp import FmpConnector
+    from idis.services.enrichment.connectors.fred import FredConnector
+    from idis.services.enrichment.connectors.gdelt import GdeltConnector
+    from idis.services.enrichment.connectors.github import GitHubConnector
+    from idis.services.enrichment.connectors.google_news_rss import GoogleNewsRssConnector
+    from idis.services.enrichment.connectors.hackernews import HackerNewsConnector
+    from idis.services.enrichment.connectors.patentsview import PatentsViewConnector
+    from idis.services.enrichment.connectors.qatar_open_data import QatarOpenDataConnector
+    from idis.services.enrichment.connectors.wayback import WaybackConnector
+    from idis.services.enrichment.connectors.world_bank import WorldBankConnector
+
+    registry = EnrichmentProviderRegistry()
+
+    registry.register(EdgarConnector(), requires_byol=False)
+    registry.register(CompaniesHouseConnector(), requires_byol=True)
+    registry.register(GitHubConnector(), requires_byol=True)
+    registry.register(FredConnector(), requires_byol=True)
+    registry.register(FinnhubConnector(), requires_byol=True)
+    registry.register(FmpConnector(), requires_byol=True)
+    registry.register(WorldBankConnector(), requires_byol=False)
+    registry.register(EscwaCatalogConnector(), requires_byol=False)
+    registry.register(QatarOpenDataConnector(), requires_byol=False)
+    registry.register(HackerNewsConnector(), requires_byol=False)
+    registry.register(GdeltConnector(), requires_byol=False)
+    registry.register(PatentsViewConnector(), requires_byol=False)
+    registry.register(WaybackConnector(), requires_byol=False)
+    registry.register(GoogleNewsRssConnector(), requires_byol=False)
+
+    return registry

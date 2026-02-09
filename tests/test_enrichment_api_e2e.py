@@ -88,6 +88,32 @@ class TestListProviders:
         provider_ids = [p["provider_id"] for p in data["providers"]]
         assert "sec_edgar" in provider_ids
 
+    def test_list_providers_returns_all_14(self, _enrich_client: TestClient) -> None:
+        resp = _enrich_client.get(
+            "/v1/enrichment/providers",
+            headers={"X-IDIS-API-Key": "test-key-enrich"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        provider_ids = {p["provider_id"] for p in data["providers"]}
+        expected = {
+            "sec_edgar",
+            "companies_house",
+            "github",
+            "fred",
+            "finnhub",
+            "fmp",
+            "world_bank",
+            "escwa_catalog",
+            "qatar_open_data",
+            "hackernews",
+            "gdelt",
+            "patentsview",
+            "wayback",
+            "google_news_rss",
+        }
+        assert provider_ids == expected
+
     def test_list_providers_has_correct_schema(self, _enrich_client: TestClient) -> None:
         resp = _enrich_client.get(
             "/v1/enrichment/providers",

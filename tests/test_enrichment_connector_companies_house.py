@@ -1,0 +1,160 @@
+"""Tests for Companies House enrichment connector.
+
+Uses httpx.MockTransport for deterministic testing with no live network calls.
+Verifies BYOL credential handling.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import httpx
+
+from idis.services.enrichment.connectors.companies_house import (
+    COMPANIES_HOUSE_PROVIDER_ID,
+    CompaniesHouseConnector,
+)
+from idis.services.enrichment.models import (
+    CachePolicyConfig,
+    EnrichmentContext,
+    EnrichmentQuery,
+    EnrichmentRequest,
+    EnrichmentStatus,
+    EntityType,
+    RightsClass,
+)
+
+SAMPLE_RESPONSE: dict[str, Any] = {
+    "total_results": 1,
+    "items": [
+        {
+            "title": "ACME CORPORATION LTD",
+            "company_number": "12345678",
+            "company_status": "active",
+            "company_type": "ltd",
+            "date_of_creation": "2020-01-15",
+            "address_snippet": "123 High Street, London",
+            "address": {"locality": "London", "postal_code": "EC1A 1BB"},
+        }
+    ],
+}
+
+
+def _make_client(
+    status_code: int = 200,
+    response_json: dict[str, Any] | None = None,
+    raise_error: bool = False,
+) -> httpx.Client:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if raise_error:
+            raise httpx.ConnectError("Connection refused")
+        body = response_json if response_json is not None else SAMPLE_RESPONSE
+        return httpx.Response(status_code=status_code, json=body)
+
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def _make_request(
+    company_name: str = "Acme Corp",
+    entity_type: EntityType = EntityType.COMPANY,
+) -> EnrichmentRequest:
+    return EnrichmentRequest(
+        tenant_id="tenant-ch-001",
+        entity_type=entity_type,
+        query=EnrichmentQuery(company_name=company_name),
+    )
+
+
+def _ctx_with_key() -> EnrichmentContext:
+    return EnrichmentContext(
+        timeout_seconds=5.0,
+        max_retries=0,
+        request_id="req-ch-test",
+        byol_credentials={"api_key": "test-ch-key-12345"},
+    )
+
+
+def _ctx_no_key() -> EnrichmentContext:
+    return EnrichmentContext(timeout_seconds=5.0, max_retries=0, request_id="req-ch-test")
+
+
+class TestCompaniesHouseProperties:
+    def test_provider_id(self) -> None:
+        assert CompaniesHouseConnector().provider_id == COMPANIES_HOUSE_PROVIDER_ID
+
+    def test_rights_class_is_green(self) -> None:
+        assert CompaniesHouseConnector().rights_class == RightsClass.GREEN
+
+    def test_cache_policy(self) -> None:
+        policy = CompaniesHouseConnector().cache_policy
+        assert isinstance(policy, CachePolicyConfig)
+        assert policy.ttl_seconds > 0
+
+
+class TestCompaniesHouseFetchSuccess:
+    def test_successful_fetch_returns_hit(self) -> None:
+        connector = CompaniesHouseConnector(http_client=_make_client())
+        result = connector.fetch(_make_request(), _ctx_with_key())
+        assert result.status == EnrichmentStatus.HIT
+        assert result.normalized["total_results"] == 1
+        assert result.normalized["companies"][0]["company_number"] == "12345678"
+
+    def test_provenance_populated(self) -> None:
+        connector = CompaniesHouseConnector(http_client=_make_client())
+        result = connector.fetch(_make_request(), _ctx_with_key())
+        assert result.provenance is not None
+        assert result.provenance.source_id == COMPANIES_HOUSE_PROVIDER_ID
+        assert result.provenance.identifiers_used["company_name"] == "Acme Corp"
+
+    def test_normalized_schema_deterministic(self) -> None:
+        connector = CompaniesHouseConnector(http_client=_make_client())
+        r1 = connector.fetch(_make_request(), _ctx_with_key())
+        r2 = connector.fetch(_make_request(), _ctx_with_key())
+        assert r1.normalized == r2.normalized
+
+
+class TestCompaniesHouseFetchFailures:
+    def test_404_returns_miss(self) -> None:
+        connector = CompaniesHouseConnector(http_client=_make_client(status_code=404))
+        assert connector.fetch(_make_request(), _ctx_with_key()).status == EnrichmentStatus.MISS
+
+    def test_500_returns_error(self) -> None:
+        connector = CompaniesHouseConnector(
+            http_client=_make_client(status_code=500, response_json={})
+        )
+        assert connector.fetch(_make_request(), _ctx_with_key()).status == EnrichmentStatus.ERROR
+
+    def test_network_error_returns_error(self) -> None:
+        connector = CompaniesHouseConnector(http_client=_make_client(raise_error=True))
+        assert connector.fetch(_make_request(), _ctx_with_key()).status == EnrichmentStatus.ERROR
+
+    def test_non_company_entity_returns_error(self) -> None:
+        connector = CompaniesHouseConnector(http_client=_make_client())
+        result = connector.fetch(_make_request(entity_type=EntityType.PERSON), _ctx_with_key())
+        assert result.status == EnrichmentStatus.ERROR
+
+    def test_missing_company_name_returns_error(self) -> None:
+        connector = CompaniesHouseConnector(http_client=_make_client())
+        request = EnrichmentRequest(
+            tenant_id="t-001", entity_type=EntityType.COMPANY, query=EnrichmentQuery()
+        )
+        assert connector.fetch(request, _ctx_with_key()).status == EnrichmentStatus.ERROR
+
+
+class TestCompaniesHouseByol:
+    def test_missing_api_key_returns_error(self) -> None:
+        connector = CompaniesHouseConnector(http_client=_make_client())
+        result = connector.fetch(_make_request(), _ctx_no_key())
+        assert result.status == EnrichmentStatus.ERROR
+        assert "API key" in result.normalized.get("error", "")
+
+    def test_empty_credentials_returns_error(self) -> None:
+        ctx = EnrichmentContext(
+            timeout_seconds=5.0,
+            max_retries=0,
+            request_id="req-ch-test",
+            byol_credentials={},
+        )
+        connector = CompaniesHouseConnector(http_client=_make_client())
+        result = connector.fetch(_make_request(), ctx)
+        assert result.status == EnrichmentStatus.ERROR

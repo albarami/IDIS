@@ -140,20 +140,20 @@ class DeliverablesGenerator:
             DeliverablesGeneratorError: On missing inputs or validation failure.
             AuditSinkError: On audit sink failure (fatal).
         """
-        if scorecard is None:
-            raise ValueError("scorecard is required and must not be None")
-
         self._emit_audit(
             "deliverable.generation.started",
             {
                 "deal_id": ctx.deal_id,
                 "tenant_id": ctx.tenant_id,
                 "run_id": ctx.run_id,
-                "routing": scorecard.routing.value,
+                "routing": scorecard.routing.value if scorecard is not None else "UNKNOWN",
             },
         )
 
         try:
+            if scorecard is None:
+                raise ValueError("scorecard is required and must not be None")
+
             reports_by_type = self._validate_preconditions(bundle, scorecard)
 
             screening = self._build_screening_snapshot(
@@ -231,6 +231,18 @@ class DeliverablesGenerator:
             return result
 
         except AuditSinkError:
+            raise
+        except ValueError as exc:
+            self._emit_audit(
+                "deliverable.generation.failed",
+                {
+                    "deal_id": ctx.deal_id,
+                    "tenant_id": ctx.tenant_id,
+                    "run_id": ctx.run_id,
+                    "error_type": "precondition_failed",
+                    "error": str(exc),
+                },
+            )
             raise
         except DeliverablesGeneratorError:
             self._emit_audit(

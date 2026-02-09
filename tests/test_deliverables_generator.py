@@ -412,7 +412,7 @@ class TestDeliverablesGeneratorFailClosed:
         assert len(REQUIRED_AGENT_TYPES) == 8
 
     def test_missing_scorecard_raises(self) -> None:
-        """Generator must raise ValueError when scorecard is None."""
+        """Generator must raise ValueError when scorecard is None, with audit trail."""
         sink = InMemoryAuditSink()
         generator = DeliverablesGenerator(audit_sink=sink)
 
@@ -425,6 +425,10 @@ class TestDeliverablesGeneratorFailClosed:
                 generated_at=_TIMESTAMP,
                 deliverable_id_prefix="del-run001",
             )
+
+        event_types = [e["event_type"] for e in sink.events]
+        assert "deliverable.generation.started" in event_types
+        assert "deliverable.generation.failed" in event_types
 
     def test_generator_rejects_nff_violation_in_qa_brief(self) -> None:
         """Generator must fail-closed if assembled QA items lack evidence refs."""
@@ -595,7 +599,8 @@ class TestDeliverablesGeneratorStructural:
         """Structural guard: src/idis/analysis/deliverables/ must not exist."""
         from pathlib import Path
 
-        forbidden_path = Path("src/idis/analysis/deliverables")
+        repo_root = Path(__file__).resolve().parent.parent
+        forbidden_path = repo_root / "src" / "idis" / "analysis" / "deliverables"
         assert not forbidden_path.exists(), (
             f"Forbidden parallel deliverables package detected at {forbidden_path}. "
             "All deliverable code must live in src/idis/deliverables/ "

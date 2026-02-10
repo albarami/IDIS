@@ -103,6 +103,7 @@ class TestGitHubFetchSuccess:
         connector = GitHubConnector(http_client=_make_client())
         result = connector.fetch(_make_request(), _ctx_with_token())
         assert result.provenance is not None
+        assert result.provenance.provider_id == GITHUB_PROVIDER_ID
         assert result.provenance.source_id == GITHUB_PROVIDER_ID
         assert result.provenance.identifiers_used["login"] == "acme-corp"
 

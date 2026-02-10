@@ -166,6 +166,7 @@ class EscwaIsparConnector:
 
         now = datetime.now(UTC)
         provenance = EnrichmentProvenance(
+            provider_id=ESCWA_ISPAR_PROVIDER_ID,
             source_id=ESCWA_ISPAR_PROVIDER_ID,
             retrieved_at=now,
             rights_class=RightsClass.GREEN,

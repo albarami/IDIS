@@ -41,6 +41,7 @@ class EnrichmentFetchRequest(BaseModel):
 class EnrichmentProvenanceResponse(BaseModel):
     """Provenance metadata in enrichment response."""
 
+    provider_id: str
     source_id: str
     retrieved_at: str
     rights_class: str
@@ -162,6 +163,7 @@ def fetch_enrichment(
     provenance_resp = None
     if result.provenance is not None:
         provenance_resp = EnrichmentProvenanceResponse(
+            provider_id=result.provenance.provider_id,
             source_id=result.provenance.source_id,
             retrieved_at=result.provenance.retrieved_at.isoformat(),
             rights_class=result.provenance.rights_class.value,

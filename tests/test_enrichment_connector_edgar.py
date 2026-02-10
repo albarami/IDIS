@@ -145,6 +145,7 @@ class TestEdgarFetchSuccess:
         result = connector.fetch(_make_request(), _make_context())
 
         assert result.provenance is not None
+        assert result.provenance.provider_id == EDGAR_PROVIDER_ID
         assert result.provenance.source_id == EDGAR_PROVIDER_ID
         assert result.provenance.rights_class == RightsClass.GREEN
         assert result.provenance.raw_ref_hash

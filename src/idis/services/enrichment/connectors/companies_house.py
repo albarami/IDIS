@@ -127,6 +127,7 @@ class CompaniesHouseConnector:
         raw_hash = self._compute_raw_hash(response_data)
 
         provenance = EnrichmentProvenance(
+            provider_id=COMPANIES_HOUSE_PROVIDER_ID,
             source_id=COMPANIES_HOUSE_PROVIDER_ID,
             retrieved_at=datetime.now(UTC),
             rights_class=RightsClass.GREEN,

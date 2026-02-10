@@ -52,6 +52,7 @@ def _make_hit_result() -> EnrichmentResult:
         status=EnrichmentStatus.HIT,
         normalized={"registrant_name": "Test Corp"},
         provenance=EnrichmentProvenance(
+            provider_id="sec_edgar",
             source_id="sec_edgar",
             retrieved_at=datetime.now(UTC),
             rights_class=RightsClass.GREEN,

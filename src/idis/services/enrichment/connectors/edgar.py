@@ -129,6 +129,7 @@ class EdgarConnector:
 
         now = datetime.now(UTC)
         provenance = EnrichmentProvenance(
+            provider_id=EDGAR_PROVIDER_ID,
             source_id=EDGAR_PROVIDER_ID,
             retrieved_at=now,
             rights_class=RightsClass.GREEN,

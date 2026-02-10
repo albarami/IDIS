@@ -100,6 +100,7 @@ class TestWaybackFetchSuccess:
         connector = WaybackConnector(http_client=_make_client())
         result = connector.fetch(_make_request(), _ctx())
         assert result.provenance is not None
+        assert result.provenance.provider_id == WAYBACK_PROVIDER_ID
         assert result.provenance.source_id == WAYBACK_PROVIDER_ID
         assert result.provenance.rights_class == RightsClass.YELLOW
         assert result.provenance.identifiers_used["domain"] == "example.com"

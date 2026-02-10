@@ -92,6 +92,7 @@ class TestGdeltFetchSuccess:
         connector = GdeltConnector(http_client=_make_client())
         result = connector.fetch(_make_request(), _ctx())
         assert result.provenance is not None
+        assert result.provenance.provider_id == GDELT_PROVIDER_ID
         assert result.provenance.source_id == GDELT_PROVIDER_ID
         assert result.provenance.identifiers_used["company_name"] == "Acme Corp"
 

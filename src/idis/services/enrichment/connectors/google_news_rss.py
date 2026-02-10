@@ -122,6 +122,7 @@ class GoogleNewsRssConnector:
         raw_hash = self._compute_raw_hash(raw_xml)
 
         provenance = EnrichmentProvenance(
+            provider_id=GOOGLE_NEWS_RSS_PROVIDER_ID,
             source_id=GOOGLE_NEWS_RSS_PROVIDER_ID,
             retrieved_at=datetime.now(UTC),
             rights_class=RightsClass.YELLOW,

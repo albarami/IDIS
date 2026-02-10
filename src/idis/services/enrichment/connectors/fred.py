@@ -129,6 +129,7 @@ class FredConnector:
         raw_hash = self._compute_raw_hash(response_data)
 
         provenance = EnrichmentProvenance(
+            provider_id=FRED_PROVIDER_ID,
             source_id=FRED_PROVIDER_ID,
             retrieved_at=datetime.now(UTC),
             rights_class=RightsClass.GREEN,

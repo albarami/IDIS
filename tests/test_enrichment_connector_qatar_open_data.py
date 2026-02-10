@@ -94,6 +94,7 @@ class TestQatarOpenDataFetchSuccess:
         connector = QatarOpenDataConnector(http_client=_make_client())
         result = connector.fetch(_make_request(), _ctx())
         assert result.provenance is not None
+        assert result.provenance.provider_id == QATAR_OPEN_DATA_PROVIDER_ID
         assert result.provenance.source_id == QATAR_OPEN_DATA_PROVIDER_ID
         assert result.provenance.identifiers_used["company_name"] == "Qatar trade"
 

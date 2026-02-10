@@ -124,6 +124,7 @@ class FmpConnector:
         raw_hash = self._compute_raw_hash(response_data)
 
         provenance = EnrichmentProvenance(
+            provider_id=FMP_PROVIDER_ID,
             source_id=FMP_PROVIDER_ID,
             retrieved_at=datetime.now(UTC),
             rights_class=RightsClass.RED,

@@ -97,6 +97,7 @@ class TestWorldBankFetchSuccess:
         connector = WorldBankConnector(http_client=_make_client())
         result = connector.fetch(_make_request(), _ctx())
         assert result.provenance is not None
+        assert result.provenance.provider_id == WORLD_BANK_PROVIDER_ID
         assert result.provenance.source_id == WORLD_BANK_PROVIDER_ID
         assert result.provenance.identifiers_used["jurisdiction"] == "QA"
 

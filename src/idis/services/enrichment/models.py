@@ -116,13 +116,15 @@ class EnrichmentProvenance(BaseModel):
     """Provenance metadata for an enrichment result.
 
     Attributes:
-        source_id: Provider identifier.
+        provider_id: Connector provider identifier (spec §3).
+        source_id: Provider identifier (legacy, kept for backward compat).
         retrieved_at: Timestamp of data retrieval.
         rights_class: Rights classification of the source.
         raw_ref_hash: SHA256 hash of raw response (for audit, not the raw data).
         identifiers_used: Query identifiers that produced this result.
     """
 
+    provider_id: str
     source_id: str
     retrieved_at: datetime
     rights_class: RightsClass

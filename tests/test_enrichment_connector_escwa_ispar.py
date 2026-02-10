@@ -123,6 +123,7 @@ class TestEscwaIsparFetchSuccess:
         connector = EscwaIsparConnector(http_client=_make_client())
         result = connector.fetch(_make_request(), _ctx())
         assert result.provenance is not None
+        assert result.provenance.provider_id == ESCWA_ISPAR_PROVIDER_ID
         assert result.provenance.source_id == ESCWA_ISPAR_PROVIDER_ID
         assert result.provenance.rights_class == RightsClass.GREEN
         assert result.provenance.raw_ref_hash

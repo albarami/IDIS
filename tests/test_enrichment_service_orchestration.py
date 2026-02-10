@@ -84,6 +84,7 @@ class _FakeConnector:
             status=EnrichmentStatus.HIT,
             normalized={"test": "data"},
             provenance=EnrichmentProvenance(
+                provider_id=self._provider_id,
                 source_id=self._provider_id,
                 retrieved_at=datetime.now(UTC),
                 rights_class=self._rights_class,

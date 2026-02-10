@@ -95,6 +95,7 @@ class TestHackerNewsFetchSuccess:
         connector = HackerNewsConnector(http_client=_make_client())
         result = connector.fetch(_make_request(), _ctx())
         assert result.provenance is not None
+        assert result.provenance.provider_id == HACKERNEWS_PROVIDER_ID
         assert result.provenance.source_id == HACKERNEWS_PROVIDER_ID
         assert result.provenance.rights_class == RightsClass.GREEN
         assert result.provenance.raw_ref_hash

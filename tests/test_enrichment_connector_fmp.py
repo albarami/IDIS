@@ -107,6 +107,7 @@ class TestFmpFetchSuccess:
         connector = FmpConnector(http_client=_make_client())
         result = connector.fetch(_make_request(), _ctx_with_key())
         assert result.provenance is not None
+        assert result.provenance.provider_id == FMP_PROVIDER_ID
         assert result.provenance.source_id == FMP_PROVIDER_ID
         assert result.provenance.rights_class == RightsClass.RED
         assert result.provenance.identifiers_used["ticker"] == "AAPL"

@@ -9,6 +9,7 @@ Uses httpx as the project-standard HTTP client.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import time
 from pathlib import Path
@@ -28,13 +29,8 @@ from idis.evaluation.types import (
     SuiteResult,
 )
 
-KNOWN_BLOCKERS = [
-    "Document ingestion pipeline not integrated with claim extraction",
-    "Claim extraction service not operational",
-    "Sanad chain building not automated",
-    "Debate execution not integrated with deliverable generation",
-    "No /v1/deals/{dealId}/runs endpoint that executes full pipeline",
-]
+_DOCUMENT_EXTENSIONS = frozenset({"pdf", "xlsx", "docx", "pptx", "txt"})
+_HTTP_TIMEOUT = 120.0
 
 
 def _validate_case(case: GdbsCase, dataset_root: Path) -> CaseResult:
@@ -99,31 +95,184 @@ def _check_api_availability(base_url: str, api_key: str | None) -> tuple[bool, s
         return False, f"API check failed: {e}"
 
 
+def _build_headers(api_key: str | None) -> dict[str, str]:
+    """Build request headers with optional API key authentication."""
+    headers: dict[str, str] = {}
+    if api_key:
+        headers["X-IDIS-API-Key"] = api_key
+    return headers
+
+
 def _execute_case(
     case: GdbsCase,
     base_url: str,
     api_key: str | None,
+    dataset_root: Path,
 ) -> CaseResult:
-    """Execute a single case via API.
+    """Execute a single case via the IDIS API.
 
-    Currently returns BLOCKED because the full pipeline is not integrated.
+    Steps:
+        1. Create deal via POST /v1/deals
+        2. Upload documents from dataset (if document files exist)
+        3. Start FULL run via POST /v1/deals/{deal_id}/runs
+        4. Interpret run result status
+
+    Args:
+        case: GDBS benchmark case to execute.
+        base_url: API base URL.
+        api_key: Optional API key for authentication.
+        dataset_root: Path to GDBS dataset root.
+
+    Returns:
+        CaseResult with status, errors, metrics, and timing.
     """
     start_time = time.monotonic()
+    metrics: dict[str, object] = {}
+    auth_headers = _build_headers(api_key)
 
-    blockers = [
-        "runs_endpoint_missing_or_not_full_pipeline",
-        "Full E2E pipeline execution not yet integrated",
-    ]
+    try:
+        with httpx.Client(timeout=_HTTP_TIMEOUT) as client:
+            # 3a. Create deal
+            create_resp = client.post(
+                f"{base_url}/v1/deals",
+                json={"name": case.deal_key, "company_name": case.deal_key},
+                headers=auth_headers,
+            )
+            if create_resp.status_code != 201:
+                return CaseResult(
+                    case_id=case.case_id,
+                    deal_id=case.deal_id,
+                    status=CaseStatus.FAIL,
+                    errors=[
+                        f"Deal creation failed: HTTP {create_resp.status_code} "
+                        f"{create_resp.text[:500]}"
+                    ],
+                    execution_time_ms=int((time.monotonic() - start_time) * 1000),
+                )
 
-    execution_time_ms = int((time.monotonic() - start_time) * 1000)
+            deal_id = create_resp.json()["deal_id"]
+            metrics["deal_id"] = deal_id
 
-    return CaseResult(
-        case_id=case.case_id,
-        deal_id=case.deal_id,
-        status=CaseStatus.BLOCKED,
-        blockers=blockers,
-        execution_time_ms=execution_time_ms,
-    )
+            # 3b. Upload documents from dataset directory
+            deal_dir = dataset_root / case.directory
+            if deal_dir.exists():
+                doc_files = [
+                    f
+                    for f in deal_dir.iterdir()
+                    if f.is_file() and f.suffix.lstrip(".").lower() in _DOCUMENT_EXTENSIONS
+                ]
+                for doc_file in sorted(doc_files):
+                    with contextlib.suppress(httpx.HTTPError):
+                        client.post(
+                            f"{base_url}/v1/deals/{deal_id}/documents",
+                            json={
+                                "doc_type": "DATA_ROOM_FILE",
+                                "title": doc_file.name,
+                                "auto_ingest": False,
+                            },
+                            headers=auth_headers,
+                        )
+
+            # 3c. Start FULL run
+            run_headers = {**auth_headers, "Idempotency-Key": case.case_id}
+            run_resp = client.post(
+                f"{base_url}/v1/deals/{deal_id}/runs",
+                json={"mode": "FULL"},
+                headers=run_headers,
+            )
+
+            execution_time_ms = int((time.monotonic() - start_time) * 1000)
+
+            # 3d. Interpret run result
+            if run_resp.status_code >= 500:
+                return CaseResult(
+                    case_id=case.case_id,
+                    deal_id=case.deal_id,
+                    status=CaseStatus.FAIL,
+                    errors=[
+                        f"Run request server error: HTTP {run_resp.status_code} "
+                        f"{run_resp.text[:500]}"
+                    ],
+                    metrics=metrics,
+                    execution_time_ms=execution_time_ms,
+                )
+
+            if run_resp.status_code >= 400:
+                body = (
+                    run_resp.json()
+                    if run_resp.headers.get("content-type", "").startswith("application/json")
+                    else {}
+                )
+                return CaseResult(
+                    case_id=case.case_id,
+                    deal_id=case.deal_id,
+                    status=CaseStatus.FAIL,
+                    errors=[
+                        f"Run request failed: HTTP {run_resp.status_code} "
+                        f"code={body.get('code', 'UNKNOWN')} "
+                        f"message={body.get('message', run_resp.text[:500])}"
+                    ],
+                    metrics=metrics,
+                    execution_time_ms=execution_time_ms,
+                )
+
+            run_body = run_resp.json()
+            run_id = run_body.get("run_id", "")
+            run_status = run_body.get("status", "UNKNOWN")
+            steps = run_body.get("steps", [])
+
+            metrics["run_id"] = run_id
+            metrics["run_status"] = run_status
+            metrics["steps_completed"] = len([s for s in steps if s.get("status") == "COMPLETED"])
+            metrics["steps_failed"] = len([s for s in steps if s.get("status") == "FAILED"])
+
+            failed_steps = [s for s in steps if s.get("status") == "FAILED"]
+            if failed_steps:
+                metrics["failing_step"] = failed_steps[0].get("step_name", "UNKNOWN")
+
+            # 3d. Map run status to case status
+            if run_status == "COMPLETED":
+                return CaseResult(
+                    case_id=case.case_id,
+                    deal_id=case.deal_id,
+                    status=CaseStatus.PASS,
+                    metrics=metrics,
+                    execution_time_ms=execution_time_ms,
+                )
+
+            if run_status == "BLOCKED":
+                block_reason = run_body.get("block_reason", "Run blocked")
+                return CaseResult(
+                    case_id=case.case_id,
+                    deal_id=case.deal_id,
+                    status=CaseStatus.BLOCKED,
+                    blockers=[block_reason],
+                    metrics=metrics,
+                    execution_time_ms=execution_time_ms,
+                )
+
+            # FAILED, PARTIAL, or other
+            step_errors = [
+                f"{s.get('step_name', '?')}: {s.get('error', 'failed')}" for s in failed_steps
+            ]
+            return CaseResult(
+                case_id=case.case_id,
+                deal_id=case.deal_id,
+                status=CaseStatus.FAIL,
+                errors=step_errors or [f"Run status: {run_status}"],
+                metrics=metrics,
+                execution_time_ms=execution_time_ms,
+            )
+
+    except Exception as exc:
+        execution_time_ms = int((time.monotonic() - start_time) * 1000)
+        return CaseResult(
+            case_id=case.case_id,
+            deal_id=case.deal_id,
+            status=CaseStatus.FAIL,
+            errors=[f"{type(exc).__name__}: {exc}"],
+            execution_time_ms=execution_time_ms,
+        )
 
 
 def run_suite(
@@ -266,13 +415,12 @@ def _run_execute_mode(
     api_available, reason = _check_api_availability(base_url, api_key)
     if not api_available:
         blockers.append(reason)
-        blockers.extend(KNOWN_BLOCKERS)
 
     case_results: list[CaseResult] = []
 
     for case in load_result.cases:
         if api_available:
-            case_result = _execute_case(case, base_url, api_key)
+            case_result = _execute_case(case, base_url, api_key, dataset_root)
         else:
             case_result = CaseResult(
                 case_id=case.case_id,

@@ -14,6 +14,8 @@ import json
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from idis.evaluation.benchmarks.gdbs import load_gdbs_suite
 from idis.evaluation.harness import (
     format_summary,
@@ -184,10 +186,12 @@ class TestHarnessExecuteMode:
 
         assert result.status == GateStatus.BLOCKED
         assert len(result.blockers) > 0
+        # Blocker should describe the connection failure, not static stub strings
+        assert any("connect" in b.lower() or "timeout" in b.lower() for b in result.blockers)
         assert get_exit_code(result) == 2
 
     def test_execute_mode_blockers_are_populated(self) -> None:
-        """BLOCKED result should have actionable blockers list."""
+        """BLOCKED result should have actionable blocker describing connectivity issue."""
         result = run_suite(
             FIXTURES_DIR,
             "gdbs-s",
@@ -196,9 +200,9 @@ class TestHarnessExecuteMode:
         )
 
         assert result.status == GateStatus.BLOCKED
-        assert len(result.blockers) > 0
-        # Should include connectivity error or known blockers
-        assert any("connect" in b.lower() or "endpoint" in b.lower() for b in result.blockers)
+        assert len(result.blockers) == 1
+        # Single blocker from _check_api_availability, not old static stub list
+        assert "connect" in result.blockers[0].lower() or "timeout" in result.blockers[0].lower()
 
 
 class TestSuiteResultSerialization:
@@ -419,6 +423,129 @@ class TestAdversarialSuite:
         # gdbs_mini has only 2 adversarial deals, GDBS-A requires 30
         assert result.success is False
         assert any("30" in err for err in result.errors)
+
+
+class TestExecuteCaseContract:
+    """Test _execute_case contract for API-driven case execution."""
+
+    def test_execute_case_returns_fail_on_connection_error(self) -> None:
+        """_execute_case with unreachable URL returns FAIL with connection error."""
+        from idis.evaluation.harness import _execute_case
+        from idis.evaluation.types import CaseStatus, GdbsCase
+
+        case = GdbsCase(
+            case_id="test-conn-fail",
+            deal_id="00000000-0000-0000-0000-000000000001",
+            deal_key="test_conn_fail",
+            scenario="clean",
+            directory="deals/nonexistent",
+            description="Connection failure test",
+        )
+
+        result = _execute_case(
+            case,
+            base_url="http://127.0.0.1:9",
+            api_key=None,
+            dataset_root=FIXTURES_DIR,
+        )
+
+        assert result.status == CaseStatus.FAIL
+        assert len(result.errors) > 0
+        assert any("Connect" in e for e in result.errors)
+        assert result.execution_time_ms is not None
+
+    def test_execute_case_returns_case_result_with_metrics(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_execute_case populates metrics on successful HTTP flow."""
+        import httpx
+
+        from idis.evaluation.harness import _execute_case
+        from idis.evaluation.types import CaseStatus, GdbsCase
+
+        case = GdbsCase(
+            case_id="test-metrics",
+            deal_id="00000000-0000-0000-0000-000000000002",
+            deal_key="test_metrics",
+            scenario="clean",
+            directory="deals/deal_001",
+            description="Metrics test",
+        )
+
+        call_count = 0
+
+        def mock_send(
+            self: httpx.Client, request: httpx.Request, **kwargs: object
+        ) -> httpx.Response:  # type: ignore[override]
+            nonlocal call_count
+            call_count += 1
+            url = str(request.url)
+
+            if url.endswith("/v1/deals") and request.method == "POST":
+                return httpx.Response(
+                    status_code=201,
+                    json={"deal_id": "aaa-bbb-ccc"},
+                    request=request,
+                )
+            if "/runs" in url and request.method == "POST":
+                return httpx.Response(
+                    status_code=202,
+                    json={
+                        "run_id": "run-123",
+                        "status": "COMPLETED",
+                        "steps": [],
+                    },
+                    request=request,
+                )
+            return httpx.Response(status_code=404, request=request)
+
+        monkeypatch.setattr(httpx.Client, "send", mock_send)
+
+        result = _execute_case(
+            case,
+            base_url="http://fake-host:9999",
+            api_key="test-key",
+            dataset_root=FIXTURES_DIR,
+        )
+
+        assert result.status == CaseStatus.PASS
+        assert result.metrics["run_id"] == "run-123"
+        assert result.metrics["run_status"] == "COMPLETED"
+
+    def test_execute_case_captures_exception_as_fail(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """_execute_case wraps unexpected exceptions as FAIL with error info."""
+        import httpx
+
+        from idis.evaluation.harness import _execute_case
+        from idis.evaluation.types import CaseStatus, GdbsCase
+
+        case = GdbsCase(
+            case_id="test-exc",
+            deal_id="00000000-0000-0000-0000-000000000003",
+            deal_key="test_exc",
+            scenario="clean",
+            directory="deals/nonexistent",
+            description="Exception capture test",
+        )
+
+        def mock_send(
+            self: httpx.Client, request: httpx.Request, **kwargs: object
+        ) -> httpx.Response:  # type: ignore[override]
+            raise RuntimeError("Simulated unexpected failure")
+
+        monkeypatch.setattr(httpx.Client, "send", mock_send)
+
+        result = _execute_case(
+            case,
+            base_url="http://fake-host:9999",
+            api_key=None,
+            dataset_root=FIXTURES_DIR,
+        )
+
+        assert result.status == CaseStatus.FAIL
+        assert any("RuntimeError" in e for e in result.errors)
+        assert any("Simulated unexpected failure" in e for e in result.errors)
+        assert result.execution_time_ms is not None
 
 
 class TestMetrics:

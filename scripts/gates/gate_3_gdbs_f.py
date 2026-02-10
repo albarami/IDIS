@@ -7,29 +7,9 @@ Phase 6 Release Gate:
 - Measure Muḥāsabah gate pass rate
 - Require >=95% completion with valid outputs
 
-BLOCKED STATUS:
-This gate is currently BLOCKED because full end-to-end pipeline execution
-with debate is not yet operational. The following components exist but are
-not integrated into a working E2E flow:
-
-✅ Implemented:
-- GDBS dataset loader (datasets/gdbs_full/)
-- Claim/Sanad models and services
-- Debate orchestrator and roles
-- Muḥāsabah validator
-- Deliverables generator
-- Background worker infrastructure
-
-❌ Missing for E2E:
-- Document ingestion + claim extraction pipeline
-- Claim → Sanad chain building automation
-- Debate → Deliverable pipeline orchestration
-- Runs that execute full debate + deliverable generation
-
-This script provides the evaluation framework. When pipeline is complete,
-run: python scripts/gates/gate_3_gdbs_f.py --execute
-
-For now, this script documents the gate structure and exits with BLOCKED status.
+Usage:
+    python scripts/gates/gate_3_gdbs_f.py --status   # Check prerequisites
+    python scripts/gates/gate_3_gdbs_f.py --execute   # Run full gate evaluation
 """
 
 from __future__ import annotations
@@ -70,17 +50,25 @@ def check_prerequisites() -> tuple[bool, list[str]]:
         if not (REPO_ROOT / module).exists():
             blockers.append(f"Required module missing: {module}")
 
-    # Check for E2E pipeline components (these are NOT complete)
-    pipeline_blockers = [
-        "Document ingestion pipeline not integrated with claim extraction",
-        "Claim extraction service not operational",
-        "Sanad chain building not automated (only manual test scripts exist)",
-        "Debate execution not integrated with deliverable generation",
-        "No /v1/deals/{dealId}/runs endpoint that executes full pipeline",
-    ]
+    # Check orchestrator has all 9 pipeline steps
+    try:
+        from idis.models.run_step import FULL_STEPS, StepName
 
-    # Gate 3 is BLOCKED until pipeline is complete
-    blockers.extend(pipeline_blockers)
+        if len(FULL_STEPS) < 9:
+            blockers.append(f"Orchestrator FULL_STEPS has {len(FULL_STEPS)} steps, need >= 9")
+        required_step_names = {"ENRICHMENT", "ANALYSIS", "SCORING", "DELIVERABLES"}
+        available_step_names = set(StepName.__members__)
+        missing_steps = required_step_names - available_step_names
+        if missing_steps:
+            blockers.append(f"StepName missing members: {sorted(missing_steps)}")
+    except ImportError as exc:
+        blockers.append(f"Cannot import orchestrator step definitions: {exc}")
+
+    # Check harness is importable
+    try:
+        from idis.evaluation.harness import run_suite  # noqa: F401
+    except ImportError as exc:
+        blockers.append(f"Cannot import evaluation harness: {exc}")
 
     return len(blockers) == 0, blockers
 

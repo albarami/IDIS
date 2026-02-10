@@ -4,6 +4,9 @@ Covers:
 - Retry EXTRACT step is idempotent (no duplicate claims)
 - Retry GRADE step is idempotent (no duplicate sanads)
 - Retry CALC step is idempotent (no duplicate calcs)
+- Retry DEBATE step is idempotent (no duplicate debate runs)
+
+Updated for Phase X: FULL mode now has 9 steps.
 """
 
 from __future__ import annotations
@@ -315,6 +318,21 @@ class TestRetryDebateStepIdempotentNoDuplicateDebate:
                 "all_failed": False,
             }
 
+        def stub_enrichment(
+            *,
+            run_id: str,
+            tenant_id: str,
+            deal_id: str,
+            created_claim_ids: list[str],
+            calc_ids: list[str],
+        ) -> dict[str, Any]:
+            return {
+                "provider_count": 0,
+                "result_count": 0,
+                "blocked_count": 0,
+                "enrichment_refs": {},
+            }
+
         def counting_debate(
             *,
             run_id: str,
@@ -333,6 +351,50 @@ class TestRetryDebateStepIdempotentNoDuplicateDebate:
                 "agent_output_count": 10,
             }
 
+        def stub_analysis(
+            *,
+            run_id: str,
+            tenant_id: str,
+            deal_id: str,
+            created_claim_ids: list[str],
+            calc_ids: list[str],
+            enrichment_refs: dict[str, Any],
+        ) -> dict[str, Any]:
+            return {
+                "agent_count": 8,
+                "report_ids": ["r1"],
+                "bundle_id": f"bundle-{run_id[:8]}",
+            }
+
+        def stub_scoring(
+            *,
+            run_id: str,
+            tenant_id: str,
+            deal_id: str,
+            analysis_bundle: Any,
+            analysis_context: Any,
+        ) -> dict[str, Any]:
+            return {
+                "composite_score": 72.5,
+                "band": "MEDIUM",
+                "routing": "HOLD",
+            }
+
+        def stub_deliverables(
+            *,
+            run_id: str,
+            tenant_id: str,
+            deal_id: str,
+            analysis_bundle: Any,
+            analysis_context: Any,
+            scorecard: Any,
+        ) -> dict[str, Any]:
+            return {
+                "deliverable_count": 4,
+                "types": ["IC_MEMO", "QA_BRIEF", "SCREENING_SNAPSHOT", "TRUTH_DASHBOARD"],
+                "deliverable_ids": ["del-001", "del-002", "del-003", "del-004"],
+            }
+
         run_id = str(uuid.uuid4())
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
@@ -347,7 +409,11 @@ class TestRetryDebateStepIdempotentNoDuplicateDebate:
             extract_fn=stub_extract,
             grade_fn=stub_grade,
             calc_fn=_stub_calc,
+            enrich_fn=stub_enrichment,
             debate_fn=counting_debate,
+            analysis_fn=stub_analysis,
+            scoring_fn=stub_scoring,
+            deliverables_fn=stub_deliverables,
         )
 
         result1 = orchestrator.execute(ctx)

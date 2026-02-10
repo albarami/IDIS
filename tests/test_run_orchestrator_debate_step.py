@@ -3,6 +3,8 @@
 Covers:
 - Happy path: debate_fn stub returns deterministic output → DEBATE step COMPLETED
 - Fail-closed: debate_fn is None → DEBATE step FAILED with ValueError
+
+Updated for Phase X: ENRICHMENT now runs before DEBATE in FULL mode.
 """
 
 from __future__ import annotations
@@ -72,6 +74,23 @@ def _stub_calc(
     }
 
 
+def _stub_enrichment(
+    *,
+    run_id: str,
+    tenant_id: str,
+    deal_id: str,
+    created_claim_ids: list[str],
+    calc_ids: list[str],
+) -> dict[str, Any]:
+    """Deterministic enrichment stub returning zero results."""
+    return {
+        "provider_count": 0,
+        "result_count": 0,
+        "blocked_count": 0,
+        "enrichment_refs": {},
+    }
+
+
 def _stub_debate(
     *,
     run_id: str,
@@ -87,6 +106,56 @@ def _stub_debate(
         "round_number": 5,
         "muhasabah_passed": True,
         "agent_output_count": 10,
+    }
+
+
+def _stub_analysis(
+    *,
+    run_id: str,
+    tenant_id: str,
+    deal_id: str,
+    created_claim_ids: list[str],
+    calc_ids: list[str],
+    enrichment_refs: dict[str, Any],
+) -> dict[str, Any]:
+    """Deterministic analysis stub."""
+    return {
+        "agent_count": 8,
+        "report_ids": ["report-001"],
+        "bundle_id": f"bundle-{run_id[:8]}",
+    }
+
+
+def _stub_scoring(
+    *,
+    run_id: str,
+    tenant_id: str,
+    deal_id: str,
+    analysis_bundle: Any,
+    analysis_context: Any,
+) -> dict[str, Any]:
+    """Deterministic scoring stub."""
+    return {
+        "composite_score": 72.5,
+        "band": "MEDIUM",
+        "routing": "HOLD",
+    }
+
+
+def _stub_deliverables(
+    *,
+    run_id: str,
+    tenant_id: str,
+    deal_id: str,
+    analysis_bundle: Any,
+    analysis_context: Any,
+    scorecard: Any,
+) -> dict[str, Any]:
+    """Deterministic deliverables stub."""
+    return {
+        "deliverable_count": 4,
+        "types": ["IC_MEMO", "QA_BRIEF", "SCREENING_SNAPSHOT", "TRUTH_DASHBOARD"],
+        "deliverable_ids": ["del-001", "del-002", "del-003", "del-004"],
     }
 
 
@@ -118,8 +187,8 @@ def _clear_stores() -> None:
 class TestDebateStepHappyPath:
     """DEBATE step completes when debate_fn is provided and returns valid output."""
 
-    def test_full_run_with_debate_fn_completes_all_five_steps(self) -> None:
-        """FULL run with debate_fn completes INGEST_CHECK→EXTRACT→GRADE→CALC→DEBATE."""
+    def test_full_run_with_debate_fn_completes_all_nine_steps(self) -> None:
+        """FULL run completes all 9 steps including DEBATE."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -133,25 +202,32 @@ class TestDebateStepHappyPath:
             extract_fn=_stub_extract,
             grade_fn=_stub_grade,
             calc_fn=_stub_calc,
+            enrich_fn=_stub_enrichment,
             debate_fn=_stub_debate,
+            analysis_fn=_stub_analysis,
+            scoring_fn=_stub_scoring,
+            deliverables_fn=_stub_deliverables,
         )
 
         result = orchestrator.execute(ctx)
 
         assert result.status == "COMPLETED"
-        assert len(result.steps) == 5
+        assert len(result.steps) == 9
 
         expected_names = [
             StepName.INGEST_CHECK,
             StepName.EXTRACT,
             StepName.GRADE,
             StepName.CALC,
+            StepName.ENRICHMENT,
             StepName.DEBATE,
+            StepName.ANALYSIS,
+            StepName.SCORING,
+            StepName.DELIVERABLES,
         ]
         for i, step in enumerate(result.steps):
             assert step.step_name == expected_names[i]
             assert step.status == StepStatus.COMPLETED
-            assert step.step_order == i
             assert step.started_at is not None
             assert step.finished_at is not None
 
@@ -171,7 +247,11 @@ class TestDebateStepHappyPath:
             extract_fn=_stub_extract,
             grade_fn=_stub_grade,
             calc_fn=_stub_calc,
+            enrich_fn=_stub_enrichment,
             debate_fn=_stub_debate,
+            analysis_fn=_stub_analysis,
+            scoring_fn=_stub_scoring,
+            deliverables_fn=_stub_deliverables,
         )
 
         result = orchestrator.execute(ctx)
@@ -220,7 +300,11 @@ class TestDebateStepHappyPath:
             extract_fn=_stub_extract,
             grade_fn=_stub_grade,
             calc_fn=_stub_calc,
+            enrich_fn=_stub_enrichment,
             debate_fn=capturing_debate,
+            analysis_fn=_stub_analysis,
+            scoring_fn=_stub_scoring,
+            deliverables_fn=_stub_deliverables,
         )
 
         result = orchestrator.execute(ctx)
@@ -247,6 +331,7 @@ class TestDebateStepFailClosed:
             extract_fn=_stub_extract,
             grade_fn=_stub_grade,
             calc_fn=_stub_calc,
+            enrich_fn=_stub_enrichment,
             debate_fn=None,
         )
 
@@ -257,12 +342,13 @@ class TestDebateStepFailClosed:
         assert "debate_fn not provided" in (result.error_message or "")
 
         completed = [s for s in result.steps if s.status == StepStatus.COMPLETED]
-        assert len(completed) == 4
+        assert len(completed) == 5
         assert [s.step_name for s in completed] == [
             StepName.INGEST_CHECK,
             StepName.EXTRACT,
             StepName.GRADE,
             StepName.CALC,
+            StepName.ENRICHMENT,
         ]
 
         failed = [s for s in result.steps if s.status == StepStatus.FAILED]

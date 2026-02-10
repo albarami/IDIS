@@ -4,6 +4,10 @@ Executes pipeline steps in canonical order, records each step in the
 RunStep ledger, emits audit events at every transition, and enforces
 fail-closed semantics on audit failures.
 
+SNAPSHOT: INGEST_CHECK -> EXTRACT -> GRADE -> CALC.
+FULL: INGEST_CHECK -> EXTRACT -> GRADE -> CALC -> ENRICHMENT -> DEBATE
+      -> ANALYSIS -> SCORING -> DELIVERABLES.
+
 No FastAPI globals. All dependencies injected via constructor or execute().
 """
 
@@ -78,7 +82,11 @@ class RunContext:
     grade_fn: Callable[..., dict[str, Any]]
     calc_fn: Callable[..., dict[str, Any]] | None = None
     calc_types: list[CalcType] | None = None
+    enrich_fn: Callable[..., dict[str, Any]] | None = None
     debate_fn: Callable[..., dict[str, Any]] | None = None
+    analysis_fn: Callable[..., dict[str, Any]] | None = None
+    scoring_fn: Callable[..., dict[str, Any]] | None = None
+    deliverables_fn: Callable[..., dict[str, Any]] | None = None
 
 
 class RunOrchestrator:
@@ -112,7 +120,8 @@ class RunOrchestrator:
         """Execute all pipeline steps for the given run context.
 
         For SNAPSHOT: INGEST_CHECK -> EXTRACT -> GRADE -> CALC.
-        For FULL: INGEST_CHECK -> EXTRACT -> GRADE -> CALC -> DEBATE.
+        For FULL: INGEST_CHECK -> EXTRACT -> GRADE -> CALC -> ENRICHMENT
+                  -> DEBATE -> ANALYSIS -> SCORING -> DELIVERABLES.
 
         Skips steps that are already COMPLETED (idempotent resume).
         Fails closed on audit emission errors.
@@ -203,8 +212,16 @@ class RunOrchestrator:
             return self._execute_grade(ctx, accumulated)
         if step_name == StepName.CALC:
             return self._execute_calc(ctx, accumulated)
+        if step_name == StepName.ENRICHMENT:
+            return self._execute_enrichment(ctx, accumulated)
         if step_name == StepName.DEBATE:
             return self._execute_debate(ctx, accumulated)
+        if step_name == StepName.ANALYSIS:
+            return self._execute_analysis(ctx, accumulated)
+        if step_name == StepName.SCORING:
+            return self._execute_scoring(ctx, accumulated)
+        if step_name == StepName.DELIVERABLES:
+            return self._execute_deliverables(ctx, accumulated)
         raise ValueError(f"No handler for step: {step_name.value}")
 
     def _execute_ingest_check(self, ctx: RunContext) -> dict[str, Any]:
@@ -293,6 +310,38 @@ class RunOrchestrator:
             calc_types=ctx.calc_types,
         )
 
+    def _execute_enrichment(
+        self,
+        ctx: RunContext,
+        accumulated: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Run enrichment via injected callable.
+
+        Fail-closed: raises ValueError if enrich_fn is not provided.
+
+        Args:
+            ctx: Run context with optional enrich_fn.
+            accumulated: Must contain created_claim_ids and calc_ids from prior steps.
+
+        Returns:
+            Enrichment result dict with provider_count, result_count, blocked_count.
+
+        Raises:
+            ValueError: If ctx.enrich_fn is None (fail-closed).
+        """
+        if ctx.enrich_fn is None:
+            raise ValueError("enrich_fn not provided")
+
+        created_claim_ids = accumulated.get("created_claim_ids", [])
+        calc_ids = accumulated.get("calc_ids", [])
+        return ctx.enrich_fn(
+            run_id=ctx.run_id,
+            tenant_id=ctx.tenant_id,
+            deal_id=ctx.deal_id,
+            created_claim_ids=created_claim_ids,
+            calc_ids=calc_ids,
+        )
+
     def _execute_debate(
         self,
         ctx: RunContext,
@@ -323,6 +372,101 @@ class RunOrchestrator:
             deal_id=ctx.deal_id,
             created_claim_ids=created_claim_ids,
             calc_ids=calc_ids,
+        )
+
+    def _execute_analysis(
+        self,
+        ctx: RunContext,
+        accumulated: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Run analysis agents via injected callable.
+
+        Fail-closed: raises ValueError if analysis_fn is not provided.
+
+        Args:
+            ctx: Run context with optional analysis_fn.
+            accumulated: Must contain created_claim_ids, calc_ids, enrichment_refs.
+
+        Returns:
+            Analysis result dict with agent_count, report_ids, bundle_id.
+
+        Raises:
+            ValueError: If ctx.analysis_fn is None (fail-closed).
+        """
+        if ctx.analysis_fn is None:
+            raise ValueError("analysis_fn not provided")
+
+        created_claim_ids = accumulated.get("created_claim_ids", [])
+        calc_ids = accumulated.get("calc_ids", [])
+        enrichment_refs = accumulated.get("enrichment_refs", {})
+        return ctx.analysis_fn(
+            run_id=ctx.run_id,
+            tenant_id=ctx.tenant_id,
+            deal_id=ctx.deal_id,
+            created_claim_ids=created_claim_ids,
+            calc_ids=calc_ids,
+            enrichment_refs=enrichment_refs,
+        )
+
+    def _execute_scoring(
+        self,
+        ctx: RunContext,
+        accumulated: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Run scoring engine via injected callable.
+
+        Fail-closed: raises ValueError if scoring_fn is not provided.
+
+        Args:
+            ctx: Run context with optional scoring_fn.
+            accumulated: Must contain _analysis_bundle and _analysis_context.
+
+        Returns:
+            Scoring result dict with composite_score, band, routing.
+
+        Raises:
+            ValueError: If ctx.scoring_fn is None (fail-closed).
+        """
+        if ctx.scoring_fn is None:
+            raise ValueError("scoring_fn not provided")
+
+        return ctx.scoring_fn(
+            run_id=ctx.run_id,
+            tenant_id=ctx.tenant_id,
+            deal_id=ctx.deal_id,
+            analysis_bundle=accumulated.get("_analysis_bundle"),
+            analysis_context=accumulated.get("_analysis_context"),
+        )
+
+    def _execute_deliverables(
+        self,
+        ctx: RunContext,
+        accumulated: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Run deliverables generation via injected callable.
+
+        Fail-closed: raises ValueError if deliverables_fn is not provided.
+
+        Args:
+            ctx: Run context with optional deliverables_fn.
+            accumulated: Must contain _analysis_bundle, _analysis_context, _scorecard.
+
+        Returns:
+            Deliverables result dict with deliverable_count, types, deliverable_ids.
+
+        Raises:
+            ValueError: If ctx.deliverables_fn is None (fail-closed).
+        """
+        if ctx.deliverables_fn is None:
+            raise ValueError("deliverables_fn not provided")
+
+        return ctx.deliverables_fn(
+            run_id=ctx.run_id,
+            tenant_id=ctx.tenant_id,
+            deal_id=ctx.deal_id,
+            analysis_bundle=accumulated.get("_analysis_bundle"),
+            analysis_context=accumulated.get("_analysis_context"),
+            scorecard=accumulated.get("_scorecard"),
         )
 
     def _start_step(

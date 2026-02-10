@@ -20,7 +20,11 @@ class StepName(StrEnum):
     EXTRACT = "EXTRACT"
     GRADE = "GRADE"
     CALC = "CALC"
+    ENRICHMENT = "ENRICHMENT"
     DEBATE = "DEBATE"
+    ANALYSIS = "ANALYSIS"
+    SCORING = "SCORING"
+    DELIVERABLES = "DELIVERABLES"
 
 
 class StepStatus(StrEnum):
@@ -38,7 +42,11 @@ STEP_ORDER: dict[StepName, int] = {
     StepName.EXTRACT: 1,
     StepName.GRADE: 2,
     StepName.CALC: 3,
-    StepName.DEBATE: 4,
+    StepName.ENRICHMENT: 4,
+    StepName.DEBATE: 5,
+    StepName.ANALYSIS: 6,
+    StepName.SCORING: 7,
+    StepName.DELIVERABLES: 8,
 }
 """Canonical ordering for deterministic step iteration."""
 
@@ -55,9 +63,24 @@ FULL_STEPS: list[StepName] = [
     StepName.EXTRACT,
     StepName.GRADE,
     StepName.CALC,
+    StepName.ENRICHMENT,
     StepName.DEBATE,
+    StepName.ANALYSIS,
+    StepName.SCORING,
+    StepName.DELIVERABLES,
 ]
 """Steps executed during a FULL run."""
+
+FULL_ONLY_STEPS: frozenset[StepName] = frozenset(
+    {
+        StepName.ENRICHMENT,
+        StepName.DEBATE,
+        StepName.ANALYSIS,
+        StepName.SCORING,
+        StepName.DELIVERABLES,
+    }
+)
+"""Steps that execute only in FULL mode, never in SNAPSHOT."""
 
 IMPLEMENTED_STEPS: frozenset[StepName] = frozenset(
     {
@@ -65,7 +88,11 @@ IMPLEMENTED_STEPS: frozenset[StepName] = frozenset(
         StepName.EXTRACT,
         StepName.GRADE,
         StepName.CALC,
+        StepName.ENRICHMENT,
         StepName.DEBATE,
+        StepName.ANALYSIS,
+        StepName.SCORING,
+        StepName.DELIVERABLES,
     }
 )
 """Steps with working implementations. Unimplemented steps trigger BLOCKED."""

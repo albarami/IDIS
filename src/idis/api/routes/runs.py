@@ -4,8 +4,9 @@ Provides POST /v1/deals/{dealId}/runs and GET /v1/runs/{runId} per OpenAPI spec.
 
 Supports both Postgres persistence (when configured) and in-memory fallback.
 
-SNAPSHOT mode: Runs INGEST_CHECK -> EXTRACT -> GRADE -> CALC via RunOrchestrator.
-FULL mode: Runs INGEST_CHECK -> EXTRACT -> GRADE -> CALC -> DEBATE via RunOrchestrator.
+SNAPSHOT mode: INGEST_CHECK -> EXTRACT -> GRADE -> CALC.
+FULL mode: INGEST_CHECK -> EXTRACT -> GRADE -> CALC -> ENRICHMENT -> DEBATE
+           -> ANALYSIS -> SCORING -> DELIVERABLES.
 """
 
 from __future__ import annotations
@@ -168,6 +169,7 @@ async def start_run(
         run_steps_repo=run_steps_repo,
     )
 
+    is_full = request_body.mode == "FULL"
     ctx = RunContext(
         run_id=run_id,
         tenant_id=tenant_ctx.tenant_id,
@@ -177,7 +179,11 @@ async def start_run(
         extract_fn=_run_snapshot_extraction,
         grade_fn=_run_snapshot_auto_grade,
         calc_fn=_run_snapshot_calc,
-        debate_fn=_run_full_debate if request_body.mode == "FULL" else None,
+        enrich_fn=_run_full_enrichment if is_full else None,
+        debate_fn=_run_full_debate if is_full else None,
+        analysis_fn=_run_full_analysis if is_full else None,
+        scoring_fn=_run_full_scoring if is_full else None,
+        deliverables_fn=_run_full_deliverables if is_full else None,
     )
 
     try:
@@ -557,6 +563,297 @@ def _run_full_debate(
         "muhasabah_passed": muhasabah_passed,
         "agent_output_count": len(final_state.agent_outputs),
     }
+
+
+def _run_full_enrichment(
+    *,
+    run_id: str,
+    tenant_id: str,
+    deal_id: str,
+    created_claim_ids: list[str],
+    calc_ids: list[str],
+) -> dict[str, Any]:
+    """Run enrichment for all configured providers in a FULL pipeline run.
+
+    Iterates over registered providers, calls EnrichmentService.enrich() for each,
+    and aggregates results. Gracefully handles zero results (step COMPLETED with
+    result_count=0).
+
+    Args:
+        run_id: Pipeline run UUID.
+        tenant_id: Tenant context.
+        deal_id: Deal UUID.
+        created_claim_ids: Claim IDs from extraction/grading.
+        calc_ids: Calc IDs from calculation step.
+
+    Returns:
+        Dict with provider_count, result_count, blocked_count, enrichment_refs.
+    """
+    from idis.audit.sink import InMemoryAuditSink
+    from idis.services.enrichment.models import (
+        EnrichmentPurpose,
+        EnrichmentQuery,
+        EnrichmentRequest,
+        EnrichmentStatus,
+        EntityType,
+    )
+    from idis.services.enrichment.service import create_default_enrichment_service
+
+    audit_sink = InMemoryAuditSink()
+    service = create_default_enrichment_service(audit_sink=audit_sink)
+    providers = service.list_providers()
+
+    result_count = 0
+    blocked_count = 0
+    enrichment_refs: dict[str, dict[str, str]] = {}
+
+    request = EnrichmentRequest(
+        tenant_id=tenant_id,
+        entity_type=EntityType.COMPANY,
+        query=EnrichmentQuery(company_name=deal_id),
+        purpose=EnrichmentPurpose.DUE_DILIGENCE,
+    )
+
+    for provider_info in providers:
+        provider_id = provider_info["provider_id"]
+        try:
+            result = service.enrich(provider_id=provider_id, request=request)
+        except Exception:
+            logger.warning(
+                "Enrichment provider %s failed for deal %s in run %s",
+                provider_id,
+                deal_id,
+                run_id,
+                exc_info=True,
+            )
+            continue
+
+        if result.status == EnrichmentStatus.HIT:
+            result_count += 1
+            if result.provenance:
+                ref_id = f"enrich-{provider_id}-{run_id[:8]}"
+                enrichment_refs[ref_id] = {
+                    "ref_id": ref_id,
+                    "provider_id": result.provenance.provider_id,
+                    "source_id": result.provenance.source_id,
+                }
+        elif result.status in (
+            EnrichmentStatus.BLOCKED_RIGHTS,
+            EnrichmentStatus.BLOCKED_MISSING_BYOL,
+        ):
+            blocked_count += 1
+
+    return {
+        "provider_count": len(providers),
+        "result_count": result_count,
+        "blocked_count": blocked_count,
+        "enrichment_refs": enrichment_refs,
+    }
+
+
+def _run_full_analysis(
+    *,
+    run_id: str,
+    tenant_id: str,
+    deal_id: str,
+    created_claim_ids: list[str],
+    calc_ids: list[str],
+    enrichment_refs: dict[str, Any],
+) -> dict[str, Any]:
+    """Run analysis agents for a FULL pipeline run.
+
+    Builds LLM client (using IDIS_DEBATE_BACKEND), registers all 8 specialist agents,
+    constructs AnalysisContext from pipeline data, and runs AnalysisEngine.
+
+    Args:
+        run_id: Pipeline run UUID.
+        tenant_id: Tenant context.
+        deal_id: Deal UUID.
+        created_claim_ids: Claim IDs from extraction/grading.
+        calc_ids: Calc IDs from calculation step.
+        enrichment_refs: Enrichment references from enrichment step.
+
+    Returns:
+        Dict with agent_count, report_ids, bundle_id, and internal state
+        (_analysis_bundle, _analysis_context) for downstream steps.
+    """
+    from idis.analysis.agents import build_default_specialist_agents
+    from idis.analysis.models import AnalysisContext, EnrichmentRef
+    from idis.analysis.registry import AnalysisAgentRegistry
+    from idis.analysis.runner import AnalysisEngine
+    from idis.audit.sink import InMemoryAuditSink
+
+    llm_client = _build_analysis_llm_client()
+    agents = build_default_specialist_agents(llm_client=llm_client)
+
+    registry = AnalysisAgentRegistry()
+    for agent in agents:
+        registry.register(agent)
+
+    enrichment_ref_models: dict[str, EnrichmentRef] = {}
+    for ref_id, ref_data in enrichment_refs.items():
+        if isinstance(ref_data, dict):
+            enrichment_ref_models[ref_id] = EnrichmentRef(
+                ref_id=ref_data.get("ref_id", ref_id),
+                provider_id=ref_data.get("provider_id", "unknown"),
+                source_id=ref_data.get("source_id", "unknown"),
+            )
+
+    analysis_ctx = AnalysisContext(
+        deal_id=deal_id,
+        tenant_id=tenant_id,
+        run_id=run_id,
+        claim_ids=frozenset(created_claim_ids),
+        calc_ids=frozenset(calc_ids),
+        enrichment_refs=enrichment_ref_models,
+    )
+
+    audit_sink = InMemoryAuditSink()
+    engine = AnalysisEngine(registry=registry, audit_sink=audit_sink)
+    agent_ids = [a.agent_id for a in registry.list_agents()]
+    bundle = engine.run(analysis_ctx, agent_ids)
+
+    return {
+        "agent_count": len(bundle.reports),
+        "report_ids": [r.agent_id for r in bundle.reports],
+        "bundle_id": f"bundle-{run_id[:8]}",
+        "_analysis_bundle": bundle,
+        "_analysis_context": analysis_ctx,
+    }
+
+
+def _run_full_scoring(
+    *,
+    run_id: str,
+    tenant_id: str,
+    deal_id: str,
+    analysis_bundle: Any,
+    analysis_context: Any,
+) -> dict[str, Any]:
+    """Run scoring engine for a FULL pipeline run.
+
+    Builds LLM client (using IDIS_DEBATE_BACKEND), constructs ScoringEngine,
+    and scores the analysis bundle. Defaults to SEED stage.
+
+    Args:
+        run_id: Pipeline run UUID.
+        tenant_id: Tenant context.
+        deal_id: Deal UUID.
+        analysis_bundle: AnalysisBundle from analysis step.
+        analysis_context: AnalysisContext from analysis step.
+
+    Returns:
+        Dict with composite_score, band, routing, and internal state
+        (_scorecard) for downstream steps.
+    """
+    from idis.analysis.scoring.engine import ScoringEngine
+    from idis.analysis.scoring.llm_scorecard_runner import LLMScorecardRunner
+    from idis.analysis.scoring.models import Stage
+    from idis.audit.sink import InMemoryAuditSink
+
+    llm_client = _build_analysis_llm_client()
+    runner = LLMScorecardRunner(llm_client=llm_client)
+    audit_sink = InMemoryAuditSink()
+    engine = ScoringEngine(runner=runner, audit_sink=audit_sink)
+
+    stage = Stage.SEED
+    scorecard = engine.score(analysis_context, analysis_bundle, stage)
+
+    return {
+        "composite_score": scorecard.composite_score,
+        "band": scorecard.score_band.value,
+        "routing": scorecard.routing.value,
+        "_scorecard": scorecard,
+    }
+
+
+def _run_full_deliverables(
+    *,
+    run_id: str,
+    tenant_id: str,
+    deal_id: str,
+    analysis_bundle: Any,
+    analysis_context: Any,
+    scorecard: Any,
+) -> dict[str, Any]:
+    """Run deliverables generation for a FULL pipeline run.
+
+    Uses DeliverablesGenerator to produce the full bundle of deliverables
+    from analysis reports and scorecard.
+
+    Args:
+        run_id: Pipeline run UUID.
+        tenant_id: Tenant context.
+        deal_id: Deal UUID.
+        analysis_bundle: AnalysisBundle from analysis step.
+        analysis_context: AnalysisContext from analysis step.
+        scorecard: Scorecard from scoring step.
+
+    Returns:
+        Dict with deliverable_count, types, deliverable_ids.
+    """
+    from idis.audit.sink import InMemoryAuditSink
+    from idis.deliverables.generator import DeliverablesGenerator
+
+    audit_sink = InMemoryAuditSink()
+    generator = DeliverablesGenerator(audit_sink=audit_sink)
+
+    generated_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    bundle = generator.generate(
+        ctx=analysis_context,
+        bundle=analysis_bundle,
+        scorecard=scorecard,
+        deal_name=deal_id,
+        generated_at=generated_at,
+        deliverable_id_prefix=f"del-{run_id[:8]}",
+    )
+
+    types: list[str] = [
+        bundle.screening_snapshot.deliverable_type,
+        bundle.ic_memo.deliverable_type,
+        bundle.truth_dashboard.deliverable_type,
+        bundle.qa_brief.deliverable_type,
+    ]
+    deliverable_ids: list[str] = [
+        bundle.screening_snapshot.deliverable_id,
+        bundle.ic_memo.deliverable_id,
+        bundle.truth_dashboard.deliverable_id,
+        bundle.qa_brief.deliverable_id,
+    ]
+
+    if bundle.decline_letter is not None:
+        types.append(bundle.decline_letter.deliverable_type)
+        deliverable_ids.append(bundle.decline_letter.deliverable_id)
+
+    return {
+        "deliverable_count": len(types),
+        "types": sorted(types),
+        "deliverable_ids": sorted(deliverable_ids),
+    }
+
+
+def _build_analysis_llm_client() -> Any:
+    """Build the LLM client for analysis/scoring based on env configuration.
+
+    Reads IDIS_DEBATE_BACKEND (default: deterministic).
+    Reuses the debate backend selection for analysis agents and scoring.
+
+    Returns:
+        An LLMClient implementation instance.
+    """
+    import os
+
+    backend = os.environ.get("IDIS_DEBATE_BACKEND", "deterministic")
+
+    if backend == "anthropic":
+        from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
+
+        model = os.environ.get("IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT", "claude-sonnet-4-20250514")
+        return AnthropicLLMClient(model=model)
+
+    from idis.services.extraction.extractors.llm_client import DeterministicLLMClient
+
+    return DeterministicLLMClient()
 
 
 def _run_snapshot_calc(

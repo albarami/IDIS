@@ -3,9 +3,11 @@
 Covers:
 - SNAPSHOT records four steps in order (INGEST_CHECK → EXTRACT → GRADE → CALC)
 - Step errors persisted and returned
-- FULL blocks on DEBATE step with reason (after CALC)
+- FULL completes all 9 steps in correct order
 - Cross-tenant run step read returns 404 (no existence leak)
 - Audit failure aborts run fail-closed
+
+Updated for Phase X: FULL mode now has 9 steps.
 """
 
 from __future__ import annotations
@@ -214,6 +216,23 @@ class TestSnapshotStepErrorsPersistedAndReturned:
         assert completed_steps[0].step_name == StepName.INGEST_CHECK
 
 
+def _stub_enrichment(
+    *,
+    run_id: str,
+    tenant_id: str,
+    deal_id: str,
+    created_claim_ids: list[str],
+    calc_ids: list[str],
+) -> dict[str, Any]:
+    """Deterministic enrichment stub returning zero results."""
+    return {
+        "provider_count": 0,
+        "result_count": 0,
+        "blocked_count": 0,
+        "enrichment_refs": {},
+    }
+
+
 def _stub_debate(
     *,
     run_id: str,
@@ -232,11 +251,61 @@ def _stub_debate(
     }
 
 
-class TestFullCompletesAllStepsIncludingDebate:
-    """test_full_completes_all_steps_including_debate."""
+def _stub_analysis(
+    *,
+    run_id: str,
+    tenant_id: str,
+    deal_id: str,
+    created_claim_ids: list[str],
+    calc_ids: list[str],
+    enrichment_refs: dict[str, Any],
+) -> dict[str, Any]:
+    """Deterministic analysis stub."""
+    return {
+        "agent_count": 8,
+        "report_ids": ["report-001"],
+        "bundle_id": f"bundle-{run_id[:8]}",
+    }
 
-    def test_full_completes_all_five_steps(self) -> None:
-        """FULL run completes INGEST_CHECK/EXTRACT/GRADE/CALC/DEBATE."""
+
+def _stub_scoring(
+    *,
+    run_id: str,
+    tenant_id: str,
+    deal_id: str,
+    analysis_bundle: Any,
+    analysis_context: Any,
+) -> dict[str, Any]:
+    """Deterministic scoring stub."""
+    return {
+        "composite_score": 72.5,
+        "band": "MEDIUM",
+        "routing": "HOLD",
+    }
+
+
+def _stub_deliverables(
+    *,
+    run_id: str,
+    tenant_id: str,
+    deal_id: str,
+    analysis_bundle: Any,
+    analysis_context: Any,
+    scorecard: Any,
+) -> dict[str, Any]:
+    """Deterministic deliverables stub."""
+    return {
+        "deliverable_count": 4,
+        "types": ["IC_MEMO", "QA_BRIEF", "SCREENING_SNAPSHOT", "TRUTH_DASHBOARD"],
+        "deliverable_ids": ["del-001", "del-002", "del-003", "del-004"],
+    }
+
+
+class TestFullCompletesAllNineSteps:
+    """test_full_completes_all_nine_steps."""
+
+    def test_full_completes_all_nine_steps(self) -> None:
+        """FULL run completes all 9 steps in canonical order."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -250,7 +319,11 @@ class TestFullCompletesAllStepsIncludingDebate:
             extract_fn=_stub_extract,
             grade_fn=_stub_grade,
             calc_fn=_stub_calc,
+            enrich_fn=_stub_enrichment,
             debate_fn=_stub_debate,
+            analysis_fn=_stub_analysis,
+            scoring_fn=_stub_scoring,
+            deliverables_fn=_stub_deliverables,
         )
 
         result = orchestrator.execute(ctx)
@@ -259,13 +332,17 @@ class TestFullCompletesAllStepsIncludingDebate:
         assert result.block_reason is None
 
         completed = [s for s in result.steps if s.status == StepStatus.COMPLETED]
-        assert len(completed) == 5
+        assert len(completed) == 9
         assert [s.step_name for s in completed] == [
             StepName.INGEST_CHECK,
             StepName.EXTRACT,
             StepName.GRADE,
             StepName.CALC,
+            StepName.ENRICHMENT,
             StepName.DEBATE,
+            StepName.ANALYSIS,
+            StepName.SCORING,
+            StepName.DELIVERABLES,
         ]
 
 

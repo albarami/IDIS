@@ -101,7 +101,7 @@ class GitHubConnector:
         token = (ctx.byol_credentials or {}).get(GITHUB_CREDENTIAL_KEY)
         if not token:
             return EnrichmentResult(
-                status=EnrichmentStatus.ERROR,
+                status=EnrichmentStatus.BLOCKED_MISSING_BYOL,
                 normalized={"error": "Token not found in BYOL credentials"},
             )
 

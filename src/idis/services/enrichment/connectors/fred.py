@@ -102,7 +102,7 @@ class FredConnector:
         api_key = (ctx.byol_credentials or {}).get(FRED_CREDENTIAL_KEY)
         if not api_key:
             return EnrichmentResult(
-                status=EnrichmentStatus.ERROR,
+                status=EnrichmentStatus.BLOCKED_MISSING_BYOL,
                 normalized={"error": "API key not found in BYOL credentials"},
             )
 

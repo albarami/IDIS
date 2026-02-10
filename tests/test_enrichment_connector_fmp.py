@@ -149,13 +149,13 @@ class TestFmpFetchFailures:
 
 
 class TestFmpByol:
-    def test_missing_api_key_returns_error(self) -> None:
+    def test_missing_api_key_returns_blocked(self) -> None:
         connector = FmpConnector(http_client=_make_client())
         result = connector.fetch(_make_request(), _ctx_no_key())
-        assert result.status == EnrichmentStatus.ERROR
+        assert result.status == EnrichmentStatus.BLOCKED_MISSING_BYOL
         assert "API key" in result.normalized.get("error", "")
 
-    def test_empty_credentials_returns_error(self) -> None:
+    def test_empty_credentials_returns_blocked(self) -> None:
         ctx = EnrichmentContext(
             timeout_seconds=5.0,
             max_retries=0,
@@ -164,7 +164,7 @@ class TestFmpByol:
         )
         connector = FmpConnector(http_client=_make_client())
         result = connector.fetch(_make_request(), ctx)
-        assert result.status == EnrichmentStatus.ERROR
+        assert result.status == EnrichmentStatus.BLOCKED_MISSING_BYOL
 
 
 class TestFmpRedRights:

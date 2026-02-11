@@ -11,6 +11,7 @@ FULL mode: INGEST_CHECK -> EXTRACT -> GRADE -> CALC -> ENRICHMENT -> DEBATE
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -187,7 +188,7 @@ async def start_run(
     )
 
     try:
-        orch_result = orchestrator.execute(ctx)
+        orch_result = await asyncio.to_thread(orchestrator.execute, ctx)
     except AuditSinkError as exc:
         logger.error("Audit failure aborted run %s: %s", run_id, exc)
         raise IdisHttpError(

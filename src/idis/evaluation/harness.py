@@ -9,11 +9,13 @@ Uses httpx as the project-standard HTTP client.
 
 from __future__ import annotations
 
-import contextlib
+import hashlib
 import json
+import logging
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import httpx
 
@@ -31,6 +33,9 @@ from idis.evaluation.types import (
 
 _DOCUMENT_EXTENSIONS = frozenset({"pdf", "xlsx", "docx", "pptx", "txt"})
 _HTTP_TIMEOUT = 120.0
+_GATE3_TENANT_ID = "00000000-0000-0000-0000-000000000001"
+
+logger = logging.getLogger(__name__)
 
 
 def _validate_case(case: GdbsCase, dataset_root: Path) -> CaseResult:
@@ -103,17 +108,195 @@ def _build_headers(api_key: str | None) -> dict[str, str]:
     return headers
 
 
+def _load_deal_artifacts(deal_dir: Path) -> list[dict[str, Any]]:
+    """Load artifact manifest from a deal directory.
+
+    Reads artifacts.json and returns the list of artifact descriptors.
+    Falls back to scanning for document files if no manifest exists.
+
+    Args:
+        deal_dir: Path to the deal directory.
+
+    Returns:
+        List of artifact dicts with at least 'filename' and optionally
+        'sha256', 'artifact_type', 'storage_uri'.
+    """
+    manifest_path = deal_dir / "artifacts.json"
+    if manifest_path.exists():
+        with open(manifest_path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("artifacts", [])
+
+    doc_files = [
+        fp
+        for fp in deal_dir.iterdir()
+        if fp.is_file() and fp.suffix.lstrip(".").lower() in _DOCUMENT_EXTENSIONS
+    ]
+    return [{"filename": fp.name, "artifact_type": "DATA_ROOM_FILE"} for fp in sorted(doc_files)]
+
+
+def _seed_artifact_bytes(
+    *,
+    fs_store: object,
+    tenant_id: str,
+    storage_key: str,
+    data: bytes,
+) -> None:
+    """Write artifact bytes into the shared FilesystemObjectStore.
+
+    This mirrors the E2E test pattern: the harness writes bytes directly
+    to the same filesystem store the server reads from.
+
+    Args:
+        fs_store: A FilesystemObjectStore instance.
+        tenant_id: Tenant UUID string.
+        storage_key: Deterministic storage key for the artifact.
+        data: Raw file bytes.
+    """
+    fs_store.put(tenant_id=tenant_id, key=storage_key, data=data)  # type: ignore[union-attr]
+
+
+def _map_artifact_type_to_doc_type(artifact_type: str) -> str:
+    """Map dataset artifact_type to API DocType enum value.
+
+    Args:
+        artifact_type: Artifact type from artifacts.json.
+
+    Returns:
+        DocType string for the API.
+    """
+    mapping = {
+        "PITCH_DECK": "PITCH_DECK",
+        "FIN_MODEL": "FINANCIAL_MODEL",
+        "FINANCIAL_MODEL": "FINANCIAL_MODEL",
+        "DATA_ROOM_FILE": "DATA_ROOM_FILE",
+        "TRANSCRIPT": "TRANSCRIPT",
+        "TERM_SHEET": "TERM_SHEET",
+    }
+    return mapping.get(artifact_type, "DATA_ROOM_FILE")
+
+
+def _seed_and_ingest_documents(
+    *,
+    client: httpx.Client,
+    auth_headers: dict[str, str],
+    base_url: str,
+    deal_id: str,
+    deal_dir: Path,
+    shared_store_dir: Path | None,
+    case_id: str,
+) -> tuple[int, list[str]]:
+    """Seed document bytes into the shared store and create documents via API.
+
+    For each artifact in the deal's artifacts.json:
+    1. Read raw bytes from the artifacts/ subdirectory
+    2. Write bytes into the shared FilesystemObjectStore
+    3. Create document via POST /v1/deals/{dealId}/documents with
+       uri=file://{storage_key} and auto_ingest=True
+
+    Args:
+        client: HTTP client.
+        auth_headers: Auth headers for API calls.
+        base_url: API base URL.
+        deal_id: Server-assigned deal UUID.
+        deal_dir: Path to the deal directory in the dataset.
+        shared_store_dir: Path to the shared filesystem store (None = skip seeding).
+        case_id: Case identifier for deterministic storage keys.
+
+    Returns:
+        (ingested_count, errors) tuple.
+    """
+    artifacts = _load_deal_artifacts(deal_dir)
+    if not artifacts:
+        return 0, ["No artifacts found in deal directory"]
+
+    fs_store = None
+    if shared_store_dir is not None:
+        from idis.storage.filesystem_store import FilesystemObjectStore
+
+        fs_store = FilesystemObjectStore(base_dir=shared_store_dir)
+
+    ingested = 0
+    errors: list[str] = []
+
+    for artifact in artifacts:
+        filename = artifact.get("filename", "")
+        if not filename:
+            errors.append("Artifact missing filename")
+            continue
+
+        artifact_type = artifact.get("artifact_type", "DATA_ROOM_FILE")
+        expected_sha256 = artifact.get("sha256")
+
+        artifacts_subdir = deal_dir / "artifacts"
+        file_path = artifacts_subdir / filename
+        if not file_path.exists():
+            file_path = deal_dir / filename
+
+        storage_key = f"gdbs/{case_id}/{filename}"
+        uri = f"file://{storage_key}"
+        doc_type = _map_artifact_type_to_doc_type(artifact_type)
+
+        if file_path.exists() and fs_store is not None:
+            raw_bytes = file_path.read_bytes()
+            actual_sha256 = hashlib.sha256(raw_bytes).hexdigest()
+
+            _seed_artifact_bytes(
+                fs_store=fs_store,
+                tenant_id=_GATE3_TENANT_ID,
+                storage_key=storage_key,
+                data=raw_bytes,
+            )
+            logger.debug(
+                "Seeded %s (%d bytes, sha256=%s) -> %s",
+                filename,
+                len(raw_bytes),
+                actual_sha256[:16],
+                storage_key,
+            )
+        elif not file_path.exists():
+            errors.append(f"Artifact file not found: {filename}")
+            continue
+
+        create_body: dict[str, Any] = {
+            "doc_type": doc_type,
+            "title": filename,
+            "uri": uri,
+            "auto_ingest": True,
+        }
+        if expected_sha256:
+            create_body["sha256"] = expected_sha256
+
+        create_resp = client.post(
+            f"{base_url}/v1/deals/{deal_id}/documents",
+            json=create_body,
+            headers={**auth_headers, "Content-Type": "application/json"},
+        )
+
+        if create_resp.status_code == 201:
+            ingested += 1
+        else:
+            errors.append(
+                f"Document creation failed for {filename}: "
+                f"HTTP {create_resp.status_code} {create_resp.text[:200]}"
+            )
+
+    return ingested, errors
+
+
 def _execute_case(
     case: GdbsCase,
     base_url: str,
     api_key: str | None,
     dataset_root: Path,
+    shared_store_dir: Path | None = None,
+    http_timeout: float | None = None,
 ) -> CaseResult:
     """Execute a single case via the IDIS API.
 
     Steps:
         1. Create deal via POST /v1/deals
-        2. Upload documents from dataset (if document files exist)
+        2. Seed document bytes into shared store and create documents with auto_ingest
         3. Start FULL run via POST /v1/deals/{deal_id}/runs
         4. Interpret run result status
 
@@ -122,6 +305,7 @@ def _execute_case(
         base_url: API base URL.
         api_key: Optional API key for authentication.
         dataset_root: Path to GDBS dataset root.
+        shared_store_dir: Path to the shared filesystem store for seeding bytes.
 
     Returns:
         CaseResult with status, errors, metrics, and timing.
@@ -131,8 +315,8 @@ def _execute_case(
     auth_headers = _build_headers(api_key)
 
     try:
-        with httpx.Client(timeout=_HTTP_TIMEOUT) as client:
-            # 3a. Create deal
+        effective_timeout = http_timeout if http_timeout is not None else _HTTP_TIMEOUT
+        with httpx.Client(timeout=effective_timeout) as client:
             create_resp = client.post(
                 f"{base_url}/v1/deals",
                 json={"name": case.deal_key, "company_name": case.deal_key},
@@ -153,27 +337,31 @@ def _execute_case(
             deal_id = create_resp.json()["deal_id"]
             metrics["deal_id"] = deal_id
 
-            # 3b. Upload documents from dataset directory
             deal_dir = dataset_root / case.directory
             if deal_dir.exists():
-                doc_files = [
-                    f
-                    for f in deal_dir.iterdir()
-                    if f.is_file() and f.suffix.lstrip(".").lower() in _DOCUMENT_EXTENSIONS
-                ]
-                for doc_file in sorted(doc_files):
-                    with contextlib.suppress(httpx.HTTPError):
-                        client.post(
-                            f"{base_url}/v1/deals/{deal_id}/documents",
-                            json={
-                                "doc_type": "DATA_ROOM_FILE",
-                                "title": doc_file.name,
-                                "auto_ingest": False,
-                            },
-                            headers=auth_headers,
-                        )
+                ingested_count, seed_errors = _seed_and_ingest_documents(
+                    client=client,
+                    auth_headers=auth_headers,
+                    base_url=base_url,
+                    deal_id=deal_id,
+                    deal_dir=deal_dir,
+                    shared_store_dir=shared_store_dir,
+                    case_id=case.case_id,
+                )
+                metrics["documents_ingested"] = ingested_count
+                if seed_errors:
+                    metrics["seed_errors"] = seed_errors
 
-            # 3c. Start FULL run
+                if ingested_count == 0:
+                    return CaseResult(
+                        case_id=case.case_id,
+                        deal_id=case.deal_id,
+                        status=CaseStatus.FAIL,
+                        errors=seed_errors or ["No documents ingested"],
+                        metrics=metrics,
+                        execution_time_ms=int((time.monotonic() - start_time) * 1000),
+                    )
+
             run_headers = {**auth_headers, "Idempotency-Key": case.case_id}
             run_resp = client.post(
                 f"{base_url}/v1/deals/{deal_id}/runs",
@@ -183,7 +371,6 @@ def _execute_case(
 
             execution_time_ms = int((time.monotonic() - start_time) * 1000)
 
-            # 3d. Interpret run result
             if run_resp.status_code >= 500:
                 return CaseResult(
                     case_id=case.case_id,
@@ -230,7 +417,6 @@ def _execute_case(
             if failed_steps:
                 metrics["failing_step"] = failed_steps[0].get("step_name", "UNKNOWN")
 
-            # 3d. Map run status to case status
             if run_status == "COMPLETED":
                 return CaseResult(
                     case_id=case.case_id,
@@ -251,7 +437,6 @@ def _execute_case(
                     execution_time_ms=execution_time_ms,
                 )
 
-            # FAILED, PARTIAL, or other
             step_errors = [
                 f"{s.get('step_name', '?')}: {s.get('error', 'failed')}" for s in failed_steps
             ]
@@ -283,6 +468,10 @@ def run_suite(
     base_url: str | None = None,
     api_key: str | None = None,
     out_path: Path | None = None,
+    shared_store_dir: Path | None = None,
+    case_limit: int | None = None,
+    http_timeout: float | None = None,
+    pre_case_fn: Callable[[], None] | None = None,
 ) -> SuiteResult:
     """Run evaluation suite in validate or execute mode.
 
@@ -293,6 +482,12 @@ def run_suite(
         base_url: API base URL (required for execute mode)
         api_key: Optional API key
         out_path: Optional path to write JSON report
+        shared_store_dir: Path to shared filesystem store for seeding document bytes.
+            When provided, _execute_case seeds artifact bytes into this directory
+            so the server's ComplianceEnforcedStore can read them.
+        case_limit: Optional max number of cases to execute (for diagnostic runs).
+        http_timeout: Optional per-request HTTP timeout override in seconds.
+        pre_case_fn: Optional callback invoked before each case (e.g. server restart).
 
     Returns:
         SuiteResult with status, cases, and metrics
@@ -334,11 +529,23 @@ def run_suite(
         _write_report(result, out_path)
         return result
 
+    if case_limit is not None and case_limit > 0:
+        load_result.cases = load_result.cases[:case_limit]
+
     if mode == "validate":
         return _run_validate_mode(load_result, suite, started_at, dataset_root, out_path)
     else:
         return _run_execute_mode(
-            load_result, suite, started_at, dataset_root, base_url, api_key, out_path
+            load_result,
+            suite,
+            started_at,
+            dataset_root,
+            base_url,
+            api_key,
+            out_path,
+            shared_store_dir=shared_store_dir,
+            http_timeout=http_timeout,
+            pre_case_fn=pre_case_fn,
         )
 
 
@@ -393,6 +600,9 @@ def _run_execute_mode(
     base_url: str | None,
     api_key: str | None,
     out_path: Path | None,
+    shared_store_dir: Path | None = None,
+    http_timeout: float | None = None,
+    pre_case_fn: Callable[[], None] | None = None,
 ) -> SuiteResult:
     """Run execute mode (attempts API calls)."""
     blockers: list[str] = []
@@ -418,9 +628,24 @@ def _run_execute_mode(
 
     case_results: list[CaseResult] = []
 
-    for case in load_result.cases:
+    for idx, case in enumerate(load_result.cases):
+        if pre_case_fn is not None:
+            logger.info(
+                "pre_case_fn: resetting server before case %d/%d (%s)",
+                idx + 1,
+                len(load_result.cases),
+                case.case_id,
+            )
+            pre_case_fn()
         if api_available:
-            case_result = _execute_case(case, base_url, api_key, dataset_root)
+            case_result = _execute_case(
+                case,
+                base_url,
+                api_key,
+                dataset_root,
+                shared_store_dir=shared_store_dir,
+                http_timeout=http_timeout,
+            )
         else:
             case_result = CaseResult(
                 case_id=case.case_id,

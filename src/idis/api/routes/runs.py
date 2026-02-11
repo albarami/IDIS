@@ -852,9 +852,9 @@ def _build_analysis_llm_client() -> Any:
         model = os.environ.get("IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT", "claude-sonnet-4-20250514")
         return AnthropicLLMClient(model=model)
 
-    from idis.services.extraction.extractors.llm_client import DeterministicLLMClient
+    from idis.services.extraction.extractors.llm_client import DeterministicAnalysisLLMClient
 
-    return DeterministicLLMClient()
+    return DeterministicAnalysisLLMClient()
 
 
 def _run_snapshot_calc(

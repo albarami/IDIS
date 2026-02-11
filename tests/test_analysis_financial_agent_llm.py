@@ -237,6 +237,36 @@ class TestFinancialAgentFailClosed:
         with pytest.raises(ValueError, match="non-object"):
             agent.run(_make_context())
 
+    def test_single_element_list_wrapped_object_succeeds(self) -> None:
+        """LLM returning [{...}] is unwrapped to {...} and parsed as AgentReport."""
+        wrapped = f"[{_valid_financial_response()}]"
+        client = _StubLLMClient(wrapped)
+        agent = FinancialAgent(llm_client=client)
+
+        report = agent.run(_make_context())
+
+        assert isinstance(report, AgentReport)
+        assert report.agent_id == "financial-agent-01"
+        assert report.agent_type == "financial_agent"
+        assert report.confidence == 0.68
+
+    def test_multi_element_list_raises(self) -> None:
+        """LLM returning a list with >1 element must fail-closed."""
+        two_reports = f"[{_valid_financial_response()}, {_valid_financial_response()}]"
+        client = _StubLLMClient(two_reports)
+        agent = FinancialAgent(llm_client=client)
+
+        with pytest.raises(ValueError, match=r"got list \(len=2\).*single-element"):
+            agent.run(_make_context())
+
+    def test_list_of_non_object_raises(self) -> None:
+        """LLM returning a list of non-dicts must fail-closed."""
+        client = _StubLLMClient(json.dumps(["not an object"]))
+        agent = FinancialAgent(llm_client=client)
+
+        with pytest.raises(ValueError, match=r"got list \(len=1\).*single-element"):
+            agent.run(_make_context())
+
     def test_missing_prompt_file_raises(self) -> None:
         from pathlib import Path
 

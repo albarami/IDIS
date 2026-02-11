@@ -30,6 +30,13 @@ logger = logging.getLogger(__name__)
 
 _VALID_SEVERITIES = frozenset(item.value for item in RiskSeverity)
 
+_JSON_OBJECT_CONSTRAINT = (
+    "\n\nOUTPUT FORMAT CONSTRAINT: "
+    "Return a single JSON object at the top level. "
+    "Do not return a JSON array. "
+    "If you would otherwise return an array, unwrap it and return the single object."
+)
+
 
 def _load_prompt(prompt_path: Path) -> str:
     """Load prompt text from disk. Fail-closed on missing file.
@@ -109,6 +116,9 @@ def _strip_markdown_fences(text: str) -> str:
 def _parse_llm_response(raw: str, agent_type: str) -> dict[str, Any]:
     """Parse LLM response as JSON. Fail-closed on invalid.
 
+    Accepts a single-element list wrapping a dict ([{...}] -> {...}).
+    Rejects all other non-object shapes.
+
     Args:
         raw: Raw response string from LLM.
         agent_type: Agent type for error context.
@@ -125,11 +135,19 @@ def _parse_llm_response(raw: str, agent_type: str) -> dict[str, Any]:
     except json.JSONDecodeError as exc:
         raise ValueError(f"LLM returned invalid JSON for {agent_type}: {exc}") from exc
 
-    if not isinstance(parsed, dict):
+    if isinstance(parsed, dict):
+        return parsed
+
+    if isinstance(parsed, list):
+        if len(parsed) == 1 and isinstance(parsed[0], dict):
+            return parsed[0]
         raise ValueError(
-            f"LLM returned non-object JSON for {agent_type}: got {type(parsed).__name__}"
+            f"LLM returned non-object JSON for {agent_type}: "
+            f"got list (len={len(parsed)}). "
+            f"Only single-element list wrapping is accepted."
         )
-    return parsed
+
+    raise ValueError(f"LLM returned non-object JSON for {agent_type}: got {type(parsed).__name__}")
 
 
 def _build_risks(raw_risks: list[dict[str, Any]]) -> list[Risk]:
@@ -221,7 +239,9 @@ def run_specialist_agent(
     """
     prompt_text = _load_prompt(prompt_path)
     context_payload = _build_context_payload(ctx)
-    full_prompt = f"{prompt_text}\n\n---\n\nCONTEXT PAYLOAD:\n{context_payload}"
+    full_prompt = (
+        f"{prompt_text}\n\n---\n\nCONTEXT PAYLOAD:\n{context_payload}{_JSON_OBJECT_CONSTRAINT}"
+    )
 
     raw_response = llm_client.call(full_prompt, json_mode=True)
     parsed = _parse_llm_response(raw_response, agent_type)

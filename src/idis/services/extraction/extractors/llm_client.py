@@ -263,3 +263,170 @@ class DeterministicAnalysisLLMClient:
             },
             "enrichment_ref_ids": [],
         }
+
+
+_SCORING_DIMENSIONS = (
+    "MARKET_ATTRACTIVENESS",
+    "TEAM_QUALITY",
+    "PRODUCT_DEFENSIBILITY",
+    "TRACTION_VELOCITY",
+    "FUND_THESIS_FIT",
+    "CAPITAL_EFFICIENCY",
+    "SCALABILITY",
+    "RISK_PROFILE",
+)
+
+
+class DeterministicScoringLLMClient:
+    """Deterministic LLM client for scoring agents — returns valid scorecard JSON.
+
+    Parses the CONTEXT PAYLOAD from the scoring prompt to extract real
+    claim/calc IDs, then builds a fully-valid scoring response with all 8
+    dimensions that passes DimensionScore Pydantic validation, NFF, and
+    Muhasabah gates.
+    """
+
+    _CONTEXT_MARKER = "CONTEXT PAYLOAD:\n"
+    _TIMESTAMP = "2026-01-01T00:00:00+00:00"
+
+    def call(self, prompt: str, *, json_mode: bool = False) -> str:
+        """Return deterministic scoring JSON based on prompt context.
+
+        Args:
+            prompt: The full scoring prompt (includes CONTEXT PAYLOAD JSON block).
+            json_mode: Ignored; always returns JSON.
+
+        Returns:
+            JSON string containing a scorecard object with dimension_scores.
+        """
+        claim_ids, calc_ids = self._extract_registry_ids(prompt)
+        response = self._build_scoring_response(claim_ids, calc_ids)
+        return json.dumps(response, sort_keys=True)
+
+    def _extract_registry_ids(self, prompt: str) -> tuple[list[str], list[str]]:
+        """Extract claim and calc IDs from the CONTEXT PAYLOAD in the prompt.
+
+        The scoring runner embeds the payload as:
+            CONTEXT PAYLOAD:\\n{json}
+        with claim_registry and calc_registry as dicts keyed by ID.
+
+        Args:
+            prompt: Full prompt containing a CONTEXT PAYLOAD JSON block.
+
+        Returns:
+            Tuple of (sorted claim_ids, sorted calc_ids).
+
+        Raises:
+            ValueError: If context payload cannot be parsed (fail-closed).
+        """
+        ctx_start = prompt.find(self._CONTEXT_MARKER)
+        if ctx_start == -1:
+            raise ValueError(
+                "DETERMINISTIC_SCORING_CONTEXT_PARSE_FAILED: "
+                "no CONTEXT PAYLOAD marker found in prompt"
+            )
+
+        json_text = prompt[ctx_start + len(self._CONTEXT_MARKER) :].strip()
+
+        try:
+            payload = json.loads(json_text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                "DETERMINISTIC_SCORING_CONTEXT_PARSE_FAILED: "
+                f"invalid JSON in CONTEXT PAYLOAD: {exc}"
+            ) from exc
+
+        if not isinstance(payload, dict):
+            raise ValueError(
+                "DETERMINISTIC_SCORING_CONTEXT_PARSE_FAILED: "
+                f"expected dict, got {type(payload).__name__}"
+            )
+
+        claim_registry = payload.get("claim_registry", {})
+        calc_registry = payload.get("calc_registry", {})
+
+        claim_ids = sorted(claim_registry.keys()) if isinstance(claim_registry, dict) else []
+        calc_ids = sorted(calc_registry.keys()) if isinstance(calc_registry, dict) else []
+
+        return claim_ids, calc_ids
+
+    def _build_dimension_score(
+        self,
+        dimension: str,
+        claim_ids: list[str],
+        calc_ids: list[str],
+    ) -> dict[str, Any]:
+        """Build a single valid DimensionScore dict.
+
+        Args:
+            dimension: ScoreDimension value (e.g. MARKET_ATTRACTIVENESS).
+            claim_ids: Sorted claim IDs from context.
+            calc_ids: Sorted calc IDs from context.
+
+        Returns:
+            Dict matching DimensionScore schema with valid Muhasabah.
+        """
+        return {
+            "dimension": dimension,
+            "score": 0.65,
+            "rationale": (
+                f"Deterministic scoring assessment for {dimension}"
+                " based on available evidence."
+            ),
+            "supported_claim_ids": list(claim_ids),
+            "supported_calc_ids": list(calc_ids),
+            "enrichment_refs": [],
+            "confidence": 0.60,
+            "confidence_justification": (
+                f"Deterministic stub: moderate confidence for {dimension}"
+            ),
+            "muhasabah": {
+                "agent_id": "deterministic-scoring-stub",
+                "output_id": f"det-score-{dimension.lower()}",
+                "supported_claim_ids": list(claim_ids),
+                "supported_calc_ids": list(calc_ids),
+                "evidence_summary": f"Deterministic evidence for {dimension} from registries",
+                "counter_hypothesis": f"Evidence for {dimension} may be incomplete",
+                "falsifiability_tests": [
+                    {
+                        "test_description": f"Verify {dimension} claims against sources",
+                        "required_evidence": "Original source documents",
+                        "pass_fail_rule": "Claims without traceable sources are ungrounded",
+                    }
+                ],
+                "uncertainties": [
+                    {
+                        "uncertainty": f"Stub scoring for {dimension} not LLM-validated",
+                        "impact": "MEDIUM",
+                        "mitigation": "Run with real LLM backend for production scoring",
+                    }
+                ],
+                "failure_modes": ["incomplete_evidence", "stub_limitations"],
+                "confidence": 0.60,
+                "confidence_justification": (
+                    f"Deterministic stub: moderate confidence for {dimension}"
+                ),
+                "timestamp": self._TIMESTAMP,
+                "is_subjective": False,
+            },
+        }
+
+    def _build_scoring_response(
+        self,
+        claim_ids: list[str],
+        calc_ids: list[str],
+    ) -> dict[str, Any]:
+        """Build a complete scoring response with all 8 dimensions.
+
+        Args:
+            claim_ids: Sorted claim IDs from context.
+            calc_ids: Sorted calc IDs from context.
+
+        Returns:
+            Dict with dimension_scores containing all 8 required dimensions.
+        """
+        dimension_scores: dict[str, dict[str, Any]] = {}
+        for dim in _SCORING_DIMENSIONS:
+            dimension_scores[dim] = self._build_dimension_score(dim, claim_ids, calc_ids)
+
+        return {"dimension_scores": dimension_scores}

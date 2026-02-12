@@ -752,7 +752,7 @@ def _run_full_scoring(
     from idis.analysis.scoring.models import Stage
     from idis.audit.sink import InMemoryAuditSink
 
-    llm_client = _build_analysis_llm_client()
+    llm_client = _build_scoring_llm_client()
     runner = LLMScorecardRunner(llm_client=llm_client)
     audit_sink = InMemoryAuditSink()
     engine = ScoringEngine(runner=runner, audit_sink=audit_sink)
@@ -833,11 +833,37 @@ def _run_full_deliverables(
     }
 
 
-def _build_analysis_llm_client() -> Any:
-    """Build the LLM client for analysis/scoring based on env configuration.
+def _build_scoring_llm_client() -> Any:
+    """Build the LLM client for scoring based on env configuration.
 
     Reads IDIS_DEBATE_BACKEND (default: deterministic).
-    Reuses the debate backend selection for analysis agents and scoring.
+    When no real backend is configured, returns DeterministicScoringLLMClient
+    which produces valid scorecard JSON with all 8 dimensions.
+
+    Returns:
+        An LLMClient implementation instance.
+    """
+    import os
+
+    backend = os.environ.get("IDIS_DEBATE_BACKEND", "deterministic")
+
+    if backend == "anthropic":
+        from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
+
+        model = os.environ.get("IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT", "claude-sonnet-4-20250514")
+        return AnthropicLLMClient(model=model)
+
+    from idis.services.extraction.extractors.llm_client import DeterministicScoringLLMClient
+
+    return DeterministicScoringLLMClient()
+
+
+def _build_analysis_llm_client() -> Any:
+    """Build the LLM client for analysis agents based on env configuration.
+
+    Reads IDIS_DEBATE_BACKEND (default: deterministic).
+    When no real backend is configured, returns DeterministicAnalysisLLMClient
+    which produces valid AgentReport JSON.
 
     Returns:
         An LLMClient implementation instance.

@@ -13,12 +13,15 @@ No FastAPI globals. All dependencies injected via constructor or execute().
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
+
+from pydantic import BaseModel
 
 from idis.audit.sink import AuditSink, AuditSinkError
 from idis.models.deterministic_calculation import CalcType
@@ -519,6 +522,36 @@ class RunOrchestrator:
         )
         return step
 
+    @staticmethod
+    def _sanitize_for_json(obj: Any) -> Any:
+        """Recursively convert non-serializable objects for JSON storage.
+
+        Handles Pydantic models, UUIDs, datetimes, and nested structures.
+        Fail-closed: raises TypeError for truly exotic types that
+        json.dumps cannot handle.
+
+        Args:
+            obj: Any object that may appear in a step result_summary.
+
+        Returns:
+            A JSON-safe equivalent of the input.
+        """
+        if isinstance(obj, BaseModel):
+            return obj.model_dump(mode="json")
+        if isinstance(obj, dict):
+            return {k: RunOrchestrator._sanitize_for_json(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [RunOrchestrator._sanitize_for_json(item) for item in obj]
+        if hasattr(obj, "isoformat"):
+            return obj.isoformat()
+        if isinstance(obj, (str, int, float, bool, type(None))):
+            return obj
+        try:
+            json.dumps(obj)
+            return obj
+        except TypeError:
+            return str(obj)
+
     def _complete_step(self, step: RunStep, result: dict[str, Any]) -> None:
         """Mark a step COMPLETED and persist its result summary.
 
@@ -529,7 +562,7 @@ class RunOrchestrator:
         now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         step.status = StepStatus.COMPLETED
         step.finished_at = now
-        step.result_summary = result
+        step.result_summary = self._sanitize_for_json(result)
         self._steps_repo.update(step)
 
         self._emit_audit_event(

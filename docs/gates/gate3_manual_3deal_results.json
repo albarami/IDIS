@@ -1,0 +1,34 @@
+[
+  {
+    "deal": "deal_001_clean",
+    "status": "FAIL",
+    "http_status": 202,
+    "elapsed": 961.2,
+    "response_keys": [
+      "run_id",
+      "status",
+      "steps",
+      "block_reason"
+    ],
+    "error": null
+  },
+  {
+    "deal": "deal_002_contradiction",
+    "status": "FAIL",
+    "http_status": 202,
+    "elapsed": 1052.5,
+    "response_keys": [
+      "run_id",
+      "status",
+      "steps",
+      "block_reason"
+    ],
+    "error": null
+  },
+  {
+    "deal": "deal_003_unit_mismatch",
+    "status": "FAIL",
+    "elapsed": 501.1,
+    "error": "ReadError: [WinError 10054] An existing connection was forcibly closed by the remote host"
+  }
+]

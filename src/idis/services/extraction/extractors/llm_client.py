@@ -370,8 +370,7 @@ class DeterministicScoringLLMClient:
             "dimension": dimension,
             "score": 0.65,
             "rationale": (
-                f"Deterministic scoring assessment for {dimension}"
-                " based on available evidence."
+                f"Deterministic scoring assessment for {dimension} based on available evidence."
             ),
             "supported_claim_ids": list(claim_ids),
             "supported_calc_ids": list(calc_ids),

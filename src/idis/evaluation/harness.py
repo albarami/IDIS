@@ -124,8 +124,9 @@ def _load_deal_artifacts(deal_dir: Path) -> list[dict[str, Any]]:
     manifest_path = deal_dir / "artifacts.json"
     if manifest_path.exists():
         with open(manifest_path, encoding="utf-8") as f:
-            data = json.load(f)
-        return data.get("artifacts", [])
+            data: dict[str, Any] = json.load(f)
+        result: list[dict[str, Any]] = data.get("artifacts", [])
+        return result
 
     doc_files = [
         fp
@@ -137,7 +138,7 @@ def _load_deal_artifacts(deal_dir: Path) -> list[dict[str, Any]]:
 
 def _seed_artifact_bytes(
     *,
-    fs_store: object,
+    fs_store: Any,
     tenant_id: str,
     storage_key: str,
     data: bytes,
@@ -153,7 +154,7 @@ def _seed_artifact_bytes(
         storage_key: Deterministic storage key for the artifact.
         data: Raw file bytes.
     """
-    fs_store.put(tenant_id=tenant_id, key=storage_key, data=data)  # type: ignore[union-attr]
+    fs_store.put(tenant_id=tenant_id, key=storage_key, data=data)
 
 
 def _map_artifact_type_to_doc_type(artifact_type: str) -> str:

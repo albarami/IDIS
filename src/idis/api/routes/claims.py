@@ -209,6 +209,9 @@ def _get_claim_response(claim_data: dict[str, Any]) -> ClaimResponse:
 
     value = claim_data.get("value")
     if isinstance(value, dict):
+        tw = value.get("time_window")
+        if isinstance(tw, str):
+            value = {**value, "time_window": {"label": tw}}
         value = Quantity(**value)
 
     return ClaimResponse(

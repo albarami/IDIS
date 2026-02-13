@@ -35,13 +35,15 @@ class AnthropicLLMClient:
     Fail-closed: raises ValueError if ANTHROPIC_API_KEY is not set.
     """
 
-    def __init__(self, *, model: str | None = None) -> None:
+    def __init__(self, *, model: str | None = None, max_tokens: int | None = None) -> None:
         """Initialize the Anthropic client.
 
         Args:
             model: Model identifier override. If not provided, reads from
                 IDIS_ANTHROPIC_MODEL_EXTRACT env var, falling back to
                 claude-sonnet-4-20250514.
+            max_tokens: Maximum output tokens per request. Defaults to
+                MAX_TOKENS (4096) if not provided.
 
         Raises:
             ValueError: If ANTHROPIC_API_KEY is not set in the environment.
@@ -58,6 +60,7 @@ class AnthropicLLMClient:
             "IDIS_ANTHROPIC_MODEL_EXTRACT",
             "claude-sonnet-4-20250514",
         )
+        self._max_tokens = max_tokens or MAX_TOKENS
         self._client: anthropic.Anthropic = anthropic.Anthropic(
             api_key=api_key,
             timeout=REQUEST_TIMEOUT_SECONDS,
@@ -90,7 +93,7 @@ class AnthropicLLMClient:
             try:
                 response = self._client.messages.create(
                     model=self._model,
-                    max_tokens=MAX_TOKENS,
+                    max_tokens=self._max_tokens,
                     temperature=0,
                     system="\n".join(system_parts) if system_parts else "",
                     messages=messages,

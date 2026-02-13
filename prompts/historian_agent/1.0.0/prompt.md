@@ -119,6 +119,15 @@ Return a single JSON object. No markdown fences, no commentary outside JSON.
       "enrichment_ref_ids": []
     }
   ],
+```
+
+**CRITICAL EVIDENCE LINK RULE:**
+Every Risk object MUST include at least one evidence link — `claim_ids`, `calc_ids`, or `enrichment_ref_ids`.
+- If a risk is about missing information, link it to the claim(s) that revealed the gap.
+- If you cannot link a risk to any evidence, do NOT output it as a Risk. Instead, add it to `questions_for_founder`.
+- A Risk with empty evidence links will be REJECTED by the validator.
+
+```json
   "questions_for_founder": [
     "What previous strategic pivots has the company made and why?",
     "Which companies do you consider your closest historical analogues?"

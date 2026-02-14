@@ -1716,7 +1716,7 @@ components:
       required: [run_id, status]
       properties:
         run_id: { type: string, format: uuid }
-        status: { type: string, enum: [QUEUED, RUNNING, COMPLETED, FAILED, BLOCKED, PARTIAL] }
+        status: { type: string, enum: [QUEUED, RUNNING, SUCCEEDED, FAILED] }
         steps:
           type: array
           items: { $ref: "#/components/schemas/RunStepResponse" }
@@ -1733,7 +1733,7 @@ components:
       required: [run_id, status, started_at]
       properties:
         run_id: { type: string, format: uuid }
-        status: { type: string, enum: [QUEUED, RUNNING, COMPLETED, FAILED, BLOCKED, PARTIAL] }
+        status: { type: string, enum: [QUEUED, RUNNING, SUCCEEDED, FAILED] }
         started_at: { type: string, format: date-time }
         finished_at: { type: string, format: date-time, nullable: true }
         steps:

@@ -120,7 +120,7 @@ class TestCalcStepCompletedWithOutputRefs:
 
         result = orchestrator.execute(ctx)
 
-        assert result.status == "COMPLETED"
+        assert result.status == "SUCCEEDED"
 
         calc_steps = [s for s in result.steps if s.step_name == StepName.CALC]
         assert len(calc_steps) == 1

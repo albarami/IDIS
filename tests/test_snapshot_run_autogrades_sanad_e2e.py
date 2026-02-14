@@ -124,7 +124,7 @@ class TestSnapshotRunAutogradesSanadE2E:
         )
         assert resp.status_code == 202, f"Run start failed: {resp.text}"
         run_data = resp.json()
-        assert run_data["status"] in ("COMPLETED", "PARTIAL")
+        assert run_data["status"] == "SUCCEEDED"
 
         # Verify claims exist
         claims_resp = client.get(

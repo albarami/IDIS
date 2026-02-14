@@ -162,7 +162,7 @@ class TestSnapshotRecordsFourStepsInOrder:
 
         result = orchestrator.execute(ctx)
 
-        assert result.status == "COMPLETED"
+        assert result.status == "SUCCEEDED"
         assert len(result.steps) == 4
 
         expected_names = [
@@ -328,7 +328,7 @@ class TestFullCompletesAllNineSteps:
 
         result = orchestrator.execute(ctx)
 
-        assert result.status == "COMPLETED"
+        assert result.status == "SUCCEEDED"
         assert result.block_reason is None
 
         completed = [s for s in result.steps if s.status == StepStatus.COMPLETED]

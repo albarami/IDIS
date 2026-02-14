@@ -211,7 +211,7 @@ class TestDebateStepHappyPath:
 
         result = orchestrator.execute(ctx)
 
-        assert result.status == "COMPLETED"
+        assert result.status == "SUCCEEDED"
         assert len(result.steps) == 9
 
         expected_names = [
@@ -308,7 +308,7 @@ class TestDebateStepHappyPath:
         )
 
         result = orchestrator.execute(ctx)
-        assert result.status == "COMPLETED"
+        assert result.status == "SUCCEEDED"
         assert received_args["created_claim_ids"] == ["claim-001", "claim-002"]
         assert received_args["calc_ids"] == ["calc-001", "calc-002"]
 
@@ -375,6 +375,6 @@ class TestDebateStepFailClosed:
 
         result = orchestrator.execute(ctx)
 
-        assert result.status == "COMPLETED"
+        assert result.status == "SUCCEEDED"
         assert len(result.steps) == 4
         assert all(s.status == StepStatus.COMPLETED for s in result.steps)

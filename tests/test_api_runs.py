@@ -111,7 +111,7 @@ class TestRunsAPIHappyPath:
         assert response.status_code == 202
         body = response.json()
         assert "run_id" in body
-        assert body["status"] == "COMPLETED"
+        assert body["status"] == "SUCCEEDED"
         uuid.UUID(body["run_id"])
 
     def test_get_run_returns_run_status(self, client: TestClient, deal_id: str) -> None:
@@ -131,7 +131,7 @@ class TestRunsAPIHappyPath:
         assert response.status_code == 200
         body = response.json()
         assert body["run_id"] == run_id
-        assert body["status"] == "COMPLETED"
+        assert body["status"] == "SUCCEEDED"
         assert "started_at" in body
 
 

@@ -123,11 +123,11 @@ class TestRetryExtractStepIdempotentNoDuplicateClaims:
         )
 
         result1 = orchestrator.execute(ctx)
-        assert result1.status == "COMPLETED"
+        assert result1.status == "SUCCEEDED"
         assert extract_call_count == 1
 
         result2 = orchestrator.execute(ctx)
-        assert result2.status == "COMPLETED"
+        assert result2.status == "SUCCEEDED"
         assert extract_call_count == 1, "EXTRACT must not re-run when already COMPLETED"
 
         extract_steps = [s for s in result2.steps if s.step_name == StepName.EXTRACT]
@@ -190,11 +190,11 @@ class TestRetryGradeStepIdempotentNoDuplicateSanads:
         )
 
         result1 = orchestrator.execute(ctx)
-        assert result1.status == "COMPLETED"
+        assert result1.status == "SUCCEEDED"
         assert grade_call_count == 1
 
         result2 = orchestrator.execute(ctx)
-        assert result2.status == "COMPLETED"
+        assert result2.status == "SUCCEEDED"
         assert grade_call_count == 1, "GRADE must not re-run when already COMPLETED"
 
         grade_steps = [s for s in result2.steps if s.step_name == StepName.GRADE]
@@ -270,11 +270,11 @@ class TestRetryCalcStepIdempotentNoDuplicateCalcs:
         )
 
         result1 = orchestrator.execute(ctx)
-        assert result1.status == "COMPLETED"
+        assert result1.status == "SUCCEEDED"
         assert calc_call_count == 1
 
         result2 = orchestrator.execute(ctx)
-        assert result2.status == "COMPLETED"
+        assert result2.status == "SUCCEEDED"
         assert calc_call_count == 1, "CALC must not re-run when already COMPLETED"
 
         calc_steps = [s for s in result2.steps if s.step_name == StepName.CALC]
@@ -417,11 +417,11 @@ class TestRetryDebateStepIdempotentNoDuplicateDebate:
         )
 
         result1 = orchestrator.execute(ctx)
-        assert result1.status == "COMPLETED"
+        assert result1.status == "SUCCEEDED"
         assert debate_call_count == 1
 
         result2 = orchestrator.execute(ctx)
-        assert result2.status == "COMPLETED"
+        assert result2.status == "SUCCEEDED"
         assert debate_call_count == 1, "DEBATE must not re-run when already COMPLETED"
 
         debate_steps = [s for s in result2.steps if s.step_name == StepName.DEBATE]

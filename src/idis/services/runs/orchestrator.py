@@ -46,9 +46,9 @@ class OrchestratorResult:
     """Aggregate result of a pipeline orchestration run.
 
     Attributes:
-        status: Final run status (COMPLETED, FAILED, BLOCKED, PARTIAL).
+        status: Final run status (SUCCEEDED, FAILED) per DB constraint.
         steps: All RunStep records in canonical order.
-        block_reason: Stable reason code when status is BLOCKED.
+        block_reason: Diagnostic reason code when run failed due to a blocked step.
         error_code: Top-level error code on failure.
         error_message: Top-level error message on failure.
     """
@@ -155,7 +155,7 @@ class RunOrchestrator:
                 )
                 all_steps = self._steps_repo.get_by_run_id(ctx.run_id)
                 return OrchestratorResult(
-                    status="BLOCKED",
+                    status="FAILED",
                     steps=all_steps,
                     block_reason=BLOCK_REASON_DEBATE_NOT_IMPLEMENTED,
                 )
@@ -660,16 +660,13 @@ class RunOrchestrator:
             steps: All step records for the run.
 
         Returns:
-            COMPLETED if all passed, FAILED if any failed, PARTIAL if mixed.
+            SUCCEEDED if all steps completed, FAILED otherwise (fail-closed).
         """
         if not steps:
             return "FAILED"
 
         has_failed = any(s.status == StepStatus.FAILED for s in steps)
-        has_completed = any(s.status == StepStatus.COMPLETED for s in steps)
 
-        if has_failed and not has_completed:
+        if has_failed:
             return "FAILED"
-        if has_failed and has_completed:
-            return "PARTIAL"
-        return "COMPLETED"
+        return "SUCCEEDED"

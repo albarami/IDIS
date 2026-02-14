@@ -280,7 +280,7 @@ class TestFullVsSnapshotEnforcement:
 
         result = orchestrator.execute(ctx)
 
-        assert result.status == "COMPLETED"
+        assert result.status == "SUCCEEDED"
         assert len(result.steps) == 4
         step_names = {s.step_name for s in result.steps}
         for full_only in FULL_ONLY_STEPS:
@@ -295,7 +295,7 @@ class TestFullVsSnapshotEnforcement:
         ctx = _make_full_ctx()
         result = orchestrator.execute(ctx)
 
-        assert result.status == "COMPLETED"
+        assert result.status == "SUCCEEDED"
         assert len(result.steps) == 9
 
 
@@ -381,7 +381,7 @@ class TestResumeSkipsCompletedSteps:
         ctx = _make_full_ctx(run_id=run_id)
 
         result1 = orchestrator.execute(ctx)
-        assert result1.status == "COMPLETED"
+        assert result1.status == "SUCCEEDED"
         assert len(result1.steps) == 9
 
         call_count = {"enrichment": 0}
@@ -394,7 +394,7 @@ class TestResumeSkipsCompletedSteps:
         ctx2 = _make_full_ctx(run_id=run_id, enrich_fn=counting_enrich)
         result2 = orchestrator.execute(ctx2)
 
-        assert result2.status == "COMPLETED"
+        assert result2.status == "SUCCEEDED"
         assert call_count["enrichment"] == 0
 
 
@@ -532,7 +532,7 @@ class TestEnrichmentStepDataFlow:
         )
         result = orchestrator.execute(ctx)
 
-        assert result.status == "COMPLETED"
+        assert result.status == "SUCCEEDED"
         assert "ref-001" in received["enrichment_refs"]
         ref = received["enrichment_refs"]["ref-001"]
         assert ref["provider_id"] == "edgar"

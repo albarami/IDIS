@@ -492,7 +492,7 @@ class TestExecuteCaseContract:
                     status_code=202,
                     json={
                         "run_id": "run-123",
-                        "status": "COMPLETED",
+                        "status": "SUCCEEDED",
                         "steps": [],
                     },
                     request=request,
@@ -510,7 +510,7 @@ class TestExecuteCaseContract:
 
         assert result.status == CaseStatus.PASS
         assert result.metrics["run_id"] == "run-123"
-        assert result.metrics["run_status"] == "COMPLETED"
+        assert result.metrics["run_status"] == "SUCCEEDED"
 
     def test_execute_case_captures_exception_as_fail(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """_execute_case wraps unexpected exceptions as FAIL with error info."""
@@ -546,6 +546,168 @@ class TestExecuteCaseContract:
         assert any("RuntimeError" in e for e in result.errors)
         assert any("Simulated unexpected failure" in e for e in result.errors)
         assert result.execution_time_ms is not None
+
+
+class TestExecuteCaseRunStatusClassification:
+    """Test run-status classification after DB alignment (SUCCEEDED/FAILED)."""
+
+    def test_execute_case_blocked_via_block_reason(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAILED + block_reason → CaseStatus.BLOCKED with reason in blockers."""
+        import httpx
+
+        from idis.evaluation.harness import _execute_case
+        from idis.evaluation.types import CaseStatus, GdbsCase
+
+        case = GdbsCase(
+            case_id="test-blocked",
+            deal_id="00000000-0000-0000-0000-000000000010",
+            deal_key="test_blocked",
+            scenario="clean",
+            directory="deals/deal_001",
+            description="Blocked via block_reason test",
+        )
+
+        def mock_send(
+            self: httpx.Client, request: httpx.Request, **kwargs: object
+        ) -> httpx.Response:
+            url = str(request.url)
+            if url.endswith("/v1/deals") and request.method == "POST":
+                return httpx.Response(
+                    status_code=201,
+                    json={"deal_id": "aaa-bbb-ccc"},
+                    request=request,
+                )
+            if "/runs" in url and request.method == "POST":
+                return httpx.Response(
+                    status_code=202,
+                    json={
+                        "run_id": "run-blocked-1",
+                        "status": "FAILED",
+                        "block_reason": "UNIMPLEMENTED_STEP:XYZ",
+                        "steps": [],
+                    },
+                    request=request,
+                )
+            return httpx.Response(status_code=404, request=request)
+
+        monkeypatch.setattr(httpx.Client, "send", mock_send)
+
+        result = _execute_case(
+            case,
+            base_url="http://fake-host:9999",
+            api_key="test-key",
+            dataset_root=FIXTURES_DIR,
+        )
+
+        assert result.status == CaseStatus.BLOCKED
+        assert "UNIMPLEMENTED_STEP:XYZ" in result.blockers
+        assert result.metrics["run_status"] == "FAILED"
+
+    def test_execute_case_failed_without_block_reason(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FAILED without block_reason → CaseStatus.FAIL."""
+        import httpx
+
+        from idis.evaluation.harness import _execute_case
+        from idis.evaluation.types import CaseStatus, GdbsCase
+
+        case = GdbsCase(
+            case_id="test-plain-fail",
+            deal_id="00000000-0000-0000-0000-000000000011",
+            deal_key="test_plain_fail",
+            scenario="clean",
+            directory="deals/deal_001",
+            description="Plain failure test",
+        )
+
+        def mock_send(
+            self: httpx.Client, request: httpx.Request, **kwargs: object
+        ) -> httpx.Response:
+            url = str(request.url)
+            if url.endswith("/v1/deals") and request.method == "POST":
+                return httpx.Response(
+                    status_code=201,
+                    json={"deal_id": "aaa-bbb-ccc"},
+                    request=request,
+                )
+            if "/runs" in url and request.method == "POST":
+                return httpx.Response(
+                    status_code=202,
+                    json={
+                        "run_id": "run-fail-1",
+                        "status": "FAILED",
+                        "steps": [
+                            {"step_name": "EXTRACT", "status": "FAILED", "error": "LLM timeout"},
+                        ],
+                    },
+                    request=request,
+                )
+            return httpx.Response(status_code=404, request=request)
+
+        monkeypatch.setattr(httpx.Client, "send", mock_send)
+
+        result = _execute_case(
+            case,
+            base_url="http://fake-host:9999",
+            api_key="test-key",
+            dataset_root=FIXTURES_DIR,
+        )
+
+        assert result.status == CaseStatus.FAIL
+        assert any("EXTRACT" in e for e in result.errors)
+        assert result.metrics["run_status"] == "FAILED"
+
+    def test_execute_case_unknown_status_fail_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Unknown run status → CaseStatus.FAIL with unknown_run_status blocker."""
+        import httpx
+
+        from idis.evaluation.harness import _execute_case
+        from idis.evaluation.types import CaseStatus, GdbsCase
+
+        case = GdbsCase(
+            case_id="test-unknown-status",
+            deal_id="00000000-0000-0000-0000-000000000012",
+            deal_key="test_unknown_status",
+            scenario="clean",
+            directory="deals/deal_001",
+            description="Unknown status fail-closed test",
+        )
+
+        def mock_send(
+            self: httpx.Client, request: httpx.Request, **kwargs: object
+        ) -> httpx.Response:
+            url = str(request.url)
+            if url.endswith("/v1/deals") and request.method == "POST":
+                return httpx.Response(
+                    status_code=201,
+                    json={"deal_id": "aaa-bbb-ccc"},
+                    request=request,
+                )
+            if "/runs" in url and request.method == "POST":
+                return httpx.Response(
+                    status_code=202,
+                    json={
+                        "run_id": "run-weird-1",
+                        "status": "BANANA",
+                        "steps": [],
+                    },
+                    request=request,
+                )
+            return httpx.Response(status_code=404, request=request)
+
+        monkeypatch.setattr(httpx.Client, "send", mock_send)
+
+        result = _execute_case(
+            case,
+            base_url="http://fake-host:9999",
+            api_key="test-key",
+            dataset_root=FIXTURES_DIR,
+        )
+
+        assert result.status == CaseStatus.FAIL
+        assert any("unknown_run_status:BANANA" in e for e in result.errors)
+        assert result.metrics["run_status"] == "BANANA"
 
 
 class TestMetrics:

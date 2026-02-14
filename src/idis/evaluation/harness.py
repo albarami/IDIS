@@ -418,7 +418,7 @@ def _execute_case(
             if failed_steps:
                 metrics["failing_step"] = failed_steps[0].get("step_name", "UNKNOWN")
 
-            if run_status == "COMPLETED":
+            if run_status == "SUCCEEDED":
                 return CaseResult(
                     case_id=case.case_id,
                     deal_id=case.deal_id,
@@ -427,25 +427,34 @@ def _execute_case(
                     execution_time_ms=execution_time_ms,
                 )
 
-            if run_status == "BLOCKED":
-                block_reason = run_body.get("block_reason", "Run blocked")
+            if run_status == "FAILED":
+                block_reason = run_body.get("block_reason")
+                if block_reason:
+                    return CaseResult(
+                        case_id=case.case_id,
+                        deal_id=case.deal_id,
+                        status=CaseStatus.BLOCKED,
+                        blockers=[block_reason],
+                        metrics=metrics,
+                        execution_time_ms=execution_time_ms,
+                    )
+                step_errors = [
+                    f"{s.get('step_name', '?')}: {s.get('error', 'failed')}" for s in failed_steps
+                ]
                 return CaseResult(
                     case_id=case.case_id,
                     deal_id=case.deal_id,
-                    status=CaseStatus.BLOCKED,
-                    blockers=[block_reason],
+                    status=CaseStatus.FAIL,
+                    errors=step_errors or [f"Run status: {run_status}"],
                     metrics=metrics,
                     execution_time_ms=execution_time_ms,
                 )
 
-            step_errors = [
-                f"{s.get('step_name', '?')}: {s.get('error', 'failed')}" for s in failed_steps
-            ]
             return CaseResult(
                 case_id=case.case_id,
                 deal_id=case.deal_id,
                 status=CaseStatus.FAIL,
-                errors=step_errors or [f"Run status: {run_status}"],
+                errors=[f"unknown_run_status:{run_status}"],
                 metrics=metrics,
                 execution_time_ms=execution_time_ms,
             )

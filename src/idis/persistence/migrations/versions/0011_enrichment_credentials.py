@@ -43,17 +43,15 @@ def upgrade() -> None:
         """
         ALTER TABLE enrichment_credentials ENABLE ROW LEVEL SECURITY;
 
-        DO $$ BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM pg_policies
-                WHERE tablename = 'enrichment_credentials'
-                  AND policyname = 'enrichment_credentials_tenant_isolation'
-            ) THEN
-                CREATE POLICY enrichment_credentials_tenant_isolation
-                    ON enrichment_credentials
-                    USING (tenant_id = current_setting('app.current_tenant')::uuid);
-            END IF;
-        END $$;
+        DROP POLICY IF EXISTS enrichment_credentials_tenant_isolation
+            ON enrichment_credentials;
+
+        CREATE POLICY enrichment_credentials_tenant_isolation
+            ON enrichment_credentials
+            USING (
+                NULLIF(current_setting('idis.tenant_id', true), '') IS NOT NULL
+                AND tenant_id = NULLIF(current_setting('idis.tenant_id', true), '')::uuid
+            );
         """
     )
 

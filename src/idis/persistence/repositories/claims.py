@@ -194,6 +194,34 @@ class ClaimsRepository:
 
         return claims, next_cursor
 
+    def update_grade(
+        self,
+        claim_id: str,
+        *,
+        claim_grade: str | None = None,
+        sanad_id: str | None = None,
+    ) -> None:
+        """Update claim_grade and/or sanad_id for a claim.
+
+        Args:
+            claim_id: Claim UUID.
+            claim_grade: New grade letter (A/B/C/D).
+            sanad_id: Sanad UUID to link.
+        """
+        sets: list[str] = []
+        params: dict[str, Any] = {"claim_id": claim_id}
+        if claim_grade is not None:
+            sets.append("claim_grade = :claim_grade")
+            params["claim_grade"] = claim_grade
+        if sanad_id is not None:
+            sets.append("sanad_id = :sanad_id")
+            params["sanad_id"] = sanad_id
+        if not sets:
+            return
+        sets.append("updated_at = NOW()")
+        sql = f"UPDATE claims SET {', '.join(sets)} WHERE claim_id = :claim_id"
+        self._conn.execute(text(sql), params)
+
     def delete(self, claim_id: str) -> bool:
         """Delete a claim by ID."""
         result = self._conn.execute(
@@ -923,6 +951,28 @@ class InMemoryClaimsRepository:
             next_cursor = items[-1]["claim_id"]
 
         return items, next_cursor
+
+    def update_grade(
+        self,
+        claim_id: str,
+        *,
+        claim_grade: str | None = None,
+        sanad_id: str | None = None,
+    ) -> None:
+        """Update claim_grade and/or sanad_id for a claim in memory.
+
+        Args:
+            claim_id: Claim UUID.
+            claim_grade: New grade letter (A/B/C/D).
+            sanad_id: Sanad UUID to link.
+        """
+        claim = _claims_in_memory_store.get(claim_id)
+        if claim is None or claim.get("tenant_id") != self._tenant_id:
+            return
+        if claim_grade is not None:
+            claim["claim_grade"] = claim_grade
+        if sanad_id is not None:
+            claim["sanad_id"] = sanad_id
 
     def delete(self, claim_id: str) -> bool:
         """Delete a claim from memory."""

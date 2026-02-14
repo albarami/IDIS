@@ -18,18 +18,21 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from idis.audit.sink import AuditSink
 from idis.persistence.repositories.claims import (
+    ClaimsRepository,
     InMemoryClaimsRepository,
-    InMemoryEvidenceRepository,
 )
-from idis.persistence.repositories.evidence import EvidenceRepo
+from idis.persistence.repositories.evidence import EvidenceRepo, get_evidence_repository
 from idis.services.defects.service import CreateDefectInput, DefectService
 from idis.services.sanad.chain_builder import ChainBuildError, build_sanad_chain
 from idis.services.sanad.grader import grade_sanad_v2
 from idis.services.sanad.service import CreateSanadInput, SanadService
+
+if TYPE_CHECKING:
+    from sqlalchemy import Connection
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +124,7 @@ def auto_grade_claims_for_run(
     defect_service: DefectService | None = None,
     audit_sink: AuditSink,
     prebuilt_sanads: dict[str, dict[str, Any]] | None = None,
+    db_conn: Connection | None = None,
 ) -> AutoGradeRunResult:
     """Auto-grade all extracted claims for a SNAPSHOT run.
 
@@ -151,19 +155,28 @@ def auto_grade_claims_for_run(
             with transmission_chain, primary_evidence_id, etc.),
             ``sources`` (list of evidence item dicts), and optionally
             ``claim`` (claim dict for shudhudh checks).
+        db_conn: SQLAlchemy connection for Postgres persistence. When
+            provided, repos/services default to Postgres instead of
+            in-memory.
 
     Returns:
         AutoGradeRunResult summarising per-claim outcomes.
     """
     sink = audit_sink
-    ev_repo = evidence_repo or InMemoryEvidenceRepository(tenant_id)
-    s_service = sanad_service or SanadService(tenant_id=tenant_id, audit_sink=sink)
-    d_service = defect_service or DefectService(tenant_id=tenant_id, audit_sink=sink)
+    ev_repo = evidence_repo or get_evidence_repository(db_conn, tenant_id)
+    s_service = sanad_service or SanadService(tenant_id=tenant_id, db_conn=db_conn, audit_sink=sink)
+    d_service = defect_service or DefectService(
+        tenant_id=tenant_id, db_conn=db_conn, audit_sink=sink
+    )
 
     result = AutoGradeRunResult(run_id=run_id, tenant_id=tenant_id, deal_id=deal_id)
 
     prebuilt = prebuilt_sanads or {}
-    claims_repo = InMemoryClaimsRepository(tenant_id)
+    claims_repo: ClaimsRepository | InMemoryClaimsRepository
+    if db_conn is not None:
+        claims_repo = ClaimsRepository(db_conn, tenant_id)
+    else:
+        claims_repo = InMemoryClaimsRepository(tenant_id)
 
     for claim_id in created_claim_ids:
         claim_prebuilt = prebuilt.get(claim_id)
@@ -450,29 +463,23 @@ def _grade_single_claim_prebuilt(
 
 
 def _update_claim_grade(
-    claims_repo: InMemoryClaimsRepository,
+    claims_repo: ClaimsRepository | InMemoryClaimsRepository,
     claim_id: str,
     grade: str | None,
     sanad_id: str | None,
 ) -> None:
-    """Update claim_grade and sanad_id in the in-memory claims store.
+    """Update claim_grade and sanad_id in the claims store.
 
     Ensures downstream steps (calc, debate) see the computed grade
     instead of the default 'D'.
 
     Args:
-        claims_repo: In-memory claims repository.
+        claims_repo: Claims repository (Postgres or in-memory).
         claim_id: Claim UUID.
         grade: Computed grade letter.
         sanad_id: Persisted sanad UUID.
     """
-    claim = claims_repo.get(claim_id)
-    if claim is None:
-        return
-    if grade is not None:
-        claim["claim_grade"] = grade
-    if sanad_id is not None:
-        claim["sanad_id"] = sanad_id
+    claims_repo.update_grade(claim_id, claim_grade=grade, sanad_id=sanad_id)
 
 
 # Mapping from grader DefectSummary codes to DefectService-recognized types.

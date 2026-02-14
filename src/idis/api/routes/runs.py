@@ -15,6 +15,7 @@ import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -177,11 +178,11 @@ async def start_run(
         deal_id=deal_id,
         mode=request_body.mode,
         documents=documents,
-        extract_fn=_run_snapshot_extraction,
-        grade_fn=_run_snapshot_auto_grade,
+        extract_fn=partial(_run_snapshot_extraction, db_conn=db_conn),
+        grade_fn=partial(_run_snapshot_auto_grade, db_conn=db_conn),
         calc_fn=_run_snapshot_calc,
         enrich_fn=_run_full_enrichment if is_full else None,
-        debate_fn=_run_full_debate if is_full else None,
+        debate_fn=partial(_run_full_debate, db_conn=db_conn) if is_full else None,
         analysis_fn=_run_full_analysis if is_full else None,
         scoring_fn=_run_full_scoring if is_full else None,
         deliverables_fn=_run_full_deliverables if is_full else None,
@@ -430,8 +431,12 @@ def _emit_run_completed_audit(
 def _retrieve_claims_for_debate(
     tenant_id: str,
     created_claim_ids: list[str],
+    db_conn: Any = None,
 ) -> list[dict[str, Any]]:
-    """Look up full claim data from the in-memory store for debate context.
+    """Look up full claim data for debate context.
+
+    Uses Postgres repositories when db_conn is available, otherwise
+    falls back to in-memory stores.
 
     Maps repository field names to DebateContext expected fields:
       claim_grade → sanad_grade
@@ -441,18 +446,29 @@ def _retrieve_claims_for_debate(
     Args:
         tenant_id: Tenant UUID for scoped lookups.
         created_claim_ids: Claim IDs produced by extraction/grading.
+        db_conn: SQLAlchemy connection (None for in-memory fallback).
 
     Returns:
         List of claim dicts with keys matching DebateContext serialization:
         claim_id, claim_text, claim_class, sanad_grade, source_doc, confidence.
     """
     from idis.persistence.repositories.claims import (
+        ClaimsRepository,
         InMemoryClaimsRepository,
         InMemorySanadsRepository,
+        SanadsRepository,
     )
 
-    claims_repo = InMemoryClaimsRepository(tenant_id)
-    sanads_repo = InMemorySanadsRepository(tenant_id)
+    if db_conn is not None:
+        claims_repo: ClaimsRepository | InMemoryClaimsRepository = ClaimsRepository(
+            db_conn, tenant_id
+        )
+        sanads_repo: SanadsRepository | InMemorySanadsRepository = SanadsRepository(
+            db_conn, tenant_id
+        )
+    else:
+        claims_repo = InMemoryClaimsRepository(tenant_id)
+        sanads_repo = InMemorySanadsRepository(tenant_id)
 
     debate_claims: list[dict[str, Any]] = []
     for cid in created_claim_ids:
@@ -501,6 +517,7 @@ def _run_full_debate(
     deal_id: str,
     created_claim_ids: list[str],
     calc_ids: list[str],
+    db_conn: Any = None,
 ) -> dict[str, Any]:
     """Run DebateOrchestrator for a FULL pipeline run.
 
@@ -513,6 +530,7 @@ def _run_full_debate(
         deal_id: Deal UUID.
         created_claim_ids: Claim IDs from extraction/grading.
         calc_ids: Calc IDs from calculation step.
+        db_conn: SQLAlchemy connection (None for in-memory fallback).
 
     Returns:
         Dict with debate_id, stop_reason, round_number, muhasabah_passed,
@@ -522,7 +540,7 @@ def _run_full_debate(
     from idis.debate.roles.llm_role_runner import DebateContext
     from idis.models.debate import DebateConfig, DebateState
 
-    debate_claims = _retrieve_claims_for_debate(tenant_id, created_claim_ids)
+    debate_claims = _retrieve_claims_for_debate(tenant_id, created_claim_ids, db_conn=db_conn)
 
     context = DebateContext(
         deal_name=deal_id,
@@ -923,6 +941,7 @@ def _run_snapshot_auto_grade(
     deal_id: str,
     created_claim_ids: list[str],
     audit_sink: AuditSink,
+    db_conn: Any = None,
 ) -> dict[str, Any]:
     """Run Sanad auto-grading for all claims produced by SNAPSHOT extraction.
 
@@ -932,6 +951,7 @@ def _run_snapshot_auto_grade(
         deal_id: Deal UUID.
         created_claim_ids: Claim IDs from extraction.
         audit_sink: App-level audit sink (required).
+        db_conn: SQLAlchemy connection (None for in-memory fallback).
 
     Returns:
         Dict with grading summary stats.
@@ -952,6 +972,7 @@ def _run_snapshot_auto_grade(
         deal_id=deal_id,
         created_claim_ids=created_claim_ids,
         audit_sink=audit_sink,
+        db_conn=db_conn,
     )
 
     return {
@@ -968,6 +989,7 @@ def _run_snapshot_extraction(
     tenant_id: str,
     deal_id: str,
     documents: list[dict[str, Any]],
+    db_conn: Any = None,
 ) -> dict[str, Any]:
     """Execute SNAPSHOT extraction pipeline synchronously.
 
@@ -976,6 +998,7 @@ def _run_snapshot_extraction(
         tenant_id: Tenant context.
         deal_id: Deal UUID.
         documents: List of document dicts with doc_type, document_id, spans.
+        db_conn: SQLAlchemy connection (None for in-memory fallback).
 
     Returns:
         Dict with pipeline result status and stats.
@@ -1004,6 +1027,7 @@ def _run_snapshot_extraction(
     audit_sink = InMemoryAuditSink()
     claim_service = ClaimService(
         tenant_id=tenant_id,
+        db_conn=db_conn,
         audit_sink=audit_sink,
     )
 

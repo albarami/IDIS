@@ -59,12 +59,29 @@ class ApiKeyRecord(BaseModel):
     roles: list[str] = []
 
 
+def _mask_api_key(key: str) -> str:
+    """Return a short non-secret identifier for an API key, safe for logs.
+
+    Only the first 4 characters of the key are retained. Keys shorter than
+    4 characters are replaced entirely with a fixed placeholder so that no
+    full secret is ever written to logs.
+    """
+    if not isinstance(key, str) or len(key) < 4:
+        return "<redacted>"
+    return f"{key[:4]}...(len={len(key)})"
+
+
 def _load_api_key_registry() -> dict[str, ApiKeyRecord]:
     """Load API key registry from environment variable.
 
     Returns:
         Dict mapping API key strings to ApiKeyRecord objects.
         Returns empty dict if env var missing or invalid JSON.
+
+    Malformed entries are dropped (fail-safe) but never silently: a warning
+    is emitted for each rejected entry, and an additional warning is emitted
+    when the env var is present but produces zero valid records (common
+    misconfiguration symptom: wrong shape copied from an old .env.example).
     """
     raw = os.environ.get(IDIS_API_KEYS_ENV)
     if not raw:
@@ -81,13 +98,43 @@ def _load_api_key_registry() -> dict[str, ApiKeyRecord]:
         return {}
 
     registry: dict[str, ApiKeyRecord] = {}
+    total_entries = 0
     for key, value in parsed.items():
-        if not isinstance(key, str) or not isinstance(value, dict):
+        total_entries += 1
+        if not isinstance(key, str):
+            logger.warning(
+                "%s entry has non-string key (type=%s); dropping entry",
+                IDIS_API_KEYS_ENV,
+                type(key).__name__,
+            )
+            continue
+        if not isinstance(value, dict):
+            logger.warning(
+                "%s entry %s has non-dict value (type=%s); "
+                "expected object validating as ApiKeyRecord; dropping entry",
+                IDIS_API_KEYS_ENV,
+                _mask_api_key(key),
+                type(value).__name__,
+            )
             continue
         try:
             registry[key] = ApiKeyRecord.model_validate(value)
-        except ValidationError:
+        except ValidationError as exc:
+            logger.warning(
+                "%s entry %s failed ApiKeyRecord validation: %s; dropping entry",
+                IDIS_API_KEYS_ENV,
+                _mask_api_key(key),
+                exc.errors(),
+            )
             continue
+
+    if total_entries > 0 and not registry:
+        logger.warning(
+            "%s is set but produced zero valid API key records; "
+            "all requests using X-IDIS-API-Key will return 401. "
+            "Check .env.example for the expected dict-of-dicts shape.",
+            IDIS_API_KEYS_ENV,
+        )
 
     return registry
 

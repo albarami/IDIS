@@ -87,6 +87,9 @@ def create_webhook(
         conn=db_conn,
     )
 
+    # Audit middleware fails closed if this is unset on a successful mutation.
+    request.state.audit_resource_id = webhook.webhook_id
+
     return WebhookResponse(
         webhook_id=webhook.webhook_id,
         url=webhook.url,

@@ -28,6 +28,13 @@ from idis.persistence.repositories.deals import (
     clear_in_memory_store,
     get_deals_repository,
 )
+from idis.persistence.repositories.documents import (
+    DocumentArtifactNotFoundError,
+    DocumentArtifactsRepository,
+    DocumentNotFoundError,
+    DocumentSpansRepository,
+    DocumentsRepository,
+)
 from idis.persistence.repositories.evidence import (
     EvidenceRepo,
     PostgresEvidenceRepository,
@@ -53,6 +60,11 @@ __all__ = [
     "DealNotFoundError",
     "DealsRepository",
     "DefectsRepository",
+    "DocumentArtifactNotFoundError",
+    "DocumentArtifactsRepository",
+    "DocumentNotFoundError",
+    "DocumentSpansRepository",
+    "DocumentsRepository",
     "InMemoryClaimsRepository",
     "InMemoryDealsRepository",
     "InMemoryDefectsRepository",

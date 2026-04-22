@@ -24,7 +24,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 from idis.api.auth import TenantContext
@@ -32,11 +32,19 @@ from idis.audit.sink import AuditSink, InMemoryAuditSink
 from idis.compliance.byok import DataClass
 from idis.models.document import Document, DocumentType, ParseStatus
 from idis.models.document_artifact import DocType, DocumentArtifact
-from idis.models.document_span import DocumentSpan
+from idis.models.document_span import DocumentSpan, SpanType
 from idis.parsers.base import ParseError, ParseLimits, ParseResult
 from idis.parsers.registry import parse_bytes
+from idis.persistence.repositories.documents import (
+    DocumentArtifactsRepository,
+    DocumentSpansRepository,
+    DocumentsRepository,
+)
 from idis.services.ingestion.span_generator import SpanGenerator
 from idis.storage.compliant_store import ComplianceEnforcedStore
+
+if TYPE_CHECKING:
+    from sqlalchemy import Connection
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +194,7 @@ class IngestionService:
         media_type: str | None,
         data: bytes,
         metadata: dict[str, Any] | None = None,
+        db_conn: Connection | None = None,
     ) -> IngestionResult:
         """Ingest raw document bytes into the system.
 
@@ -222,6 +231,7 @@ class IngestionService:
                 media_type=media_type,
                 data=data,
                 metadata=metadata or {},
+                db_conn=db_conn,
             )
         except Exception as e:
             logger.exception("Unexpected error during ingestion")
@@ -244,6 +254,7 @@ class IngestionService:
         media_type: str | None,
         data: bytes,
         metadata: dict[str, Any],
+        db_conn: Connection | None = None,
     ) -> IngestionResult:
         """Implementation of ingest_bytes with exception propagation."""
         validation_error = self._validate_input(data, filename)
@@ -311,9 +322,9 @@ class IngestionService:
                 document_id=document_id,
             )
 
-        self._persist_artifact(ctx.tenant_id, artifact)
-        self._persist_document(ctx.tenant_id, document)
-        self._persist_spans(ctx.tenant_id, document_id, spans)
+        self._persist_artifact(ctx.tenant_id, artifact, db_conn=db_conn)
+        self._persist_document(ctx.tenant_id, document, db_conn=db_conn)
+        self._persist_spans(ctx.tenant_id, document_id, spans, db_conn=db_conn)
 
         self._emit_document_created(ctx, artifact, sha256)
 
@@ -539,30 +550,78 @@ class IngestionService:
             updated_at=timestamp,
         )
 
-    def _persist_artifact(self, tenant_id: UUID, artifact: DocumentArtifact) -> None:
-        """Persist DocumentArtifact (in-memory for now).
-
-        Note: This will be replaced with Postgres persistence
-        once the repository layer is implemented.
+    def _persist_artifact(
+        self,
+        tenant_id: UUID,
+        artifact: DocumentArtifact,
+        *,
+        db_conn: Connection | None = None,
+    ) -> None:
+        """Persist DocumentArtifact via Postgres when a db_conn is provided,
+        otherwise fall back to the in-memory dict (test / no-DB mode).
         """
+        if db_conn is not None:
+            DocumentArtifactsRepository(db_conn, str(tenant_id)).create(
+                doc_id=str(artifact.doc_id),
+                deal_id=str(artifact.deal_id),
+                doc_type=artifact.doc_type.value,
+                title=artifact.title,
+                source_system=artifact.source_system,
+                version_id=artifact.version_id,
+                sha256=artifact.sha256,
+                uri=artifact.uri,
+                metadata=dict(artifact.metadata or {}),
+                ingested_at=artifact.ingested_at,
+            )
         key = f"{tenant_id}:{artifact.doc_id}"
         self._artifacts[key] = artifact
 
-    def _persist_document(self, tenant_id: UUID, document: Document) -> None:
-        """Persist Document (in-memory for now).
-
-        Note: This will be replaced with Postgres persistence
-        once the repository layer is implemented.
+    def _persist_document(
+        self,
+        tenant_id: UUID,
+        document: Document,
+        *,
+        db_conn: Connection | None = None,
+    ) -> None:
+        """Persist Document via Postgres when a db_conn is provided,
+        otherwise fall back to the in-memory dict.
         """
+        if db_conn is not None:
+            DocumentsRepository(db_conn, str(tenant_id)).create(
+                document_id=str(document.document_id),
+                deal_id=str(document.deal_id),
+                doc_id=str(document.doc_id),
+                doc_type=document.doc_type.value,
+                parse_status=document.parse_status.value,
+                metadata=dict(document.metadata or {}),
+            )
         key = f"{tenant_id}:{document.document_id}"
         self._documents[key] = document
 
-    def _persist_spans(self, tenant_id: UUID, document_id: UUID, spans: list[DocumentSpan]) -> None:
-        """Persist DocumentSpans (in-memory for now).
-
-        Note: This will be replaced with Postgres bulk insert
-        once the repository layer is implemented.
+    def _persist_spans(
+        self,
+        tenant_id: UUID,
+        document_id: UUID,
+        spans: list[DocumentSpan],
+        *,
+        db_conn: Connection | None = None,
+    ) -> None:
+        """Persist DocumentSpans via Postgres when a db_conn is provided,
+        otherwise fall back to the in-memory dict.
         """
+        if db_conn is not None and spans:
+            DocumentSpansRepository(db_conn, str(tenant_id)).create_many(
+                [
+                    {
+                        "span_id": str(s.span_id),
+                        "document_id": str(s.document_id),
+                        "span_type": s.span_type.value,
+                        "locator": dict(s.locator or {}),
+                        "text_excerpt": s.text_excerpt,
+                    }
+                    for s in spans
+                ]
+            )
         key = f"{tenant_id}:{document_id}"
         self._spans[key] = spans
 
@@ -687,41 +746,104 @@ class IngestionService:
         }
         self._audit_sink.emit(event)
 
-    def get_artifact(self, tenant_id: UUID, artifact_id: UUID) -> DocumentArtifact | None:
-        """Retrieve a persisted artifact by ID (tenant-scoped).
-
-        Args:
-            tenant_id: Tenant scope.
-            artifact_id: Artifact ID to retrieve.
-
-        Returns:
-            DocumentArtifact if found, None otherwise.
-        """
+    def get_artifact(
+        self,
+        tenant_id: UUID,
+        artifact_id: UUID,
+        *,
+        db_conn: Connection | None = None,
+    ) -> DocumentArtifact | None:
+        """Retrieve a persisted artifact. Postgres-first when db_conn is set."""
+        if db_conn is not None:
+            row = DocumentArtifactsRepository(db_conn, str(tenant_id)).get(str(artifact_id))
+            if row is not None:
+                return _artifact_from_row(row)
         key = f"{tenant_id}:{artifact_id}"
         return self._artifacts.get(key)
 
-    def get_document(self, tenant_id: UUID, document_id: UUID) -> Document | None:
-        """Retrieve a persisted document by ID (tenant-scoped).
-
-        Args:
-            tenant_id: Tenant scope.
-            document_id: Document ID to retrieve.
-
-        Returns:
-            Document if found, None otherwise.
-        """
+    def get_document(
+        self,
+        tenant_id: UUID,
+        document_id: UUID,
+        *,
+        db_conn: Connection | None = None,
+    ) -> Document | None:
+        """Retrieve a persisted document. Postgres-first when db_conn is set."""
+        if db_conn is not None:
+            row = DocumentsRepository(db_conn, str(tenant_id)).get(str(document_id))
+            if row is not None:
+                return _document_from_row(row)
         key = f"{tenant_id}:{document_id}"
         return self._documents.get(key)
 
-    def get_spans(self, tenant_id: UUID, document_id: UUID) -> list[DocumentSpan]:
-        """Retrieve persisted spans for a document (tenant-scoped).
-
-        Args:
-            tenant_id: Tenant scope.
-            document_id: Parent document ID.
-
-        Returns:
-            List of DocumentSpans (empty if none found).
-        """
+    def get_spans(
+        self,
+        tenant_id: UUID,
+        document_id: UUID,
+        *,
+        db_conn: Connection | None = None,
+    ) -> list[DocumentSpan]:
+        """Retrieve persisted spans. Postgres-first when db_conn is set."""
+        if db_conn is not None:
+            rows = DocumentSpansRepository(db_conn, str(tenant_id)).list_by_document(
+                str(document_id)
+            )
+            if rows:
+                return [_span_from_row(r) for r in rows]
         key = f"{tenant_id}:{document_id}"
         return self._spans.get(key, [])
+
+
+def _artifact_from_row(row: dict[str, Any]) -> DocumentArtifact:
+    """Hydrate a DocumentArtifact pydantic model from a repo row dict."""
+    return DocumentArtifact(
+        doc_id=UUID(row["doc_id"]),
+        tenant_id=UUID(row["tenant_id"]),
+        deal_id=UUID(row["deal_id"]),
+        doc_type=DocType(row["doc_type"]),
+        title=row["title"],
+        source_system=row["source_system"],
+        version_id=row["version_id"],
+        ingested_at=_parse_dt(row["ingested_at"]),
+        sha256=row.get("sha256"),
+        uri=row.get("uri"),
+        metadata=row.get("metadata") or {},
+        created_at=_parse_dt(row["created_at"]),
+        updated_at=_parse_dt(row["updated_at"]),
+    )
+
+
+def _document_from_row(row: dict[str, Any]) -> Document:
+    """Hydrate a Document pydantic model from a repo row dict."""
+    return Document(
+        document_id=UUID(row["document_id"]),
+        tenant_id=UUID(row["tenant_id"]),
+        deal_id=UUID(row["deal_id"]),
+        doc_id=UUID(row["doc_id"]),
+        doc_type=DocumentType(row["doc_type"]),
+        parse_status=ParseStatus(row["parse_status"]),
+        metadata=row.get("metadata") or {},
+        created_at=_parse_dt(row["created_at"]),
+        updated_at=_parse_dt(row["updated_at"]),
+    )
+
+
+def _span_from_row(row: dict[str, Any]) -> DocumentSpan:
+    """Hydrate a DocumentSpan pydantic model from a repo row dict."""
+    return DocumentSpan(
+        span_id=UUID(row["span_id"]),
+        tenant_id=UUID(row["tenant_id"]),
+        document_id=UUID(row["document_id"]),
+        span_type=SpanType(row["span_type"]),
+        locator=row.get("locator") or {},
+        text_excerpt=row.get("text_excerpt"),
+        created_at=_parse_dt(row["created_at"]),
+        updated_at=_parse_dt(row["updated_at"]),
+    )
+
+
+def _parse_dt(value: Any) -> datetime:
+    """Coerce the repo's ISO-8601 string (or passthrough datetime) to datetime."""
+    if isinstance(value, datetime):
+        return value
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))

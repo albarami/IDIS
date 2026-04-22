@@ -169,6 +169,59 @@ class DocumentArtifactsRepository:
             return None
         return self._row_to_dict(row)
 
+    def list_by_deal(
+        self,
+        deal_id: str,
+        *,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """List artifacts for a deal (tenant-scoped via RLS).
+
+        Deterministic order on `(created_at ASC, doc_id ASC)` so batch
+        inserts with identical timestamps still sort stably. Cursor is
+        the last seen `doc_id` of the previous page.
+        """
+        effective_limit = min(max(1, limit), 200)
+
+        if cursor:
+            stmt = text(
+                """
+                SELECT doc_id, tenant_id, deal_id, doc_type, title, source_system,
+                       version_id, ingested_at, sha256, uri, metadata,
+                       created_at, updated_at
+                FROM document_artifacts
+                WHERE deal_id = :deal_id AND doc_id > :cursor
+                ORDER BY created_at ASC, doc_id ASC
+                LIMIT :limit
+                """
+            )
+            rows = self._conn.execute(
+                stmt,
+                {"deal_id": deal_id, "cursor": cursor, "limit": effective_limit + 1},
+            ).fetchall()
+        else:
+            stmt = text(
+                """
+                SELECT doc_id, tenant_id, deal_id, doc_type, title, source_system,
+                       version_id, ingested_at, sha256, uri, metadata,
+                       created_at, updated_at
+                FROM document_artifacts
+                WHERE deal_id = :deal_id
+                ORDER BY created_at ASC, doc_id ASC
+                LIMIT :limit
+                """
+            )
+            rows = self._conn.execute(
+                stmt, {"deal_id": deal_id, "limit": effective_limit + 1}
+            ).fetchall()
+
+        items = [self._row_to_dict(row) for row in rows[:effective_limit]]
+        next_cursor: str | None = None
+        if len(rows) > effective_limit:
+            next_cursor = items[-1]["doc_id"]
+        return items, next_cursor
+
     def _row_to_dict(self, row: Any) -> dict[str, Any]:
         return {
             "doc_id": str(row.doc_id),

@@ -483,6 +483,7 @@ def _trigger_auto_ingest(
             media_type=None,
             data=actual_data,
             metadata=artifact.get("metadata"),
+            db_conn=getattr(request.state, "db_conn", None),
         )
 
         if result.success and result.document_id is not None:
@@ -517,6 +518,7 @@ def _trigger_auto_ingest(
 @router.get("/v1/deals/{deal_id}/documents", response_model=PaginatedDocumentList)
 def list_deal_documents(
     deal_id: str,
+    request: Request,
     tenant_ctx: RequireTenantContext,
     limit: int = DEFAULT_LIMIT,
     cursor: str | None = None,
@@ -526,25 +528,31 @@ def list_deal_documents(
     Implements GET /v1/deals/{dealId}/documents per OpenAPI spec.
     Enforces tenant isolation and cursor-based pagination.
 
-    Args:
-        deal_id: UUID of the deal.
-        tenant_ctx: Injected tenant context from auth dependency.
-        limit: Maximum items to return (1-200, default 50).
-        cursor: Pagination cursor from previous response.
-
-    Returns:
-        PaginatedDocumentList with items and optional next_cursor.
+    Durable-path: when a DB connection is available, list from the
+    document_artifacts table. Fall back to the in-memory store for
+    dev/test mode without Postgres.
     """
     effective_limit = min(max(1, limit), MAX_LIMIT)
 
     decoded_cursor = _decode_cursor(cursor)
 
-    items, next_cursor = _document_store.list_artifacts(
-        tenant_id=tenant_ctx.tenant_id,
-        deal_id=deal_id,
-        limit=effective_limit,
-        cursor=decoded_cursor,
-    )
+    items: list[dict[str, Any]]
+    next_cursor: str | None
+    db_conn = getattr(request.state, "db_conn", None)
+    if db_conn is not None:
+        from idis.persistence.repositories.documents import DocumentArtifactsRepository
+
+        artifacts_cursor = decoded_cursor.get("doc_id") if decoded_cursor else None
+        items, next_cursor = DocumentArtifactsRepository(
+            db_conn, tenant_ctx.tenant_id
+        ).list_by_deal(deal_id, limit=effective_limit, cursor=artifacts_cursor)
+    else:
+        items, next_cursor = _document_store.list_artifacts(
+            tenant_id=tenant_ctx.tenant_id,
+            deal_id=deal_id,
+            limit=effective_limit,
+            cursor=decoded_cursor,
+        )
 
     response_items = [
         DocumentArtifactResponse(
@@ -626,6 +634,10 @@ def create_deal_document(
     now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     version_id = str(uuid.uuid4())[:12]
 
+    # Always keep the in-memory store in sync so non-Postgres test paths and
+    # any remaining reads that still go through _document_store continue to
+    # work; add a durable row via the Postgres repo when available so the
+    # artifact survives process restart and is visible to other replicas.
     artifact = _document_store.create_artifact(
         tenant_id=tenant_ctx.tenant_id,
         deal_id=deal_id,
@@ -639,6 +651,21 @@ def create_deal_document(
         uri=request_body.uri,
         metadata=request_body.metadata,
     )
+    db_conn = getattr(request.state, "db_conn", None)
+    if db_conn is not None:
+        from idis.persistence.repositories.documents import DocumentArtifactsRepository
+
+        DocumentArtifactsRepository(db_conn, tenant_ctx.tenant_id).create(
+            doc_id=doc_id,
+            deal_id=deal_id,
+            doc_type=request_body.doc_type.value,
+            title=request_body.title,
+            source_system=request_body.source_system or "api",
+            version_id=version_id,
+            sha256=request_body.sha256,
+            uri=request_body.uri,
+            metadata=request_body.metadata or {},
+        )
 
     # Set audit resource_id for middleware correlation
     request.state.audit_resource_id = doc_id
@@ -712,7 +739,18 @@ def ingest_document(
     # Set audit resource_id from path param for middleware correlation
     request.state.audit_resource_id = doc_id
 
-    artifact = _document_store.get_artifact(tenant_ctx.tenant_id, doc_id)
+    db_conn = getattr(request.state, "db_conn", None)
+    artifact: dict[str, Any] | None
+    if db_conn is not None:
+        from idis.persistence.repositories.documents import DocumentArtifactsRepository
+
+        artifact = DocumentArtifactsRepository(db_conn, tenant_ctx.tenant_id).get(doc_id)
+        if artifact is None:
+            # Fall back to the legacy in-memory store so route/test paths
+            # that never wrote to Postgres still resolve the artifact.
+            artifact = _document_store.get_artifact(tenant_ctx.tenant_id, doc_id)
+    else:
+        artifact = _document_store.get_artifact(tenant_ctx.tenant_id, doc_id)
     if artifact is None:
         raise IdisHttpError(
             status_code=404,
@@ -826,6 +864,7 @@ def ingest_document(
                     media_type=None,
                     data=actual_data,
                     metadata=artifact.get("metadata"),
+                    db_conn=db_conn,
                 )
 
                 status = RunStatus.SUCCEEDED.value if result.success else RunStatus.FAILED.value

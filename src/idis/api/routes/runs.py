@@ -276,8 +276,13 @@ def _gather_snapshot_documents(
 ) -> list[dict[str, Any]]:
     """Gather ingested document spans for SNAPSHOT extraction.
 
-    Checks request.state.snapshot_documents first (for testing),
-    then falls back to IngestionService if available.
+    Source-of-truth order:
+    1. request.state.snapshot_documents (test override),
+    2. request.app.state.deal_documents (legacy test override),
+    3. request.state.db_conn via durable document/span repositories
+       (live Postgres path — what this method used to reach for through
+       ingestion_service._documents),
+    4. ingestion_service in-memory fallback (no-DB test mode).
 
     Args:
         request: FastAPI request.
@@ -303,11 +308,47 @@ def _gather_snapshot_documents(
     if deal_id in deal_documents:
         return deal_documents[deal_id]
 
+    db_conn = getattr(request.state, "db_conn", None)
+    if db_conn is not None:
+        from idis.persistence.repositories.documents import (
+            DocumentSpansRepository,
+            DocumentsRepository,
+        )
+
+        docs_repo = DocumentsRepository(db_conn, tenant_id)
+        spans_repo = DocumentSpansRepository(db_conn, tenant_id)
+        docs_rows, _ = docs_repo.list_by_deal(deal_id, limit=200)
+
+        documents: list[dict[str, Any]] = []
+        for doc_row in docs_rows:
+            span_rows = spans_repo.list_by_document(doc_row["document_id"])
+            if not span_rows:
+                continue
+            documents.append(
+                {
+                    "document_id": doc_row["document_id"],
+                    "doc_type": doc_row["doc_type"],
+                    "document_name": doc_row["document_id"],
+                    "spans": [
+                        {
+                            "span_id": s["span_id"],
+                            "text_excerpt": s.get("text_excerpt"),
+                            "locator": s.get("locator") or {},
+                            "span_type": s["span_type"],
+                        }
+                        for s in span_rows
+                    ],
+                }
+            )
+        return documents
+
+    # No DB connection -> fall back to the in-memory service state.
+    # This branch exists only for tests / dev mode that runs without Postgres.
     ingestion_service = getattr(request.app.state, "ingestion_service", None)
     if ingestion_service is None:
         return []
 
-    documents: list[dict[str, Any]] = []
+    documents = []
     for _key, doc in ingestion_service._documents.items():
         if str(doc.deal_id) != deal_id:
             continue

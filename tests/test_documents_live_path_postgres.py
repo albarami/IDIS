@@ -501,4 +501,289 @@ class TestRepositoryPackageExports:
             assert name in getattr(repo_pkg, "__all__", ()), f"{name} missing from __all__"
 
 
+class TestDurableReadRoutesIndependentOfDocumentStore:
+    """Task 6 completion pass: GET /v1/documents/{doc_id}, its /spans
+    sub-resource, and DELETE must all serve durable rows after the
+    in-memory _DocumentStore is cleared.
+    """
+
+    def _seed_artifact(
+        self,
+        app_engine: Engine,
+        *,
+        deal_id: str,
+        doc_id: str,
+        uri: str | None = None,
+    ) -> None:
+        with app_engine.begin() as conn:
+            DocumentArtifactsRepository(conn, TENANT_ID).create(
+                doc_id=doc_id,
+                deal_id=deal_id,
+                doc_type="DATA_ROOM_FILE",
+                title="durable only",
+                source_system="backfill",
+                version_id="v0",
+                uri=uri,
+            )
+
+    def _seed_document_with_spans(
+        self,
+        app_engine: Engine,
+        *,
+        deal_id: str,
+        art_id: str,
+        document_id: str,
+        spans: list[dict[str, object]],
+    ) -> None:
+        with app_engine.begin() as conn:
+            DocumentsRepository(conn, TENANT_ID).create(
+                document_id=document_id,
+                deal_id=deal_id,
+                doc_id=art_id,
+                doc_type="PDF",
+                parse_status="PARSED",
+            )
+            DocumentSpansRepository(conn, TENANT_ID).create_many(
+                [
+                    {
+                        "span_id": span["span_id"],
+                        "document_id": document_id,
+                        "span_type": span["span_type"],
+                        "locator": span["locator"],
+                        "text_excerpt": span.get("text_excerpt"),
+                    }
+                    for span in spans
+                ]
+            )
+
+    def test_get_spans_returns_durable_spans_after_store_cleared(
+        self,
+        client: TestClient,
+        admin_engine: Engine,
+        app_engine: Engine,
+    ) -> None:
+        from idis.api.routes.documents import clear_document_store
+
+        deal_id = str(uuid.uuid4())
+        _insert_deal(admin_engine, deal_id=deal_id)
+        art_id = str(uuid.uuid4())
+        self._seed_artifact(app_engine, deal_id=deal_id, doc_id=art_id)
+        document_id = str(uuid.uuid4())
+        span_id = str(uuid.uuid4())
+        self._seed_document_with_spans(
+            app_engine,
+            deal_id=deal_id,
+            art_id=art_id,
+            document_id=document_id,
+            spans=[
+                {
+                    "span_id": span_id,
+                    "span_type": "PAGE_TEXT",
+                    "locator": {"page": 1},
+                    "text_excerpt": "durable span text",
+                }
+            ],
+        )
+        clear_document_store()
+
+        response = client.get(
+            f"/v1/documents/{art_id}/spans",
+            headers={"X-IDIS-API-Key": API_KEY},
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["total"] == 1
+        assert body["items"][0]["span_id"] == span_id
+        assert body["items"][0]["span_type"] == "PAGE_TEXT"
+        assert body["items"][0]["text_excerpt"] == "durable span text"
+        assert body["items"][0]["document_id"] == document_id
+
+    def test_get_spans_returns_404_for_unknown_doc_even_with_cleared_store(
+        self, client: TestClient, admin_engine: Engine, app_engine: Engine
+    ) -> None:
+        from idis.api.routes.documents import clear_document_store
+
+        clear_document_store()
+        response = client.get(
+            f"/v1/documents/{uuid.uuid4()}/spans",
+            headers={"X-IDIS-API-Key": API_KEY},
+        )
+        assert response.status_code == 404, response.text
+        assert response.json()["code"] == "NOT_FOUND"
+
+    def test_get_document_does_not_404_solely_because_store_was_cleared(
+        self,
+        client: TestClient,
+        admin_engine: Engine,
+        app_engine: Engine,
+    ) -> None:
+        from idis.api.routes.documents import clear_document_store
+
+        deal_id = str(uuid.uuid4())
+        _insert_deal(admin_engine, deal_id=deal_id)
+        art_id = str(uuid.uuid4())
+        # Note: no uri -> GET short-circuits with 404 DOCUMENT_CONTENT_NOT_FOUND,
+        # which still proves that the artifact LOOKUP itself reached the
+        # durable layer (otherwise we'd get 404 DOCUMENT_NOT_FOUND first).
+        self._seed_artifact(app_engine, deal_id=deal_id, doc_id=art_id)
+        clear_document_store()
+
+        response = client.get(
+            f"/v1/documents/{art_id}",
+            headers={"X-IDIS-API-Key": API_KEY},
+        )
+        body = response.json()
+        assert response.status_code == 404, response.text
+        assert body["code"] == "DOCUMENT_CONTENT_NOT_FOUND", (
+            f"artifact lookup must reach Postgres even with empty store; "
+            f"got code={body.get('code')!r}"
+        )
+
+    def test_delete_document_removes_durable_row_after_store_cleared(
+        self,
+        client: TestClient,
+        admin_engine: Engine,
+        app_engine: Engine,
+    ) -> None:
+        from idis.api.routes.documents import clear_document_store
+
+        deal_id = str(uuid.uuid4())
+        _insert_deal(admin_engine, deal_id=deal_id)
+        art_id = str(uuid.uuid4())
+        self._seed_artifact(app_engine, deal_id=deal_id, doc_id=art_id)
+        clear_document_store()
+
+        response = client.delete(
+            f"/v1/documents/{art_id}",
+            headers={"X-IDIS-API-Key": API_KEY},
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["deleted"] is True
+
+        # Durable row is gone.
+        with admin_engine.begin() as conn:
+            row = conn.execute(
+                text("SELECT doc_id FROM document_artifacts WHERE doc_id = :d"),
+                {"d": art_id},
+            ).fetchone()
+        assert row is None, "DELETE must remove the artifact row via the durable repo"
+
+
+class TestIngestionServiceGettersAreDbAuthoritative:
+    """With db_conn provided, IngestionService.get_artifact / get_document /
+    get_spans must return what Postgres says — including an empty answer —
+    and must NOT fall back to in-memory state on a repo miss.
+    """
+
+    def test_get_artifact_repo_miss_returns_none_ignoring_memory(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        from uuid import UUID as _UUID
+
+        from idis.services.ingestion.service import IngestionService
+        from idis.storage.compliant_store import ComplianceEnforcedStore
+        from idis.storage.filesystem_store import FilesystemObjectStore
+
+        svc = IngestionService(
+            compliant_store=ComplianceEnforcedStore(
+                inner_store=FilesystemObjectStore(base_dir="/tmp/idis-task6-complete"),
+            )
+        )
+        # Poison in-memory dict so any fallback would be loudly incorrect.
+        from idis.models.document_artifact import DocType, DocumentArtifact
+
+        art_uuid = _UUID("11111111-0000-0000-0000-000000000001")
+        fake = DocumentArtifact(
+            doc_id=art_uuid,
+            tenant_id=_UUID(TENANT_ID),
+            deal_id=_UUID("11111111-0000-0000-0000-000000000002"),
+            doc_type=DocType.OTHER,
+            title="memory-only, must-not-be-returned",
+            source_system="x",
+            version_id="v",
+            ingested_at=datetime.now(),
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+        svc._artifacts[f"{art_uuid}:{art_uuid}"] = fake
+
+        with app_engine.begin() as conn:
+            set_tenant_local(conn, TENANT_ID)
+            result = svc.get_artifact(_UUID(TENANT_ID), art_uuid, db_conn=conn)
+
+        assert result is None, "DB-authoritative: repo miss must return None, not memory"
+
+    def test_get_spans_repo_miss_returns_empty_ignoring_memory(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        from uuid import UUID as _UUID
+
+        from idis.models.document_span import DocumentSpan, SpanType
+        from idis.services.ingestion.service import IngestionService
+        from idis.storage.compliant_store import ComplianceEnforcedStore
+        from idis.storage.filesystem_store import FilesystemObjectStore
+
+        svc = IngestionService(
+            compliant_store=ComplianceEnforcedStore(
+                inner_store=FilesystemObjectStore(base_dir="/tmp/idis-task6-complete"),
+            )
+        )
+        doc_uuid = _UUID("22222222-0000-0000-0000-000000000001")
+        span = DocumentSpan(
+            span_id=_UUID("22222222-0000-0000-0000-000000000099"),
+            tenant_id=_UUID(TENANT_ID),
+            document_id=doc_uuid,
+            span_type=SpanType.PAGE_TEXT,
+            locator={"page": 1},
+            text_excerpt="memory-only-should-not-appear",
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+        svc._spans[f"{TENANT_ID}:{doc_uuid}"] = [span]
+
+        with app_engine.begin() as conn:
+            set_tenant_local(conn, TENANT_ID)
+            result = svc.get_spans(_UUID(TENANT_ID), doc_uuid, db_conn=conn)
+
+        assert result == [], (
+            "DB-authoritative: empty repo result must be returned verbatim, "
+            "even when in-memory state has a span for the same key"
+        )
+
+    def test_get_document_repo_miss_returns_none_ignoring_memory(
+        self, app_engine: Engine, clean_tables: None
+    ) -> None:
+        from uuid import UUID as _UUID
+
+        from idis.models.document import Document, DocumentType, ParseStatus
+        from idis.services.ingestion.service import IngestionService
+        from idis.storage.compliant_store import ComplianceEnforcedStore
+        from idis.storage.filesystem_store import FilesystemObjectStore
+
+        svc = IngestionService(
+            compliant_store=ComplianceEnforcedStore(
+                inner_store=FilesystemObjectStore(base_dir="/tmp/idis-task6-complete"),
+            )
+        )
+        doc_uuid = _UUID("33333333-0000-0000-0000-000000000001")
+        mem_doc = Document(
+            document_id=doc_uuid,
+            tenant_id=_UUID(TENANT_ID),
+            deal_id=_UUID("33333333-0000-0000-0000-000000000002"),
+            doc_id=_UUID("33333333-0000-0000-0000-000000000003"),
+            doc_type=DocumentType.PDF,
+            parse_status=ParseStatus.PARSED,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+        svc._documents[f"{TENANT_ID}:{doc_uuid}"] = mem_doc
+
+        with app_engine.begin() as conn:
+            set_tenant_local(conn, TENANT_ID)
+            result = svc.get_document(_UUID(TENANT_ID), doc_uuid, db_conn=conn)
+
+        assert result is None, "DB-authoritative: repo miss must return None, not memory"
+
+
 _ = datetime  # keep datetime imported for potential future assertions

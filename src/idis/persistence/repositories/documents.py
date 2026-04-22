@@ -222,6 +222,25 @@ class DocumentArtifactsRepository:
             next_cursor = items[-1]["doc_id"]
         return items, next_cursor
 
+    def delete(self, doc_id: str) -> bool:
+        """Delete an artifact and every document/span chained off it.
+
+        Order: delete dependent documents (document_spans cascades via
+        ON DELETE CASCADE on the spans FK), then delete the artifact row.
+        Tenant isolation is enforced by RLS on each statement.
+
+        Returns True if the artifact row was removed, False otherwise.
+        """
+        self._conn.execute(
+            text("DELETE FROM documents WHERE doc_id = :doc_id"),
+            {"doc_id": doc_id},
+        )
+        result = self._conn.execute(
+            text("DELETE FROM document_artifacts WHERE doc_id = :doc_id"),
+            {"doc_id": doc_id},
+        )
+        return bool(result.rowcount)
+
     def _row_to_dict(self, row: Any) -> dict[str, Any]:
         return {
             "doc_id": str(row.doc_id),
@@ -314,6 +333,27 @@ class DocumentsRepository:
         if row is None:
             return None
         return self._row_to_dict(row)
+
+    def list_by_doc_id(self, doc_id: str) -> list[dict[str, Any]]:
+        """Return every Document row whose source artifact is `doc_id`.
+
+        One artifact can produce multiple documents (e.g. archive extraction).
+        Deterministic order on `(created_at ASC, document_id ASC)`.
+        Tenant-scoped via RLS.
+        """
+        rows = self._conn.execute(
+            text(
+                """
+                SELECT document_id, tenant_id, deal_id, doc_id, doc_type,
+                       parse_status, metadata, created_at, updated_at
+                FROM documents
+                WHERE doc_id = :doc_id
+                ORDER BY created_at ASC, document_id ASC
+                """
+            ),
+            {"doc_id": doc_id},
+        ).fetchall()
+        return [self._row_to_dict(row) for row in rows]
 
     def list_by_deal(
         self,

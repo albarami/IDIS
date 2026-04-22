@@ -1017,6 +1017,39 @@ def get_document_spans(
     Raises:
         IdisHttpError: 404 if document not found in tenant scope.
     """
+    db_conn = getattr(request.state, "db_conn", None)
+    if db_conn is not None:
+        from idis.persistence.repositories.documents import (
+            DocumentArtifactsRepository,
+            DocumentSpansRepository,
+            DocumentsRepository,
+        )
+
+        artifact_row = DocumentArtifactsRepository(db_conn, tenant_ctx.tenant_id).get(doc_id)
+        if artifact_row is None:
+            raise IdisHttpError(
+                status_code=404,
+                code="NOT_FOUND",
+                message="Document not found",
+                details={"doc_id": doc_id},
+            )
+
+        docs_repo = DocumentsRepository(db_conn, tenant_ctx.tenant_id)
+        spans_repo = DocumentSpansRepository(db_conn, tenant_ctx.tenant_id)
+        span_items: list[SpanResponse] = []
+        for doc_row in docs_repo.list_by_doc_id(doc_id):
+            for span_row in spans_repo.list_by_document(doc_row["document_id"]):
+                span_items.append(
+                    SpanResponse(
+                        span_id=span_row["span_id"],
+                        document_id=span_row["document_id"],
+                        span_type=span_row["span_type"],
+                        locator=span_row.get("locator") or {},
+                        text_excerpt=span_row.get("text_excerpt"),
+                    )
+                )
+        return PaginatedSpanList(items=span_items, total=len(span_items))
+
     artifact = _document_store.get_artifact(tenant_ctx.tenant_id, doc_id)
     if artifact is None:
         raise IdisHttpError(
@@ -1111,7 +1144,14 @@ async def get_document(
 
     request.state.audit_resource_id = doc_id
 
-    artifact = _document_store.get_artifact(tenant_ctx.tenant_id, doc_id)
+    db_conn = getattr(request.state, "db_conn", None)
+    artifact: dict[str, Any] | None
+    if db_conn is not None:
+        from idis.persistence.repositories.documents import DocumentArtifactsRepository
+
+        artifact = DocumentArtifactsRepository(db_conn, tenant_ctx.tenant_id).get(doc_id)
+    else:
+        artifact = _document_store.get_artifact(tenant_ctx.tenant_id, doc_id)
     if artifact is None:
         raise IdisHttpError(
             status_code=404,
@@ -1233,7 +1273,14 @@ async def delete_document(
 
     request.state.audit_resource_id = doc_id
 
-    artifact = _document_store.get_artifact(tenant_ctx.tenant_id, doc_id)
+    db_conn = getattr(request.state, "db_conn", None)
+    artifact: dict[str, Any] | None
+    if db_conn is not None:
+        from idis.persistence.repositories.documents import DocumentArtifactsRepository
+
+        artifact = DocumentArtifactsRepository(db_conn, tenant_ctx.tenant_id).get(doc_id)
+    else:
+        artifact = _document_store.get_artifact(tenant_ctx.tenant_id, doc_id)
     if artifact is None:
         raise IdisHttpError(
             status_code=404,
@@ -1273,7 +1320,15 @@ async def delete_document(
                 except Exception as e:
                     logger.warning("Storage deletion failed (continuing): %s", e)
 
-    deleted = _document_store.delete_artifact(tenant_ctx.tenant_id, doc_id)
+    if db_conn is not None:
+        from idis.persistence.repositories.documents import DocumentArtifactsRepository
+
+        deleted = DocumentArtifactsRepository(db_conn, tenant_ctx.tenant_id).delete(doc_id)
+        # Keep the legacy in-memory store consistent when both backends exist
+        # side by side; harmless no-op when no mirror row exists.
+        _document_store.delete_artifact(tenant_ctx.tenant_id, doc_id)
+    else:
+        deleted = _document_store.delete_artifact(tenant_ctx.tenant_id, doc_id)
 
     audit_sink = getattr(request.app.state, "audit_sink", None)
     if audit_sink is not None:

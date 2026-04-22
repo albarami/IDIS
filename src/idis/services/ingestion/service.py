@@ -753,11 +753,16 @@ class IngestionService:
         *,
         db_conn: Connection | None = None,
     ) -> DocumentArtifact | None:
-        """Retrieve a persisted artifact. Postgres-first when db_conn is set."""
+        """Retrieve a persisted artifact.
+
+        When `db_conn` is provided, Postgres is authoritative: a repo miss
+        returns None directly, and in-memory state is not consulted. The
+        in-memory dict is only consulted when no db_conn is supplied
+        (non-Postgres dev/test mode).
+        """
         if db_conn is not None:
             row = DocumentArtifactsRepository(db_conn, str(tenant_id)).get(str(artifact_id))
-            if row is not None:
-                return _artifact_from_row(row)
+            return _artifact_from_row(row) if row is not None else None
         key = f"{tenant_id}:{artifact_id}"
         return self._artifacts.get(key)
 
@@ -768,11 +773,14 @@ class IngestionService:
         *,
         db_conn: Connection | None = None,
     ) -> Document | None:
-        """Retrieve a persisted document. Postgres-first when db_conn is set."""
+        """Retrieve a persisted document.
+
+        DB-authoritative when `db_conn` is set: a repo miss returns None,
+        no memory fallback.
+        """
         if db_conn is not None:
             row = DocumentsRepository(db_conn, str(tenant_id)).get(str(document_id))
-            if row is not None:
-                return _document_from_row(row)
+            return _document_from_row(row) if row is not None else None
         key = f"{tenant_id}:{document_id}"
         return self._documents.get(key)
 
@@ -783,13 +791,16 @@ class IngestionService:
         *,
         db_conn: Connection | None = None,
     ) -> list[DocumentSpan]:
-        """Retrieve persisted spans. Postgres-first when db_conn is set."""
+        """Retrieve persisted spans.
+
+        DB-authoritative when `db_conn` is set: an empty repo result is a
+        valid answer and in-memory state is not consulted.
+        """
         if db_conn is not None:
             rows = DocumentSpansRepository(db_conn, str(tenant_id)).list_by_document(
                 str(document_id)
             )
-            if rows:
-                return [_span_from_row(r) for r in rows]
+            return [_span_from_row(r) for r in rows]
         key = f"{tenant_id}:{document_id}"
         return self._spans.get(key, [])
 

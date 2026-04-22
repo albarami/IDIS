@@ -26,6 +26,7 @@ from tests._postgres_support import (
     admin_engine_generator,
     migrated_db_generator,
     postgres_configured,
+    seed_deal,
     truncate_all,
 )
 
@@ -44,20 +45,83 @@ def _pg_migrated(_pg_admin_engine: Engine) -> Generator[None, None, None]:
 
 
 @pytest.fixture(autouse=True)
-def _pg_clean_state(request: pytest.FixtureRequest) -> Generator[None, None, None]:
-    """The direct-service tests in this file never pass db_conn and therefore
-    stay in-memory by design. Still apply migrations and truncate between
-    tests so the file runs cleanly under IDIS_REQUIRE_POSTGRES=1 and any
-    future direct-service test that opts into db_conn finds the schema.
+def _pg_bound_ingestion(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Generator[None, None, None]:
+    """Under Postgres mode, transparently wrap IngestionService methods so
+    every ingest/read call binds a db_conn and exercises the durable
+    repositories — the main path — instead of the in-memory fallback.
+
+    Applied at the class level so it also wraps IngestionService instances
+    that tests construct directly in their bodies (tenant-isolation tests).
+
+    Non-Postgres mode: no-op; the fixture still truncates nothing and
+    yields, preserving the existing in-memory behavior for dev runs.
     """
-    if postgres_configured():
-        admin_engine = request.getfixturevalue("_pg_admin_engine")
-        request.getfixturevalue("_pg_migrated")
-        truncate_all(admin_engine)
+    if not postgres_configured():
         yield
-        truncate_all(admin_engine)
-    else:
-        yield
+        return
+
+    admin_engine = request.getfixturevalue("_pg_admin_engine")
+    request.getfixturevalue("_pg_migrated")
+    truncate_all(admin_engine)
+
+    from idis.persistence.db import get_app_engine, set_tenant_local
+    from idis.services.ingestion.service import IngestionService
+
+    app_engine = get_app_engine()
+
+    original_ingest = IngestionService.ingest_bytes
+    original_get_artifact = IngestionService.get_artifact
+    original_get_document = IngestionService.get_document
+    original_get_spans = IngestionService.get_spans
+
+    def _bound_ingest_bytes(self: IngestionService, *args: Any, **kwargs: Any) -> Any:
+        if kwargs.get("db_conn") is not None:
+            return original_ingest(self, *args, **kwargs)
+        ctx = args[0] if args else kwargs["ctx"]
+        deal = args[1] if len(args) > 1 else kwargs["deal_id"]
+        seed_deal(admin_engine, deal_id=str(deal), tenant_id=str(ctx.tenant_id))
+        with app_engine.begin() as conn:
+            set_tenant_local(conn, str(ctx.tenant_id))
+            kwargs["db_conn"] = conn
+            return original_ingest(self, *args, **kwargs)
+
+    def _bound_get_artifact(
+        self: IngestionService, tenant_id: UUID, artifact_id: UUID, **kwargs: Any
+    ) -> Any:
+        if kwargs.get("db_conn") is not None:
+            return original_get_artifact(self, tenant_id, artifact_id, **kwargs)
+        with app_engine.begin() as conn:
+            set_tenant_local(conn, str(tenant_id))
+            return original_get_artifact(self, tenant_id, artifact_id, db_conn=conn)
+
+    def _bound_get_document(
+        self: IngestionService, tenant_id: UUID, document_id: UUID, **kwargs: Any
+    ) -> Any:
+        if kwargs.get("db_conn") is not None:
+            return original_get_document(self, tenant_id, document_id, **kwargs)
+        with app_engine.begin() as conn:
+            set_tenant_local(conn, str(tenant_id))
+            return original_get_document(self, tenant_id, document_id, db_conn=conn)
+
+    def _bound_get_spans(
+        self: IngestionService, tenant_id: UUID, document_id: UUID, **kwargs: Any
+    ) -> Any:
+        if kwargs.get("db_conn") is not None:
+            return original_get_spans(self, tenant_id, document_id, **kwargs)
+        with app_engine.begin() as conn:
+            set_tenant_local(conn, str(tenant_id))
+            return original_get_spans(self, tenant_id, document_id, db_conn=conn)
+
+    monkeypatch.setattr(IngestionService, "ingest_bytes", _bound_ingest_bytes)
+    monkeypatch.setattr(IngestionService, "get_artifact", _bound_get_artifact)
+    monkeypatch.setattr(IngestionService, "get_document", _bound_get_document)
+    monkeypatch.setattr(IngestionService, "get_spans", _bound_get_spans)
+
+    yield
+    truncate_all(admin_engine)
 
 
 @pytest.fixture
@@ -754,8 +818,11 @@ class TestDeterminismRegression:
         spans2 = service2.get_spans(tenant_a, result2.document_id)
 
         if spans1 and spans2:
-            locators1 = [s.locator for s in spans1]
-            locators2 = [s.locator for s in spans2]
+            # Compare as canonicalized sets: locator determinism is the
+            # correctness property; ordering of rows inserted in the same
+            # microsecond is not guaranteed by any storage backend.
+            locators1 = sorted((s.locator for s in spans1), key=lambda d: repr(sorted(d.items())))
+            locators2 = sorted((s.locator for s in spans2), key=lambda d: repr(sorted(d.items())))
             assert locators1 == locators2
 
     def test_same_bytes_stable_sha256(
@@ -911,3 +978,101 @@ class TestUnsupportedFormat:
         assert result.success is False
         assert result.parse_status is not None
         assert len(result.errors) >= 1
+
+
+@pytest.mark.skipif(
+    not postgres_configured(),
+    reason="Durable-main-path proof is Postgres-only",
+)
+class TestDurableMainPathPostgres:
+    """With Postgres configured, every successful ingest_bytes must leave
+    real rows in document_artifacts, documents, and document_spans. Proven
+    by direct SELECT against the admin engine — no reliance on the service
+    instance's in-memory dicts.
+    """
+
+    def test_ingest_persists_to_all_three_tables(
+        self,
+        ingestion_service: Any,
+        ingestion_context: Any,
+        deal_id: UUID,
+        tenant_a: UUID,
+    ) -> None:
+        from sqlalchemy import text
+
+        from idis.persistence.db import get_admin_engine
+
+        pdf_bytes = _create_minimal_pdf()
+        result = ingestion_service.ingest_bytes(
+            ctx=ingestion_context,
+            deal_id=deal_id,
+            filename="durable.pdf",
+            media_type="application/pdf",
+            data=pdf_bytes,
+        )
+        assert result.success is True
+
+        with get_admin_engine().begin() as conn:
+            art = conn.execute(
+                text(
+                    "SELECT doc_id, tenant_id, deal_id, sha256 "
+                    "FROM document_artifacts WHERE doc_id = :d"
+                ),
+                {"d": str(result.artifact_id)},
+            ).fetchone()
+            doc = conn.execute(
+                text(
+                    "SELECT document_id, tenant_id, doc_id, parse_status "
+                    "FROM documents WHERE document_id = :d"
+                ),
+                {"d": str(result.document_id)},
+            ).fetchone()
+            span_rows = conn.execute(
+                text(
+                    "SELECT span_id, document_id, tenant_id "
+                    "FROM document_spans WHERE document_id = :d"
+                ),
+                {"d": str(result.document_id)},
+            ).fetchall()
+
+        assert art is not None
+        assert str(art.tenant_id) == str(tenant_a)
+        assert str(art.deal_id) == str(deal_id)
+        assert art.sha256 == result.sha256
+        assert doc is not None
+        assert str(doc.doc_id) == str(result.artifact_id)
+        assert doc.parse_status == "PARSED"
+        assert len(span_rows) == result.span_count
+        assert all(str(r.tenant_id) == str(tenant_a) for r in span_rows)
+
+    def test_get_spans_reads_durable_rows(
+        self,
+        ingestion_service: Any,
+        ingestion_context: Any,
+        deal_id: UUID,
+        tenant_a: UUID,
+    ) -> None:
+        """get_spans in Postgres mode must return rows from document_spans,
+        not from the service's in-memory dict — proven by clearing the
+        in-memory state after ingest and re-reading via the public API.
+        """
+        pdf_bytes = _create_minimal_pdf()
+        result = ingestion_service.ingest_bytes(
+            ctx=ingestion_context,
+            deal_id=deal_id,
+            filename="durable-read.pdf",
+            media_type="application/pdf",
+            data=pdf_bytes,
+        )
+        assert result.success is True
+
+        # Wipe the service instance's in-memory mirrors. If the read path
+        # were falling back to memory, this would make spans invisible.
+        ingestion_service._spans.clear()
+        ingestion_service._documents.clear()
+        ingestion_service._artifacts.clear()
+
+        spans = ingestion_service.get_spans(tenant_a, result.document_id)
+        assert len(spans) == result.span_count, (
+            "get_spans must return durable rows in Postgres mode"
+        )

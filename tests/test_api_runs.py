@@ -107,9 +107,68 @@ def client(
     return TestClient(app)
 
 
+def _seed_snapshot_docs_pg(
+    *, tenant_id: str, deal_id: str, doc_count: int = 1
+) -> None:
+    """Seed durable document_artifacts + documents + document_spans rows so
+    runs.py `_gather_snapshot_documents` reads through the Postgres
+    repositories. Called only in Postgres mode.
+    """
+    from idis.persistence.db import get_app_engine, set_tenant_local
+    from idis.persistence.repositories.documents import (
+        DocumentArtifactsRepository,
+        DocumentSpansRepository,
+        DocumentsRepository,
+    )
+
+    with get_app_engine().begin() as conn:
+        set_tenant_local(conn, tenant_id)
+        arts = DocumentArtifactsRepository(conn, tenant_id)
+        docs = DocumentsRepository(conn, tenant_id)
+        spans = DocumentSpansRepository(conn, tenant_id)
+        for _ in range(doc_count):
+            art_id = str(uuid.uuid4())
+            document_id = str(uuid.uuid4())
+            arts.create(
+                doc_id=art_id,
+                deal_id=deal_id,
+                doc_type="DATA_ROOM_FILE",
+                title="snapshot-seed",
+                source_system="test",
+                version_id="v1",
+            )
+            docs.create(
+                document_id=document_id,
+                deal_id=deal_id,
+                doc_id=art_id,
+                doc_type="PDF",
+                parse_status="PARSED",
+            )
+            spans.create_many(
+                [
+                    {
+                        "span_id": str(uuid.uuid4()),
+                        "document_id": document_id,
+                        "span_type": "PAGE_TEXT",
+                        "locator": {"page": 1, "line": 1},
+                        "text_excerpt": "Revenue was $5M in 2024.",
+                    }
+                ]
+            )
+
+
 @pytest.fixture
 def deal_id(client: TestClient) -> str:
-    """Create a deal and seed a minimal document so SNAPSHOT runs pass."""
+    """Create a deal and seed a minimal document so SNAPSHOT runs pass.
+
+    In Postgres mode, seed real document_artifacts + documents +
+    document_spans rows so `_gather_snapshot_documents` reads through
+    the durable repositories — the main path.
+
+    In no-DB mode, fall back to the `app.state.deal_documents` override
+    (that code path in runs.py exists precisely so the service can run
+    without Postgres in dev/test).
+    """
     response = client.post(
         "/v1/deals",
         json={"name": "Test Deal", "company_name": "Test Company"},
@@ -117,10 +176,11 @@ def deal_id(client: TestClient) -> str:
     )
     assert response.status_code == 201
     did = response.json()["deal_id"]
-    # Use real UUIDs so the Postgres-backed extraction pipeline can persist
-    # claims whose `primary_span_id` column is typed UUID. In the non-Postgres
-    # (in-memory) path these values are treated as opaque strings and the
-    # tests still work identically.
+
+    if postgres_configured():
+        _seed_snapshot_docs_pg(tenant_id=TENANT_A_ID, deal_id=did)
+        return did
+
     client.app.state.deal_documents[did] = [
         {
             "document_id": str(uuid.uuid4()),
@@ -137,6 +197,60 @@ def deal_id(client: TestClient) -> str:
         }
     ]
     return did
+
+
+@pytest.mark.skipif(
+    not postgres_configured(),
+    reason="Durable SNAPSHOT gather proof is Postgres-only",
+)
+class TestSnapshotGatherDurablePath:
+    """Task 7 completion: under Postgres, POST /runs must drive SNAPSHOT
+    extraction from real document_artifacts / documents / document_spans
+    rows, not from an app.state.deal_documents override.
+    """
+
+    def test_snapshot_gather_requires_durable_rows(
+        self, client: TestClient
+    ) -> None:
+        """Seed a deal + real docs/spans; assert the run succeeds. Then
+        prove negative: a different deal with *no* durable rows (and no
+        deal_documents override) must return NO_INGESTED_DOCUMENTS —
+        confirming the main path reads from Postgres, not a lingering
+        override.
+        """
+        # Positive: deal with durable rows -> run succeeds.
+        create = client.post(
+            "/v1/deals",
+            json={"name": "Snapshot Durable", "company_name": "Durable Co"},
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+        )
+        did_with_docs = create.json()["deal_id"]
+        _seed_snapshot_docs_pg(tenant_id=TENANT_A_ID, deal_id=did_with_docs)
+
+        ok = client.post(
+            f"/v1/deals/{did_with_docs}/runs",
+            json={"mode": "SNAPSHOT"},
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+        )
+        assert ok.status_code == 202, ok.text
+
+        # Negative: deal without durable rows and without any
+        # deal_documents override must be rejected. If the handler were
+        # leaking through a stale override we'd get 202 here.
+        create2 = client.post(
+            "/v1/deals",
+            json={"name": "Snapshot Empty", "company_name": "Empty Co"},
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+        )
+        did_empty = create2.json()["deal_id"]
+
+        empty = client.post(
+            f"/v1/deals/{did_empty}/runs",
+            json={"mode": "SNAPSHOT"},
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+        )
+        assert empty.status_code == 400, empty.text
+        assert empty.json()["code"] == "NO_INGESTED_DOCUMENTS"
 
 
 class TestRunsAPIHappyPath:
@@ -463,21 +577,27 @@ class TestAuditFailureOnRunCompletedReturns500:
         assert create_resp.status_code == 201
         deal_id = create_resp.json()["deal_id"]
 
-        app.state.deal_documents[deal_id] = [
-            {
-                "document_id": str(uuid.uuid4()),
-                "doc_type": "PDF",
-                "document_name": "audit_test.pdf",
-                "spans": [
-                    {
-                        "span_id": str(uuid.uuid4()),
-                        "text_excerpt": "Revenue $10M.",
-                        "locator": {"page": 1},
-                        "span_type": "PAGE_TEXT",
-                    }
-                ],
-            }
-        ]
+        if postgres_configured():
+            # Durable-path seed: document_artifacts + documents +
+            # document_spans so `_gather_snapshot_documents` returns a
+            # non-empty list via the Postgres repositories.
+            _seed_snapshot_docs_pg(tenant_id=TENANT_A_ID, deal_id=deal_id)
+        else:
+            app.state.deal_documents[deal_id] = [
+                {
+                    "document_id": str(uuid.uuid4()),
+                    "doc_type": "PDF",
+                    "document_name": "audit_test.pdf",
+                    "spans": [
+                        {
+                            "span_id": str(uuid.uuid4()),
+                            "text_excerpt": "Revenue $10M.",
+                            "locator": {"page": 1},
+                            "span_type": "PAGE_TEXT",
+                        }
+                    ],
+                }
+            ]
 
         response = client.post(
             f"/v1/deals/{deal_id}/runs",

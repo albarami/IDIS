@@ -101,14 +101,21 @@ def _build_audit_event(
 
     tenant_id = tenant_ctx.tenant_id if tenant_ctx else "unknown"
 
+    # Fallback identity is only used when tenant_ctx is legitimately missing
+    # (e.g. error paths before auth resolved). For authenticated mutations we
+    # MUST surface the real principal so the append-only audit log is
+    # attributable: the tenant-level display name and a synthetic
+    # "INTEGRATION_SERVICE" role are never acceptable substitutes here.
     actor_id = "unknown"
     actor_type = "SERVICE"
     roles: list[str] = []
 
     if tenant_ctx:
-        actor_id = tenant_ctx.name
-        actor_type = "SERVICE"
-        roles = ["INTEGRATION_SERVICE"]
+        actor_id = tenant_ctx.actor_id
+        actor_type = tenant_ctx.actor_type
+        # Deterministic ordering so event diffs are stable; frozenset preserves
+        # RBAC semantics (set membership) but audit emits a sorted list.
+        roles = sorted(tenant_ctx.roles)
 
     idempotency_key = request.headers.get("Idempotency-Key")
 

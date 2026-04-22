@@ -15,11 +15,49 @@ from __future__ import annotations
 import hashlib
 import io
 import tempfile
+from collections.abc import Generator
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 import pytest
+
+from tests._postgres_support import (
+    admin_engine_generator,
+    migrated_db_generator,
+    postgres_configured,
+    truncate_all,
+)
+
+if TYPE_CHECKING:
+    from sqlalchemy import Engine
+
+
+@pytest.fixture(scope="module")
+def _pg_admin_engine() -> Generator[Engine, None, None]:
+    yield from admin_engine_generator()
+
+
+@pytest.fixture(scope="module")
+def _pg_migrated(_pg_admin_engine: Engine) -> Generator[None, None, None]:
+    yield from migrated_db_generator(_pg_admin_engine)
+
+
+@pytest.fixture(autouse=True)
+def _pg_clean_state(request: pytest.FixtureRequest) -> Generator[None, None, None]:
+    """The direct-service tests in this file never pass db_conn and therefore
+    stay in-memory by design. Still apply migrations and truncate between
+    tests so the file runs cleanly under IDIS_REQUIRE_POSTGRES=1 and any
+    future direct-service test that opts into db_conn finds the schema.
+    """
+    if postgres_configured():
+        admin_engine = request.getfixturevalue("_pg_admin_engine")
+        request.getfixturevalue("_pg_migrated")
+        truncate_all(admin_engine)
+        yield
+        truncate_all(admin_engine)
+    else:
+        yield
 
 
 @pytest.fixture

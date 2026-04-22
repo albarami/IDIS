@@ -543,9 +543,19 @@ def list_deal_documents(
         from idis.persistence.repositories.documents import DocumentArtifactsRepository
 
         artifacts_cursor = decoded_cursor.get("doc_id") if decoded_cursor else None
-        items, next_cursor = DocumentArtifactsRepository(
+        items, raw_next_cursor = DocumentArtifactsRepository(
             db_conn, tenant_ctx.tenant_id
         ).list_by_deal(deal_id, limit=effective_limit, cursor=artifacts_cursor)
+        # Keep the cursor contract stable: the in-memory store returns a
+        # base64-encoded JSON envelope, so the repo's raw doc_id must be
+        # wrapped the same way or the client's round-trip decode fails.
+        next_cursor = (
+            base64.urlsafe_b64encode(
+                json.dumps({"doc_id": raw_next_cursor}).encode()
+            ).decode()
+            if raw_next_cursor is not None
+            else None
+        )
     else:
         items, next_cursor = _document_store.list_artifacts(
             tenant_id=tenant_ctx.tenant_id,

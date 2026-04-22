@@ -25,8 +25,9 @@ import json
 import tempfile
 import uuid
 import zipfile
+from collections.abc import Generator
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -41,6 +42,57 @@ from idis.idempotency.store import SqliteIdempotencyStore
 from idis.services.ingestion import IngestionService
 from idis.storage.compliant_store import ComplianceEnforcedStore
 from idis.storage.filesystem_store import FilesystemObjectStore
+from tests._postgres_support import (
+    admin_engine_generator,
+    migrated_db_generator,
+    postgres_configured,
+    seed_deal,
+    truncate_all,
+)
+
+if TYPE_CHECKING:
+    from sqlalchemy import Engine
+
+
+@pytest.fixture(scope="module")
+def _pg_admin_engine() -> Generator[Engine, None, None]:
+    yield from admin_engine_generator()
+
+
+@pytest.fixture(scope="module")
+def _pg_migrated(_pg_admin_engine: Engine) -> Generator[None, None, None]:
+    yield from migrated_db_generator(_pg_admin_engine)
+
+
+@pytest.fixture(autouse=True)
+def _pg_clean_state(request: pytest.FixtureRequest) -> Generator[None, None, None]:
+    if postgres_configured():
+        admin_engine = request.getfixturevalue("_pg_admin_engine")
+        request.getfixturevalue("_pg_migrated")
+        truncate_all(admin_engine)
+        yield
+        truncate_all(admin_engine)
+    else:
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _pg_seed_deal(
+    request: pytest.FixtureRequest, _pg_clean_state: None
+) -> None:
+    if not postgres_configured():
+        return
+    admin_engine = request.getfixturevalue("_pg_admin_engine")
+    try:
+        deal = request.getfixturevalue("deal_id")
+    except pytest.FixtureLookupError:
+        return
+    for tenant_fixture in ("tenant_a_id", "tenant_b_id"):
+        try:
+            tenant_value = request.getfixturevalue(tenant_fixture)
+        except pytest.FixtureLookupError:
+            continue
+        seed_deal(admin_engine, deal_id=deal, tenant_id=tenant_value)
 
 
 def _create_minimal_pdf() -> bytes:

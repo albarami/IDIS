@@ -178,9 +178,11 @@ class DocumentArtifactsRepository:
     ) -> tuple[list[dict[str, Any]], str | None]:
         """List artifacts for a deal (tenant-scoped via RLS).
 
-        Deterministic order on `(created_at ASC, doc_id ASC)` so batch
-        inserts with identical timestamps still sort stably. Cursor is
-        the last seen `doc_id` of the previous page.
+        Orders strictly on the unique `doc_id` column so the
+        `WHERE doc_id > :cursor` pagination clause is consistent with
+        the ORDER BY (otherwise batch inserts with identical timestamps
+        can skip rows when paging). `doc_id` is a UUID, so lexicographic
+        ordering is stable and deterministic.
         """
         effective_limit = min(max(1, limit), 200)
 
@@ -192,7 +194,7 @@ class DocumentArtifactsRepository:
                        created_at, updated_at
                 FROM document_artifacts
                 WHERE deal_id = :deal_id AND doc_id > :cursor
-                ORDER BY created_at ASC, doc_id ASC
+                ORDER BY doc_id ASC
                 LIMIT :limit
                 """
             )
@@ -208,7 +210,7 @@ class DocumentArtifactsRepository:
                        created_at, updated_at
                 FROM document_artifacts
                 WHERE deal_id = :deal_id
-                ORDER BY created_at ASC, doc_id ASC
+                ORDER BY doc_id ASC
                 LIMIT :limit
                 """
             )
@@ -364,9 +366,10 @@ class DocumentsRepository:
     ) -> tuple[list[dict[str, Any]], str | None]:
         """List documents for a deal (tenant-scoped via RLS).
 
-        Deterministic ordering on `(created_at ASC, document_id ASC)` so
-        batch inserts with identical timestamps still sort stably.
-        Cursor is the last seen `document_id` of the previous page.
+        Orders strictly on the unique `document_id` column so the
+        `WHERE document_id > :cursor` pagination clause is consistent
+        with the ORDER BY. `document_id` is a UUID, so lexicographic
+        ordering is stable and deterministic.
         """
         effective_limit = min(max(1, limit), 200)
 
@@ -377,7 +380,7 @@ class DocumentsRepository:
                        parse_status, metadata, created_at, updated_at
                 FROM documents
                 WHERE deal_id = :deal_id AND document_id > :cursor
-                ORDER BY created_at ASC, document_id ASC
+                ORDER BY document_id ASC
                 LIMIT :limit
                 """
             )
@@ -392,7 +395,7 @@ class DocumentsRepository:
                        parse_status, metadata, created_at, updated_at
                 FROM documents
                 WHERE deal_id = :deal_id
-                ORDER BY created_at ASC, document_id ASC
+                ORDER BY document_id ASC
                 LIMIT :limit
                 """
             )

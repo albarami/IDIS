@@ -8,8 +8,12 @@ D) Pagination: limit=1 yields next_cursor, second page returns remaining
 E) Ingest failure cases: missing uri, unsupported scheme, sha256 mismatch
 """
 
+from __future__ import annotations
+
 import json
 import uuid
+from collections.abc import Generator
+from typing import TYPE_CHECKING
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,6 +24,69 @@ from idis.api.routes.deals import clear_deals_store
 from idis.api.routes.documents import clear_document_store
 from idis.audit.sink import InMemoryAuditSink
 from idis.idempotency.store import SqliteIdempotencyStore
+from tests._postgres_support import (
+    admin_engine_generator,
+    migrated_db_generator,
+    postgres_configured,
+    seed_deal,
+    truncate_all,
+)
+
+if TYPE_CHECKING:
+    from sqlalchemy import Engine
+
+
+@pytest.fixture(scope="module")
+def _pg_admin_engine() -> Generator[Engine, None, None]:
+    yield from admin_engine_generator()
+
+
+@pytest.fixture(scope="module")
+def _pg_migrated(_pg_admin_engine: Engine) -> Generator[None, None, None]:
+    yield from migrated_db_generator(_pg_admin_engine)
+
+
+@pytest.fixture(autouse=True)
+def _pg_clean_state(request: pytest.FixtureRequest) -> Generator[None, None, None]:
+    """TRUNCATE all relevant tables between tests when Postgres is enabled."""
+    if postgres_configured():
+        admin_engine = request.getfixturevalue("_pg_admin_engine")
+        request.getfixturevalue("_pg_migrated")
+        truncate_all(admin_engine)
+        yield
+        truncate_all(admin_engine)
+    else:
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _pg_seed_deal(
+    request: pytest.FixtureRequest,
+    _pg_clean_state: None,
+) -> None:
+    """When Postgres is enabled, seed a minimal `deals` row for every
+    (tenant, deal) pair the test resolves, so document_artifacts writes
+    don't trip the deal_id FK.
+
+    Only runs the seeds that are actually requested by the test via
+    pytest fixtures, so tests using only one tenant pay for only one
+    insert.
+    """
+    if not postgres_configured():
+        return
+    admin_engine = request.getfixturevalue("_pg_admin_engine")
+    # Resolve whatever deal/tenant fixtures this test pulled in.
+    try:
+        deal = request.getfixturevalue("deal_id")
+    except pytest.FixtureLookupError:
+        return
+
+    for tenant_fixture in ("tenant_a_id", "tenant_b_id"):
+        try:
+            tenant_value = request.getfixturevalue(tenant_fixture)
+        except pytest.FixtureLookupError:
+            continue
+        seed_deal(admin_engine, deal_id=deal, tenant_id=tenant_value)
 
 
 @pytest.fixture
@@ -1668,6 +1735,17 @@ class TestBYOKRevokeGetRealPath:
             client = TestClient(app, raise_server_exceptions=False)
 
             configure_key(tenant_ctx, "test-key-alias-missing", audit_sink, registry=byok_registry)
+
+            # This test builds its own client inside the test body (not via
+            # the `deal_id` fixture), so the autouse seeder doesn't see this
+            # deal. Seed the deals row directly under Postgres.
+            if postgres_configured():
+                from idis.persistence.db import get_admin_engine
+                from tests._postgres_support import seed_deal as _seed_deal_for_test
+
+                _seed_deal_for_test(
+                    get_admin_engine(), deal_id=deal_id, tenant_id=tenant_a_id
+                )
 
             storage_key = "documents/missing-content-test.pdf"
             create_resp = client.post(

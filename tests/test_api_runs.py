@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Generator
+from typing import TYPE_CHECKING
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,12 +19,48 @@ from idis.api.main import create_app
 from idis.api.routes.deals import clear_deals_store
 from idis.api.routes.runs import clear_runs_store
 from idis.audit.sink import AuditSinkError, InMemoryAuditSink
+from tests._postgres_support import (
+    admin_engine_generator,
+    migrated_db_generator,
+    postgres_configured,
+    truncate_all,
+)
+
+if TYPE_CHECKING:
+    from sqlalchemy import Engine
 
 TENANT_A_ID = "11111111-1111-1111-1111-111111111111"
 TENANT_B_ID = "22222222-2222-2222-2222-222222222222"
 
 API_KEY_TENANT_A = "test-api-key-tenant-a"
 API_KEY_TENANT_B = "test-api-key-tenant-b"
+
+
+@pytest.fixture(scope="module")
+def _pg_admin_engine() -> Generator[Engine, None, None]:
+    yield from admin_engine_generator()
+
+
+@pytest.fixture(scope="module")
+def _pg_migrated(_pg_admin_engine: Engine) -> Generator[None, None, None]:
+    yield from migrated_db_generator(_pg_admin_engine)
+
+
+@pytest.fixture(autouse=True)
+def _pg_clean_state(request: pytest.FixtureRequest) -> Generator[None, None, None]:
+    """TRUNCATE all relevant tables between tests when Postgres is enabled.
+
+    Also requests the module-scope migrations fixture lazily so it only
+    runs in Postgres mode.
+    """
+    if postgres_configured():
+        admin_engine = request.getfixturevalue("_pg_admin_engine")
+        request.getfixturevalue("_pg_migrated")
+        truncate_all(admin_engine)
+        yield
+        truncate_all(admin_engine)
+    else:
+        yield
 
 
 @pytest.fixture
@@ -79,14 +117,18 @@ def deal_id(client: TestClient) -> str:
     )
     assert response.status_code == 201
     did = response.json()["deal_id"]
+    # Use real UUIDs so the Postgres-backed extraction pipeline can persist
+    # claims whose `primary_span_id` column is typed UUID. In the non-Postgres
+    # (in-memory) path these values are treated as opaque strings and the
+    # tests still work identically.
     client.app.state.deal_documents[did] = [
         {
-            "document_id": "doc-test-001",
+            "document_id": str(uuid.uuid4()),
             "doc_type": "PDF",
             "document_name": "test.pdf",
             "spans": [
                 {
-                    "span_id": "span-test-001",
+                    "span_id": str(uuid.uuid4()),
                     "text_excerpt": "Revenue was $5M in 2024.",
                     "locator": {"page": 1, "line": 1},
                     "span_type": "PAGE_TEXT",
@@ -200,7 +242,13 @@ class TestRunsAPIAuditCorrelation:
     def test_start_run_emits_audit_event(
         self, client: TestClient, deal_id: str, audit_sink: InMemoryAuditSink
     ) -> None:
-        """POST /v1/deals/{dealId}/runs emits audit event with correct resource_id."""
+        """POST /v1/deals/{dealId}/runs emits audit event with correct resource_id.
+
+        In Postgres mode the audit middleware writes via PostgresAuditSink
+        (in-transaction), so the in-memory `audit_sink` never sees the
+        event. Query the durable `audit_events` table instead — that is
+        the main path in production.
+        """
         request_id = str(uuid.uuid4())
         response = client.post(
             f"/v1/deals/{deal_id}/runs",
@@ -214,9 +262,32 @@ class TestRunsAPIAuditCorrelation:
         assert response.status_code == 202
         run_id = response.json()["run_id"]
 
+        if postgres_configured():
+            from sqlalchemy import text as _text
+
+            from idis.persistence.db import get_admin_engine
+
+            with get_admin_engine().begin() as conn:
+                row = conn.execute(
+                    _text(
+                        """
+                        SELECT event_id, event_type, request_id, event
+                        FROM audit_events
+                        WHERE event_type = 'deal.run.started'
+                          AND event->'resource'->>'resource_id' = :rid
+                        ORDER BY occurred_at DESC
+                        LIMIT 1
+                        """
+                    ),
+                    {"rid": run_id},
+                ).fetchone()
+            assert row is not None, "deal.run.started audit row must be persisted"
+            assert row.event["resource"]["resource_id"] == run_id
+            assert row.event["request"]["request_id"] == request_id
+            return
+
         events = audit_sink.events
         assert len(events) >= 1
-
         run_event = next(
             (e for e in events if e.get("event_type") == "deal.run.started"),
             None,
@@ -361,6 +432,25 @@ class TestAuditFailureOnRunCompletedReturns500:
                 self.events.append(event)
 
         sink = FailOnRunCompletedSink()
+        # Patch PostgresAuditSink so the failure is also injected in
+        # Postgres mode, where the middleware bypasses the in-memory sink
+        # for in-transaction emission.
+        if postgres_configured():
+            from idis.audit import postgres_sink as _ps
+
+            original_emit_in_tx = _ps.PostgresAuditSink.emit_in_tx
+
+            def _fake_emit_in_tx(
+                self: _ps.PostgresAuditSink, conn: object, event: dict
+            ) -> None:
+                if event.get("event_type") == "deal.run.completed":
+                    raise AuditSinkError("Disk full on run completed")
+                return original_emit_in_tx(self, conn, event)
+
+            monkeypatch.setattr(
+                _ps.PostgresAuditSink, "emit_in_tx", _fake_emit_in_tx
+            )
+
         app = create_app(audit_sink=sink, service_region="us-east-1")
         app.state.deal_documents = {}
         client = TestClient(app, raise_server_exceptions=False)
@@ -375,12 +465,12 @@ class TestAuditFailureOnRunCompletedReturns500:
 
         app.state.deal_documents[deal_id] = [
             {
-                "document_id": "doc-audit-001",
+                "document_id": str(uuid.uuid4()),
                 "doc_type": "PDF",
                 "document_name": "audit_test.pdf",
                 "spans": [
                     {
-                        "span_id": "span-audit-001",
+                        "span_id": str(uuid.uuid4()),
                         "text_excerpt": "Revenue $10M.",
                         "locator": {"page": 1},
                         "span_type": "PAGE_TEXT",

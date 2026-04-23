@@ -195,6 +195,7 @@ class IngestionService:
         data: bytes,
         metadata: dict[str, Any] | None = None,
         db_conn: Connection | None = None,
+        existing_artifact_id: UUID | None = None,
     ) -> IngestionResult:
         """Ingest raw document bytes into the system.
 
@@ -214,6 +215,16 @@ class IngestionService:
             media_type: MIME type (for metadata, not format detection).
             data: Raw document bytes.
             metadata: Optional additional metadata.
+            db_conn: Optional SQLAlchemy Connection. When provided, durable
+                persistence uses the Postgres repositories.
+            existing_artifact_id: When supplied, the caller has already
+                created a document_artifacts row with this id and the
+                service MUST reuse it — it will not generate a fresh
+                artifact_id, will not re-insert document_artifacts, and
+                will not emit a second document.created audit. Downstream
+                documents/spans rows link to this existing artifact
+                identity. Used by the upload→ingest route path so one
+                logical upload produces exactly one artifact row.
 
         Returns:
             IngestionResult with operation outcome.
@@ -232,6 +243,7 @@ class IngestionService:
                 data=data,
                 metadata=metadata or {},
                 db_conn=db_conn,
+                existing_artifact_id=existing_artifact_id,
             )
         except Exception as e:
             logger.exception("Unexpected error during ingestion")
@@ -255,6 +267,7 @@ class IngestionService:
         data: bytes,
         metadata: dict[str, Any],
         db_conn: Connection | None = None,
+        existing_artifact_id: UUID | None = None,
     ) -> IngestionResult:
         """Implementation of ingest_bytes with exception propagation."""
         validation_error = self._validate_input(data, filename)
@@ -285,7 +298,13 @@ class IngestionService:
 
         parse_result = self._parse_document(data, filename, media_type)
 
-        artifact_id = uuid4()
+        # Identity: if the caller (the upload→ingest route) already
+        # created a document_artifacts row, reuse its id and skip the
+        # artifact insert + the document.created audit so one logical
+        # upload produces exactly one artifact row. Standalone callers
+        # (no route) still get the original behavior — generate a fresh
+        # artifact_id and persist the row themselves.
+        artifact_id = existing_artifact_id if existing_artifact_id is not None else uuid4()
         document_id = uuid4()
         now = datetime.now(UTC)
 
@@ -322,11 +341,21 @@ class IngestionService:
                 document_id=document_id,
             )
 
-        self._persist_artifact(ctx.tenant_id, artifact, db_conn=db_conn)
+        if existing_artifact_id is None:
+            self._persist_artifact(ctx.tenant_id, artifact, db_conn=db_conn)
+        else:
+            # Route already persisted the artifact; keep the in-memory
+            # mirror consistent for non-DB code paths without re-writing
+            # the durable row.
+            self._artifacts[f"{ctx.tenant_id}:{artifact.doc_id}"] = artifact
         self._persist_document(ctx.tenant_id, document, db_conn=db_conn)
         self._persist_spans(ctx.tenant_id, document_id, spans, db_conn=db_conn)
 
-        self._emit_document_created(ctx, artifact, sha256)
+        if existing_artifact_id is None:
+            # Route emits its own document.created audit for the artifact
+            # it created; only emit here when the service itself owns
+            # artifact creation.
+            self._emit_document_created(ctx, artifact, sha256)
 
         if parse_result.success:
             self._emit_ingestion_completed(ctx, document, len(spans), sha256)

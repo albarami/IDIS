@@ -484,6 +484,9 @@ def _trigger_auto_ingest(
             data=actual_data,
             metadata=artifact.get("metadata"),
             db_conn=getattr(request.state, "db_conn", None),
+            # Reuse the artifact the create route just wrote so one
+            # logical upload produces exactly one document_artifacts row.
+            existing_artifact_id=UUID(doc_id),
         )
 
         if result.success and result.document_id is not None:
@@ -875,6 +878,9 @@ def ingest_document(
                     data=actual_data,
                     metadata=artifact.get("metadata"),
                     db_conn=db_conn,
+                    # Reuse the route-level artifact identity so one logical
+                    # upload produces exactly one document_artifacts row.
+                    existing_artifact_id=UUID(doc_id),
                 )
 
                 status = RunStatus.SUCCEEDED.value if result.success else RunStatus.FAILED.value

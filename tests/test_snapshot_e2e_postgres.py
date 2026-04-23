@@ -50,7 +50,6 @@ from tests._postgres_support import (
     admin_engine_generator,
     migrated_db_generator,
     postgres_configured,
-    seed_deal,
     truncate_all,
 )
 
@@ -178,10 +177,20 @@ class TestSnapshotEndToEndGate:
         assert deal_resp.status_code == 201, deal_resp.text
         deal_id = deal_resp.json()["deal_id"]
 
-        # The deal is created through the real DealsRepository path under
-        # Postgres, so the deals row already exists. (seed_deal is a no-op
-        # safety net if anything up the stack ever short-circuits it.)
-        seed_deal(admin_engine, deal_id=deal_id, tenant_id=TENANT_ID)
+        # Honesty assertion: the gate refuses to continue if the durable
+        # deal-creation path is broken. A direct SELECT against the
+        # deals table — not a seed_deal repair — proves POST /v1/deals
+        # actually persisted the row via the real DealsRepository path.
+        with admin_engine.begin() as conn:
+            deal_row = conn.execute(
+                text("SELECT deal_id, tenant_id FROM deals WHERE deal_id = :d"),
+                {"d": deal_id},
+            ).fetchone()
+        assert deal_row is not None, (
+            "POST /v1/deals returned 201 but no deals row is durably persisted"
+        )
+        assert str(deal_row.deal_id) == deal_id
+        assert str(deal_row.tenant_id) == TENANT_ID
 
         # --- 2. Pre-stage document bytes in the compliant store. ---
         # This is what the real upload flow produces (the /v1/documents/{id}

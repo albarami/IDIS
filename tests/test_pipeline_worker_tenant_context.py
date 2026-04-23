@@ -24,7 +24,6 @@ import asyncio
 import inspect
 import uuid
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -36,14 +35,14 @@ class TestWorkerTenantContextSourceGuard:
     """Static guard: revert-to-app.tenant_id must not pass review silently."""
 
     def test_worker_source_uses_set_tenant_local(self) -> None:
-        source = inspect.getsource(PipelineWorker._process_queued_runs)
+        source = inspect.getsource(PipelineWorker._execute_one)
         assert "set_tenant_local(" in source, (
             "Worker must use set_tenant_local() so its tenant GUC matches "
             "the one the repositories and RLS policies read."
         )
 
     def test_worker_source_does_not_use_wrong_guc(self) -> None:
-        source = inspect.getsource(PipelineWorker._process_queued_runs)
+        source = inspect.getsource(PipelineWorker._execute_one)
         assert "app.tenant_id" not in source, (
             "Worker must not use 'app.tenant_id' — RLS policies read "
             "'idis.tenant_id'. Use set_tenant_local() from persistence.db."
@@ -52,6 +51,17 @@ class TestWorkerTenantContextSourceGuard:
             "Worker must not use set_config(...) for tenant scoping; "
             "that targets app.tenant_id which RLS does not read. "
             "Use set_tenant_local() from persistence.db."
+        )
+
+    def test_worker_does_not_use_stale_pipeline_executor(self) -> None:
+        worker_src = inspect.getsource(worker_module)
+        assert "PipelineExecutor(" not in worker_src, (
+            "Worker must not instantiate the deprecated GDBS-demo "
+            "PipelineExecutor. Drive RunOrchestrator directly."
+        )
+        assert "RunOrchestrator" in inspect.getsource(worker_module._run_snapshot), (
+            "Worker's SNAPSHOT helper must route through RunOrchestrator "
+            "so background execution uses the same pipeline as the API path."
         )
 
 
@@ -64,19 +74,13 @@ class _FakeResult:
 
 
 class _FakeConnection:
-    """Minimal stand-in for a SQLAlchemy Connection.
-
-    Records every `execute(stmt, params)` call so the test can assert the
-    worker never issues app.tenant_id / set_config tenant statements.
-    Returns a canned result for the QUEUED-runs SELECT; a no-op result
-    for everything else.
+    """Minimal SQLAlchemy Connection stand-in used as both the polling
+    connection and the per-run transaction connection.
     """
 
     def __init__(self, queued_rows: list[tuple[Any, ...]]) -> None:
         self._queued_rows = queued_rows
         self.executions: list[tuple[str, dict[str, Any] | None]] = []
-        self.commit_count = 0
-        self.rollback_count = 0
         self._queued_select_consumed = False
 
     def execute(self, stmt: Any, params: Any | None = None) -> _FakeResult:
@@ -87,25 +91,29 @@ class _FakeConnection:
             return _FakeResult(self._queued_rows)
         return _FakeResult([])
 
-    def commit(self) -> None:
-        self.commit_count += 1
 
-    def rollback(self) -> None:
-        self.rollback_count += 1
+class _CtxConn:
+    """Context manager that hands out the shared fake connection."""
 
-
-class _FakeEngine:
     def __init__(self, conn: _FakeConnection) -> None:
         self._conn = conn
-
-    def connect(self) -> _FakeEngine:
-        return self
 
     def __enter__(self) -> _FakeConnection:
         return self._conn
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         return None
+
+
+class _FakeEngine:
+    def __init__(self, conn: _FakeConnection) -> None:
+        self._conn = conn
+
+    def connect(self) -> _CtxConn:
+        return _CtxConn(self._conn)
+
+    def begin(self) -> _CtxConn:
+        return _CtxConn(self._conn)
 
 
 class TestWorkerTenantContextBehavior:
@@ -119,6 +127,9 @@ class TestWorkerTenantContextBehavior:
         fake_conn = _FakeConnection(queued_rows)
         fake_engine = _FakeEngine(fake_conn)
         monkeypatch.setattr(worker_module, "get_app_engine", lambda: fake_engine)
+        # Polling now uses the admin engine so cross-tenant discovery
+        # bypasses RLS; wire the same fake engine to both.
+        monkeypatch.setattr(worker_module, "get_admin_engine", lambda: fake_engine)
 
         # Capture (conn, tenant_id) passed to set_tenant_local.
         set_tenant_calls: list[tuple[Any, str]] = []
@@ -130,22 +141,20 @@ class TestWorkerTenantContextBehavior:
             worker_module, "set_tenant_local", _spy_set_tenant_local
         )
 
-        # Stub PipelineExecutor so this test stays focused on tenant context.
-        fake_executor = MagicMock()
+        # Stub the SNAPSHOT orchestrator hook so this test stays focused
+        # on the tenant-context wiring, not the full pipeline.
+        class _Result:
+            status = "SUCCEEDED"
+            block_reason = None
 
-        async def _fake_execute_run(
-            run_id: str, deal_id: str, mode: str, tenant_id: str
-        ) -> None:
-            return None
-
-        fake_executor.execute_run.side_effect = _fake_execute_run
         monkeypatch.setattr(
-            worker_module,
-            "PipelineExecutor",
-            MagicMock(return_value=fake_executor),
+            worker_module, "_run_snapshot", lambda **kwargs: _Result()
+        )
+        monkeypatch.setattr(
+            worker_module, "_gather_snapshot_documents", lambda conn, t, d: []
         )
 
-        worker = PipelineWorker(poll_interval=0, gdbs_path=None)
+        worker = PipelineWorker(poll_interval=0)
         asyncio.run(worker._process_queued_runs())
         return fake_conn, set_tenant_calls
 
@@ -186,7 +195,27 @@ class TestWorkerTenantContextBehavior:
     def test_worker_skips_processing_when_no_queued_runs(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        fake_conn, set_tenant_calls = self._run(monkeypatch, queued_rows=[])
-        # No queued rows -> no tenant context switch, no commits.
+        _, set_tenant_calls = self._run(monkeypatch, queued_rows=[])
+        # No queued rows -> no tenant context switch.
         assert set_tenant_calls == []
-        assert fake_conn.commit_count == 0
+
+    def test_worker_rejects_full_mode_runs(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FULL-mode support via the background worker is deferred.
+        Queued FULL runs must be marked FAILED, never silently succeeded
+        by a stale demo path.
+        """
+        queued = [(uuid.uuid4(), uuid.uuid4(), "FULL", uuid.uuid4())]
+        fake_conn, _ = self._run(monkeypatch, queued)
+
+        updates = [
+            (sql, params)
+            for sql, params in fake_conn.executions
+            if "UPDATE runs" in sql
+        ]
+        final = next(
+            (p for _, p in updates if p and p.get("s") == "FAILED"),
+            None,
+        )
+        assert final is not None, "FULL mode must be marked FAILED"

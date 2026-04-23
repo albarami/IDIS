@@ -23,7 +23,13 @@ from typing import Any
 from sqlalchemy import text
 
 from idis.audit.sink import AuditSink, InMemoryAuditSink
-from idis.persistence.db import get_admin_engine, get_app_engine, set_tenant_local
+from idis.persistence.db import (
+    IDIS_DATABASE_ADMIN_URL_ENV,
+    IDIS_DATABASE_URL_ENV,
+    get_admin_engine,
+    get_app_engine,
+    set_tenant_local,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -85,15 +91,26 @@ class PipelineWorker:
     async def _process_queued_runs(self) -> None:
         """Process all queued runs via the real RunOrchestrator.
 
-        Polling uses the admin engine so cross-tenant discovery is not
-        filtered by the per-tenant RLS on `runs`. Per-run execution
-        then opens a fresh app-engine transaction, calls
-        set_tenant_local (matching the repository path and the RLS
-        policies), and drives the real pipeline. SNAPSHOT mode executes
-        INGEST_CHECK → EXTRACT → GRADE → CALC through the same step
-        callables the API path uses. FULL mode is deferred: those runs
-        are marked FAILED rather than silently succeeding via a stale
-        stub.
+        Polling deliberately uses the admin engine (IDIS_DATABASE_ADMIN_URL).
+        Cross-tenant discovery of QUEUED runs bypasses the per-tenant RLS
+        policy on `runs` by design — the worker operates above any one
+        tenant's scope so it can pick up work from all tenants. Once a
+        row is selected the worker switches to the app engine
+        (IDIS_DATABASE_URL), opens a fresh transaction, and calls
+        set_tenant_local(conn, tenant_id) before doing anything tenant-
+        scoped; the real RLS policies apply from that point on.
+
+        Deployment implication: any environment that starts this worker
+        MUST provide both IDIS_DATABASE_URL (app role) and
+        IDIS_DATABASE_ADMIN_URL (trusted admin role). Startup refuses
+        to start the worker if the admin URL is missing (see
+        `_require_worker_runtime_contract` / `start_worker`), so this
+        method can assume both engines are reachable.
+
+        SNAPSHOT mode executes INGEST_CHECK → EXTRACT → GRADE → CALC
+        through the same step callables the API path uses. FULL mode is
+        deferred: those runs are marked FAILED rather than silently
+        succeeding via a stale stub.
         """
         admin = get_admin_engine()
 
@@ -181,7 +198,9 @@ class PipelineWorker:
                 exc_info=True,
             )
             with contextlib.suppress(Exception):
-                await asyncio.to_thread(_mark_run_failed_in_new_tx, run_id)
+                await asyncio.to_thread(
+                    _mark_run_failed_in_new_tx, run_id, tenant_id
+                )
 
 
 def _mark_run_running(conn: Any, *, run_id: str) -> None:
@@ -234,12 +253,19 @@ def _mark_run_failed(conn: Any, *, run_id: str, block_reason: str) -> None:
     _mark_run_final(conn, run_id=run_id, status="FAILED", block_reason=block_reason)
 
 
-def _mark_run_failed_in_new_tx(run_id: str) -> None:
-    """Best-effort FAILED marker in a fresh transaction after an exception."""
+def _mark_run_failed_in_new_tx(run_id: str, tenant_id: str) -> None:
+    """Durably mark a run FAILED in a fresh transaction after an exception.
+
+    Must call set_tenant_local(conn, tenant_id) before the UPDATE —
+    `runs` has RLS enabled with a policy keyed on `idis.tenant_id`, so
+    an app-role transaction without the tenant GUC set updates 0 rows
+    and the run would remain QUEUED forever.
+    """
     from datetime import UTC, datetime
 
     engine = get_app_engine()
     with engine.begin() as conn:
+        set_tenant_local(conn, tenant_id)
         conn.execute(
             text(
                 """
@@ -334,14 +360,52 @@ def _run_snapshot(
 _worker: PipelineWorker | None = None
 
 
+class WorkerRuntimeContractError(RuntimeError):
+    """Raised when the worker is asked to start without the required
+    runtime contract (both IDIS_DATABASE_URL and IDIS_DATABASE_ADMIN_URL).
+    """
+
+
+def _require_worker_runtime_contract() -> None:
+    """Fail loudly if the worker's runtime contract is not satisfied.
+
+    The worker needs the admin URL for cross-tenant polling (see
+    `_process_queued_runs`) and the app URL for tenant-scoped execution.
+    Silently starting the loop with only one of them wired produces a
+    broken background path; we raise instead.
+    """
+    import os
+
+    missing: list[str] = []
+    if not os.environ.get(IDIS_DATABASE_URL_ENV):
+        missing.append(IDIS_DATABASE_URL_ENV)
+    if not os.environ.get(IDIS_DATABASE_ADMIN_URL_ENV):
+        missing.append(IDIS_DATABASE_ADMIN_URL_ENV)
+    if missing:
+        raise WorkerRuntimeContractError(
+            "Pipeline worker cannot start: missing required environment "
+            f"variables {missing}. Both IDIS_DATABASE_URL (app role, per-run "
+            "tenant-scoped transactions) and IDIS_DATABASE_ADMIN_URL "
+            "(trusted role, cross-tenant polling) are required; starting "
+            "with only one wired produces a broken background loop."
+        )
+
+
 async def start_worker() -> None:
-    """Start the global pipeline worker."""
+    """Start the global pipeline worker.
+
+    Validates the runtime contract (both DB URLs present) before
+    starting the poll loop, so a partially-configured environment
+    surfaces the problem at startup rather than silently running a
+    broken worker.
+    """
     global _worker
 
     if _worker is not None:
         logger.warning("Worker already started")
         return
 
+    _require_worker_runtime_contract()
     _worker = PipelineWorker(poll_interval=5)
     await _worker.start()
 

@@ -226,3 +226,107 @@ class TestDeprecatedPipelineExecutorIsNotLive:
 
         with pytest.raises(RuntimeError, match="deprecated"):
             PipelineExecutor(None)
+
+
+class TestWorkerFailureRecoveryMarksRunFailed:
+    """If the orchestrator raises mid-SNAPSHOT, the run must be durably
+    marked FAILED with finished_at set — even though the original
+    transaction rolled back. The fresh-tx recovery path must set
+    tenant context (otherwise RLS on `runs` swallows the UPDATE).
+    """
+
+    def test_orchestrator_exception_marks_run_failed_durably(
+        self,
+        _pg_admin_engine: Engine,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from idis.persistence.db import get_app_engine
+
+        admin_engine = _pg_admin_engine
+        app_engine = get_app_engine()
+        deal_id = str(uuid.uuid4())
+        run_id = str(uuid.uuid4())
+        _seed_ingested_document(admin_engine, app_engine, deal_id)
+        _queue_run(admin_engine, run_id=run_id, deal_id=deal_id, mode="SNAPSHOT")
+
+        from idis.pipeline import worker as worker_module
+
+        def _boom(**kwargs: object) -> None:
+            raise RuntimeError("orchestrator exploded")
+
+        monkeypatch.setattr(worker_module, "_run_snapshot", _boom)
+
+        worker = PipelineWorker(poll_interval=0)
+        asyncio.run(worker._process_queued_runs())
+
+        with admin_engine.begin() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT status, finished_at FROM runs WHERE run_id = :r"
+                ),
+                {"r": run_id},
+            ).fetchone()
+
+        assert row is not None
+        assert row.status == "FAILED", (
+            f"orchestrator exception must durably mark run FAILED; "
+            f"got status={row.status!r}"
+        )
+        assert row.finished_at is not None, (
+            "FAILED recovery must also set finished_at"
+        )
+
+    def test_failure_recovery_sets_tenant_guc_before_update(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The fresh-tx fail marker must call set_tenant_local(conn,
+        tenant_id) — otherwise the UPDATE hits 0 rows under RLS and
+        the run is stuck QUEUED. Spy on set_tenant_local during the
+        recovery path.
+        """
+        from idis.pipeline import worker as worker_module
+
+        set_calls: list[tuple[object, str]] = []
+        original_set = worker_module.set_tenant_local
+
+        def _spy(conn: object, tenant_id: str) -> None:
+            set_calls.append((conn, tenant_id))
+            return original_set(conn, tenant_id)
+
+        monkeypatch.setattr(worker_module, "set_tenant_local", _spy)
+
+        tenant_id = TENANT_ID
+        run_id = str(uuid.uuid4())
+        deal_id = str(uuid.uuid4())
+        seed_deal(_pg_admin_engine_factory(), deal_id=deal_id, tenant_id=tenant_id)
+        _queue_run(
+            _pg_admin_engine_factory(),
+            run_id=run_id,
+            deal_id=deal_id,
+            mode="SNAPSHOT",
+        )
+
+        def _boom(**kwargs: object) -> None:
+            raise RuntimeError("orchestrator exploded")
+
+        monkeypatch.setattr(worker_module, "_run_snapshot", _boom)
+
+        worker = PipelineWorker(poll_interval=0)
+        asyncio.run(worker._process_queued_runs())
+
+        # Expected: 2 set_tenant_local calls — once in _execute_one's
+        # main tx (before the raise) and once in the fresh recovery tx.
+        assert any(
+            tid == tenant_id for _, tid in set_calls
+        ), "set_tenant_local was not called with the run's tenant_id"
+        assert len(set_calls) >= 2, (
+            "fresh-tx recovery must also call set_tenant_local before "
+            f"the UPDATE; saw only {len(set_calls)} call(s): {set_calls!r}"
+        )
+
+
+def _pg_admin_engine_factory() -> Engine:
+    from idis.persistence.db import get_admin_engine
+
+    return get_admin_engine()

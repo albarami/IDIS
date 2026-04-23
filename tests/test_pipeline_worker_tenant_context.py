@@ -219,3 +219,46 @@ class TestWorkerTenantContextBehavior:
             None,
         )
         assert final is not None, "FULL mode must be marked FAILED"
+
+
+class TestWorkerStartupRuntimeContract:
+    """Startup refuses to silently start a broken worker path when the
+    admin URL is missing.
+
+    The worker polls via IDIS_DATABASE_ADMIN_URL (cross-tenant) and
+    executes via IDIS_DATABASE_URL (per-tenant). If only one is wired
+    the loop is broken by construction. `start_worker()` must raise a
+    clear error rather than starting and silently spinning.
+    """
+
+    def test_start_worker_raises_when_admin_url_missing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from idis.pipeline.worker import (
+            WorkerRuntimeContractError,
+            start_worker,
+        )
+        from idis.pipeline.worker import (
+            _worker as _existing,
+        )
+
+        assert _existing is None, "test requires no worker already started"
+
+        monkeypatch.setenv("IDIS_DATABASE_URL", "postgresql://x:y@h:1/d")
+        monkeypatch.delenv("IDIS_DATABASE_ADMIN_URL", raising=False)
+
+        with pytest.raises(WorkerRuntimeContractError) as excinfo:
+            asyncio.run(start_worker())
+        assert "IDIS_DATABASE_ADMIN_URL" in str(excinfo.value)
+
+    def test_start_worker_raises_when_app_url_missing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from idis.pipeline.worker import WorkerRuntimeContractError, start_worker
+
+        monkeypatch.delenv("IDIS_DATABASE_URL", raising=False)
+        monkeypatch.setenv("IDIS_DATABASE_ADMIN_URL", "postgresql://x:y@h:1/d")
+
+        with pytest.raises(WorkerRuntimeContractError) as excinfo:
+            asyncio.run(start_worker())
+        assert "IDIS_DATABASE_URL" in str(excinfo.value)

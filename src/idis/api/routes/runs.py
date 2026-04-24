@@ -331,23 +331,6 @@ def _gather_snapshot_documents(
     return documents
 
 
-def _get_audit_sink(request: Request) -> AuditSink:
-    """Get the audit sink from app state, falling back to in-memory.
-
-    Args:
-        request: FastAPI request.
-
-    Returns:
-        AuditSink instance.
-    """
-    from idis.audit.sink import InMemoryAuditSink
-
-    sink: AuditSink | None = getattr(request.app.state, "audit_sink", None)
-    if sink is None:
-        return InMemoryAuditSink()
-    return sink
-
-
 def _build_step_responses(steps: list[Any]) -> list[RunStepResponse]:
     """Convert RunStep models to API response format.
 
@@ -380,42 +363,6 @@ def _build_step_responses(steps: list[Any]) -> list[RunStepResponse]:
             )
         )
     return responses
-
-
-def _emit_run_completed_audit(
-    request: Request,
-    run_id: str,
-    tenant_id: str,
-    status: str,
-) -> None:
-    """Emit deal.run.completed audit event after pipeline finishes.
-
-    Args:
-        request: FastAPI request for audit sink access.
-        run_id: Pipeline run UUID.
-        tenant_id: Tenant UUID.
-        status: Final run status.
-    """
-    from idis.audit.sink import InMemoryAuditSink
-
-    audit_sink = getattr(request.app.state, "audit_sink", None)
-    if audit_sink is None:
-        audit_sink = InMemoryAuditSink()
-
-    event = {
-        "event_type": "deal.run.completed",
-        "tenant_id": tenant_id,
-        "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-        "details": {
-            "run_id": run_id,
-            "status": status,
-        },
-        "resource": {
-            "resource_type": "deal",
-            "resource_id": run_id,
-        },
-    }
-    audit_sink.emit(event)
 
 
 def _retrieve_claims_for_debate(

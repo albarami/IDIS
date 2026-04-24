@@ -31,6 +31,11 @@ from idis.persistence.db import (
     set_tenant_local,
 )
 
+try:
+    from idis.audit.postgres_sink import PostgresAuditSink
+except ImportError:  # pragma: no cover - fallback only when optional dep missing
+    PostgresAuditSink = None  # type: ignore[misc,assignment]
+
 logger = logging.getLogger(__name__)
 
 
@@ -166,6 +171,14 @@ class PipelineWorker:
                         run_id=run_id,
                         block_reason="MODE_NOT_SUPPORTED_BY_WORKER",
                     )
+                    _emit_run_completed(
+                        conn=conn,
+                        run_id=run_id,
+                        tenant_id=tenant_id,
+                        deal_id=deal_id,
+                        status="FAILED",
+                        audit_sink=self._audit_sink,
+                    )
                     return
 
                 _mark_run_running(conn, run_id=run_id)
@@ -186,6 +199,22 @@ class PipelineWorker:
                     run_id=run_id,
                     status=result.status,
                     block_reason=result.block_reason,
+                )
+
+                # Fail-closed worker-side completion audit: emitted in the
+                # SAME transaction as the final status update. Any
+                # AuditSinkError propagates out of this block so the
+                # surrounding engine.begin() rolls the status update back
+                # and the outer except re-marks the run FAILED in a fresh
+                # transaction. A missing/failed audit event must never
+                # leave a run silently SUCCEEDED.
+                _emit_run_completed(
+                    conn=conn,
+                    run_id=run_id,
+                    tenant_id=tenant_id,
+                    deal_id=deal_id,
+                    status=result.status,
+                    audit_sink=self._audit_sink,
                 )
 
         try:
@@ -276,6 +305,68 @@ def _mark_run_failed_in_new_tx(run_id: str, tenant_id: str) -> None:
             ),
             {"r": run_id, "ts": datetime.now(UTC)},
         )
+
+
+def _emit_run_completed(
+    *,
+    conn: Any,
+    run_id: str,
+    tenant_id: str,
+    deal_id: str,
+    status: str,
+    audit_sink: AuditSink,
+) -> None:
+    """Emit the worker-side `deal.run.completed` audit event.
+
+    Under Postgres the event is written via `PostgresAuditSink.emit_in_tx`
+    using the same connection the run's final status was written on —
+    so the audit row and the status row commit atomically. Without
+    Postgres (tests/dev) the in-memory `audit_sink` is used instead.
+
+    Fail-closed: any `AuditSinkError` propagates. Callers rely on that
+    propagation to roll back the status update and force-mark the run
+    FAILED in a fresh transaction. Swallowing the exception here would
+    leave a SUCCEEDED run with no durable audit trail — exactly the
+    behavior the route-side test that shipped with this file's original
+    design was meant to prevent.
+    """
+    import uuid as _uuid
+    from datetime import UTC, datetime
+
+    event = {
+        "event_id": str(_uuid.uuid4()),
+        "occurred_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "tenant_id": tenant_id,
+        "event_type": "deal.run.completed",
+        "severity": "LOW",
+        "actor": {
+            "actor_type": "SERVICE",
+            "actor_id": "pipeline-worker",
+            "roles": ["INTEGRATION_SERVICE"],
+        },
+        "request": {
+            "request_id": f"worker-{run_id}",
+            "method": "WORKER",
+            "path": "/pipeline/worker/runs",
+            "status_code": 200 if status == "SUCCEEDED" else 500,
+        },
+        "resource": {
+            "resource_type": "deal",
+            "resource_id": run_id,
+        },
+        "summary": f"deal.run.completed status={status} deal={deal_id}",
+        "payload": {
+            "hashes": [],
+            "refs": [
+                {"resource_type": "deal", "resource_id": deal_id},
+            ],
+        },
+    }
+
+    if PostgresAuditSink is not None and conn is not None:
+        PostgresAuditSink().emit_in_tx(conn, event)
+        return
+    audit_sink.emit(event)
 
 
 def _gather_snapshot_documents(

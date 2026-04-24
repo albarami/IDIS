@@ -442,7 +442,7 @@ def _run_snapshot(
         documents=documents,
         extract_fn=partial(_run_snapshot_extraction, db_conn=conn),
         grade_fn=partial(_run_snapshot_auto_grade, db_conn=conn),
-        calc_fn=_run_snapshot_calc,
+        calc_fn=partial(_run_snapshot_calc, db_conn=conn),
     )
     return orchestrator.execute(ctx)
 

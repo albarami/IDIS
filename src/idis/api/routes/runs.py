@@ -845,30 +845,172 @@ def _run_snapshot_calc(
     deal_id: str,
     created_claim_ids: list[str],
     calc_types: list[Any] | None = None,
+    db_conn: Any = None,
 ) -> dict[str, Any]:
     """Run deterministic calculations for claims produced by extraction.
 
-    Args:
-        run_id: Pipeline run UUID.
-        tenant_id: Tenant context.
-        deal_id: Deal UUID.
-        created_claim_ids: Claim IDs from extraction.
-        calc_types: Optional list of CalcType to run. None means run all.
+    Sprint 2 Task 12: the CALC step now executes the real CalcEngine
+    when a DB connection is available and the created claims carry
+    predicates that map to registered formula inputs.
 
-    Returns:
-        Dict with calc_ids and reproducibility_hashes.
+    Matching rule (minimal and explicit):
+      For each persisted claim, if `claim.predicate` equals one of a
+      formula's required input names AND `claim.value` carries a
+      numeric value, the claim contributes that input to that formula.
+      When all required inputs for any registered CalcType are
+      satisfied, the engine runs and the resulting
+      DeterministicCalculation + CalcSanad are persisted under the
+      run's tenant/deal.
+
+    Behavior when nothing matches (e.g. the deterministic extractor
+    stub produced claims with no financial predicates): returns an
+    empty calc_ids list without raising — the step is still recorded
+    as COMPLETED by the orchestrator, but it's an honest "no calc
+    inputs available" outcome, not a silent placeholder.
+
+    `enforce_extraction_gate=False` is set here because the current
+    extractor does not produce per-claim extraction_confidence /
+    dhabt_score values. Re-enabling the gate is tracked as a
+    follow-up tied to extractor confidence emission.
     """
-    if not created_claim_ids:
+    if not created_claim_ids or db_conn is None:
         return {
             "calc_ids": [],
             "reproducibility_hashes": [],
         }
 
+    from decimal import Decimal
+
+    from idis.calc.engine import CalcEngine, InputGradeInfo
+    from idis.calc.formulas.core import register_core_formulas
+    from idis.calc.formulas.registry import FormulaRegistry
+    from idis.models.calc_sanad import SanadGrade
+    from idis.persistence.repositories.calcs import (
+        CalcSanadsRepository,
+        CalculationsRepository,
+    )
+    from idis.persistence.repositories.claims import ClaimsRepository
+
+    claims_repo = ClaimsRepository(db_conn, tenant_id)
+
+    # Calc inputs come from two sources, merged:
+    # 1. Claims extracted by this run (passed in via created_claim_ids).
+    # 2. Any deal-scoped claim that already carries a predicate matching
+    #    a formula input (pre-existing material evidence for this deal).
+    # Merging both means runs executed after documents were ingested in
+    # earlier sessions still get to contribute previously-anchored
+    # financial predicates to the current calc pass.
+    candidate_claims: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for cid in created_claim_ids:
+        row = claims_repo.get(cid)
+        if row is not None:
+            candidate_claims.append(row)
+            seen.add(str(row.get("claim_id")))
+
+    deal_claims, _next = claims_repo.list_by_deal(deal_id, limit=200)
+    for row in deal_claims:
+        cid = str(row.get("claim_id"))
+        if cid and cid not in seen:
+            candidate_claims.append(row)
+            seen.add(cid)
+
+    inputs_by_name: dict[str, dict[str, Any]] = {}
+    for row in candidate_claims:
+        predicate = row.get("predicate")
+        if not predicate or not isinstance(predicate, str):
+            continue
+        value = row.get("value")
+        numeric = _extract_numeric(value)
+        if numeric is None:
+            continue
+        # First claim claiming a given input wins; keeps the pairing
+        # deterministic against extractor/seed ordering.
+        if predicate not in inputs_by_name:
+            inputs_by_name[predicate] = {
+                "claim_id": str(row.get("claim_id")),
+                "value": Decimal(str(numeric)),
+                "grade": row.get("claim_grade") or "D",
+            }
+
+    if not inputs_by_name:
+        return {"calc_ids": [], "reproducibility_hashes": []}
+
+    registry = register_core_formulas(FormulaRegistry())
+    engine = CalcEngine(registry=registry, enforce_extraction_gate=False)
+    calcs_repo = CalculationsRepository(db_conn, tenant_id)
+    sanads_repo = CalcSanadsRepository(db_conn, tenant_id)
+
+    calc_ids: list[str] = []
+    hashes: list[str] = []
+    for calc_type in registry.list_registered():
+        spec = registry.get_or_raise(calc_type)
+        required = set(spec.required_inputs)
+        if not required.issubset(inputs_by_name.keys()):
+            continue
+
+        input_values: dict[str, Decimal] = {}
+        input_grades: list[InputGradeInfo] = []
+        for name in spec.required_inputs:
+            entry = inputs_by_name[name]
+            input_values[name] = entry["value"]
+            try:
+                grade = SanadGrade(entry["grade"])
+            except ValueError:
+                grade = SanadGrade.D
+            input_grades.append(
+                InputGradeInfo(
+                    claim_id=str(entry["claim_id"]),
+                    grade=grade,
+                    is_material=True,
+                )
+            )
+
+        result = engine.run(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            calc_type=spec.calc_type,
+            input_values=input_values,
+            input_grades=input_grades,
+        )
+        calcs_repo.create(result.calculation)
+        sanads_repo.create(result.calc_sanad)
+        calc_ids.append(str(result.calculation.calc_id))
+        hashes.append(result.calculation.reproducibility_hash)
+
     return {
-        "calc_ids": [],
-        "reproducibility_hashes": [],
+        "calc_ids": calc_ids,
+        "reproducibility_hashes": hashes,
         "claim_count": len(created_claim_ids),
     }
+
+
+def _extract_numeric(value: Any) -> Any:
+    """Return a numeric value from a claim `value` JSONB payload, or None.
+
+    Accepts either a raw number-ish string / number, or a Quantity-shaped
+    dict `{"value": <number>, ...}`. Anything else is treated as
+    non-numeric and the caller skips the claim.
+    """
+    if value is None:
+        return None
+    if isinstance(value, int | float):
+        return value
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    if isinstance(value, dict):
+        inner = value.get("value")
+        if isinstance(inner, int | float):
+            return inner
+        if isinstance(inner, str):
+            try:
+                return float(inner)
+            except ValueError:
+                return None
+    return None
 
 
 def _run_snapshot_auto_grade(

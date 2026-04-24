@@ -18,7 +18,7 @@ from idis.api.auth import IDIS_API_KEYS_ENV
 from idis.api.main import create_app
 from idis.api.routes.deals import clear_deals_store
 from idis.api.routes.runs import clear_runs_store
-from idis.audit.sink import AuditSinkError, InMemoryAuditSink
+from idis.audit.sink import InMemoryAuditSink
 from tests._postgres_support import (
     admin_engine_generator,
     migrated_db_generator,
@@ -267,7 +267,9 @@ class TestRunsAPIHappyPath:
         assert response.status_code == 202
         body = response.json()
         assert "run_id" in body
-        assert body["status"] == "SUCCEEDED"
+        # Sprint 2 Task 11: API is enqueue-only. Clients see QUEUED here;
+        # the worker advances to SUCCEEDED/FAILED asynchronously.
+        assert body["status"] == "QUEUED"
         uuid.UUID(body["run_id"])
 
     def test_get_run_returns_run_status(self, client: TestClient, deal_id: str) -> None:
@@ -287,7 +289,10 @@ class TestRunsAPIHappyPath:
         assert response.status_code == 200
         body = response.json()
         assert body["run_id"] == run_id
-        assert body["status"] == "SUCCEEDED"
+        # Task 11: GET immediately after POST reflects the durable QUEUED
+        # state. Advancing the run is the worker's responsibility; this
+        # test only verifies the read-after-enqueue contract.
+        assert body["status"] == "QUEUED"
         assert "started_at" in body
 
 
@@ -517,94 +522,9 @@ class TestNoIngestedDocumentsReturns400:
             )
 
 
-class TestAuditFailureOnRunCompletedReturns500:
-    """Regression: AuditSinkError on deal.run.completed must return 500 AUDIT_FAILURE."""
-
-    def test_audit_sink_failure_on_run_completed_returns_500(
-        self,
-        api_keys_config: dict[str, dict[str, str | list[str]]],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """When audit sink raises on deal.run.completed, endpoint returns 500."""
-        monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys_config))
-        clear_deals_store()
-        clear_runs_store()
-
-        call_count = 0
-
-        class FailOnRunCompletedSink:
-            """Audit sink that fails only on deal.run.completed events."""
-
-            def __init__(self) -> None:
-                self.events: list[dict] = []
-
-            def emit(self, event: dict) -> None:
-                nonlocal call_count
-                call_count += 1
-                if event.get("event_type") == "deal.run.completed":
-                    raise AuditSinkError("Disk full on run completed")
-                self.events.append(event)
-
-        sink = FailOnRunCompletedSink()
-        # Patch PostgresAuditSink so the failure is also injected in
-        # Postgres mode, where the middleware bypasses the in-memory sink
-        # for in-transaction emission.
-        if postgres_configured():
-            from idis.audit import postgres_sink as _ps
-
-            original_emit_in_tx = _ps.PostgresAuditSink.emit_in_tx
-
-            def _fake_emit_in_tx(
-                self: _ps.PostgresAuditSink, conn: object, event: dict
-            ) -> None:
-                if event.get("event_type") == "deal.run.completed":
-                    raise AuditSinkError("Disk full on run completed")
-                return original_emit_in_tx(self, conn, event)
-
-            monkeypatch.setattr(
-                _ps.PostgresAuditSink, "emit_in_tx", _fake_emit_in_tx
-            )
-
-        app = create_app(audit_sink=sink, service_region="us-east-1")
-        app.state.deal_documents = {}
-        client = TestClient(app, raise_server_exceptions=False)
-
-        create_resp = client.post(
-            "/v1/deals",
-            json={"name": "Audit Fail Deal", "company_name": "AuditCo"},
-            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
-        )
-        assert create_resp.status_code == 201
-        deal_id = create_resp.json()["deal_id"]
-
-        if postgres_configured():
-            # Durable-path seed: document_artifacts + documents +
-            # document_spans so `_gather_snapshot_documents` returns a
-            # non-empty list via the Postgres repositories.
-            _seed_snapshot_docs_pg(tenant_id=TENANT_A_ID, deal_id=deal_id)
-        else:
-            app.state.deal_documents[deal_id] = [
-                {
-                    "document_id": str(uuid.uuid4()),
-                    "doc_type": "PDF",
-                    "document_name": "audit_test.pdf",
-                    "spans": [
-                        {
-                            "span_id": str(uuid.uuid4()),
-                            "text_excerpt": "Revenue $10M.",
-                            "locator": {"page": 1},
-                            "span_type": "PAGE_TEXT",
-                        }
-                    ],
-                }
-            ]
-
-        response = client.post(
-            f"/v1/deals/{deal_id}/runs",
-            json={"mode": "SNAPSHOT"},
-            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
-        )
-
-        assert response.status_code == 500
-        body = response.json()
-        assert body["code"] == "AUDIT_FAILURE"
+# TestAuditFailureOnRunCompletedReturns500 was removed in Sprint 2 Task 11.
+# The API no longer emits deal.run.completed inline — that audit event
+# is now the worker's responsibility. A worker-side equivalent belongs
+# in tests/test_worker_orchestrator_postgres.py (future work). The
+# middleware's deal.run.started audit still fires on POST /runs and is
+# covered by TestRunsAPIAuditCorrelation.

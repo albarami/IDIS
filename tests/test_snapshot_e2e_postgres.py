@@ -244,7 +244,31 @@ class TestSnapshotEndToEndGate:
         )
         assert run_resp.status_code == 202, run_resp.text
         run_id = run_resp.json()["run_id"]
-        assert run_resp.json()["status"] == "SUCCEEDED", run_resp.text
+        # Sprint 2 Task 11: POST /runs is enqueue-only. The API returns
+        # QUEUED immediately; the worker advances the run asynchronously.
+        assert run_resp.json()["status"] == "QUEUED", run_resp.text
+
+        # Snapshot honesty check (pre-worker): durable state must reflect
+        # QUEUED. If a revert to inline execution ever ships, this would
+        # observe SUCCEEDED here before the worker runs.
+        with admin_engine.begin() as conn:
+            queued_row = conn.execute(
+                text("SELECT status FROM runs WHERE run_id = :r"),
+                {"r": run_id},
+            ).fetchone()
+        assert queued_row is not None
+        assert queued_row.status == "QUEUED", (
+            f"POST /runs must not execute inline; expected QUEUED durably, "
+            f"got {queued_row.status!r}"
+        )
+
+        # Drive the worker to advance the run (this is what the live
+        # deployment's background loop does).
+        import asyncio as _asyncio
+
+        from idis.pipeline.worker import PipelineWorker
+
+        _asyncio.run(PipelineWorker(poll_interval=0)._process_queued_runs())
 
         # Honesty check: wipe every in-memory mirror that could serve
         # false positives in the remaining assertions. If the durable

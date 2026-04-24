@@ -11,11 +11,9 @@ FULL mode: INGEST_CHECK -> EXTRACT -> GRADE -> CALC -> ENRICHMENT -> DEBATE
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
-from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -24,10 +22,9 @@ from pydantic import BaseModel, Field
 
 from idis.api.auth import RequireTenantContext
 from idis.api.errors import IdisHttpError
-from idis.audit.sink import AuditSink, AuditSinkError
+from idis.audit.sink import AuditSink
 from idis.persistence.repositories.run_steps import get_run_steps_repository
 from idis.persistence.repositories.runs import get_runs_repository
-from idis.services.runs.orchestrator import RunContext, RunOrchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -109,19 +106,27 @@ async def start_run(
     request: Request,
     tenant_ctx: RequireTenantContext,
 ) -> RunRef:
-    """Start an IDIS pipeline run.
+    """Enqueue an IDIS pipeline run.
 
-    Args:
-        deal_id: UUID of the deal to run pipeline for.
-        request: FastAPI request for DB connection and body access.
-        tenant_ctx: Injected tenant context from auth dependency.
+    Semantics (Sprint 2, Task 11):
+    - Validates the request body and preconditions (deal exists, at
+      least one ingested document is available for SNAPSHOT).
+    - Creates the run row in `runs` with status='QUEUED' via the real
+      runs repository.
+    - Returns 202 with {run_id, status: 'QUEUED'} **immediately**. The
+      worker (`idis.pipeline.worker`) is the authoritative execution
+      path; the API no longer runs the orchestrator inline.
+    - Clients observe progress via GET /v1/runs/{runId} and the
+      durable runs / run_steps tables.
 
     Returns:
-        RunRef with run_id and initial status.
+        RunRef with run_id and status='QUEUED' (empty steps; the worker
+        populates run_steps as it advances).
 
     Raises:
-        IdisHttpError: 400 if invalid/missing fields, 404 if deal not found,
-            500 if audit emission fails (fail-closed).
+        IdisHttpError: 400 for invalid body or no ingested documents,
+            404 if the deal does not exist, 503 if no claim extractor
+            is configured.
     """
     try:
         body = await request.json()
@@ -147,6 +152,14 @@ async def start_run(
             ),
         )
 
+    extractor_configured = getattr(request.app.state, "extractor_configured", True)
+    if not extractor_configured:
+        raise IdisHttpError(
+            status_code=503,
+            code="EXTRACTOR_NOT_CONFIGURED",
+            message="No claim extractor is configured. Cannot proceed.",
+        )
+
     run_data = runs_repo.create(
         run_id=run_id,
         deal_id=deal_id,
@@ -156,75 +169,11 @@ async def start_run(
 
     request.state.audit_resource_id = run_id
 
-    extractor_configured = getattr(request.app.state, "extractor_configured", True)
-    if not extractor_configured:
-        raise IdisHttpError(
-            status_code=503,
-            code="EXTRACTOR_NOT_CONFIGURED",
-            message="No claim extractor is configured. Cannot proceed.",
-        )
-
-    audit_sink = _get_audit_sink(request)
-    run_steps_repo = get_run_steps_repository(db_conn, tenant_ctx.tenant_id)
-    orchestrator = RunOrchestrator(
-        audit_sink=audit_sink,
-        run_steps_repo=run_steps_repo,
-    )
-
-    is_full = request_body.mode == "FULL"
-    ctx = RunContext(
-        run_id=run_id,
-        tenant_id=tenant_ctx.tenant_id,
-        deal_id=deal_id,
-        mode=request_body.mode,
-        documents=documents,
-        extract_fn=partial(_run_snapshot_extraction, db_conn=db_conn),
-        grade_fn=partial(_run_snapshot_auto_grade, db_conn=db_conn),
-        calc_fn=_run_snapshot_calc,
-        enrich_fn=_run_full_enrichment if is_full else None,
-        debate_fn=partial(_run_full_debate, db_conn=db_conn) if is_full else None,
-        analysis_fn=_run_full_analysis if is_full else None,
-        scoring_fn=_run_full_scoring if is_full else None,
-        deliverables_fn=_run_full_deliverables if is_full else None,
-    )
-
-    try:
-        orch_result = await asyncio.to_thread(orchestrator.execute, ctx)
-    except AuditSinkError as exc:
-        logger.error("Audit failure aborted run %s: %s", run_id, exc)
-        raise IdisHttpError(
-            status_code=500,
-            code="AUDIT_FAILURE",
-            message="Run aborted: audit event emission failed",
-        ) from exc
-
-    finished_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-    run_data["status"] = orch_result.status
-    run_data["finished_at"] = finished_at
-    run_data["block_reason"] = orch_result.block_reason
-    runs_repo.update_status(
-        run_id,
-        status=orch_result.status,
-        finished_at=finished_at,
-    )
-
-    try:
-        _emit_run_completed_audit(request, run_id, tenant_ctx.tenant_id, run_data["status"])
-    except AuditSinkError as exc:
-        logger.error("Audit failure on run.completed for run %s: %s", run_id, exc)
-        raise IdisHttpError(
-            status_code=500,
-            code="AUDIT_FAILURE",
-            message="Run completed but audit event emission failed",
-        ) from exc
-
-    step_responses = _build_step_responses(orch_result.steps)
-
     return RunRef(
         run_id=run_data["run_id"],
-        status=run_data["status"],
-        steps=step_responses,
-        block_reason=orch_result.block_reason,
+        status="QUEUED",
+        steps=[],
+        block_reason=None,
     )
 
 

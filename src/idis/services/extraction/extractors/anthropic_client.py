@@ -5,9 +5,9 @@ from the caller's perspective — only the LLMClient.call() interface is exposed
 
 Configuration via environment variables:
 - ANTHROPIC_API_KEY: Required. Fail-closed if missing.
-- IDIS_ANTHROPIC_MODEL_EXTRACT: Model for extraction (default: claude-sonnet-4-20250514).
-- IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT: Model for debate roles (default: claude-sonnet-4-20250514).
-- IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER: Model for arbiter role (default: claude-opus-4-20250514).
+- IDIS_ANTHROPIC_MODEL_EXTRACT: Model for extraction (default: claude-sonnet-4-6).
+- IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT: Model for debate roles (default: claude-sonnet-4-6).
+- IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER: Model for arbiter role (default: claude-opus-4-7).
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ class AnthropicLLMClient:
         Args:
             model: Model identifier override. If not provided, reads from
                 IDIS_ANTHROPIC_MODEL_EXTRACT env var, falling back to
-                claude-sonnet-4-20250514.
+                claude-sonnet-4-6.
             max_tokens: Maximum output tokens per request. Defaults to
                 MAX_TOKENS (4096) if not provided.
 
@@ -58,7 +58,7 @@ class AnthropicLLMClient:
 
         self._model = model or os.environ.get(
             "IDIS_ANTHROPIC_MODEL_EXTRACT",
-            "claude-sonnet-4-20250514",
+            "claude-sonnet-4-6",
         )
         self._max_tokens = max_tokens or MAX_TOKENS
         self._client: anthropic.Anthropic = anthropic.Anthropic(

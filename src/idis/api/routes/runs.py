@@ -805,7 +805,7 @@ def _build_scoring_llm_client() -> Any:
     if backend == "anthropic":
         from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
 
-        model = os.environ.get("IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT", "claude-sonnet-4-20250514")
+        model = os.environ.get("IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT", "claude-sonnet-4-6")
         return AnthropicLLMClient(model=model, max_tokens=16384)
 
     from idis.services.extraction.extractors.llm_client import DeterministicScoringLLMClient
@@ -830,7 +830,7 @@ def _build_analysis_llm_client() -> Any:
     if backend == "anthropic":
         from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
 
-        model = os.environ.get("IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT", "claude-sonnet-4-20250514")
+        model = os.environ.get("IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT", "claude-sonnet-4-6")
         return AnthropicLLMClient(model=model, max_tokens=8192)
 
     from idis.services.extraction.extractors.llm_client import DeterministicAnalysisLLMClient
@@ -1217,7 +1217,7 @@ def _build_extraction_llm_client() -> Any:
     if backend == "anthropic":
         from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
 
-        model = os.environ.get("IDIS_ANTHROPIC_MODEL_EXTRACT", "claude-sonnet-4-20250514")
+        model = os.environ.get("IDIS_ANTHROPIC_MODEL_EXTRACT", "claude-sonnet-4-6")
         return AnthropicLLMClient(model=model, max_tokens=4096)
 
     from idis.services.extraction.extractors.llm_client import DeterministicLLMClient
@@ -1254,9 +1254,9 @@ def _build_debate_role_runners(context: Any = None) -> Any:
     from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
 
     default_model = os.environ.get(
-        "IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT", "claude-sonnet-4-20250514"
+        "IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT", "claude-sonnet-4-6"
     )
-    arbiter_model = os.environ.get("IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER", "claude-opus-4-20250514")
+    arbiter_model = os.environ.get("IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER", "claude-opus-4-7")
 
     prompts = _load_debate_prompts()
 

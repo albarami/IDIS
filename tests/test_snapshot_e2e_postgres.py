@@ -83,6 +83,26 @@ def _pg_clean_state(request: pytest.FixtureRequest) -> Generator[None, None, Non
     truncate_all(admin_engine)
 
 
+@pytest.fixture(autouse=True)
+def _pin_deterministic_extraction(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the SNAPSHOT release gate to deterministic claim extraction.
+
+    This release gate validates the durable pipeline mechanics — create
+    deal → attach/ingest doc → enqueue run → worker executes → durable
+    rows exist for the core Sprint 1 entities. It must be repeatable,
+    deterministic, and independent of whichever IDIS_EXTRACT_BACKEND
+    the calling developer happens to have in their .env.
+
+    External Anthropic / LLM extraction quality is a separate concern:
+    it belongs in a dedicated integration / evaluation test, not in
+    this release gate. Forcing the deterministic backend here keeps
+    the gate honest about the *plumbing* (route, repo, worker, RLS,
+    audit, calc tenant-FK) without coupling pass/fail to the live
+    quality of an external model.
+    """
+    monkeypatch.setenv("IDIS_EXTRACT_BACKEND", "deterministic")
+
+
 def _minimal_pdf() -> bytes:
     """A minimal valid single-page PDF the existing parsers accept."""
     return b"""%PDF-1.4

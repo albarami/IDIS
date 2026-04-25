@@ -873,7 +873,11 @@ def _run_snapshot_calc(
     dhabt_score values. Re-enabling the gate is tracked as a
     follow-up tied to extractor confidence emission.
     """
-    if not created_claim_ids or db_conn is None:
+    # Honest empty-result short-circuit: only when there is no DB to
+    # write into. We keep going when created_claim_ids is empty —
+    # deal-scoped claims (loaded below) may still satisfy a formula
+    # even if this particular run produced no new claims.
+    if db_conn is None:
         return {
             "calc_ids": [],
             "reproducibility_hashes": [],
@@ -888,6 +892,7 @@ def _run_snapshot_calc(
     from idis.persistence.repositories.calcs import (
         CalcSanadsRepository,
         CalculationsRepository,
+        ensure_tenant_row,
     )
     from idis.persistence.repositories.claims import ClaimsRepository
 
@@ -938,6 +943,12 @@ def _run_snapshot_calc(
 
     registry = register_core_formulas(FormulaRegistry())
     engine = CalcEngine(registry=registry, enforce_extraction_gate=False)
+
+    # The calc tables are the only ones with a FK into `tenants(tenant_id)`.
+    # Ensure the parent tenant row exists before persisting calcs so the
+    # live path does not depend on out-of-band tenant seeding.
+    ensure_tenant_row(db_conn, tenant_id)
+
     calcs_repo = CalculationsRepository(db_conn, tenant_id)
     sanads_repo = CalcSanadsRepository(db_conn, tenant_id)
 

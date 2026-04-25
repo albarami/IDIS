@@ -67,19 +67,17 @@ def _pg_clean_state(request: pytest.FixtureRequest) -> Generator[None, None, Non
     admin_engine = request.getfixturevalue("_pg_admin_engine")
     request.getfixturevalue("_pg_migrated")
     truncate_all(admin_engine)
-    # tenants row is FK target for deterministic_calculations/calc_sanads.
+    # NOTE: Task 12 completion pass — DO NOT seed `tenants` here. The
+    # live calc persistence path is responsible for ensuring the tenant
+    # row exists before inserting calc rows. Manual seeding here would
+    # mask a real production gap.
+    yield
+    # Truncating `tenants` requires CASCADE because deterministic_calculations
+    # and calc_sanads FK into it; the per-test truncate already cascades.
     with admin_engine.begin() as conn:
         conn.execute(
-            text(
-                """
-                INSERT INTO tenants (tenant_id, name, created_at)
-                VALUES (:t, 'calc-integration-tenant', now())
-                ON CONFLICT (tenant_id) DO NOTHING
-                """
-            ),
-            {"t": TENANT_ID},
+            text("TRUNCATE tenants CASCADE")
         )
-    yield
     truncate_all(admin_engine)
 
 
@@ -318,4 +316,287 @@ class TestSnapshotCalcSourceGuard:
         )
         assert "CalculationsRepository" in source, (
             "_run_snapshot_calc must persist via CalculationsRepository"
+        )
+
+
+class TestCalcLiveTenantProvisioning:
+    """Sprint 2 Task 12 completion pass: the calc persistence path must
+    create or ensure the parent `tenants` row itself. Tests that pre-seed
+    the tenants table would mask a real production gap.
+
+    This test starts from a fresh tenant_id with NO pre-existing row in
+    `tenants`, runs the worker, and asserts:
+    - the run completes SUCCEEDED,
+    - durable calc rows exist for the deal,
+    - the tenants row was provisioned by the live path (not the test).
+
+    A revert that drops `ensure_tenant_row(...)` from the calc path
+    would trip the FK violation on calc INSERT and the run would land
+    FAILED — this test would then fail loudly.
+    """
+
+    def test_fresh_tenant_calc_persistence_provisions_parent_row(
+        self, _pg_admin_engine: Engine
+    ) -> None:
+        admin_engine = _pg_admin_engine
+        # Fresh tenant id specifically NOT seeded in the autouse fixture.
+        fresh_tenant_id = str(uuid.uuid4())
+        deal_id = str(uuid.uuid4())
+        run_id = str(uuid.uuid4())
+
+        # Confirm precondition: no tenants row for this id yet.
+        with admin_engine.begin() as conn:
+            pre = conn.execute(
+                text("SELECT 1 FROM tenants WHERE tenant_id = :t"),
+                {"t": fresh_tenant_id},
+            ).fetchone()
+        assert pre is None, (
+            "test setup error: fresh tenant id must not exist in tenants "
+            "before the live path runs"
+        )
+
+        # Seed only what the live path itself does not own: a deal
+        # (created by deals API in production) and predicate-bearing
+        # claims (created by extraction in production). The calc-step
+        # tenant ensure is what we are exercising here.
+        seed_deal(admin_engine, deal_id=deal_id, tenant_id=fresh_tenant_id)
+        # Reuse the predicate-claim seeder, parameterized by tenant.
+        now = datetime.now(UTC)
+        with admin_engine.begin() as conn:
+            for predicate, numeric in (
+                ("cash_balance", "9000000"),
+                ("monthly_burn_rate", "750000"),
+            ):
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO claims (
+                            claim_id, tenant_id, deal_id, claim_class,
+                            claim_text, predicate, value, claim_grade,
+                            corroboration, claim_verdict, claim_action,
+                            defect_ids, materiality, ic_bound, created_at
+                        ) VALUES (
+                            :cid, :t, :d, 'QUANTITY_ASSERTION',
+                            :ctext, :predicate, CAST(:value AS JSONB), 'A',
+                            CAST(:corroboration AS JSONB),
+                            'VERIFIED', 'NONE', CAST('[]' AS JSONB),
+                            'HIGH', FALSE, :created_at
+                        )
+                        """
+                    ),
+                    {
+                        "cid": str(uuid.uuid4()),
+                        "t": fresh_tenant_id,
+                        "d": deal_id,
+                        "ctext": f"{predicate} = {numeric}",
+                        "predicate": predicate,
+                        "value": json.dumps({"value": numeric, "unit": "USD"}),
+                        "corroboration": json.dumps(
+                            {"level": "AHAD", "independent_chain_count": 1}
+                        ),
+                        "created_at": now,
+                    },
+                )
+            # Document/span scaffold so SNAPSHOT INGEST_CHECK is non-empty.
+            art_id = str(uuid.uuid4())
+            document_id = str(uuid.uuid4())
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO document_artifacts (
+                        doc_id, tenant_id, deal_id, doc_type, title,
+                        source_system, version_id, ingested_at, sha256,
+                        uri, metadata, created_at, updated_at
+                    ) VALUES (
+                        :a, :t, :d, 'PITCH_DECK', 'fresh-tenant.pdf',
+                        'test', 'v1', now(), NULL, NULL,
+                        CAST('{}' AS JSONB), now(), now()
+                    )
+                    """
+                ),
+                {"a": art_id, "t": fresh_tenant_id, "d": deal_id},
+            )
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO documents (
+                        document_id, tenant_id, deal_id, doc_id, doc_type,
+                        parse_status, metadata, created_at, updated_at
+                    ) VALUES (
+                        :did, :t, :d, :a, 'PDF', 'PARSED',
+                        CAST('{}' AS JSONB), now(), now()
+                    )
+                    """
+                ),
+                {"did": document_id, "t": fresh_tenant_id, "d": deal_id, "a": art_id},
+            )
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO document_spans (
+                        span_id, tenant_id, document_id, span_type, locator,
+                        text_excerpt, created_at, updated_at
+                    ) VALUES (
+                        :s, :t, :did, 'PAGE_TEXT',
+                        CAST(:locator AS JSONB), :excerpt, now(), now()
+                    )
+                    """
+                ),
+                {
+                    "s": str(uuid.uuid4()),
+                    "t": fresh_tenant_id,
+                    "did": document_id,
+                    "locator": json.dumps({"page": 1}),
+                    "excerpt": "Cash $9M; burn $750K.",
+                },
+            )
+            # Queue the SNAPSHOT run.
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO runs (
+                        run_id, tenant_id, deal_id, mode, status,
+                        started_at, created_at
+                    ) VALUES (
+                        :r, :t, :d, 'SNAPSHOT', 'QUEUED', now(), now()
+                    )
+                    """
+                ),
+                {"r": run_id, "t": fresh_tenant_id, "d": deal_id},
+            )
+
+        # --- Live path: the worker is responsible end-to-end. ---
+        asyncio.run(PipelineWorker(poll_interval=0)._process_queued_runs())
+
+        with admin_engine.begin() as conn:
+            run_row = conn.execute(
+                text("SELECT status FROM runs WHERE run_id = :r"),
+                {"r": run_id},
+            ).fetchone()
+            tenants_row = conn.execute(
+                text("SELECT tenant_id FROM tenants WHERE tenant_id = :t"),
+                {"t": fresh_tenant_id},
+            ).fetchone()
+            calc_rows = conn.execute(
+                text(
+                    "SELECT calc_type, tenant_id FROM deterministic_calculations "
+                    "WHERE deal_id = :d"
+                ),
+                {"d": deal_id},
+            ).fetchall()
+            sanad_rows = conn.execute(
+                text(
+                    """
+                    SELECT calc_id FROM calc_sanads
+                    WHERE calc_id IN (
+                        SELECT calc_id FROM deterministic_calculations
+                        WHERE deal_id = :d
+                    )
+                    """
+                ),
+                {"d": deal_id},
+            ).fetchall()
+
+        assert run_row is not None and run_row.status == "SUCCEEDED", (
+            f"the run must succeed end-to-end; got "
+            f"{getattr(run_row, 'status', None)!r}. If this is FAILED with "
+            f"a foreign-key violation in logs, the calc path is no longer "
+            f"ensuring the parent tenants row."
+        )
+        assert tenants_row is not None, (
+            "the live calc path must provision the tenants row; if no row "
+            "exists here, ensure_tenant_row(...) was bypassed"
+        )
+        assert str(tenants_row.tenant_id) == fresh_tenant_id
+        assert any(r.calc_type == "RUNWAY" for r in calc_rows), (
+            f"durable RUNWAY calc must be persisted for fresh tenant; "
+            f"got {[(r.calc_type, str(r.tenant_id)) for r in calc_rows]!r}"
+        )
+        assert all(str(r.tenant_id) == fresh_tenant_id for r in calc_rows)
+        assert sanad_rows, "calc_sanads rows must accompany the calc rows"
+
+
+class TestCalcStepHonorsDealScopedClaimsWithoutCreatedClaimIds:
+    """Codex secondary finding: when extraction produces no new claims,
+    deal-scoped pre-existing claims must still be considered. Previously
+    `_run_snapshot_calc` returned early on empty `created_claim_ids`,
+    blocking that fallback even though the doc/code claimed to support it.
+    """
+
+    def test_calc_uses_deal_scoped_claims_when_extraction_empty(
+        self, _pg_admin_engine: Engine
+    ) -> None:
+        from idis.api.routes.runs import _run_snapshot_calc
+        from idis.persistence.db import get_app_engine, set_tenant_local
+
+        admin_engine = _pg_admin_engine
+        fresh_tenant = str(uuid.uuid4())
+        deal_id = str(uuid.uuid4())
+        seed_deal(admin_engine, deal_id=deal_id, tenant_id=fresh_tenant)
+
+        # Pre-existing predicate claims (not produced by the current
+        # run): seed via admin so RLS is not in the way.
+        now = datetime.now(UTC)
+        with admin_engine.begin() as conn:
+            for predicate, numeric in (
+                ("revenue", "8000000"),
+                ("cogs", "3000000"),
+            ):
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO claims (
+                            claim_id, tenant_id, deal_id, claim_class,
+                            claim_text, predicate, value, claim_grade,
+                            corroboration, claim_verdict, claim_action,
+                            defect_ids, materiality, ic_bound, created_at
+                        ) VALUES (
+                            :cid, :t, :d, 'QUANTITY_ASSERTION',
+                            :ctext, :predicate, CAST(:value AS JSONB), 'A',
+                            CAST(:corroboration AS JSONB),
+                            'VERIFIED', 'NONE', CAST('[]' AS JSONB),
+                            'HIGH', FALSE, :created_at
+                        )
+                        """
+                    ),
+                    {
+                        "cid": str(uuid.uuid4()),
+                        "t": fresh_tenant,
+                        "d": deal_id,
+                        "ctext": f"{predicate} = {numeric}",
+                        "predicate": predicate,
+                        "value": json.dumps({"value": numeric, "unit": "USD"}),
+                        "corroboration": json.dumps(
+                            {"level": "AHAD", "independent_chain_count": 1}
+                        ),
+                        "created_at": now,
+                    },
+                )
+
+        with get_app_engine().begin() as conn:
+            set_tenant_local(conn, fresh_tenant)
+            result = _run_snapshot_calc(
+                run_id=str(uuid.uuid4()),
+                tenant_id=fresh_tenant,
+                deal_id=deal_id,
+                created_claim_ids=[],  # empty on purpose
+                db_conn=conn,
+            )
+
+        assert len(result["calc_ids"]) >= 1, (
+            "deal-scoped claims must contribute even when "
+            "created_claim_ids is empty; got " f"{result!r}"
+        )
+
+        with admin_engine.begin() as conn:
+            kinds = conn.execute(
+                text(
+                    "SELECT calc_type FROM deterministic_calculations "
+                    "WHERE deal_id = :d"
+                ),
+                {"d": deal_id},
+            ).fetchall()
+        assert any(r.calc_type == "GROSS_MARGIN" for r in kinds), (
+            f"GROSS_MARGIN should fire from deal-scoped revenue+cogs claims; "
+            f"got {[r.calc_type for r in kinds]!r}"
         )

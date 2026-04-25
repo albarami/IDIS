@@ -49,6 +49,33 @@ def _coerce_json(value: Any) -> Any:
     return value
 
 
+def ensure_tenant_row(conn: Connection, tenant_id: str, *, name: str | None = None) -> None:
+    """Idempotently ensure a row exists in `tenants` for `tenant_id`.
+
+    Required because `deterministic_calculations.tenant_id` and
+    `calc_sanads.tenant_id` are the only tables with a FK into the
+    `tenants` registry; any code path that persists into them must
+    have a parent row in place. The `tenants` table is not
+    RLS-protected, so the same app-role connection that performs the
+    calc INSERTs can also do this upsert.
+
+    `name` defaults to the tenant_id itself — a stable, opaque label —
+    so the upsert never depends on caller context that might not be
+    available inside a worker thread. Real tenant onboarding flows can
+    refresh the name later without affecting the FK.
+    """
+    conn.execute(
+        text(
+            """
+            INSERT INTO tenants (tenant_id, name, created_at)
+            VALUES (:t, :n, now())
+            ON CONFLICT (tenant_id) DO NOTHING
+            """
+        ),
+        {"t": tenant_id, "n": name or tenant_id},
+    )
+
+
 class CalculationsRepository:
     """Tenant-scoped repository for `deterministic_calculations`."""
 

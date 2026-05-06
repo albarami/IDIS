@@ -93,6 +93,7 @@ class CreateSanadInput(BaseModel):
     extraction_confidence: float = Field(
         default=0.9, ge=0.0, le=1.0, description="Extraction confidence"
     )
+    dhabt_score: float = Field(default=0.9, ge=0.0, le=1.0, description="Dhabt score")
     request_id: str | None = Field(default=None, description="Request correlation ID")
 
 
@@ -296,6 +297,8 @@ class SanadService:
             defects=defects,
             corroborating_count=len(input_data.corroborating_evidence_ids),
         )
+        computed["extraction_confidence"] = input_data.extraction_confidence
+        computed["dhabt_score"] = input_data.dhabt_score
 
         # Build validation object and run integrity check
         validation_sanad = _build_integrity_validation_sanad(

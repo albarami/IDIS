@@ -308,6 +308,12 @@ class ExtractionPipeline:
                     predicate=claim.predicate,
                     value=claim.value,
                     claim_grade="D",
+                    corroboration={
+                        "level": "AHAD",
+                        "independent_chain_count": 1,
+                        "extraction_confidence": str(claim.extraction_confidence),
+                        "dhabt_score": str(claim.extraction_confidence),
+                    },
                     claim_verdict="UNVERIFIED",
                     claim_action=claim_action,
                     materiality="MEDIUM",

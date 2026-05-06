@@ -12,11 +12,13 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
+import idis.api.routes.runs as runs_route
 from idis.api.auth import IDIS_API_KEYS_ENV
 from idis.api.main import create_app
 from idis.api.routes.deals import clear_deals_store
 from idis.api.routes.runs import clear_runs_store
 from idis.audit.sink import AuditSinkError, InMemoryAuditSink
+from idis.services.runs.execution import RunExecutionResult
 
 TENANT_A_ID = "11111111-1111-1111-1111-111111111111"
 TENANT_B_ID = "22222222-2222-2222-2222-222222222222"
@@ -113,6 +115,39 @@ class TestRunsAPIHappyPath:
         assert "run_id" in body
         assert body["status"] == "SUCCEEDED"
         uuid.UUID(body["run_id"])
+
+    def test_start_run_uses_canonical_execution_service(
+        self,
+        client: TestClient,
+        deal_id: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """API starts must execute through RunExecutionService."""
+        calls: list[str] = []
+
+        class RecordingExecutionService:
+            def __init__(self, **kwargs: object) -> None:
+                calls.append("init")
+
+            def execute(self, ctx: object) -> RunExecutionResult:
+                calls.append("execute")
+                return RunExecutionResult(claimed=True, status="SUCCEEDED")
+
+        monkeypatch.setattr(
+            runs_route,
+            "RunExecutionService",
+            RecordingExecutionService,
+            raising=False,
+        )
+
+        response = client.post(
+            f"/v1/deals/{deal_id}/runs",
+            json={"mode": "SNAPSHOT"},
+            headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
+        )
+
+        assert response.status_code == 202
+        assert calls == ["init", "execute"]
 
     def test_get_run_returns_run_status(self, client: TestClient, deal_id: str) -> None:
         """GET /v1/runs/{runId} returns RunStatus."""

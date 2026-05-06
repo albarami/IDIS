@@ -148,9 +148,10 @@ def render_report(inventory: WiringInventory) -> str:
         "",
         "## Executive Summary",
         "",
-        "- API runs use `RunOrchestrator`; background queued runs use `PipelineExecutor`, "
-        "so the paths are not equivalent.",
-        "- CALC infrastructure exists, but the current API run CALC hook is stubbed.",
+        "- API runs and background queued runs use `RunExecutionService`, which wraps "
+        "`RunOrchestrator` as the canonical execution engine.",
+        "- CALC now delegates to `CalcRunner`, persists eligible deterministic calculations "
+        "and CalcSanad rows, and reports blocked candidates without fake calc IDs.",
         "- Neo4j, Redis, and pgvector are present in code/config, but are not proven live-run "
         "wiring.",
         "- Enrichment connectors and deterministic/Anthropic LLM wiring exist, but baseline "
@@ -271,6 +272,8 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/api/routes/runs.py",
         "src/idis/api/main.py",
         "src/idis/models/run_step.py",
+        "src/idis/services/runs/execution.py",
+        "src/idis/services/runs/steps.py",
         "src/idis/pipeline/worker.py",
         "src/idis/pipeline/executor.py",
         "src/idis/services/ingestion/service.py",
@@ -278,7 +281,9 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/services/extraction/pipeline.py",
         "src/idis/services/sanad/auto_grade.py",
         "src/idis/calc/engine.py",
+        "src/idis/services/calc/runner.py",
         "src/idis/models/calc_sanad.py",
+        "src/idis/persistence/repositories/calculations.py",
         "src/idis/analysis/agents/__init__.py",
         "src/idis/analysis/runner.py",
         "src/idis/debate/orchestrator.py",
@@ -346,36 +351,39 @@ def _escape_cell(value: str) -> str:
 def _api_run_path(files: dict[str, str]) -> WiringItem:
     status = (
         "WIRED"
-        if _contains(files, "src/idis/api/routes/runs.py", "RunOrchestrator")
+        if _contains(files, "src/idis/api/routes/runs.py", "RunExecutionService")
+        and _contains(files, "src/idis/services/runs/execution.py", "RunOrchestrator")
         else "NOT_FOUND"
     )
     return WiringItem(
         key="api_run_path",
         label="API run path",
         status=status,
-        summary="HTTP run route constructs RunContext and executes RunOrchestrator in-process.",
+        summary="HTTP run route executes through the shared RunExecutionService.",
         evidence=[
-            "`src/idis/api/routes/runs.py` imports/uses `RunOrchestrator`.",
-            "`start_run` calls `asyncio.to_thread(orchestrator.execute, ctx)`.",
+            "`src/idis/api/routes/runs.py` imports/uses `RunExecutionService`.",
+            "`RunExecutionService` wraps `RunOrchestrator`.",
+            "`start_run` calls `asyncio.to_thread(execution_service.execute, ctx)`.",
         ],
-        gaps=["Runs are created as queued before immediate in-process execution."],
+        gaps=[],
     )
 
 
 def _worker_executor_path(files: dict[str, str]) -> WiringItem:
+    worker_text = files.get("src/idis/pipeline/worker.py", "")
+    status = "WIRED" if "RunExecutionService" in worker_text else "PARTIAL"
     return WiringItem(
         key="worker_executor_path",
         label="Worker/executor path",
-        status="PARTIAL",
-        summary="Background worker polls queued Postgres runs and uses PipelineExecutor.",
+        status=status,
+        summary="Background worker uses RunExecutionService for queued runs.",
         evidence=[
-            "`src/idis/pipeline/worker.py::PipelineWorker` polls `runs`.",
-            "`PipelineWorker` instantiates `PipelineExecutor`.",
-            "`src/idis/pipeline/executor.py` is GDBS-oriented per module docstring.",
+            "`PipelineWorker` uses tenant-scoped queued-run polling.",
+            "`PipelineWorker` constructs `RunExecutionService` for claimed runs.",
+            "`PipelineExecutor` is no longer instantiated by the production worker.",
         ],
         gaps=[
-            "Uses a different execution engine from the API run path.",
-            "Does not call `RunOrchestrator` for full step parity.",
+            "Worker polling is fail-safe/no-op without explicit tenant scope.",
         ],
     )
 
@@ -384,13 +392,14 @@ def _api_worker_path_comparison(files: dict[str, str]) -> WiringItem:
     return WiringItem(
         key="api_worker_path_comparison",
         label="API path vs worker path comparison",
-        status="PARTIAL",
-        summary="Both paths touch the runs table, but execute different pipelines.",
+        status="WIRED",
+        summary="Both API and worker execution paths use RunExecutionService.",
         evidence=[
-            "API path uses `RunOrchestrator`.",
-            "Worker path uses `PipelineExecutor`.",
+            "API path uses `RunExecutionService`.",
+            "Worker path uses `RunExecutionService`.",
+            "`RunExecutionService` uses `RunOrchestrator` internally.",
         ],
-        gaps=["Canonical run execution path is not singular."],
+        gaps=[],
     )
 
 
@@ -404,7 +413,7 @@ def _snapshot_steps(files: dict[str, str]) -> WiringItem:
             "`SNAPSHOT_STEPS` includes INGEST_CHECK, EXTRACT, GRADE, CALC.",
             "`RunContext` receives extract, grade, and calc callables.",
         ],
-        gaps=["CALC callable is stubbed even though the step exists."],
+        gaps=[],
     )
 
 
@@ -477,10 +486,13 @@ def _calc_engine(files: dict[str, str]) -> WiringItem:
     return WiringItem(
         key="calc_engine",
         label="CalcEngine",
-        status="PARTIAL",
-        summary="CalcEngine and formulas exist but are not invoked by API CALC step.",
-        evidence=["`src/idis/calc/engine.py::CalcEngine` exists."],
-        gaps=["API run CALC hook does not call `CalcEngine`."],
+        status="WIRED",
+        summary="CalcEngine is reached through CalcRunner for eligible CALC inputs.",
+        evidence=[
+            "`src/idis/calc/engine.py::CalcEngine` exists.",
+            "`src/idis/services/calc/runner.py::CalcRunner` invokes `CalcEngine.run`.",
+        ],
+        gaps=[],
     )
 
 
@@ -488,16 +500,17 @@ def _calc_step(files: dict[str, str]) -> WiringItem:
     return WiringItem(
         key="calc_step",
         label="Current CALC run step",
-        status="STUBBED",
-        summary="The current API CALC callable reports completion without durable calculations.",
-        evidence=["`src/idis/api/routes/runs.py::_run_snapshot_calc` returns a summary."],
-        gaps=[
-            "`_run_snapshot_calc` returns empty calc_ids and reproducibility_hashes.",
-            (
-                "`_run_snapshot_calc` does not invoke `CalcEngine` or persist "
-                "deterministic calculations."
-            ),
+        status="WIRED",
+        summary=(
+            "The API CALC callable delegates to CalcRunner and reports persisted or "
+            "blocked candidates truthfully."
+        ),
+        evidence=[
+            "`_run_snapshot_calc` constructs `CalcRunner`.",
+            "`CalcRunner` persists eligible deterministic calculations and CalcSanads.",
+            "`CalcRunner` returns blocked_candidates for ineligible inputs.",
         ],
+        gaps=[],
     )
 
 
@@ -505,10 +518,13 @@ def _calc_sanad(files: dict[str, str]) -> WiringItem:
     return WiringItem(
         key="calc_sanad",
         label="CalcSanad",
-        status="PARTIAL",
-        summary="CalcSanad model exists, but run-path production is blocked by stubbed CALC.",
-        evidence=["`src/idis/models/calc_sanad.py::CalcSanad` exists."],
-        gaps=["No live API run creates durable CalcSanad records today."],
+        status="WIRED",
+        summary="CalcSanad records are persisted for eligible deterministic calculations.",
+        evidence=[
+            "`src/idis/models/calc_sanad.py::CalcSanad` exists.",
+            "`src/idis/persistence/repositories/calculations.py` persists calc_sanads.",
+        ],
+        gaps=[],
     )
 
 
@@ -751,11 +767,11 @@ def _comparison_section(inventory: WiringInventory) -> list[str]:
         "",
         f"- Status: `{item.status}`",
         "- API path: `src/idis/api/routes/runs.py` builds `RunContext` and calls "
-        "`RunOrchestrator`.",
-        "- Worker path: `src/idis/pipeline/worker.py` polls queued runs and calls "
-        "`PipelineExecutor`.",
-        "- Result: Phase 2.0 must not treat these as equivalent until parity is tested or "
-        "one path is retired.",
+        "`RunExecutionService`.",
+        "- Worker path: `src/idis/pipeline/worker.py` polls tenant-scoped queued runs "
+        "and calls `RunExecutionService`.",
+        "- Result: API and worker execution share the canonical service; "
+        "`PipelineExecutor` is legacy/demo-only.",
     ]
 
 
@@ -800,12 +816,11 @@ def _risk_section(inventory: WiringInventory) -> list[str]:
         "",
         "## Risk Ranking",
         "",
-        "1. **High**: API run path and worker path use different execution engines.",
-        "2. **High**: CALC step can complete without durable deterministic calculations.",
-        "3. **High**: RAG/vector retrieval is config-only while reports may imply future RAG.",
-        "4. **Medium**: Neo4j graph code exists but is not live-run wired.",
-        "5. **Medium**: Redis is configured but unused by runtime cache/rate/queue paths.",
-        "6. **Medium**: External BYOL credentials are not automatically wired from env names.",
+        "1. **High**: RAG/vector retrieval is config-only while reports may imply future RAG.",
+        "2. **Medium**: Neo4j graph code exists but is not live-run wired.",
+        "3. **Medium**: Redis is configured but unused by runtime cache/rate/queue paths.",
+        "4. **Medium**: External BYOL credentials are not automatically wired from env names.",
+        "5. **Low**: Worker polling is fail-safe when tenant scope is not configured.",
     ]
 
 

@@ -15,7 +15,6 @@ import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
-from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +26,8 @@ from idis.api.errors import IdisHttpError
 from idis.audit.sink import AuditSink, AuditSinkError
 from idis.persistence.repositories.run_steps import get_run_steps_repository
 from idis.persistence.repositories.runs import get_runs_repository
-from idis.services.runs.orchestrator import RunContext, RunOrchestrator
+from idis.services.runs.execution import RunExecutionService
+from idis.services.runs.steps import build_run_context
 
 logger = logging.getLogger(__name__)
 
@@ -166,30 +166,24 @@ async def start_run(
 
     audit_sink = _get_audit_sink(request)
     run_steps_repo = get_run_steps_repository(db_conn, tenant_ctx.tenant_id)
-    orchestrator = RunOrchestrator(
+    execution_service = RunExecutionService(
         audit_sink=audit_sink,
+        runs_repo=runs_repo,
         run_steps_repo=run_steps_repo,
     )
 
-    is_full = request_body.mode == "FULL"
-    ctx = RunContext(
+    ctx = build_run_context(
+        db_conn=db_conn,
         run_id=run_id,
         tenant_id=tenant_ctx.tenant_id,
         deal_id=deal_id,
         mode=request_body.mode,
         documents=documents,
-        extract_fn=partial(_run_snapshot_extraction, db_conn=db_conn),
-        grade_fn=partial(_run_snapshot_auto_grade, db_conn=db_conn),
-        calc_fn=_run_snapshot_calc,
-        enrich_fn=_run_full_enrichment if is_full else None,
-        debate_fn=partial(_run_full_debate, db_conn=db_conn) if is_full else None,
-        analysis_fn=_run_full_analysis if is_full else None,
-        scoring_fn=_run_full_scoring if is_full else None,
-        deliverables_fn=_run_full_deliverables if is_full else None,
+        audit_sink=audit_sink,
     )
 
     try:
-        orch_result = await asyncio.to_thread(orchestrator.execute, ctx)
+        execution_result = await asyncio.to_thread(execution_service.execute, ctx)
     except AuditSinkError as exc:
         logger.error("Audit failure aborted run %s: %s", run_id, exc)
         raise IdisHttpError(
@@ -198,15 +192,19 @@ async def start_run(
             message="Run aborted: audit event emission failed",
         ) from exc
 
-    finished_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-    run_data["status"] = orch_result.status
-    run_data["finished_at"] = finished_at
-    run_data["block_reason"] = orch_result.block_reason
-    runs_repo.update_status(
-        run_id,
-        status=orch_result.status,
-        finished_at=finished_at,
+    if not execution_result.claimed:
+        raise IdisHttpError(
+            status_code=409,
+            code="RUN_ALREADY_CLAIMED",
+            message="Run was already claimed for execution",
+        )
+
+    finished_at = execution_result.finished_at or datetime.now(UTC).isoformat().replace(
+        "+00:00", "Z"
     )
+    run_data["status"] = execution_result.status
+    run_data["finished_at"] = finished_at
+    run_data["block_reason"] = execution_result.block_reason
 
     try:
         _emit_run_completed_audit(request, run_id, tenant_ctx.tenant_id, run_data["status"])
@@ -218,13 +216,13 @@ async def start_run(
             message="Run completed but audit event emission failed",
         ) from exc
 
-    step_responses = _build_step_responses(orch_result.steps)
+    step_responses = _build_step_responses(execution_result.steps)
 
     return RunRef(
         run_id=run_data["run_id"],
         status=run_data["status"],
         steps=step_responses,
-        block_reason=orch_result.block_reason,
+        block_reason=execution_result.block_reason,
     )
 
 
@@ -908,6 +906,7 @@ def _run_snapshot_calc(
     deal_id: str,
     created_claim_ids: list[str],
     calc_types: list[Any] | None = None,
+    db_conn: Any = None,
 ) -> dict[str, Any]:
     """Run deterministic calculations for claims produced by extraction.
 
@@ -917,21 +916,48 @@ def _run_snapshot_calc(
         deal_id: Deal UUID.
         created_claim_ids: Claim IDs from extraction.
         calc_types: Optional list of CalcType to run. None means run all.
+        db_conn: SQLAlchemy connection for Postgres persistence.
 
     Returns:
         Dict with calc_ids and reproducibility_hashes.
     """
-    if not created_claim_ids:
-        return {
-            "calc_ids": [],
-            "reproducibility_hashes": [],
-        }
+    from idis.models.deterministic_calculation import CalcType
+    from idis.persistence.repositories.calculations import get_calculations_repository
+    from idis.persistence.repositories.claims import (
+        ClaimsRepository,
+        InMemoryClaimsRepository,
+        InMemorySanadsRepository,
+        SanadsRepository,
+    )
+    from idis.services.calc.runner import CalcRunner
 
-    return {
-        "calc_ids": [],
-        "reproducibility_hashes": [],
-        "claim_count": len(created_claim_ids),
-    }
+    typed_calc_types = [
+        calc_type if isinstance(calc_type, CalcType) else CalcType(str(calc_type))
+        for calc_type in calc_types
+    ] if calc_types else None
+
+    claims_repo: Any
+    sanads_repo: Any
+    if db_conn is not None:
+        claims_repo = ClaimsRepository(db_conn, tenant_id)
+        sanads_repo = SanadsRepository(db_conn, tenant_id)
+    else:
+        claims_repo = InMemoryClaimsRepository(tenant_id)
+        sanads_repo = InMemorySanadsRepository(tenant_id)
+
+    runner = CalcRunner(
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        claims_repo=claims_repo,
+        sanads_repo=sanads_repo,
+        calculations_repo=get_calculations_repository(db_conn, tenant_id),
+    )
+    result = runner.run(
+        created_claim_ids=created_claim_ids,
+        calc_types=typed_calc_types,
+    )
+    result["claim_count"] = len(created_claim_ids)
+    return result
 
 
 def _run_snapshot_auto_grade(

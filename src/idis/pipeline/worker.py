@@ -11,7 +11,7 @@ import logging
 import os
 from pathlib import Path
 
-from idis.persistence.db import get_app_engine
+from idis.persistence.db import get_app_engine, set_tenant_local
 from idis.pipeline.executor import PipelineExecutor
 
 logger = logging.getLogger(__name__)
@@ -95,11 +95,7 @@ class PipelineWorker:
                 run_id, deal_id, mode, tenant_id = row
 
                 try:
-                    # Set tenant context
-                    conn.execute(
-                        text("SELECT set_config('app.tenant_id', :tenant_id, false)"),
-                        {"tenant_id": tenant_id},
-                    )
+                    set_tenant_local(conn, tenant_id)
 
                     # Execute run
                     executor = PipelineExecutor(conn, gdbs_path=self._gdbs_path)

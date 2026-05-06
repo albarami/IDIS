@@ -106,9 +106,9 @@ def _build_audit_event(
     roles: list[str] = []
 
     if tenant_ctx:
-        actor_id = tenant_ctx.name
-        actor_type = "SERVICE"
-        roles = ["INTEGRATION_SERVICE"]
+        actor_id = tenant_ctx.actor_id
+        actor_type = tenant_ctx.actor_type
+        roles = sorted(tenant_ctx.roles)
 
     idempotency_key = request.headers.get("Idempotency-Key")
 

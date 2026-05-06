@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, FormEvent } from "react";
+import { useEffect, useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
@@ -8,6 +8,27 @@ export default function LoginPage() {
   const [apiKey, setApiKey] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function tryDevSession() {
+      try {
+        const response = await fetch("/api/session/dev", { method: "POST" });
+        if (response.ok && !cancelled) {
+          router.replace("/deals");
+        }
+      } catch {
+        // Dev bypass is optional; fall back to the normal login form.
+      }
+    }
+
+    void tryDevSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();

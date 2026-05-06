@@ -26,6 +26,8 @@ services:
       IDIS_DATABASE_ADMIN_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres_password}@postgres:5432/${POSTGRES_DB:-idis}"
       # Service region for residency enforcement (required - fail-closed)
       IDIS_SERVICE_REGION: "us-east-1"
+      # API-key registry for local API/UI authentication.
+      IDIS_API_KEYS_JSON: "${IDIS_API_KEYS_JSON:-}"
       # Object storage
       IDIS_OBJECT_STORE_BASE_DIR: "/data/objects"
       # OpenTelemetry (optional)

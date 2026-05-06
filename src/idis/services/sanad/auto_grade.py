@@ -180,6 +180,8 @@ def auto_grade_claims_for_run(
 
     for claim_id in created_claim_ids:
         claim_prebuilt = prebuilt.get(claim_id)
+        claim = claims_repo.get(claim_id)
+        extraction_confidence, dhabt_score = _claim_gate_scores(claim)
         claim_result = _grade_single_claim(
             tenant_id=tenant_id,
             deal_id=deal_id,
@@ -189,6 +191,8 @@ def auto_grade_claims_for_run(
             defect_service=d_service,
             audit_sink=sink,
             prebuilt=claim_prebuilt,
+            extraction_confidence=extraction_confidence,
+            dhabt_score=dhabt_score,
         )
         result.results.append(claim_result)
 
@@ -212,6 +216,8 @@ def _grade_single_claim(
     defect_service: DefectService,
     audit_sink: AuditSink,
     prebuilt: dict[str, Any] | None = None,
+    extraction_confidence: float = 0.9,
+    dhabt_score: float = 0.9,
 ) -> ClaimGradeResult:
     """Grade a single claim: build chain → grade → persist.
 
@@ -279,7 +285,8 @@ def _grade_single_claim(
         deal_id=deal_id,
         primary_evidence_id=chain_data["primary_evidence_id"],
         transmission_chain=chain_data["transmission_chain"],
-        extraction_confidence=0.9,
+        extraction_confidence=extraction_confidence,
+        dhabt_score=dhabt_score,
     )
     sanad_data = sanad_service.create(sanad_input)
     sanad_id = sanad_data["sanad_id"]
@@ -411,6 +418,7 @@ def _grade_single_claim_prebuilt(
         primary_evidence_id=primary_evidence_id,
         transmission_chain=[],
         extraction_confidence=sanad_data.get("extraction_confidence", 0.9),
+        dhabt_score=sanad_data.get("dhabt_score", 0.9),
     )
     persisted = sanad_service.create(sanad_input)
     sanad_id = persisted["sanad_id"]
@@ -480,6 +488,27 @@ def _update_claim_grade(
         sanad_id: Persisted sanad UUID.
     """
     claims_repo.update_grade(claim_id, claim_grade=grade, sanad_id=sanad_id)
+
+
+def _claim_gate_scores(claim: dict[str, Any] | None) -> tuple[float, float]:
+    """Read extraction gate scores stored with extracted claims."""
+    if claim is None:
+        return 0.9, 0.9
+
+    corroboration = claim.get("corroboration")
+    if not isinstance(corroboration, dict):
+        return 0.9, 0.9
+
+    confidence = _float_or_default(corroboration.get("extraction_confidence"), 0.9)
+    dhabt = _float_or_default(corroboration.get("dhabt_score"), confidence)
+    return confidence, dhabt
+
+
+def _float_or_default(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 # Mapping from grader DefectSummary codes to DefectService-recognized types.

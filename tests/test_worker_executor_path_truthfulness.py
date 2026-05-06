@@ -9,22 +9,24 @@ from scripts.audit_full_system_wiring import collect_wiring_inventory
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_worker_path_is_parallel_to_api_run_path() -> None:
-    """The worker path must be reported as PipelineExecutor-driven, not API-equivalent."""
+def test_worker_path_uses_canonical_run_execution_service() -> None:
+    """The worker path must use RunExecutionService, not PipelineExecutor."""
     inventory = collect_wiring_inventory(REPO_ROOT)
     worker = inventory["worker_executor_path"]
 
-    assert worker.status == "PARTIAL"
+    assert worker.status == "WIRED"
     assert any("PipelineWorker" in item for item in worker.evidence)
+    assert any("RunExecutionService" in item for item in worker.evidence)
     assert any("PipelineExecutor" in item for item in worker.evidence)
-    assert any("different execution engine" in item for item in worker.gaps)
+    assert not any("different execution engine" in item for item in worker.gaps)
 
 
-def test_worker_executor_is_gdbs_oriented_and_not_full_orchestrator_wiring() -> None:
-    """PipelineExecutor should be identified as demo/GDBS-oriented, not full run parity."""
+def test_api_and_worker_share_canonical_execution_path() -> None:
+    """API and worker should be classified as sharing the canonical path."""
     inventory = collect_wiring_inventory(REPO_ROOT)
-    worker = inventory["worker_executor_path"]
+    comparison = inventory["api_worker_path_comparison"]
 
-    assert any("GDBS" in item for item in worker.evidence)
-    assert any("RunOrchestrator" in item for item in worker.gaps)
-    assert inventory["api_worker_path_comparison"].status == "PARTIAL"
+    assert comparison.status == "WIRED"
+    assert any("RunExecutionService" in item for item in comparison.evidence)
+    assert any("RunOrchestrator" in item for item in comparison.evidence)
+    assert comparison.gaps == []

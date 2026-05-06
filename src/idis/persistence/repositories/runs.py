@@ -155,6 +155,59 @@ class PostgresRunsRepository:
                 {"run_id": run_id, "status": status},
             )
 
+    def try_mark_running(self, run_id: str) -> bool:
+        """Atomically transition a queued run to running.
+
+        Returns:
+            True when this caller claimed the run, False if it was already claimed
+            or terminal.
+        """
+        now = datetime.now(UTC)
+        result = self._conn.execute(
+            text(
+                """
+                UPDATE runs
+                SET status = 'RUNNING', started_at = :started_at
+                WHERE run_id = :run_id AND status = 'QUEUED'
+                RETURNING run_id
+                """
+            ),
+            {"run_id": run_id, "started_at": now},
+        )
+        return result.fetchone() is not None
+
+    def complete(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        finished_at: str | None,
+    ) -> None:
+        """Set a terminal run status and finished timestamp."""
+        self.update_status(run_id, status=status, finished_at=finished_at)
+
+    def claim_queued_runs(self, *, limit: int = 10) -> list[dict[str, Any]]:
+        """Return tenant-scoped queued run candidates with row locks.
+
+        The caller still transitions each run to RUNNING through
+        try_mark_running(), so API and worker paths share the same race guard.
+        """
+        result = self._conn.execute(
+            text(
+                """
+                SELECT run_id, tenant_id, deal_id, mode, status,
+                       started_at, finished_at, created_at
+                FROM runs
+                WHERE status = 'QUEUED'
+                ORDER BY created_at ASC
+                LIMIT :limit
+                FOR UPDATE SKIP LOCKED
+                """
+            ),
+            {"limit": limit},
+        )
+        return [self._row_to_dict(row) for row in result.fetchall()]
+
     def deal_exists(self, deal_id: str) -> bool:
         """Check if deal exists (RLS enforced).
 
@@ -287,6 +340,37 @@ class InMemoryRunsRepository:
             if finished_at is not None:
                 run["finished_at"] = finished_at
             _in_memory_runs_store[run_id] = run
+
+    def try_mark_running(self, run_id: str) -> bool:
+        """Atomically mark a queued in-memory run as running."""
+        run = _in_memory_runs_store.get(run_id)
+        if run is None or run.get("tenant_id") != self._tenant_id:
+            return False
+        if run.get("status") != "QUEUED":
+            return False
+        run["status"] = "RUNNING"
+        run["started_at"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        _in_memory_runs_store[run_id] = run
+        return True
+
+    def complete(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        finished_at: str | None,
+    ) -> None:
+        """Set a terminal in-memory run status."""
+        self.update_status(run_id, status=status, finished_at=finished_at)
+
+    def claim_queued_runs(self, *, limit: int = 10) -> list[dict[str, Any]]:
+        """Return tenant-scoped queued in-memory run candidates."""
+        queued = [
+            run
+            for run in _in_memory_runs_store.values()
+            if run.get("tenant_id") == self._tenant_id and run.get("status") == "QUEUED"
+        ]
+        return sorted(queued, key=lambda item: item["created_at"])[:limit]
 
     def deal_exists(self, deal_id: str) -> bool:
         """Check if deal exists in memory.

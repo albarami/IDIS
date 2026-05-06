@@ -1,7 +1,4 @@
-"""Background worker for processing pipeline runs.
-
-Polls for QUEUED runs and executes them using PipelineExecutor.
-"""
+"""Background worker for processing pipeline runs through the canonical service."""
 
 from __future__ import annotations
 
@@ -9,26 +6,51 @@ import asyncio
 import contextlib
 import logging
 import os
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
+from idis.audit.sink import InMemoryAuditSink
 from idis.persistence.db import get_app_engine, set_tenant_local
-from idis.pipeline.executor import PipelineExecutor
+from idis.persistence.repositories.run_steps import get_run_steps_repository
+from idis.persistence.repositories.runs import get_runs_repository
+from idis.services.runs.execution import RunExecutionService
+from idis.services.runs.orchestrator import RunContext
 
 logger = logging.getLogger(__name__)
+
+ExecutionServiceFactory = Callable[..., RunExecutionService]
+RunContextFactory = Callable[..., RunContext]
 
 
 class PipelineWorker:
     """Background worker that processes queued runs."""
 
-    def __init__(self, poll_interval: int = 5, gdbs_path: str | None = None) -> None:
+    def __init__(
+        self,
+        poll_interval: int = 5,
+        gdbs_path: str | None = None,
+        tenant_ids: list[str] | None = None,
+        execution_service_factory: ExecutionServiceFactory | None = None,
+        run_context_factory: RunContextFactory | None = None,
+    ) -> None:
         """Initialize worker.
 
         Args:
             poll_interval: Seconds between polls for new runs.
             gdbs_path: Path to GDBS dataset for loading synthetic claims.
+            tenant_ids: Explicit tenant scopes the worker may poll.
+            execution_service_factory: Optional factory for tests.
+            run_context_factory: Optional factory for tests.
         """
         self._poll_interval = poll_interval
         self._gdbs_path = gdbs_path
+        self._tenant_ids = tenant_ids if tenant_ids is not None else get_worker_tenant_ids()
+        self._execution_service_factory = (
+            execution_service_factory or _default_execution_service_factory
+        )
+        self._run_context_factory = run_context_factory or _default_run_context_factory
         self._running = False
         self._task: asyncio.Task | None = None
 
@@ -64,53 +86,88 @@ class PipelineWorker:
 
             await asyncio.sleep(self._poll_interval)
 
-    async def _process_queued_runs(self) -> None:
+    async def _process_queued_runs(self) -> int:
         """Process all queued runs."""
-        from sqlalchemy import text
+        if not self._tenant_ids:
+            logger.info("Pipeline worker has no tenant scope configured; skipping queued polling")
+            return 0
 
         engine = get_app_engine()
+        processed_count = 0
 
         with engine.connect() as conn:
-            # Find queued runs
-            result = conn.execute(
-                text(
-                    """
-                    SELECT run_id, deal_id, mode, tenant_id
-                    FROM runs
-                    WHERE status = 'QUEUED'
-                    ORDER BY created_at ASC
-                    LIMIT 10
-                    """
-                )
+            for tenant_id in self._tenant_ids:
+                set_tenant_local(conn, tenant_id)
+                runs_repo = get_runs_repository(conn, tenant_id)
+                runs = runs_repo.claim_queued_runs(limit=10)
+
+                if not runs:
+                    continue
+
+                logger.info("Found %s queued runs for tenant %s", len(runs), tenant_id)
+
+                for run_data in runs:
+                    run_id = str(run_data["run_id"])
+                    processed_count += 1
+
+                    try:
+                        service = self._execution_service_factory(
+                            db_conn=conn,
+                            tenant_id=tenant_id,
+                        )
+                        ctx = self._run_context_factory(
+                            db_conn=conn,
+                            tenant_id=tenant_id,
+                            run_data=run_data,
+                            audit_sink=service.audit_sink,
+                        )
+                        await asyncio.to_thread(service.execute, ctx)
+
+                        conn.commit()
+                        logger.info("Completed run %s", run_id)
+
+                    except Exception as e:
+                        conn.rollback()
+                        self._mark_run_failed_after_exception(conn, tenant_id, run_id)
+                        logger.error(
+                            "Failed to execute run %s: %s",
+                            run_id,
+                            e,
+                            extra={"run_id": run_id, "error": str(e)},
+                            exc_info=True,
+                        )
+
+        return processed_count
+
+    def _mark_run_failed_after_exception(self, conn: Any, tenant_id: str, run_id: str) -> None:
+        """Persist a terminal FAILED status after rollback clears the failed transaction."""
+        try:
+            set_tenant_local(conn, tenant_id)
+            runs_repo = get_runs_repository(conn, tenant_id)
+            runs_repo.complete(
+                run_id,
+                status="FAILED",
+                finished_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            logger.error(
+                "Failed to persist FAILED status for run %s after execution error",
+                run_id,
+                extra={"run_id": run_id},
+                exc_info=True,
             )
 
-            runs = result.fetchall()
 
-            if not runs:
-                return
+def get_worker_tenant_ids() -> list[str]:
+    """Return tenant IDs the worker is allowed to poll.
 
-            logger.info(f"Found {len(runs)} queued runs to process")
-
-            for row in runs:
-                run_id, deal_id, mode, tenant_id = row
-
-                try:
-                    set_tenant_local(conn, tenant_id)
-
-                    # Execute run
-                    executor = PipelineExecutor(conn, gdbs_path=self._gdbs_path)
-                    await executor.execute_run(run_id, deal_id, mode, tenant_id)
-
-                    conn.commit()
-                    logger.info(f"Completed run {run_id}")
-
-                except Exception as e:
-                    conn.rollback()
-                    logger.error(
-                        f"Failed to execute run {run_id}: {e}",
-                        extra={"run_id": run_id, "error": str(e)},
-                        exc_info=True,
-                    )
+    Empty configuration is fail-safe: the worker does not globally scan queued
+    runs without first setting an RLS tenant context.
+    """
+    raw = os.getenv("IDIS_WORKER_TENANT_IDS", "")
+    return [item.strip() for item in raw.split(",") if item.strip()]
 
 
 def get_gdbs_path() -> str | None:
@@ -128,6 +185,42 @@ def get_gdbs_path() -> str | None:
 
     logger.warning("GDBS dataset path not found")
     return None
+
+
+def _default_execution_service_factory(
+    *,
+    db_conn: Any,
+    tenant_id: str,
+) -> RunExecutionService:
+    audit_sink = InMemoryAuditSink()
+    return RunExecutionService(
+        audit_sink=audit_sink,
+        runs_repo=get_runs_repository(db_conn, tenant_id),
+        run_steps_repo=get_run_steps_repository(db_conn, tenant_id),
+    )
+
+
+def _default_run_context_factory(
+    *,
+    db_conn: Any,
+    tenant_id: str,
+    run_data: dict[str, Any],
+    audit_sink: Any,
+) -> RunContext:
+    """Build a worker run context using shared run step wiring."""
+    from idis.services.runs.steps import build_run_context, load_documents_for_deal
+
+    deal_id = str(run_data["deal_id"])
+
+    return build_run_context(
+        db_conn=db_conn,
+        tenant_id=tenant_id,
+        run_id=str(run_data["run_id"]),
+        deal_id=deal_id,
+        mode=str(run_data["mode"]),
+        documents=load_documents_for_deal(db_conn=db_conn, deal_id=deal_id),
+        audit_sink=audit_sink,
+    )
 
 
 # Global worker instance

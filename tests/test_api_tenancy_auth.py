@@ -1,12 +1,14 @@
 """Tests for IDIS API tenant authentication and /v1/tenants/me endpoint."""
 
 import json
+import logging
 import uuid
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from idis.api.auth import IDIS_API_KEYS_ENV
+from idis.api.auth import IDIS_API_KEYS_ENV, _load_api_key_registry
 from idis.api.main import create_app
 
 
@@ -185,3 +187,64 @@ class TestHealthNoAuth:
         assert response.status_code == 200
         body = response.json()
         assert body["status"] == "ok"
+
+
+class TestApiKeyRegistryConfig:
+    """API-key registry diagnostics and documented example coverage."""
+
+    def test_env_example_api_key_shape_authenticates(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The documented .env.example IDIS_API_KEYS_JSON shape is loadable."""
+        env_example = Path(__file__).resolve().parents[1] / ".env.example"
+        api_keys_json = ""
+        for line in env_example.read_text(encoding="utf-8").splitlines():
+            if line.startswith("IDIS_API_KEYS_JSON="):
+                api_keys_json = line.split("=", 1)[1]
+                break
+
+        assert api_keys_json
+        parsed = json.loads(api_keys_json)
+        api_key = next(iter(parsed))
+
+        monkeypatch.setenv(IDIS_API_KEYS_ENV, api_keys_json)
+        app = create_app(service_region=parsed[api_key]["data_region"])
+        client = TestClient(app)
+
+        response = client.get("/v1/tenants/me", headers={"X-IDIS-API-Key": api_key})
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["tenant_id"] == parsed[api_key]["tenant_id"]
+
+    def test_malformed_api_key_registry_logs_startup_diagnostic(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Malformed registry entries are visible during app startup diagnostics."""
+        monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps({"bad-key": "not-a-record"}))
+
+        with caplog.at_level(logging.WARNING):
+            create_app()
+
+        assert any(
+            "Malformed IDIS_API_KEYS_JSON entry" in record.message for record in caplog.records
+        )
+
+    def test_malformed_api_key_registry_logs_load_diagnostic(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Malformed registry entries are visible when the registry is loaded."""
+        monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps({"bad-key": "not-a-record"}))
+
+        with caplog.at_level(logging.WARNING):
+            registry = _load_api_key_registry()
+
+        assert registry == {}
+        assert any(
+            "Malformed IDIS_API_KEYS_JSON entry" in record.message for record in caplog.records
+        )

@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 
+from idis.api.auth import validate_api_key_registry_config
 from idis.api.errors import (
     IdisHttpError,
     generic_exception_handler,
@@ -116,6 +117,8 @@ def create_app(
 
     app.state.audit_sink = audit_sink
     app.state.ingestion_service = ingestion_service
+
+    validate_api_key_registry_config()
 
     configure_tracing()
     instrument_httpx()

@@ -81,15 +81,41 @@ def _load_api_key_registry() -> dict[str, ApiKeyRecord]:
         return {}
 
     registry: dict[str, ApiKeyRecord] = {}
-    for key, value in parsed.items():
+    malformed_count = 0
+    for index, (key, value) in enumerate(parsed.items()):
         if not isinstance(key, str) or not isinstance(value, dict):
+            malformed_count += 1
+            logger.warning(
+                "Malformed %s entry at index %d; skipping",
+                IDIS_API_KEYS_ENV,
+                index,
+            )
             continue
         try:
             registry[key] = ApiKeyRecord.model_validate(value)
-        except ValidationError:
+        except ValidationError as exc:
+            malformed_count += 1
+            logger.warning(
+                "Malformed %s entry at index %d; skipping: %s",
+                IDIS_API_KEYS_ENV,
+                index,
+                exc.errors(),
+            )
             continue
 
+    if parsed and not registry:
+        logger.warning(
+            "%s contains %d malformed entries and no valid API keys",
+            IDIS_API_KEYS_ENV,
+            malformed_count,
+        )
+
     return registry
+
+
+def validate_api_key_registry_config() -> None:
+    """Validate API-key registry shape during application startup diagnostics."""
+    _load_api_key_registry()
 
 
 def _constant_time_lookup(

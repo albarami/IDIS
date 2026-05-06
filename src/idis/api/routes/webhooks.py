@@ -86,6 +86,7 @@ def create_webhook(
         input_data=input_data,
         conn=db_conn,
     )
+    request.state.audit_resource_id = webhook.webhook_id
 
     return WebhookResponse(
         webhook_id=webhook.webhook_id,

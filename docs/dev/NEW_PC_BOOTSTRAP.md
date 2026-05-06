@@ -34,6 +34,11 @@ Copy-Item .env.example .env
 # Edit .env if needed (never commit .env)
 ```
 
+For local UI development, `.env.example` includes a non-production dev session key:
+`IDIS_UI_DEV_AUTH_BYPASS=true`, `IDIS_DEV_API_KEY=test-key-not-real`, and a matching
+`IDIS_API_KEYS_JSON` registry entry. The UI uses this only to set the same HttpOnly
+session cookie as manual login; the backend still validates `X-IDIS-API-Key`.
+
 ## 4. Start Infrastructure
 
 ```powershell

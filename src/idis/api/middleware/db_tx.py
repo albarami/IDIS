@@ -132,12 +132,13 @@ class DBTransactionMiddleware:
             return
 
         response_status: int | None = None
+        response_messages: list[Any] = []
 
         async def send_wrapper(message: Any) -> None:
             nonlocal response_status
             if message["type"] == "http.response.start":
                 response_status = message.get("status", 500)
-            await send(message)
+            response_messages.append(message)
 
         try:
             await self.app(scope, receive, send_wrapper)
@@ -154,6 +155,15 @@ class DBTransactionMiddleware:
                     )
                     with contextlib.suppress(Exception):
                         await asyncio.to_thread(_rollback, trans)
+                    error_response = make_error_response_no_request(
+                        code="DATABASE_COMMIT_FAILED",
+                        message="Database transaction commit failed",
+                        http_status=500,
+                        request_id=request_id,
+                        details=None,
+                    )
+                    await error_response(scope, receive, send)
+                    return
             else:
                 try:
                     await asyncio.to_thread(_rollback, trans)
@@ -168,6 +178,9 @@ class DBTransactionMiddleware:
                         e,
                         extra={"request_id": request_id},
                     )
+
+            for message in response_messages:
+                await send(message)
 
         except Exception as e:
             logger.error(

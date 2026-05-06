@@ -13,9 +13,11 @@ import os
 import uuid
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from idis.api.auth_sso import SsoIdentity
 from idis.api.main import create_app
 from idis.audit.sink import JsonlFileAuditSink
 from idis.validators.audit_event_validator import validate_audit_event
@@ -134,6 +136,83 @@ class TestAuditMiddlewareEmission:
 
         finally:
             os.environ.pop("IDIS_API_KEYS_JSON", None)
+            os.environ.pop("IDIS_AUDIT_LOG_PATH", None)
+
+    def test_api_key_audit_actor_uses_authenticated_context(self, tmp_path: Path) -> None:
+        """API-key mutations audit the configured actor_id, actor_type, and roles."""
+        tenant_id = str(uuid.uuid4())
+        actor_id = str(uuid.uuid4())
+        audit_log_path = tmp_path / "audit_actor_api_key.jsonl"
+
+        os.environ["IDIS_API_KEYS_JSON"] = _make_api_keys_json(
+            tenant_id,
+            actor_id=actor_id,
+            name="Analyst Actor",
+        )
+        os.environ["IDIS_AUDIT_LOG_PATH"] = str(audit_log_path)
+
+        try:
+            sink = JsonlFileAuditSink(str(audit_log_path))
+            app = create_app(audit_sink=sink, service_region="us-east-1")
+            client = TestClient(app, raise_server_exceptions=False)
+
+            response = client.post(
+                "/v1/deals",
+                headers={
+                    "X-IDIS-API-Key": "test-api-key-12345",
+                    "Content-Type": "application/json",
+                },
+                json={"name": "Actor Test", "company_name": "Acme"},
+            )
+
+            assert response.status_code == 201
+            event = json.loads(audit_log_path.read_text().strip())
+            assert event["actor"]["actor_id"] == actor_id
+            assert event["actor"]["actor_type"] == "SERVICE"
+            assert event["actor"]["roles"] == ["ANALYST"]
+
+        finally:
+            os.environ.pop("IDIS_API_KEYS_JSON", None)
+            os.environ.pop("IDIS_AUDIT_LOG_PATH", None)
+
+    def test_jwt_audit_actor_uses_authenticated_context(self, tmp_path: Path) -> None:
+        """JWT mutations audit the authenticated human actor and JWT roles."""
+        tenant_id = str(uuid.uuid4())
+        user_id = str(uuid.uuid4())
+        audit_log_path = tmp_path / "audit_actor_jwt.jsonl"
+        identity = SsoIdentity(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            roles=frozenset({"PARTNER", "ANALYST"}),
+            email="analyst@example.com",
+            name="Human Analyst",
+            data_region="us-east-1",
+        )
+
+        os.environ["IDIS_AUDIT_LOG_PATH"] = str(audit_log_path)
+
+        try:
+            sink = JsonlFileAuditSink(str(audit_log_path))
+            app = create_app(audit_sink=sink, service_region="us-east-1")
+            client = TestClient(app, raise_server_exceptions=False)
+
+            with patch("idis.api.auth_sso.validate_jwt", return_value=identity):
+                response = client.post(
+                    "/v1/deals",
+                    headers={
+                        "Authorization": "Bearer valid.jwt.token",
+                        "Content-Type": "application/json",
+                    },
+                    json={"name": "JWT Actor Test", "company_name": "Acme"},
+                )
+
+            assert response.status_code == 201
+            event = json.loads(audit_log_path.read_text().strip())
+            assert event["actor"]["actor_id"] == user_id
+            assert event["actor"]["actor_type"] == "HUMAN"
+            assert event["actor"]["roles"] == ["ANALYST", "PARTNER"]
+
+        finally:
             os.environ.pop("IDIS_AUDIT_LOG_PATH", None)
 
 

@@ -78,3 +78,39 @@ def test_full_system_report_does_not_overstate_methodology_run_wiring() -> None:
     assert "coverage" in report.lower()
     assert "methodology run integration" in report.lower()
     assert "Methodology registry is fully wired into production runs" not in report
+
+
+def test_full_system_inventory_detects_phase_2_3_document_classification_foundation() -> None:
+    """Phase 2.3 classification components are detected without claiming live wiring."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+
+    assert inventory["document_classification_models"].status in {"WIRED", "PARTIAL"}
+    assert inventory["parser_capability_registry"].status == "PARTIAL"
+    assert inventory["document_classification_service"].status == "PARTIAL"
+    assert inventory["parser_triage_layer"].status == "PARTIAL"
+    assert inventory["document_classification_postgres_persistence"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+    assert inventory["document_classification_api_integration"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+    assert inventory["document_classification_ui_integration"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+    assert inventory["document_classification_run_integration"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+
+
+def test_full_system_report_does_not_overstate_document_classification_wiring() -> None:
+    """Wiring audit must not claim live document-classification run integration."""
+    report = render_report(collect_wiring_inventory(REPO_ROOT))
+
+    assert "document classification" in report.lower()
+    assert "parser triage" in report.lower()
+    assert "document classification run integration" in report.lower()
+    assert "Document classification is fully wired into production runs" not in report

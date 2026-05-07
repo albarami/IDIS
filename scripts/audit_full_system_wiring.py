@@ -110,6 +110,13 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             "document_classification_run_integration": _document_classification_run_integration(
                 files
             ),
+            "extraction_task_models": _extraction_task_models(root, files),
+            "extraction_task_planner": _extraction_task_planner(root, files),
+            "extraction_task_audit_contract": _extraction_task_audit_contract(root, files),
+            "extraction_task_postgres_persistence": _extraction_task_postgres_persistence(root),
+            "extraction_task_api_integration": _extraction_task_api_integration(files),
+            "extraction_task_run_integration": _extraction_task_run_integration(files),
+            "live_methodology_extraction_execution": _live_methodology_extraction_execution(files),
             "analysis_agents": _analysis_agents(files),
             "commercial_agents": _commercial_agents(files),
             "debate_layer_1": _debate_layer_1(files),
@@ -179,6 +186,8 @@ def render_report(inventory: WiringInventory) -> str:
         "wiring.",
         "- Document classification and parser triage now exist as an in-memory foundation, "
         "but API/UI/run/Postgres integration is explicitly deferred.",
+        "- Methodology-driven extraction task planning now exists as metadata-only, "
+        "in-memory planning; live methodology extraction execution remains deferred.",
         "- Enrichment connectors and deterministic/Anthropic LLM wiring exist, but baseline "
         "validation is config-only for paid/network providers.",
         "",
@@ -320,6 +329,9 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/services/documents/classifier.py",
         "src/idis/services/documents/classification_service.py",
         "src/idis/services/documents/audit.py",
+        "src/idis/models/extraction_task.py",
+        "src/idis/services/extraction/task_planner.py",
+        "src/idis/services/extraction/task_audit.py",
         "src/idis/analysis/agents/__init__.py",
         "src/idis/analysis/runner.py",
         "src/idis/debate/orchestrator.py",
@@ -785,6 +797,121 @@ def _document_classification_run_integration(files: dict[str, str]) -> WiringIte
         evidence=["RunExecutionService remains document-classification agnostic in Phase 2.3."],
         gaps=["Future runs must call classification before methodology-driven extraction."],
         phase_2_action="Phase 2.3",
+    )
+
+
+def _extraction_task_models(root: Path, files: dict[str, str]) -> WiringItem:
+    has_models = _exists(root, "src/idis/models/extraction_task.py") and _contains(
+        files, "src/idis/models/extraction_task.py", "ExtractionTask"
+    )
+    return WiringItem(
+        key="extraction_task_models",
+        label="Extraction task models",
+        status="WIRED" if has_models else "NOT_FOUND",
+        summary="Structured extraction task metadata models exist.",
+        evidence=[
+            "`src/idis/models/extraction_task.py` defines ExtractionTask and statuses.",
+            "Models link methodology questions, classifications, documents, and source spans.",
+        ],
+        gaps=["Extraction task records are not persisted to Postgres."],
+        phase_2_action="Phase 2.4",
+    )
+
+
+def _extraction_task_planner(root: Path, files: dict[str, str]) -> WiringItem:
+    has_planner = _exists(root, "src/idis/services/extraction/task_planner.py") and _contains(
+        files, "src/idis/services/extraction/task_planner.py", "InMemoryExtractionTaskPlanner"
+    )
+    return WiringItem(
+        key="extraction_task_planner",
+        label="In-memory extraction task planner",
+        status="PARTIAL" if has_planner else "NOT_FOUND",
+        summary="In-memory planner creates ready/blocked extraction task metadata.",
+        evidence=[
+            "`task_planner.py` maps MethodologyQuestion to DocumentClassification and spans.",
+            "Planner produces metadata only and does not execute extraction.",
+        ],
+        gaps=["Planner is not called by RunExecutionService or API routes."],
+        phase_2_action="Phase 2.4",
+    )
+
+
+def _extraction_task_audit_contract(root: Path, files: dict[str, str]) -> WiringItem:
+    has_contract = _exists(root, "src/idis/services/extraction/task_audit.py") and _contains(
+        files, "src/idis/services/extraction/task_audit.py", "EXTRACTION_TASK_AUDIT_EVENTS"
+    )
+    return WiringItem(
+        key="extraction_task_audit_contract",
+        label="Extraction task future audit contract",
+        status="PARTIAL" if has_contract else "NOT_FOUND",
+        summary="Future audit event names and payload keys exist for extraction task planning.",
+        evidence=["`task_audit.py` defines event constants without live audit emission."],
+        gaps=["No live audit sink emission is wired in Phase 2.4."],
+        phase_2_action="Phase 2.4",
+    )
+
+
+def _extraction_task_postgres_persistence(root: Path) -> WiringItem:
+    migrations_dir = root / "src/idis/persistence/migrations/versions"
+    has_migration = any(
+        "extraction_task" in path.name or "task_planning" in path.name
+        for path in migrations_dir.glob("*.py")
+    )
+    return WiringItem(
+        key="extraction_task_postgres_persistence",
+        label="Extraction task Postgres persistence",
+        status="PARTIAL" if has_migration else "DEFERRED",
+        summary="Extraction task persistence is intentionally deferred in Phase 2.4.",
+        evidence=["No Phase 2.4 extraction task migration is expected."],
+        gaps=["Future slice must define tenant-scoped persistent task tables."],
+        phase_2_action="Phase 2.4",
+    )
+
+
+def _extraction_task_api_integration(files: dict[str, str]) -> WiringItem:
+    api_text = files.get("src/idis/api/main.py", "") + files.get("src/idis/api/routes/runs.py", "")
+    integrated = "ExtractionTask" in api_text or "InMemoryExtractionTaskPlanner" in api_text
+    return WiringItem(
+        key="extraction_task_api_integration",
+        label="Extraction task API integration",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary="Extraction task planning is not exposed through API routes in Phase 2.4.",
+        evidence=["No extraction task API route is wired by this static audit."],
+        gaps=["Future API work may expose task planning summaries."],
+        phase_2_action="Phase 2.4",
+    )
+
+
+def _extraction_task_run_integration(files: dict[str, str]) -> WiringItem:
+    run_steps = files.get("src/idis/services/runs/steps.py", "")
+    worker = files.get("src/idis/pipeline/worker.py", "")
+    integrated = "InMemoryExtractionTaskPlanner" in run_steps or "ExtractionTask" in worker
+    return WiringItem(
+        key="extraction_task_run_integration",
+        label="Extraction task run integration",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary="Extraction task planning is not called by production runs in Phase 2.4.",
+        evidence=["RunExecutionService remains extraction-task-planning agnostic."],
+        gaps=["Future runs must plan tasks before methodology-driven extraction execution."],
+        phase_2_action="Phase 2.4",
+    )
+
+
+def _live_methodology_extraction_execution(files: dict[str, str]) -> WiringItem:
+    planner_text = files.get("src/idis/services/extraction/task_planner.py", "")
+    integrated = (
+        "ClaimExtractor" in planner_text
+        or "LLM" in planner_text
+        or "create_claim" in planner_text
+    )
+    return WiringItem(
+        key="live_methodology_extraction_execution",
+        label="Live methodology extraction execution",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary="Live methodology-driven extraction execution is intentionally deferred.",
+        evidence=["Phase 2.4 creates extraction task metadata only."],
+        gaps=["Future slices must execute tasks and convert extracted answers into claims."],
+        phase_2_action="Phase 2.4",
     )
 
 

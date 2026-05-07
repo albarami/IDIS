@@ -114,3 +114,37 @@ def test_full_system_report_does_not_overstate_document_classification_wiring() 
     assert "parser triage" in report.lower()
     assert "document classification run integration" in report.lower()
     assert "Document classification is fully wired into production runs" not in report
+
+
+def test_full_system_inventory_detects_phase_2_4_extraction_task_planning_foundation() -> None:
+    """Phase 2.4 extraction task planning is detected without claiming live extraction."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+
+    assert inventory["extraction_task_models"].status in {"WIRED", "PARTIAL"}
+    assert inventory["extraction_task_planner"].status == "PARTIAL"
+    assert inventory["extraction_task_audit_contract"].status == "PARTIAL"
+    assert inventory["extraction_task_postgres_persistence"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+    assert inventory["extraction_task_api_integration"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+    assert inventory["extraction_task_run_integration"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+    assert inventory["live_methodology_extraction_execution"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+
+
+def test_full_system_report_does_not_overstate_extraction_task_planning_wiring() -> None:
+    """Wiring audit must not claim methodology-driven extraction is live."""
+    report = render_report(collect_wiring_inventory(REPO_ROOT))
+
+    assert "extraction task" in report.lower()
+    assert "live methodology extraction execution" in report.lower()
+    assert "Methodology-driven extraction is fully wired into production runs" not in report

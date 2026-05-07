@@ -56,3 +56,25 @@ def test_full_system_report_renders_phase_2_1_canonical_truthfulness() -> None:
     assert "CALC step can complete without durable deterministic calculations" not in report
     assert "RunExecutionService" in report
     assert "CalcRunner" in report
+
+
+def test_full_system_inventory_detects_phase_2_2_methodology_foundation() -> None:
+    """Phase 2.2 methodology components are detected without claiming run integration."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+
+    assert inventory["methodology_registry_models"].status in {"WIRED", "PARTIAL"}
+    assert inventory["fdd_synthetic_excel_importer"].status == "PARTIAL"
+    assert inventory["commercial_dd_template"].status == "PARTIAL"
+    assert inventory["methodology_coverage_service"].status == "PARTIAL"
+    assert inventory["methodology_postgres_persistence"].status in {"NOT_FOUND", "DEFERRED"}
+    assert inventory["methodology_run_integration"].status in {"NOT_FOUND", "DEFERRED"}
+
+
+def test_full_system_report_does_not_overstate_methodology_run_wiring() -> None:
+    """Wiring audit must remain truthful about deferred methodology run integration."""
+    report = render_report(collect_wiring_inventory(REPO_ROOT))
+
+    assert "methodology registry" in report.lower()
+    assert "coverage" in report.lower()
+    assert "methodology run integration" in report.lower()
+    assert "Methodology registry is fully wired into production runs" not in report

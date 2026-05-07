@@ -94,6 +94,22 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             "methodology_coverage_service": _methodology_coverage_service(root, files),
             "methodology_postgres_persistence": _methodology_postgres_persistence(root),
             "methodology_run_integration": _methodology_run_integration(files),
+            "document_classification_models": _document_classification_models(root, files),
+            "parser_capability_registry": _parser_capability_registry(root, files),
+            "document_classification_service": _document_classification_service(root, files),
+            "parser_triage_layer": _parser_triage_layer(root, files),
+            "document_classification_postgres_persistence": (
+                _document_classification_postgres_persistence(root)
+            ),
+            "document_classification_api_integration": _document_classification_api_integration(
+                files
+            ),
+            "document_classification_ui_integration": _document_classification_ui_integration(
+                root
+            ),
+            "document_classification_run_integration": _document_classification_run_integration(
+                files
+            ),
             "analysis_agents": _analysis_agents(files),
             "commercial_agents": _commercial_agents(files),
             "debate_layer_1": _debate_layer_1(files),
@@ -161,6 +177,8 @@ def render_report(inventory: WiringInventory) -> str:
         "and CalcSanad rows, and reports blocked candidates without fake calc IDs.",
         "- Neo4j, Redis, and pgvector are present in code/config, but are not proven live-run "
         "wiring.",
+        "- Document classification and parser triage now exist as an in-memory foundation, "
+        "but API/UI/run/Postgres integration is explicitly deferred.",
         "- Enrichment connectors and deterministic/Anthropic LLM wiring exist, but baseline "
         "validation is config-only for paid/network providers.",
         "",
@@ -297,6 +315,11 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/methodology/templates/commercial_dd_v1.json",
         "src/idis/models/methodology_coverage.py",
         "src/idis/services/methodology/coverage.py",
+        "src/idis/models/document_classification.py",
+        "src/idis/services/documents/parser_capabilities.py",
+        "src/idis/services/documents/classifier.py",
+        "src/idis/services/documents/classification_service.py",
+        "src/idis/services/documents/audit.py",
         "src/idis/analysis/agents/__init__.py",
         "src/idis/analysis/runner.py",
         "src/idis/debate/orchestrator.py",
@@ -624,6 +647,144 @@ def _methodology_run_integration(files: dict[str, str]) -> WiringItem:
         summary="Methodology registry is not yet wired into production run execution.",
         evidence=["RunExecutionService remains methodology-agnostic in Phase 2.2."],
         gaps=["Future run slices must initialize coverage per methodology question."],
+    )
+
+
+def _document_classification_models(root: Path, files: dict[str, str]) -> WiringItem:
+    has_models = _exists(root, "src/idis/models/document_classification.py") and _contains(
+        files, "src/idis/models/document_classification.py", "DocumentClassification"
+    )
+    return WiringItem(
+        key="document_classification_models",
+        label="Document classification models",
+        status="WIRED" if has_models else "NOT_FOUND",
+        summary="Structured document classification and parser triage models exist.",
+        evidence=[
+            "`src/idis/models/document_classification.py` defines classification enums/models.",
+            "Models include FDD/CDD categories, support statuses, triage status, and evidence.",
+        ],
+        gaps=["Models are not yet persisted to Postgres."],
+        phase_2_action="Phase 2.3",
+    )
+
+
+def _parser_capability_registry(root: Path, files: dict[str, str]) -> WiringItem:
+    has_registry = _exists(root, "src/idis/services/documents/parser_capabilities.py")
+    return WiringItem(
+        key="parser_capability_registry",
+        label="Parser capability registry",
+        status="PARTIAL" if has_registry else "NOT_FOUND",
+        summary="Parser capabilities classify current parser support without overstating OCR.",
+        evidence=[
+            "`parser_capabilities.py` maps PDF/XLSX/DOCX/PPTX and unsupported formats.",
+            "Conversion/OCR requirements are represented as triage metadata only.",
+        ],
+        gaps=["Registry is not yet called by ingestion or run execution paths."],
+        phase_2_action="Phase 2.3",
+    )
+
+
+def _document_classification_service(root: Path, files: dict[str, str]) -> WiringItem:
+    has_service = _exists(root, "src/idis/services/documents/classification_service.py")
+    return WiringItem(
+        key="document_classification_service",
+        label="Document classification service",
+        status="PARTIAL" if has_service else "NOT_FOUND",
+        summary="In-memory document classification service exists for single/batch use.",
+        evidence=[
+            "`classification_service.py` stores deterministic in-memory classification results.",
+            "`classifier.py` maps categories to methodology target areas.",
+        ],
+        gaps=["No API, Postgres, or production run integration is claimed."],
+        phase_2_action="Phase 2.3",
+    )
+
+
+def _parser_triage_layer(root: Path, files: dict[str, str]) -> WiringItem:
+    has_triage = _exists(root, "src/idis/services/documents/parser_capabilities.py") and _contains(
+        files, "src/idis/services/documents/parser_capabilities.py", "triage_document"
+    )
+    return WiringItem(
+        key="parser_triage_layer",
+        label="Parser triage layer",
+        status="PARTIAL" if has_triage else "NOT_FOUND",
+        summary="Parser triage maps parse errors to unsupported/encrypted/scanned/large states.",
+        evidence=[
+            (
+                "`triage_document` consumes parser error codes such as ENCRYPTED_PDF "
+                "and NO_TEXT_EXTRACTED."
+            ),
+            "Large, corrupted, conversion-required, and unsupported sources are reason-coded.",
+        ],
+        gaps=["Triage output is not yet persisted or surfaced through API/UI."],
+        phase_2_action="Phase 2.3",
+    )
+
+
+def _document_classification_postgres_persistence(root: Path) -> WiringItem:
+    migrations_dir = root / "src/idis/persistence/migrations/versions"
+    has_migration = any(
+        "classification" in path.name or "triage" in path.name
+        for path in migrations_dir.glob("*.py")
+    )
+    return WiringItem(
+        key="document_classification_postgres_persistence",
+        label="Document classification Postgres persistence",
+        status="PARTIAL" if has_migration else "DEFERRED",
+        summary="Document classification persistence is intentionally deferred in Phase 2.3.",
+        evidence=["No Phase 2.3 document classification migration is expected."],
+        gaps=["Future slice must define tenant-scoped persistent classification tables."],
+        phase_2_action="Phase 2.3",
+    )
+
+
+def _document_classification_api_integration(files: dict[str, str]) -> WiringItem:
+    api_text = files.get("src/idis/api/main.py", "") + files.get("src/idis/api/routes/runs.py", "")
+    integrated = "DocumentClassification" in api_text or "classification_service" in api_text
+    return WiringItem(
+        key="document_classification_api_integration",
+        label="Document classification API integration",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary="Document classification is not exposed through API routes in Phase 2.3.",
+        evidence=["No document classification API route is wired by this static audit."],
+        gaps=["Future API work must expose tenant-scoped classification endpoints."],
+        phase_2_action="Phase 2.3",
+    )
+
+
+def _document_classification_ui_integration(root: Path) -> WiringItem:
+    has_ui = any(
+        path.name.endswith((".tsx", ".ts"))
+        and "document" in path.name.lower()
+        and "classification" in _read(path).lower()
+        for path in (root / "frontend").glob("**/*")
+        if path.is_file()
+    )
+    return WiringItem(
+        key="document_classification_ui_integration",
+        label="Document classification UI integration",
+        status="PARTIAL" if has_ui else "DEFERRED",
+        summary="Document classification UI is intentionally out of scope for Phase 2.3.",
+        evidence=["No Phase 2.3 UI files are expected."],
+        gaps=["Future UI work may present triage/blocker summaries."],
+        phase_2_action="Phase 2.3",
+    )
+
+
+def _document_classification_run_integration(files: dict[str, str]) -> WiringItem:
+    run_steps = files.get("src/idis/services/runs/steps.py", "")
+    worker = files.get("src/idis/pipeline/worker.py", "")
+    integrated = "classify_document" in run_steps or "DocumentClassification" in worker
+    return WiringItem(
+        key="document_classification_run_integration",
+        label="Document classification run integration",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary=(
+            "Document classification run integration is deferred; no live run wiring is claimed."
+        ),
+        evidence=["RunExecutionService remains document-classification agnostic in Phase 2.3."],
+        gaps=["Future runs must call classification before methodology-driven extraction."],
+        phase_2_action="Phase 2.3",
     )
 
 

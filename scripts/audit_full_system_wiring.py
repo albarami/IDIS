@@ -21,6 +21,7 @@ VALID_STATUSES: Final = {
     "CONFIG_ONLY",
     "NOT_FOUND",
     "TEST_ONLY",
+    "DEFERRED",
 }
 
 
@@ -87,6 +88,12 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             "calc_engine": _calc_engine(files),
             "calc_step": _calc_step(files),
             "calc_sanad": _calc_sanad(files),
+            "methodology_registry_models": _methodology_registry_models(root, files),
+            "fdd_synthetic_excel_importer": _fdd_synthetic_excel_importer(root, files),
+            "commercial_dd_template": _commercial_dd_template(root, files),
+            "methodology_coverage_service": _methodology_coverage_service(root, files),
+            "methodology_postgres_persistence": _methodology_postgres_persistence(root),
+            "methodology_run_integration": _methodology_run_integration(files),
             "analysis_agents": _analysis_agents(files),
             "commercial_agents": _commercial_agents(files),
             "debate_layer_1": _debate_layer_1(files),
@@ -284,6 +291,12 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/services/calc/runner.py",
         "src/idis/models/calc_sanad.py",
         "src/idis/persistence/repositories/calculations.py",
+        "src/idis/methodology/models.py",
+        "src/idis/methodology/registry.py",
+        "src/idis/methodology/importers/fdd_excel.py",
+        "src/idis/methodology/templates/commercial_dd_v1.json",
+        "src/idis/models/methodology_coverage.py",
+        "src/idis/services/methodology/coverage.py",
         "src/idis/analysis/agents/__init__.py",
         "src/idis/analysis/runner.py",
         "src/idis/debate/orchestrator.py",
@@ -525,6 +538,92 @@ def _calc_sanad(files: dict[str, str]) -> WiringItem:
             "`src/idis/persistence/repositories/calculations.py` persists calc_sanads.",
         ],
         gaps=[],
+    )
+
+
+def _methodology_registry_models(root: Path, files: dict[str, str]) -> WiringItem:
+    has_models = _exists(root, "src/idis/methodology/models.py") and _contains(
+        files, "src/idis/methodology/models.py", "MethodologyRegistry"
+    )
+    return WiringItem(
+        key="methodology_registry_models",
+        label="Methodology registry models",
+        status="WIRED" if has_models else "NOT_FOUND",
+        summary="Structured methodology registry models exist for FDD and CDD.",
+        evidence=[
+            "`src/idis/methodology/models.py` defines MethodologyRegistry and MethodologyQuestion.",
+            "`MethodologyType` includes financial_dd and commercial_dd.",
+        ],
+        gaps=["Not yet integrated into live run orchestration."],
+    )
+
+
+def _fdd_synthetic_excel_importer(root: Path, files: dict[str, str]) -> WiringItem:
+    has_importer = _exists(root, "src/idis/methodology/importers/fdd_excel.py")
+    return WiringItem(
+        key="fdd_synthetic_excel_importer",
+        label="FDD synthetic Excel importer",
+        status="PARTIAL" if has_importer else "NOT_FOUND",
+        summary="FDD-style Excel importer exists and is tested only with synthetic workbooks.",
+        evidence=["`src/idis/methodology/importers/fdd_excel.py` validates sheets and columns."],
+        gaps=["Real confidential workbook import is intentionally not committed or run."],
+    )
+
+
+def _commercial_dd_template(root: Path, files: dict[str, str]) -> WiringItem:
+    has_template = _exists(root, "src/idis/methodology/templates/commercial_dd_v1.json")
+    return WiringItem(
+        key="commercial_dd_template",
+        label="Commercial DD structured template",
+        status="PARTIAL" if has_template else "NOT_FOUND",
+        summary="CDD methodology exists as structured registry JSON.",
+        evidence=["`commercial_dd_v1.json` uses MethodologyRegistry shape."],
+        gaps=["Template is not yet consumed by prompts, agents, or deliverables."],
+    )
+
+
+def _methodology_coverage_service(root: Path, files: dict[str, str]) -> WiringItem:
+    has_service = _exists(root, "src/idis/services/methodology/coverage.py") and _exists(
+        root, "src/idis/models/methodology_coverage.py"
+    )
+    return WiringItem(
+        key="methodology_coverage_service",
+        label="Methodology coverage ledger models/service",
+        status="PARTIAL" if has_service else "NOT_FOUND",
+        summary="In-memory coverage ledger can initialize and summarize methodology coverage.",
+        evidence=[
+            "`src/idis/models/methodology_coverage.py` defines coverage records.",
+            "`src/idis/services/methodology/coverage.py` defines in-memory coverage service.",
+        ],
+        gaps=["Coverage is not yet persisted or connected to live runs."],
+    )
+
+
+def _methodology_postgres_persistence(root: Path) -> WiringItem:
+    has_migration = any(
+        "methodology" in path.name
+        for path in (root / "src/idis/persistence/migrations/versions").glob("*.py")
+    )
+    return WiringItem(
+        key="methodology_postgres_persistence",
+        label="Methodology Postgres persistence",
+        status="PARTIAL" if has_migration else "DEFERRED",
+        summary="Methodology persistence is intentionally deferred in Phase 2.2.",
+        evidence=["No Phase 2.2 methodology persistence migration is present."],
+        gaps=["Postgres persistence remains a later slice."],
+    )
+
+
+def _methodology_run_integration(files: dict[str, str]) -> WiringItem:
+    run_steps = files.get("src/idis/services/runs/steps.py", "")
+    integrated = "methodology_question_id" in run_steps or "MethodologyRegistry" in run_steps
+    return WiringItem(
+        key="methodology_run_integration",
+        label="Methodology run integration",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary="Methodology registry is not yet wired into production run execution.",
+        evidence=["RunExecutionService remains methodology-agnostic in Phase 2.2."],
+        gaps=["Future run slices must initialize coverage per methodology question."],
     )
 
 

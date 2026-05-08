@@ -186,3 +186,41 @@ def test_full_system_report_does_not_overstate_phase_2_5_execution_wiring() -> N
     assert "methodology extraction task executor" in report.lower()
     assert "methodology extraction run integration" in report.lower()
     assert "Methodology extraction execution is fully wired into production runs" not in report
+
+
+def test_full_system_inventory_detects_phase_2_6_claim_materialization_foundation() -> None:
+    """Phase 2.6 claim materialization exists while integrations remain deferred."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+
+    assert inventory["methodology_claim_materialization_models"].status in {"WIRED", "PARTIAL"}
+    assert inventory["methodology_claim_materializer"].status == "PARTIAL"
+    assert inventory["methodology_claim_materialization_audit_contract"].status == "PARTIAL"
+    assert inventory["methodology_claim_materialization_postgres_schema"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+    assert inventory["methodology_claim_materialization_api_integration"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+    assert inventory["methodology_claim_materialization_run_integration"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+    assert inventory["methodology_claim_materialization_sanad_integration"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+    assert inventory["methodology_claim_materialization_coverage_integration"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+
+
+def test_full_system_report_does_not_overstate_claim_materialization_wiring() -> None:
+    """Wiring audit must not claim claim materialization is production-wired."""
+    report = render_report(collect_wiring_inventory(REPO_ROOT))
+
+    assert "methodology claim materializer" in report.lower()
+    assert "claim materialization run integration" in report.lower()
+    assert "Methodology claim materialization is fully wired into production runs" not in report

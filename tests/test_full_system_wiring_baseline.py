@@ -274,3 +274,48 @@ def test_full_system_report_does_not_overstate_phase_2_7_wiring() -> None:
     assert "Sanad creation is wired for methodology boundary decisions" not in report
     assert "Coverage updates are live in production" not in report
     assert "IC-bound promotion is wired" not in report
+
+
+def test_full_system_inventory_detects_phase_2_8_sanad_creation_boundary() -> None:
+    """Phase 2.8 Sanad creation boundary exists while live integrations stay deferred."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+
+    assert inventory["methodology_sanad_creation_boundary_models"].status in {
+        "WIRED",
+        "PARTIAL",
+    }
+    assert inventory["methodology_sanad_creation_boundary_service"].status == "PARTIAL"
+    assert inventory["methodology_sanad_creation_boundary_audit_contract"].status == "PARTIAL"
+    assert inventory["methodology_synthetic_sanad_creation_path"].status == "PARTIAL"
+    assert inventory["methodology_sanad_creation_claim_link_application"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+    assert inventory["methodology_sanad_creation_ic_promotion"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+    assert inventory["methodology_sanad_creation_coverage_updates"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+    assert inventory["methodology_sanad_creation_postgres_api_run_ui_integration"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+    assert inventory["methodology_sanad_creation_rag_graph_cache_integration"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+
+
+def test_full_system_report_does_not_overstate_phase_2_8_wiring() -> None:
+    """Wiring audit must not claim Phase 2.8 creation is production wired."""
+    report = render_report(collect_wiring_inventory(REPO_ROOT))
+
+    assert "sanad creation boundary" in report.lower()
+    assert "synthetic sanad creation path exists when explicitly invoked" in report.lower()
+    assert "claim link application is not wired" in report.lower()
+    assert "Coverage updates are live in production" not in report
+    assert "IC-bound promotion is wired" not in report
+    assert "Sanad creation boundary is fully wired into production runs" not in report

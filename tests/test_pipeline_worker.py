@@ -326,3 +326,5 @@ def test_default_worker_context_factory_hydrates_persisted_documents() -> None:
         }
     ]
     assert [doc["document_id"] for doc in ctx.preflight_corpus] == ["doc-1"]
+    assert ctx.methodology_registry_loader_fn is not None
+    assert ctx.methodology_coverage_records == []

@@ -59,7 +59,7 @@ def test_full_system_report_renders_phase_2_1_canonical_truthfulness() -> None:
 
 
 def test_full_system_inventory_detects_phase_2_2_methodology_foundation() -> None:
-    """Phase 2.2 methodology components are detected without claiming run integration."""
+    """Methodology components are detected without claiming extraction planning."""
     inventory = collect_wiring_inventory(REPO_ROOT)
 
     assert inventory["methodology_registry_models"].status in {"WIRED", "PARTIAL"}
@@ -67,7 +67,7 @@ def test_full_system_inventory_detects_phase_2_2_methodology_foundation() -> Non
     assert inventory["commercial_dd_template"].status == "PARTIAL"
     assert inventory["methodology_coverage_service"].status == "PARTIAL"
     assert inventory["methodology_postgres_persistence"].status in {"NOT_FOUND", "DEFERRED"}
-    assert inventory["methodology_run_integration"].status in {"NOT_FOUND", "DEFERRED"}
+    assert inventory["methodology_run_integration"].status == "PARTIAL"
 
 
 def test_full_system_report_does_not_overstate_methodology_run_wiring() -> None:
@@ -78,6 +78,24 @@ def test_full_system_report_does_not_overstate_methodology_run_wiring() -> None:
     assert "coverage" in report.lower()
     assert "methodology run integration" in report.lower()
     assert "Methodology registry is fully wired into production runs" not in report
+
+
+def test_full_system_inventory_detects_phase_3_0c_coverage_init_baseline() -> None:
+    """Slice 3 coverage init is visible while extraction planning remains deferred."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+
+    coverage_init = inventory["methodology_coverage_init_run_integration"]
+    extraction_task = inventory["extraction_task_run_integration"]
+
+    assert coverage_init.status == "PARTIAL"
+    assert any("METHODOLOGY_COVERAGE_INIT" in item for item in coverage_init.evidence)
+    assert any("commercial_dd_v1.json" in item for item in coverage_init.evidence)
+    assert any("run-step summary" in item for item in coverage_init.evidence)
+    assert any(
+        "methodology extraction task planning remains deferred" in item
+        for item in coverage_init.gaps
+    )
+    assert extraction_task.status in {"DEFERRED", "PARTIAL"}
 
 
 def test_full_system_inventory_detects_phase_2_3_document_classification_foundation() -> None:
@@ -129,7 +147,7 @@ def test_full_system_inventory_detects_phase_3_0b_document_preflight_baseline() 
     assert any("DOCUMENT_PREFLIGHT" in item for item in preflight.evidence)
     assert any("preflight_corpus" in item for item in preflight.evidence)
     assert any("run-step summary" in item for item in preflight.evidence)
-    assert any("live extraction remains deferred" in item for item in preflight.gaps)
+    assert any("extraction planning remains deferred" in item.lower() for item in preflight.gaps)
 
 
 def test_full_system_report_does_not_overstate_phase_3_0a_full_run_wiring() -> None:

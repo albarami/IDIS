@@ -4,9 +4,10 @@ Executes pipeline steps in canonical order, records each step in the
 RunStep ledger, emits audit events at every transition, and enforces
 fail-closed semantics on audit failures.
 
-SNAPSHOT: INGEST_CHECK -> DOCUMENT_PREFLIGHT -> EXTRACT -> GRADE -> CALC.
-FULL: INGEST_CHECK -> DOCUMENT_PREFLIGHT -> EXTRACT -> GRADE -> CALC -> ENRICHMENT -> DEBATE
-      -> ANALYSIS -> SCORING -> DELIVERABLES.
+SNAPSHOT: INGEST_CHECK -> DOCUMENT_PREFLIGHT -> METHODOLOGY_COVERAGE_INIT -> EXTRACT
+          -> GRADE -> CALC.
+FULL: INGEST_CHECK -> DOCUMENT_PREFLIGHT -> METHODOLOGY_COVERAGE_INIT -> EXTRACT
+      -> GRADE -> CALC -> ENRICHMENT -> DEBATE -> ANALYSIS -> SCORING -> DELIVERABLES.
 
 No FastAPI globals. All dependencies injected via constructor or execute().
 """
@@ -24,8 +25,13 @@ from typing import Any
 from pydantic import BaseModel
 
 from idis.audit.sink import AuditSink, AuditSinkError
+from idis.methodology.models import MethodologyRegistry
 from idis.models.deterministic_calculation import CalcType
 from idis.models.document_preflight import DocumentPreflightResult
+from idis.models.methodology_coverage import (
+    MethodologyCoverageInitializationResult,
+    MethodologyCoverageRecord,
+)
 from idis.models.run_step import (
     FULL_STEPS,
     IMPLEMENTED_STEPS,
@@ -89,6 +95,7 @@ class RunContext:
         mode: SNAPSHOT or FULL.
         documents: Extraction-ready parsed document dicts.
         preflight_corpus: Full persisted corpus, including failed/no-span rows.
+        methodology_coverage_records: Initialized run-scoped coverage records.
         extract_fn: Callable that executes extraction, returns result dict.
         grade_fn: Callable that executes grading, returns summary dict.
         calc_fn: Optional callable that executes calculations, returns result dict.
@@ -106,6 +113,15 @@ class RunContext:
     document_preflight_fn: (
         Callable[..., tuple[DocumentPreflightResult, list[dict[str, Any]]]] | None
     ) = None
+    methodology_registry: MethodologyRegistry | None = None
+    methodology_registry_loader_fn: Callable[[], MethodologyRegistry] | None = None
+    methodology_coverage_init_fn: (
+        Callable[
+            ..., tuple[MethodologyCoverageInitializationResult, list[MethodologyCoverageRecord]]
+        ]
+        | None
+    ) = None
+    methodology_coverage_records: list[MethodologyCoverageRecord] = field(default_factory=list)
     calc_fn: Callable[..., dict[str, Any]] | None = None
     calc_types: list[CalcType] | None = None
     enrich_fn: Callable[..., dict[str, Any]] | None = None
@@ -145,9 +161,11 @@ class RunOrchestrator:
     def execute(self, ctx: RunContext) -> OrchestratorResult:
         """Execute all pipeline steps for the given run context.
 
-        For SNAPSHOT: INGEST_CHECK -> DOCUMENT_PREFLIGHT -> EXTRACT -> GRADE -> CALC.
-        For FULL: INGEST_CHECK -> DOCUMENT_PREFLIGHT -> EXTRACT -> GRADE -> CALC -> ENRICHMENT
-                  -> DEBATE -> ANALYSIS -> SCORING -> DELIVERABLES.
+        For SNAPSHOT: INGEST_CHECK -> DOCUMENT_PREFLIGHT -> METHODOLOGY_COVERAGE_INIT
+                      -> EXTRACT -> GRADE -> CALC.
+        For FULL: INGEST_CHECK -> DOCUMENT_PREFLIGHT -> METHODOLOGY_COVERAGE_INIT
+                  -> EXTRACT -> GRADE -> CALC -> ENRICHMENT -> DEBATE
+                  -> ANALYSIS -> SCORING -> DELIVERABLES.
 
         Skips steps that are already COMPLETED (idempotent resume).
         Fails closed on audit emission errors.
@@ -186,6 +204,8 @@ class RunOrchestrator:
             existing = self._steps_repo.get_step(ctx.run_id, step_name)
             if existing is not None and existing.status == StepStatus.COMPLETED:
                 accumulated.update(existing.result_summary)
+                if step_name == StepName.METHODOLOGY_COVERAGE_INIT:
+                    self._rehydrate_methodology_coverage_records(ctx)
                 continue
 
             step = self._start_step(ctx, step_name, existing)
@@ -236,6 +256,8 @@ class RunOrchestrator:
             return self._execute_ingest_check(ctx)
         if step_name == StepName.DOCUMENT_PREFLIGHT:
             return self._execute_document_preflight(ctx)
+        if step_name == StepName.METHODOLOGY_COVERAGE_INIT:
+            return self._execute_methodology_coverage_init(ctx)
         if step_name == StepName.EXTRACT:
             return self._execute_extract(ctx)
         if step_name == StepName.GRADE:
@@ -305,6 +327,51 @@ class RunOrchestrator:
             )
         ctx.documents = eligible_documents
         return summary
+
+    def _execute_methodology_coverage_init(self, ctx: RunContext) -> dict[str, Any]:
+        """Initialize NOT_STARTED methodology coverage records for this run."""
+        if ctx.methodology_coverage_init_fn is not None:
+            init_result, records = ctx.methodology_coverage_init_fn(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                registry=ctx.methodology_registry,
+            )
+        else:
+            from idis.services.runs.methodology_coverage_init import (
+                InMemoryRunMethodologyCoverageInitService,
+            )
+
+            init_result, records = InMemoryRunMethodologyCoverageInitService(
+                registry_loader_fn=ctx.methodology_registry_loader_fn,
+            ).run(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                registry=ctx.methodology_registry,
+            )
+
+        ctx.methodology_coverage_records = records
+        return init_result.to_run_step_summary()
+
+    def _rehydrate_methodology_coverage_records(self, ctx: RunContext) -> None:
+        """Reattach in-memory coverage records when a completed init step is skipped."""
+        if ctx.methodology_coverage_records:
+            return
+
+        from idis.services.runs.methodology_coverage_init import (
+            InMemoryRunMethodologyCoverageInitService,
+        )
+
+        _init_result, records = InMemoryRunMethodologyCoverageInitService(
+            registry_loader_fn=ctx.methodology_registry_loader_fn,
+        ).run(
+            tenant_id=ctx.tenant_id,
+            deal_id=ctx.deal_id,
+            run_id=ctx.run_id,
+            registry=ctx.methodology_registry,
+        )
+        ctx.methodology_coverage_records = records
 
     def _execute_extract(self, ctx: RunContext) -> dict[str, Any]:
         """Run extraction pipeline via injected callable.

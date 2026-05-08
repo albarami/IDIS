@@ -228,6 +228,7 @@ class TestStepOrderingConstants:
         assert FULL_STEPS == [
             StepName.INGEST_CHECK,
             StepName.DOCUMENT_PREFLIGHT,
+            StepName.METHODOLOGY_COVERAGE_INIT,
             StepName.EXTRACT,
             StepName.GRADE,
             StepName.CALC,
@@ -262,8 +263,8 @@ class TestStepOrderingConstants:
 class TestFullVsSnapshotEnforcement:
     """FULL-only steps must not execute in SNAPSHOT mode."""
 
-    def test_snapshot_has_only_five_steps(self) -> None:
-        """SNAPSHOT mode completes with 5 steps (no FULL-only steps)."""
+    def test_snapshot_has_only_six_steps(self) -> None:
+        """SNAPSHOT mode completes with 6 steps (no FULL-only steps)."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -282,13 +283,13 @@ class TestFullVsSnapshotEnforcement:
         result = orchestrator.execute(ctx)
 
         assert result.status == "SUCCEEDED"
-        assert len(result.steps) == 5
+        assert len(result.steps) == 6
         step_names = {s.step_name for s in result.steps}
         for full_only in FULL_ONLY_STEPS:
             assert full_only not in step_names
 
-    def test_full_has_ten_steps(self) -> None:
-        """FULL mode completes with all 10 steps."""
+    def test_full_has_eleven_steps(self) -> None:
+        """FULL mode completes with all 11 steps."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -297,7 +298,7 @@ class TestFullVsSnapshotEnforcement:
         result = orchestrator.execute(ctx)
 
         assert result.status == "SUCCEEDED"
-        assert len(result.steps) == 10
+        assert len(result.steps) == 11
 
 
 class TestMissingCallableFailClosed:
@@ -383,7 +384,7 @@ class TestResumeSkipsCompletedSteps:
 
         result1 = orchestrator.execute(ctx)
         assert result1.status == "SUCCEEDED"
-        assert len(result1.steps) == 10
+        assert len(result1.steps) == 11
 
         call_count = {"enrichment": 0}
         original_enrich = _stub_enrichment

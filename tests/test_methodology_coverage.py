@@ -98,6 +98,39 @@ def test_initialize_one_record_per_methodology_question() -> None:
 
     assert len(records) == 2
     assert {record.status for record in records} == {MethodologyCoverageStatus.NOT_STARTED}
+    assert {record.tenant_id for record in records} == {TENANT_ID}
+    assert {record.deal_id for record in records} == {DEAL_ID}
+    assert {record.run_id for record in records} == {RUN_ID}
+    assert {record.methodology_question_id for record in records} == {
+        "mq_commercial_dd_customers_0001",
+        "mq_commercial_dd_market_0001",
+    }
+
+
+def test_duplicate_initialization_is_idempotent() -> None:
+    """Repeating initialization for the same run reuses deterministic record IDs."""
+    service = InMemoryMethodologyCoverageService()
+    registry = _registry()
+
+    first = service.initialize_coverage(
+        tenant_id=TENANT_ID,
+        deal_id=DEAL_ID,
+        run_id=RUN_ID,
+        registry=registry,
+    )
+    second = service.initialize_coverage(
+        tenant_id=TENANT_ID,
+        deal_id=DEAL_ID,
+        run_id=RUN_ID,
+        registry=registry,
+    )
+    summary = service.summarize(tenant_id=TENANT_ID, deal_id=DEAL_ID, run_id=RUN_ID)
+
+    assert [record.coverage_record_id for record in first] == [
+        record.coverage_record_id for record in second
+    ]
+    assert summary.total_questions == 2
+    assert summary.by_status == {"not_started": 2}
 
 
 def test_aggregates_by_methodology_type_and_section() -> None:

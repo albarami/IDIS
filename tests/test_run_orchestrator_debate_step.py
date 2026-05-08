@@ -187,8 +187,8 @@ def _clear_stores() -> None:
 class TestDebateStepHappyPath:
     """DEBATE step completes when debate_fn is provided and returns valid output."""
 
-    def test_full_run_with_debate_fn_completes_all_ten_steps(self) -> None:
-        """FULL run completes all 10 steps including DEBATE."""
+    def test_full_run_with_debate_fn_completes_all_eleven_steps(self) -> None:
+        """FULL run completes all 11 steps including DEBATE."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -212,11 +212,12 @@ class TestDebateStepHappyPath:
         result = orchestrator.execute(ctx)
 
         assert result.status == "SUCCEEDED"
-        assert len(result.steps) == 10
+        assert len(result.steps) == 11
 
         expected_names = [
             StepName.INGEST_CHECK,
             StepName.DOCUMENT_PREFLIGHT,
+            StepName.METHODOLOGY_COVERAGE_INIT,
             StepName.EXTRACT,
             StepName.GRADE,
             StepName.CALC,
@@ -343,10 +344,11 @@ class TestDebateStepFailClosed:
         assert "debate_fn not provided" in (result.error_message or "")
 
         completed = [s for s in result.steps if s.status == StepStatus.COMPLETED]
-        assert len(completed) == 6
+        assert len(completed) == 7
         assert [s.step_name for s in completed] == [
             StepName.INGEST_CHECK,
             StepName.DOCUMENT_PREFLIGHT,
+            StepName.METHODOLOGY_COVERAGE_INIT,
             StepName.EXTRACT,
             StepName.GRADE,
             StepName.CALC,
@@ -378,5 +380,5 @@ class TestDebateStepFailClosed:
         result = orchestrator.execute(ctx)
 
         assert result.status == "SUCCEEDED"
-        assert len(result.steps) == 5
+        assert len(result.steps) == 6
         assert all(s.status == StepStatus.COMPLETED for s in result.steps)

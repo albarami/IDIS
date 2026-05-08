@@ -1,13 +1,14 @@
 """Tests for RunOrchestrator step ledger — Phase 5 orchestration.
 
 Covers:
-- SNAPSHOT records five steps in order (INGEST_CHECK → DOCUMENT_PREFLIGHT → EXTRACT → GRADE → CALC)
+- SNAPSHOT records six steps in order
+  (INGEST_CHECK → DOCUMENT_PREFLIGHT → METHODOLOGY_COVERAGE_INIT → EXTRACT → GRADE → CALC)
 - Step errors persisted and returned
-- FULL completes all 10 steps in correct order
+- FULL completes all 11 steps in correct order
 - Cross-tenant run step read returns 404 (no existence leak)
 - Audit failure aborts run fail-closed
 
-Updated for Phase 3.0 Slice 2: FULL mode now has 10 steps.
+Updated for Phase 3.0 Slice 3: FULL mode now has 11 steps.
 """
 
 from __future__ import annotations
@@ -192,11 +193,11 @@ def _clear_stores() -> None:
     clear_run_steps_store()
 
 
-class TestSnapshotRecordsFiveStepsInOrder:
+class TestSnapshotRecordsSixStepsInOrder:
     """test_snapshot_records_five_steps_in_order."""
 
     def test_snapshot_records_four_steps_in_order(self) -> None:
-        """SNAPSHOT run records DOCUMENT_PREFLIGHT before EXTRACT."""
+        """SNAPSHOT run records coverage init after preflight and before EXTRACT."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -215,11 +216,12 @@ class TestSnapshotRecordsFiveStepsInOrder:
         result = orchestrator.execute(ctx)
 
         assert result.status == "SUCCEEDED"
-        assert len(result.steps) == 5
+        assert len(result.steps) == 6
 
         expected_names = [
             StepName.INGEST_CHECK,
             StepName.DOCUMENT_PREFLIGHT,
+            StepName.METHODOLOGY_COVERAGE_INIT,
             StepName.EXTRACT,
             StepName.GRADE,
             StepName.CALC,
@@ -267,9 +269,10 @@ class TestSnapshotStepErrorsPersistedAndReturned:
         assert failed.finished_at is not None
 
         completed_steps = [s for s in result.steps if s.status == StepStatus.COMPLETED]
-        assert len(completed_steps) == 2
+        assert len(completed_steps) == 3
         assert completed_steps[0].step_name == StepName.INGEST_CHECK
         assert completed_steps[1].step_name == StepName.DOCUMENT_PREFLIGHT
+        assert completed_steps[2].step_name == StepName.METHODOLOGY_COVERAGE_INIT
 
     def test_empty_documents_sets_no_ingested_documents_block_reason(self) -> None:
         """Empty corpus is an intentional blocked condition, not a generic runtime error."""
@@ -326,6 +329,7 @@ class TestSnapshotStepErrorsPersistedAndReturned:
             StepName.INGEST_CHECK,
             StepName.DOCUMENT_PREFLIGHT,
         ]
+        assert StepName.METHODOLOGY_COVERAGE_INIT not in {step.step_name for step in result.steps}
 
     def test_mixed_corpus_sends_only_eligible_documents_to_extract(self) -> None:
         """Broken documents must not leak into EXTRACT inputs."""
@@ -385,6 +389,37 @@ class TestSnapshotStepErrorsPersistedAndReturned:
         assert "Highly sensitive raw revenue sentence" not in str(preflight_step.result_summary)
         assert "text_excerpt" not in str(preflight_step.result_summary)
 
+    def test_methodology_coverage_init_summary_has_safe_identifiers_only(self) -> None:
+        """Coverage init summary stores IDs and counts, not document or question text."""
+        audit_sink = InMemoryAuditSink()
+        repo = InMemoryRunStepsRepository(TENANT_A)
+        orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
+
+        ctx = RunContext(
+            run_id=str(uuid.uuid4()),
+            tenant_id=TENANT_A,
+            deal_id="deal-preflight",
+            mode="SNAPSHOT",
+            documents=[],
+            preflight_corpus=[_make_preflight_document(document_id="doc-usable")],
+            extract_fn=_stub_extract,
+            grade_fn=_stub_grade,
+            calc_fn=_stub_calc,
+        )
+
+        result = orchestrator.execute(ctx)
+
+        assert result.status == "SUCCEEDED"
+        coverage_step = next(
+            step for step in result.steps if step.step_name == StepName.METHODOLOGY_COVERAGE_INIT
+        )
+        assert "Highly sensitive raw revenue sentence" not in str(coverage_step.result_summary)
+        assert "text_excerpt" not in str(coverage_step.result_summary)
+        assert "question_text" not in str(coverage_step.result_summary)
+        assert coverage_step.result_summary["methodology_id"] == "commercial_dd"
+        assert coverage_step.result_summary["coverage_record_ids"]
+        assert ctx.methodology_coverage_records
+
     def test_generic_preflight_runtime_failure_does_not_become_block_reason(self) -> None:
         """Unexpected preflight exceptions are not intentional business blockers."""
         audit_sink = InMemoryAuditSink()
@@ -413,6 +448,82 @@ class TestSnapshotStepErrorsPersistedAndReturned:
         assert result.error_code == "RUNTIMEERROR"
         assert result.block_reason is None
         assert result.steps[-1].step_name == StepName.DOCUMENT_PREFLIGHT
+
+    def test_generic_coverage_init_runtime_failure_does_not_become_block_reason(self) -> None:
+        """Unexpected coverage-init exceptions are not intentional business blockers."""
+        audit_sink = InMemoryAuditSink()
+        repo = InMemoryRunStepsRepository(TENANT_A)
+        orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
+
+        def failing_coverage_init(**kwargs: Any) -> Any:
+            raise RuntimeError("coverage service failed")
+
+        ctx = RunContext(
+            run_id=str(uuid.uuid4()),
+            tenant_id=TENANT_A,
+            deal_id="deal-preflight",
+            mode="SNAPSHOT",
+            documents=[],
+            preflight_corpus=[_make_preflight_document(document_id="doc-usable")],
+            methodology_coverage_init_fn=failing_coverage_init,
+            extract_fn=_stub_extract,
+            grade_fn=_stub_grade,
+            calc_fn=_stub_calc,
+        )
+
+        result = orchestrator.execute(ctx)
+
+        assert result.status == "FAILED"
+        assert result.error_code == "RUNTIMEERROR"
+        assert result.block_reason is None
+        assert result.steps[-1].step_name == StepName.METHODOLOGY_COVERAGE_INIT
+
+    def test_resume_reattaches_completed_coverage_records_without_rerunning_init_fn(self) -> None:
+        """A resumed context keeps in-memory coverage available after skipping the step."""
+        audit_sink = InMemoryAuditSink()
+        repo = InMemoryRunStepsRepository(TENANT_A)
+        orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
+        run_id = str(uuid.uuid4())
+
+        first_ctx = RunContext(
+            run_id=run_id,
+            tenant_id=TENANT_A,
+            deal_id="deal-preflight",
+            mode="SNAPSHOT",
+            documents=[],
+            preflight_corpus=[_make_preflight_document(document_id="doc-usable")],
+            extract_fn=_stub_extract,
+            grade_fn=_stub_grade,
+            calc_fn=_stub_calc,
+        )
+        first_result = orchestrator.execute(first_ctx)
+        assert first_result.status == "SUCCEEDED"
+
+        init_calls = 0
+
+        def counting_coverage_init(**kwargs: Any) -> Any:
+            nonlocal init_calls
+            init_calls += 1
+            raise AssertionError("completed coverage init should not rerun injected init fn")
+
+        resumed_ctx = RunContext(
+            run_id=run_id,
+            tenant_id=TENANT_A,
+            deal_id="deal-preflight",
+            mode="SNAPSHOT",
+            documents=[],
+            preflight_corpus=[_make_preflight_document(document_id="doc-usable")],
+            methodology_coverage_init_fn=counting_coverage_init,
+            extract_fn=_stub_extract,
+            grade_fn=_stub_grade,
+            calc_fn=_stub_calc,
+        )
+
+        resumed_result = orchestrator.execute(resumed_ctx)
+
+        assert resumed_result.status == "SUCCEEDED"
+        assert init_calls == 0
+        assert resumed_ctx.methodology_coverage_records
 
 
 def _stub_enrichment(
@@ -500,11 +611,11 @@ def _stub_deliverables(
     }
 
 
-class TestFullCompletesAllNineSteps:
+class TestFullCompletesAllElevenSteps:
     """test_full_completes_all_nine_steps."""
 
     def test_full_completes_all_ten_steps(self) -> None:
-        """FULL run completes all 10 steps in canonical order."""
+        """FULL run completes all 11 steps in canonical order."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -531,10 +642,11 @@ class TestFullCompletesAllNineSteps:
         assert result.block_reason is None
 
         completed = [s for s in result.steps if s.status == StepStatus.COMPLETED]
-        assert len(completed) == 10
+        assert len(completed) == 11
         assert [s.step_name for s in completed] == [
             StepName.INGEST_CHECK,
             StepName.DOCUMENT_PREFLIGHT,
+            StepName.METHODOLOGY_COVERAGE_INIT,
             StepName.EXTRACT,
             StepName.GRADE,
             StepName.CALC,
@@ -690,6 +802,7 @@ class TestStartRunPreflightCorpusBehavior:
         assert [step["step_name"] for step in body["steps"]] == [
             "INGEST_CHECK",
             "DOCUMENT_PREFLIGHT",
+            "METHODOLOGY_COVERAGE_INIT",
             "EXTRACT",
             "GRADE",
             "CALC",

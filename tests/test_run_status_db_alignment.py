@@ -234,7 +234,7 @@ class TestRunStatusDBAlignment:
         result = orchestrator.execute(_make_snapshot_ctx())
 
         completed_steps = [s for s in result.steps if s.status == StepStatus.COMPLETED]
-        assert len(completed_steps) == 5
+        assert len(completed_steps) == 6
 
     def test_compute_final_status_with_failed_step_returns_failed_string(self) -> None:
         """_compute_final_status returns exactly 'FAILED' (not 'PARTIAL') when a step failed."""

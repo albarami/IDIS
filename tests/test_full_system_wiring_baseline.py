@@ -319,3 +319,48 @@ def test_full_system_report_does_not_overstate_phase_2_8_wiring() -> None:
     assert "Coverage updates are live in production" not in report
     assert "IC-bound promotion is wired" not in report
     assert "Sanad creation boundary is fully wired into production runs" not in report
+
+
+def test_full_system_inventory_detects_phase_2_9_claim_sanad_link_boundary() -> None:
+    """Phase 2.9 Claim-Sanad link boundary exists while promotion stays deferred."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+
+    assert inventory["methodology_claim_sanad_link_boundary_models"].status in {
+        "WIRED",
+        "PARTIAL",
+    }
+    assert inventory["methodology_claim_sanad_link_boundary_service"].status == "PARTIAL"
+    assert inventory["methodology_claim_sanad_link_boundary_audit_contract"].status == "PARTIAL"
+    assert inventory["methodology_synthetic_claim_sanad_link_apply_path"].status == "PARTIAL"
+    assert inventory["methodology_claim_sanad_link_ic_promotion"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+    assert inventory["methodology_claim_sanad_link_verdict_action_promotion"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+    assert inventory["methodology_claim_sanad_link_coverage_updates"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+    assert inventory["methodology_claim_sanad_link_postgres_api_run_ui_integration"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+    assert inventory["methodology_claim_sanad_link_rag_graph_cache_integration"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+
+
+def test_full_system_report_does_not_overstate_phase_2_9_wiring() -> None:
+    """Wiring audit must not claim Phase 2.9 links are IC promotion."""
+    report = render_report(collect_wiring_inventory(REPO_ROOT))
+
+    assert "claim-sanad link boundary" in report.lower()
+    assert "explicit synthetic claimservice.update path exists when invoked" in report.lower()
+    assert "ic promotion is not wired" in report.lower()
+    assert "claim verdict/action promotion is not wired" in report.lower()
+    assert "coverage updates are not wired" in report.lower()
+    assert "claim-sanad link boundary is fully wired into production runs" not in report

@@ -219,6 +219,33 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             "methodology_sanad_creation_rag_graph_cache_integration": (
                 _methodology_sanad_creation_rag_graph_cache_integration(files)
             ),
+            "methodology_claim_sanad_link_boundary_models": (
+                _methodology_claim_sanad_link_boundary_models(root, files)
+            ),
+            "methodology_claim_sanad_link_boundary_service": (
+                _methodology_claim_sanad_link_boundary_service(root, files)
+            ),
+            "methodology_claim_sanad_link_boundary_audit_contract": (
+                _methodology_claim_sanad_link_boundary_audit_contract(root, files)
+            ),
+            "methodology_synthetic_claim_sanad_link_apply_path": (
+                _methodology_synthetic_claim_sanad_link_apply_path(files)
+            ),
+            "methodology_claim_sanad_link_ic_promotion": (
+                _methodology_claim_sanad_link_ic_promotion(files)
+            ),
+            "methodology_claim_sanad_link_verdict_action_promotion": (
+                _methodology_claim_sanad_link_verdict_action_promotion(files)
+            ),
+            "methodology_claim_sanad_link_coverage_updates": (
+                _methodology_claim_sanad_link_coverage_updates(files)
+            ),
+            "methodology_claim_sanad_link_postgres_api_run_ui_integration": (
+                _methodology_claim_sanad_link_postgres_api_run_ui_integration(files)
+            ),
+            "methodology_claim_sanad_link_rag_graph_cache_integration": (
+                _methodology_claim_sanad_link_rag_graph_cache_integration(files)
+            ),
             "analysis_agents": _analysis_agents(files),
             "commercial_agents": _commercial_agents(files),
             "debate_layer_1": _debate_layer_1(files),
@@ -296,6 +323,9 @@ def render_report(inventory: WiringInventory) -> str:
         "- Sanad readiness boundary and coverage update decisions now exist, while "
         "live coverage updates are not wired; Phase 2.8 adds an explicit synthetic "
         "Sanad creation path while production run wiring remains deferred.",
+        "- Claim-Sanad link boundary now exists; the explicit synthetic ClaimService.update "
+        "path exists when invoked, while IC promotion, claim verdict/action promotion, "
+        "and coverage updates are not wired.",
         "- Enrichment connectors and deterministic/Anthropic LLM wiring exist, but baseline "
         "validation is config-only for paid/network providers.",
         "",
@@ -454,6 +484,10 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/services/methodology/sanad_creation_boundary_results.py",
         "src/idis/services/methodology/sanad_creation_boundary_support.py",
         "src/idis/services/methodology/sanad_creation_boundary_audit.py",
+        "src/idis/models/claim_sanad_link_boundary.py",
+        "src/idis/services/methodology/claim_sanad_link_boundary.py",
+        "src/idis/services/methodology/claim_sanad_link_boundary_support.py",
+        "src/idis/services/methodology/claim_sanad_link_boundary_audit.py",
         "src/idis/analysis/agents/__init__.py",
         "src/idis/analysis/runner.py",
         "src/idis/debate/orchestrator.py",
@@ -1721,6 +1755,197 @@ def _methodology_sanad_creation_rag_graph_cache_integration(files: dict[str, str
         evidence=["The creation boundary consumes only synthetic in-memory references."],
         gaps=["Future retrieval, graph, and cache work must preserve source-span linkage."],
         phase_2_action="Phase 2.8",
+    )
+
+
+def _claim_sanad_link_text(files: dict[str, str]) -> str:
+    return (
+        files.get("src/idis/services/methodology/claim_sanad_link_boundary.py", "")
+        + files.get("src/idis/services/methodology/claim_sanad_link_boundary_support.py", "")
+    )
+
+
+def _methodology_claim_sanad_link_boundary_models(
+    root: Path, files: dict[str, str]
+) -> WiringItem:
+    has_models = _exists(
+        root, "src/idis/models/claim_sanad_link_boundary.py"
+    ) and _contains(
+        files,
+        "src/idis/models/claim_sanad_link_boundary.py",
+        "ClaimSanadLinkApplicationResult",
+    )
+    return WiringItem(
+        key="methodology_claim_sanad_link_boundary_models",
+        label="Claim-Sanad link boundary models",
+        status="WIRED" if has_models else "NOT_FOUND",
+        summary="Claim-Sanad link boundary models exist for synthetic Phase 2.9 results.",
+        evidence=[
+            "`claim_sanad_link_boundary.py` defines apply decisions, mappings, "
+            "rejections, summaries, and non-promotion status."
+        ],
+        gaps=["Models are not persisted to a dedicated Phase 2.9 schema."],
+        phase_2_action="Phase 2.9",
+    )
+
+
+def _methodology_claim_sanad_link_boundary_service(
+    root: Path, files: dict[str, str]
+) -> WiringItem:
+    service_text = _claim_sanad_link_text(files)
+    has_service = _exists(
+        root, "src/idis/services/methodology/claim_sanad_link_boundary.py"
+    ) and "ClaimSanadLinkBoundaryService" in service_text
+    return WiringItem(
+        key="methodology_claim_sanad_link_boundary_service",
+        label="Claim-Sanad link boundary service",
+        status="PARTIAL" if has_service else "NOT_FOUND",
+        summary=(
+            "Synthetic-only Claim-Sanad link boundary exists and requires explicit "
+            "tenant-scoped invocation."
+        ),
+        evidence=[
+            "`build_claim_sanad_link_decisions` consumes Phase 2.8 creation output.",
+            "`apply_claim_sanad_links` requires an injected ClaimService.",
+        ],
+        gaps=["No API, run, UI, Postgres, RAG, graph, or cache integration is wired."],
+        phase_2_action="Phase 2.9",
+    )
+
+
+def _methodology_claim_sanad_link_boundary_audit_contract(
+    root: Path, files: dict[str, str]
+) -> WiringItem:
+    has_contract = _exists(
+        root, "src/idis/services/methodology/claim_sanad_link_boundary_audit.py"
+    ) and _contains(
+        files,
+        "src/idis/services/methodology/claim_sanad_link_boundary_audit.py",
+        "CLAIM_SANAD_LINK_BOUNDARY_AUDIT_EVENTS",
+    )
+    return WiringItem(
+        key="methodology_claim_sanad_link_boundary_audit_contract",
+        label="Claim-Sanad link boundary future audit contract",
+        status="PARTIAL" if has_contract else "NOT_FOUND",
+        summary="Future audit event names and payload keys exist without live emission.",
+        evidence=[
+            "`claim_sanad_link_boundary_audit.py` defines Phase 2.9 audit constants."
+        ],
+        gaps=["No live audit sink emission is wired in Phase 2.9."],
+        phase_2_action="Phase 2.9",
+    )
+
+
+def _methodology_synthetic_claim_sanad_link_apply_path(files: dict[str, str]) -> WiringItem:
+    service_text = _claim_sanad_link_text(files)
+    has_path = all(
+        token in service_text
+        for token in [
+            "apply_claim_sanad_links",
+            "ClaimService",
+            "UpdateClaimInput",
+            ".update(",
+        ]
+    )
+    return WiringItem(
+        key="methodology_synthetic_claim_sanad_link_apply_path",
+        label="Synthetic Claim-Sanad link apply path",
+        status="PARTIAL" if has_path else "NOT_FOUND",
+        summary="Explicit synthetic ClaimService.update path exists when invoked.",
+        evidence=[
+            "Phase 2.9 applies only `sanad_id` and `request_id` through ClaimService.update."
+        ],
+        gaps=["This path is not called from production run execution."],
+        phase_2_action="Phase 2.9",
+    )
+
+
+def _methodology_claim_sanad_link_ic_promotion(files: dict[str, str]) -> WiringItem:
+    service_text = _claim_sanad_link_text(files)
+    integrated = "ic_bound=True" in service_text
+    return WiringItem(
+        key="methodology_claim_sanad_link_ic_promotion",
+        label="Claim-Sanad link IC promotion",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary="IC promotion is not wired for Phase 2.9 Claim-Sanad linking.",
+        evidence=["Link mappings carry `sanad_linked_not_ic_ready` promotion metadata."],
+        gaps=["Investment-committee promotion remains a later explicit phase."],
+        phase_2_action="Phase 2.9",
+    )
+
+
+def _methodology_claim_sanad_link_verdict_action_promotion(
+    files: dict[str, str],
+) -> WiringItem:
+    service_text = _claim_sanad_link_text(files)
+    integrated = "claim_verdict=VERIFIED" in service_text or "claim_action=NONE" in service_text
+    return WiringItem(
+        key="methodology_claim_sanad_link_verdict_action_promotion",
+        label="Claim-Sanad link verdict/action promotion",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary="Claim verdict/action promotion is not wired for Phase 2.9.",
+        evidence=["Post-update validation rejects VERIFIED or NONE protected-field drift."],
+        gaps=["Verified verdict and no-action promotion remain a later explicit phase."],
+        phase_2_action="Phase 2.9",
+    )
+
+
+def _methodology_claim_sanad_link_coverage_updates(files: dict[str, str]) -> WiringItem:
+    service_text = _claim_sanad_link_text(files)
+    live_coverage = (
+        ".update_status(" in service_text
+        or "update_status(" in service_text
+        or "apply_decisions_in_memory" in service_text
+    )
+    return WiringItem(
+        key="methodology_claim_sanad_link_coverage_updates",
+        label="Claim-Sanad link coverage updates",
+        status="PARTIAL" if live_coverage else "DEFERRED",
+        summary="Coverage updates are not wired for Phase 2.9 Claim-Sanad linking.",
+        evidence=["Link mappings carry coverage_update_status='not_applied'."],
+        gaps=["Coverage mutation remains deferred until explicitly approved."],
+        phase_2_action="Phase 2.9",
+    )
+
+
+def _methodology_claim_sanad_link_postgres_api_run_ui_integration(
+    files: dict[str, str],
+) -> WiringItem:
+    service_text = _claim_sanad_link_text(files)
+    integration_text = (
+        files.get("src/idis/api/main.py", "")
+        + files.get("src/idis/api/routes/runs.py", "")
+        + files.get("src/idis/services/runs/steps.py", "")
+        + files.get("src/idis/pipeline/worker.py", "")
+    )
+    integrated = "ClaimSanadLinkBoundaryService" in integration_text or "sqlalchemy" in (
+        service_text
+    ).lower()
+    return WiringItem(
+        key="methodology_claim_sanad_link_postgres_api_run_ui_integration",
+        label="Claim-Sanad link Postgres/API/run/UI integration",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary="Postgres/API/run/UI integration is not wired for Phase 2.9.",
+        evidence=["The link boundary is not invoked by API routes or run execution paths."],
+        gaps=["Production integration must keep explicit tenant and apply boundaries."],
+        phase_2_action="Phase 2.9",
+    )
+
+
+def _methodology_claim_sanad_link_rag_graph_cache_integration(files: dict[str, str]) -> WiringItem:
+    service_text = _claim_sanad_link_text(files)
+    integrated = any(
+        token in service_text.lower()
+        for token in ["retrieval", "pgvector", "neo4j", "redis"]
+    )
+    return WiringItem(
+        key="methodology_claim_sanad_link_rag_graph_cache_integration",
+        label="Claim-Sanad link RAG/vector/Neo4j/Redis integration",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary="RAG/vector/Neo4j/Redis integration remains deferred for Phase 2.9.",
+        evidence=["The link boundary consumes only synthetic Phase 2.8 mapping records."],
+        gaps=["Future retrieval, graph, and cache work must preserve Sanad linkage."],
+        phase_2_action="Phase 2.9",
     )
 
 

@@ -309,7 +309,7 @@ class IngestionService:
             artifact_id=artifact_id,
             doc_type=doc_type_enum,
             parse_status=parse_status,
-            parse_metadata=parse_result.metadata,
+            parse_metadata=self._parse_metadata_for_persistence(parse_result),
             timestamp=now,
         )
 
@@ -496,6 +496,16 @@ class IngestionService:
             "UNKNOWN": DocumentType.PDF,
         }
         return type_map.get(parser_doc_type, DocumentType.PDF)
+
+    def _parse_metadata_for_persistence(self, parse_result: ParseResult) -> dict[str, Any]:
+        """Return safe parser metadata needed for persisted preflight triage."""
+        return {
+            **parse_result.metadata,
+            "parse_error_codes": [error.code.value for error in parse_result.errors],
+            "parse_warning_codes": [str(warning) for warning in parse_result.warnings],
+            "detected_format": parse_result.doc_type,
+            "parser_doc_type": parse_result.doc_type,
+        }
 
     def _create_artifact(
         self,

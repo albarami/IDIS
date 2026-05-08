@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import pytest
+
 from idis.models.document_classification import DocumentSupportStatus, DocumentTriageStatus
+from idis.parsers.base import ParseError, ParseErrorCode, ParseResult
 from idis.services.documents.parser_capabilities import (
     DEFAULT_MAX_CLASSIFICATION_BYTES,
     capability_for_document,
+    triage_document,
 )
 
 
@@ -78,6 +82,33 @@ def test_file_above_ingestion_limit_is_too_large() -> None:
     capability = capability_for_document(
         filename="synthetic_model.xlsx",
         file_size_bytes=DEFAULT_MAX_CLASSIFICATION_BYTES + 1,
+    )
+
+    assert capability.support_status == DocumentSupportStatus.TOO_LARGE
+    assert capability.triage_status == DocumentTriageStatus.TOO_LARGE
+
+
+@pytest.mark.parametrize(
+    "error_code",
+    [
+        ParseErrorCode.MAX_SIZE_EXCEEDED,
+        ParseErrorCode.MAX_PAGES_EXCEEDED,
+        ParseErrorCode.MAX_SHEETS_EXCEEDED,
+        ParseErrorCode.MAX_CELLS_EXCEEDED,
+    ],
+)
+def test_all_parser_limit_failures_triage_to_too_large(
+    error_code: ParseErrorCode,
+) -> None:
+    parse_result = ParseResult(
+        doc_type="XLSX",
+        success=False,
+        errors=[ParseError(code=error_code, message=error_code.value)],
+    )
+
+    capability = triage_document(
+        filename="synthetic_model.xlsx",
+        parse_result=parse_result,
     )
 
     assert capability.support_status == DocumentSupportStatus.TOO_LARGE

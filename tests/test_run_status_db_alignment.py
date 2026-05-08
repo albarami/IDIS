@@ -104,6 +104,24 @@ def _failing_extract(**kwargs: Any) -> dict[str, Any]:
     raise ValueError("Simulated extraction failure")
 
 
+def _make_documents() -> list[dict[str, Any]]:
+    return [
+        {
+            "document_id": "doc-001",
+            "doc_type": "DOCX",
+            "document_name": "test.docx",
+            "spans": [
+                {
+                    "span_id": "span-001",
+                    "text_excerpt": "Revenue was $5M.",
+                    "locator": {"paragraph": 1},
+                    "span_type": "PARAGRAPH",
+                }
+            ],
+        }
+    ]
+
+
 def _make_orchestrator() -> tuple[RunOrchestrator, InMemoryAuditSink, InMemoryRunStepsRepository]:
     audit_sink = InMemoryAuditSink()
     repo = InMemoryRunStepsRepository(TENANT_A)
@@ -117,7 +135,7 @@ def _make_snapshot_ctx(**overrides: Any) -> RunContext:
         "tenant_id": TENANT_A,
         "deal_id": str(uuid.uuid4()),
         "mode": "SNAPSHOT",
-        "documents": [{"doc_id": "d1", "content": "test"}],
+        "documents": _make_documents(),
         "extract_fn": _stub_extract,
         "grade_fn": _stub_grade,
         "calc_fn": _stub_calc,
@@ -132,7 +150,7 @@ def _make_full_ctx(**overrides: Any) -> RunContext:
         "tenant_id": TENANT_A,
         "deal_id": str(uuid.uuid4()),
         "mode": "FULL",
-        "documents": [{"doc_id": "d1", "content": "test"}],
+        "documents": _make_documents(),
         "extract_fn": _stub_extract,
         "grade_fn": _stub_grade,
         "calc_fn": _stub_calc,
@@ -216,7 +234,7 @@ class TestRunStatusDBAlignment:
         result = orchestrator.execute(_make_snapshot_ctx())
 
         completed_steps = [s for s in result.steps if s.status == StepStatus.COMPLETED]
-        assert len(completed_steps) == 4
+        assert len(completed_steps) == 5
 
     def test_compute_final_status_with_failed_step_returns_failed_string(self) -> None:
         """_compute_final_status returns exactly 'FAILED' (not 'PARTIAL') when a step failed."""

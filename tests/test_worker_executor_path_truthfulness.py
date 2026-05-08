@@ -42,3 +42,15 @@ def test_worker_and_api_share_persisted_document_corpus_loader() -> None:
     assert split.status == "PARTIAL"
     assert any("Pipeline worker context factory" in item for item in loader.evidence)
     assert any("Worker path hydrates" in item for item in split.evidence)
+
+
+def test_worker_and_api_share_document_preflight_behavior() -> None:
+    """Worker and API should both hydrate full corpus before DOCUMENT_PREFLIGHT."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+    preflight = inventory["document_preflight_run_integration"]
+
+    assert preflight.status == "PARTIAL"
+    assert any("API start-run loads full preflight corpus" in item for item in preflight.evidence)
+    assert any(
+        "worker context factory loads full preflight corpus" in item for item in preflight.evidence
+    )

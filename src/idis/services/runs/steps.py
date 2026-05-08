@@ -18,6 +18,7 @@ def build_run_context(
     deal_id: str,
     mode: str,
     documents: list[dict[str, Any]],
+    preflight_corpus: list[dict[str, Any]] | None = None,
     audit_sink: AuditSink,
 ) -> RunContext:
     """Build a RunContext with the canonical step callables.
@@ -44,6 +45,7 @@ def build_run_context(
         deal_id=deal_id,
         mode=mode,
         documents=documents,
+        preflight_corpus=preflight_corpus or documents,
         extract_fn=partial(_run_snapshot_extraction, db_conn=db_conn),
         grade_fn=partial(_run_snapshot_auto_grade, db_conn=db_conn),
         calc_fn=partial(_run_snapshot_calc, db_conn=db_conn),
@@ -81,6 +83,46 @@ def load_documents_for_deal(
     return run_documents
 
 
+def load_document_preflight_corpus_for_deal(
+    *,
+    db_conn: Any,
+    deal_id: str,
+    tenant_id: str,
+) -> list[dict[str, Any]]:
+    """Load the full persisted corpus for document preflight.
+
+    This includes parsed and failed document rows. Failed/no-span rows are needed
+    so parser triage can reconstruct blockers from safe metadata.
+    """
+    if db_conn is None:
+        return []
+
+    repo = PostgresDocumentsRepository(db_conn, tenant_id)
+    corpus: list[dict[str, Any]] = []
+    for document in repo.list_documents_by_deal(deal_id, parsed_only=False):
+        spans = repo.list_spans_by_document(
+            deal_id=deal_id,
+            document_id=document["document_id"],
+        )
+        corpus.append(_document_for_preflight(document, spans))
+    return corpus
+
+
+def extraction_ready_documents_from_preflight_corpus(
+    corpus: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return parsed documents with spans in the legacy extraction-ready shape."""
+    documents: list[dict[str, Any]] = []
+    for document in corpus:
+        spans = list(document.get("spans") or [])
+        if str(document.get("parse_status", "PARSED")) != "PARSED":
+            continue
+        if not spans:
+            continue
+        documents.append(_document_for_run(document, spans))
+    return documents
+
+
 def _span_for_run(span: Any) -> dict[str, Any]:
     """Convert a repository span row to the run document span shape."""
     span_dict = (
@@ -112,4 +154,39 @@ def _document_for_run(document: dict[str, Any], spans: list[dict[str, Any]]) -> 
         "doc_type": document["doc_type"],
         "document_name": document["document_name"],
         "spans": [_span_for_run(span) for span in spans],
+    }
+
+
+def _span_for_preflight(span: dict[str, Any]) -> dict[str, Any]:
+    """Convert a repository span row to full preflight span shape."""
+    return {
+        "span_id": str(span["span_id"]),
+        "tenant_id": str(span.get("tenant_id")) if span.get("tenant_id") is not None else None,
+        "deal_id": str(span.get("deal_id")) if span.get("deal_id") is not None else None,
+        "document_id": str(span["document_id"]),
+        "span_type": str(span["span_type"]),
+        "locator": span.get("locator") if isinstance(span.get("locator"), dict) else {},
+        "text_excerpt": span.get("text_excerpt"),
+        "content_hash": span.get("content_hash"),
+    }
+
+
+def _document_for_preflight(
+    document: dict[str, Any],
+    spans: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Convert repository document and spans to full preflight corpus shape."""
+    return {
+        "tenant_id": str(document["tenant_id"]),
+        "deal_id": str(document["deal_id"]),
+        "document_id": str(document["document_id"]),
+        "doc_id": str(document["doc_id"]),
+        "doc_type": str(document["doc_type"]),
+        "parse_status": str(document["parse_status"]),
+        "document_name": str(document.get("document_name") or document["document_id"]),
+        "sha256": document.get("sha256"),
+        "uri": document.get("uri"),
+        "metadata": dict(document.get("metadata") or {}),
+        "source_metadata": dict(document.get("artifact_metadata") or {}),
+        "spans": [_span_for_preflight(span) for span in spans],
     }

@@ -269,8 +269,49 @@ def test_ingestion_persists_failed_parse_without_extraction_ready_spans(
 
     assert result.success is False
     assert documents[0]["parse_status"] == "FAILED"
+    assert documents[0]["metadata"]["parse_error_codes"] == ["unsupported_format"]
+    assert documents[0]["metadata"]["parse_warning_codes"] == []
+    assert documents[0]["metadata"]["detected_format"] == "UNKNOWN"
+    assert documents[0]["metadata"]["parser_doc_type"] == "UNKNOWN"
+    assert "not a supported document" not in json.dumps(documents[0]["metadata"])
     assert parsed_documents == []
     assert spans == []
+
+
+def test_oversized_pre_ingestion_validation_creates_no_corpus_row(
+    app_engine: Engine,
+    clean_tables: None,
+    compliant_store: ComplianceEnforcedStore,
+) -> None:
+    """Slice 2 Option A: pre-ingestion MAX_BYTES rejection is outside preflight."""
+    with app_engine.begin() as conn:
+        _create_deal(conn)
+        service = IngestionService(
+            compliant_store=compliant_store,
+            audit_sink=InMemoryAuditSink(),
+            db_conn=conn,
+            max_bytes=4,
+        )
+
+        result = service.ingest_bytes(
+            ctx=IngestionContext(
+                tenant_id=TENANT_ID,
+                actor_id="synthetic-tester",
+                request_id="req-too-large-before-persistence",
+            ),
+            deal_id=DEAL_ID,
+            filename="oversized.pdf",
+            media_type="application/pdf",
+            data=b"too large",
+        )
+
+        repo = PostgresDocumentsRepository(conn, str(TENANT_ID))
+        documents = repo.list_documents_by_deal(str(DEAL_ID), parsed_only=False)
+
+    assert result.success is False
+    assert result.artifact_id is None
+    assert result.document_id is None
+    assert documents == []
 
 
 def test_api_ingestion_persists_corpus_and_api_run_loads_persisted_spans(
@@ -368,6 +409,7 @@ def test_api_ingestion_persists_corpus_and_api_run_loads_persisted_spans(
         assert len(spans) > 0
 
         captured_documents: list[list[dict[str, object]]] = []
+        captured_preflight_corpus: list[list[dict[str, object]]] = []
 
         class CapturingRunExecutionService:
             def __init__(self, **kwargs: object) -> None:
@@ -375,6 +417,7 @@ def test_api_ingestion_persists_corpus_and_api_run_loads_persisted_spans(
 
             def execute(self, ctx: object) -> RunExecutionResult:
                 captured_documents.append(ctx.documents)  # type: ignore[attr-defined]
+                captured_preflight_corpus.append(ctx.preflight_corpus)  # type: ignore[attr-defined]
                 return RunExecutionResult(
                     claimed=True,
                     status="SUCCEEDED",
@@ -393,3 +436,4 @@ def test_api_ingestion_persists_corpus_and_api_run_loads_persisted_spans(
         assert captured_documents
         assert captured_documents[0][0]["document_id"] == documents[0]["document_id"]
         assert captured_documents[0][0]["spans"][0]["span_id"] == spans[0]["span_id"]
+        assert captured_preflight_corpus[0][0]["document_id"] == documents[0]["document_id"]

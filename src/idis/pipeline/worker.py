@@ -208,9 +208,18 @@ def _default_run_context_factory(
     audit_sink: Any,
 ) -> RunContext:
     """Build a worker run context using shared run step wiring."""
-    from idis.services.runs.steps import build_run_context, load_documents_for_deal
+    from idis.services.runs.steps import (
+        build_run_context,
+        extraction_ready_documents_from_preflight_corpus,
+        load_document_preflight_corpus_for_deal,
+    )
 
     deal_id = str(run_data["deal_id"])
+    preflight_corpus = load_document_preflight_corpus_for_deal(
+        db_conn=db_conn,
+        deal_id=deal_id,
+        tenant_id=tenant_id,
+    )
 
     return build_run_context(
         db_conn=db_conn,
@@ -218,11 +227,8 @@ def _default_run_context_factory(
         run_id=str(run_data["run_id"]),
         deal_id=deal_id,
         mode=str(run_data["mode"]),
-        documents=load_documents_for_deal(
-            db_conn=db_conn,
-            deal_id=deal_id,
-            tenant_id=tenant_id,
-        ),
+        documents=extraction_ready_documents_from_preflight_corpus(preflight_corpus),
+        preflight_corpus=preflight_corpus,
         audit_sink=audit_sink,
     )
 

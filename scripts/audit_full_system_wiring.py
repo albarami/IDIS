@@ -111,6 +111,7 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             "document_classification_run_integration": _document_classification_run_integration(
                 files
             ),
+            "document_preflight_run_integration": _document_preflight_run_integration(files),
             "extraction_task_models": _extraction_task_models(root, files),
             "extraction_task_planner": _extraction_task_planner(root, files),
             "extraction_task_audit_contract": _extraction_task_audit_contract(root, files),
@@ -442,6 +443,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/api/main.py",
         "src/idis/models/run_step.py",
         "src/idis/services/runs/execution.py",
+        "src/idis/services/runs/orchestrator.py",
         "src/idis/services/runs/steps.py",
         "src/idis/pipeline/worker.py",
         "src/idis/pipeline/executor.py",
@@ -449,6 +451,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/persistence/repositories/documents.py",
         "src/idis/persistence/migrations/versions/0012_document_spans_deal_content_hash.py",
         "src/idis/models/document_span.py",
+        "src/idis/models/document_preflight.py",
         "src/idis/parsers/registry.py",
         "src/idis/services/extraction/pipeline.py",
         "src/idis/services/sanad/auto_grade.py",
@@ -467,6 +470,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/services/documents/classifier.py",
         "src/idis/services/documents/classification_service.py",
         "src/idis/services/documents/audit.py",
+        "src/idis/services/runs/document_preflight.py",
         "src/idis/models/extraction_task.py",
         "src/idis/services/extraction/task_planner.py",
         "src/idis/services/extraction/task_audit.py",
@@ -694,8 +698,14 @@ def _unified_run_document_loader(files: dict[str, str]) -> WiringItem:
         "PARTIAL"
         if "load_documents_for_deal" in steps_text
         and "PostgresDocumentsRepository" in steps_text
-        and "load_documents_for_deal" in route_text
-        and "load_documents_for_deal" in worker_text
+        and (
+            "load_documents_for_deal" in route_text
+            or "load_document_preflight_corpus_for_deal" in route_text
+        )
+        and (
+            "load_documents_for_deal" in worker_text
+            or "load_document_preflight_corpus_for_deal" in worker_text
+        )
         else "DEFERRED"
     )
     return WiringItem(
@@ -726,8 +736,14 @@ def _api_worker_document_corpus_split(files: dict[str, str]) -> WiringItem:
     worker_text = files.get("src/idis/pipeline/worker.py", "")
     resolved = (
         'getattr(request.state, "db_conn", None)' in route_text
-        and "load_documents_for_deal" in route_text
-        and "load_documents_for_deal" in worker_text
+        and (
+            "load_documents_for_deal" in route_text
+            or "load_document_preflight_corpus_for_deal" in route_text
+        )
+        and (
+            "load_documents_for_deal" in worker_text
+            or "load_document_preflight_corpus_for_deal" in worker_text
+        )
         and "tenant_id=tenant_id" in worker_text
     )
     return WiringItem(
@@ -1035,17 +1051,59 @@ def _document_classification_ui_integration(root: Path) -> WiringItem:
 def _document_classification_run_integration(files: dict[str, str]) -> WiringItem:
     run_steps = files.get("src/idis/services/runs/steps.py", "")
     worker = files.get("src/idis/pipeline/worker.py", "")
-    integrated = "classify_document" in run_steps or "DocumentClassification" in worker
+    orchestrator = files.get("src/idis/services/runs/orchestrator.py", "")
+    integrated = (
+        "classify_document" in run_steps
+        or "DocumentClassification" in worker
+        or "DOCUMENT_PREFLIGHT" in orchestrator
+    )
     return WiringItem(
         key="document_classification_run_integration",
         label="Document classification run integration",
         status="PARTIAL" if integrated else "DEFERRED",
+        summary=("Document classification is partially wired through run preflight when present."),
+        evidence=["Run-level preflight is distinct from methodology extraction planning."],
+        gaps=["Future runs must call methodology-driven extraction after preflight."],
+        phase_2_action="Phase 3.0 Slice 2",
+    )
+
+
+def _document_preflight_run_integration(files: dict[str, str]) -> WiringItem:
+    orchestrator = files.get("src/idis/services/runs/orchestrator.py", "")
+    steps = files.get("src/idis/services/runs/steps.py", "")
+    api = files.get("src/idis/api/routes/runs.py", "")
+    worker = files.get("src/idis/pipeline/worker.py", "")
+    service = files.get("src/idis/services/runs/document_preflight.py", "")
+    model = files.get("src/idis/models/document_preflight.py", "")
+
+    wired = (
+        "DOCUMENT_PREFLIGHT" in orchestrator
+        and "preflight_corpus" in orchestrator
+        and "load_document_preflight_corpus_for_deal" in steps
+        and "_gather_preflight_corpus" in api
+        and "load_document_preflight_corpus_for_deal" in worker
+        and ("to_run_step_summary" in service or "to_run_step_summary" in model)
+    )
+    return WiringItem(
+        key="document_preflight_run_integration",
+        label="Document preflight run integration",
+        status="PARTIAL" if wired else "DEFERRED",
         summary=(
-            "Document classification run integration is deferred; no live run wiring is claimed."
+            "DOCUMENT_PREFLIGHT classifies and triages the full persisted corpus before "
+            "legacy extraction receives eligible documents."
         ),
-        evidence=["RunExecutionService remains document-classification agnostic in Phase 2.3."],
-        gaps=["Future runs must call classification before methodology-driven extraction."],
-        phase_2_action="Phase 2.3",
+        evidence=[
+            "`DOCUMENT_PREFLIGHT` is present in the orchestrator step order.",
+            "`RunContext.preflight_corpus` keeps the full corpus separate from extraction docs.",
+            "API start-run loads full preflight corpus before deriving parsed documents.",
+            "worker context factory loads full preflight corpus before deriving parsed documents.",
+            "Preflight stores safe run-step summary references rather than raw span text.",
+        ],
+        gaps=[
+            "Methodology live extraction remains deferred to Slice 3.",
+            "No normalized Postgres classification/triage tables are added in Slice 2.",
+        ],
+        phase_2_action="Phase 3.0 Slice 2",
     )
 
 

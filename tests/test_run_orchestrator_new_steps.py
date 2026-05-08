@@ -229,6 +229,7 @@ class TestStepOrderingConstants:
             StepName.INGEST_CHECK,
             StepName.DOCUMENT_PREFLIGHT,
             StepName.METHODOLOGY_COVERAGE_INIT,
+            StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING,
             StepName.EXTRACT,
             StepName.GRADE,
             StepName.CALC,
@@ -288,8 +289,8 @@ class TestFullVsSnapshotEnforcement:
         for full_only in FULL_ONLY_STEPS:
             assert full_only not in step_names
 
-    def test_full_has_eleven_steps(self) -> None:
-        """FULL mode completes with all 11 steps."""
+    def test_full_has_twelve_steps(self) -> None:
+        """FULL mode completes with all 12 steps."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -298,7 +299,7 @@ class TestFullVsSnapshotEnforcement:
         result = orchestrator.execute(ctx)
 
         assert result.status == "SUCCEEDED"
-        assert len(result.steps) == 11
+        assert len(result.steps) == 12
 
 
 class TestMissingCallableFailClosed:
@@ -384,7 +385,7 @@ class TestResumeSkipsCompletedSteps:
 
         result1 = orchestrator.execute(ctx)
         assert result1.status == "SUCCEEDED"
-        assert len(result1.steps) == 11
+        assert len(result1.steps) == 12
 
         call_count = {"enrichment": 0}
         original_enrich = _stub_enrichment

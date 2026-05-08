@@ -28,6 +28,7 @@ from idis.audit.sink import AuditSink, AuditSinkError
 from idis.methodology.models import MethodologyRegistry
 from idis.models.deterministic_calculation import CalcType
 from idis.models.document_preflight import DocumentPreflightResult
+from idis.models.extraction_task import ExtractionTask, ExtractionTaskPlanningRunResult
 from idis.models.methodology_coverage import (
     MethodologyCoverageInitializationResult,
     MethodologyCoverageRecord,
@@ -48,6 +49,7 @@ logger = logging.getLogger(__name__)
 BLOCK_REASON_DEBATE_NOT_IMPLEMENTED = "DEBATE_NOT_IMPLEMENTED"
 BLOCK_REASON_NO_INGESTED_DOCUMENTS = "NO_INGESTED_DOCUMENTS"
 BLOCK_REASON_NO_USABLE_DOCUMENTS = "NO_USABLE_DOCUMENTS"
+BLOCK_REASON_NO_ELIGIBLE_EXTRACTION_TASKS = "NO_ELIGIBLE_EXTRACTION_TASKS"
 
 
 class RunStepBlockedError(ValueError):
@@ -122,6 +124,10 @@ class RunContext:
         | None
     ) = None
     methodology_coverage_records: list[MethodologyCoverageRecord] = field(default_factory=list)
+    methodology_extraction_task_planning_fn: (
+        Callable[..., tuple[ExtractionTaskPlanningRunResult, list[ExtractionTask]]] | None
+    ) = None
+    methodology_extraction_tasks: list[ExtractionTask] = field(default_factory=list)
     calc_fn: Callable[..., dict[str, Any]] | None = None
     calc_types: list[CalcType] | None = None
     enrich_fn: Callable[..., dict[str, Any]] | None = None
@@ -206,6 +212,8 @@ class RunOrchestrator:
                 accumulated.update(existing.result_summary)
                 if step_name == StepName.METHODOLOGY_COVERAGE_INIT:
                     self._rehydrate_methodology_coverage_records(ctx)
+                if step_name == StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING:
+                    self._rehydrate_methodology_extraction_tasks(ctx, accumulated)
                 continue
 
             step = self._start_step(ctx, step_name, existing)
@@ -258,6 +266,8 @@ class RunOrchestrator:
             return self._execute_document_preflight(ctx)
         if step_name == StepName.METHODOLOGY_COVERAGE_INIT:
             return self._execute_methodology_coverage_init(ctx)
+        if step_name == StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING:
+            return self._execute_methodology_extraction_task_planning(ctx, accumulated)
         if step_name == StepName.EXTRACT:
             return self._execute_extract(ctx)
         if step_name == StepName.GRADE:
@@ -372,6 +382,80 @@ class RunOrchestrator:
             registry=ctx.methodology_registry,
         )
         ctx.methodology_coverage_records = records
+
+    def _execute_methodology_extraction_task_planning(
+        self,
+        ctx: RunContext,
+        accumulated: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Plan methodology extraction tasks without executing extraction."""
+        if ctx.methodology_extraction_task_planning_fn is not None:
+            planning_result, tasks = ctx.methodology_extraction_task_planning_fn(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                registry=self._methodology_registry_for_planning(ctx),
+                coverage_records=ctx.methodology_coverage_records,
+                document_preflight_summary=accumulated,
+            )
+        else:
+            planning_result, tasks = self._run_default_methodology_extraction_task_planning(
+                ctx,
+                accumulated,
+            )
+
+        if not tasks:
+            raise RunStepBlockedError(
+                BLOCK_REASON_NO_ELIGIBLE_EXTRACTION_TASKS,
+                "No methodology extraction tasks could be planned",
+                result_summary=planning_result.to_run_step_summary(status="FAILED"),
+            )
+        ctx.methodology_extraction_tasks = tasks
+        return planning_result.to_run_step_summary()
+
+    def _rehydrate_methodology_extraction_tasks(
+        self,
+        ctx: RunContext,
+        accumulated: dict[str, Any],
+    ) -> None:
+        """Reattach in-memory planned tasks when a completed planning step is skipped."""
+        if ctx.methodology_extraction_tasks:
+            return
+        _planning_result, tasks = self._run_default_methodology_extraction_task_planning(
+            ctx,
+            accumulated,
+        )
+        ctx.methodology_extraction_tasks = tasks
+
+    def _run_default_methodology_extraction_task_planning(
+        self,
+        ctx: RunContext,
+        accumulated: dict[str, Any],
+    ) -> tuple[ExtractionTaskPlanningRunResult, list[ExtractionTask]]:
+        from idis.services.runs.methodology_extraction_task_planning import (
+            InMemoryRunMethodologyExtractionTaskPlanningService,
+        )
+
+        return InMemoryRunMethodologyExtractionTaskPlanningService().run(
+            tenant_id=ctx.tenant_id,
+            deal_id=ctx.deal_id,
+            run_id=ctx.run_id,
+            registry=self._methodology_registry_for_planning(ctx),
+            coverage_records=ctx.methodology_coverage_records,
+            document_preflight_summary=accumulated,
+        )
+
+    def _methodology_registry_for_planning(self, ctx: RunContext) -> MethodologyRegistry:
+        if ctx.methodology_registry is not None:
+            return ctx.methodology_registry
+        if ctx.methodology_registry_loader_fn is not None:
+            ctx.methodology_registry = ctx.methodology_registry_loader_fn()
+            return ctx.methodology_registry
+
+        from idis.services.runs.methodology_coverage_init import load_default_methodology_registry
+
+        ctx.methodology_registry = load_default_methodology_registry()
+        return ctx.methodology_registry
 
     def _execute_extract(self, ctx: RunContext) -> dict[str, Any]:
         """Run extraction pipeline via injected callable.

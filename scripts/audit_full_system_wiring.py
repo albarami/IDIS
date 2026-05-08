@@ -475,6 +475,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/services/documents/classification_service.py",
         "src/idis/services/documents/audit.py",
         "src/idis/services/runs/document_preflight.py",
+        "src/idis/services/runs/methodology_extraction_task_planning.py",
         "src/idis/models/extraction_task.py",
         "src/idis/services/extraction/task_planner.py",
         "src/idis/services/extraction/task_audit.py",
@@ -931,7 +932,7 @@ def _methodology_run_integration(files: dict[str, str]) -> WiringItem:
             "`build_run_context` injects a deterministic methodology registry loader.",
             "`METHODOLOGY_COVERAGE_INIT` initializes coverage before legacy extraction.",
         ],
-        gaps=["Methodology extraction task planning and execution remain deferred."],
+        gaps=["Methodology extraction execution remains deferred."],
     )
 
 
@@ -965,8 +966,8 @@ def _methodology_coverage_init_run_integration(files: dict[str, str]) -> WiringI
             "Coverage initialization persists only safe IDs/counts in run-step summary.",
         ],
         gaps=[
-            "methodology extraction task planning remains deferred to Slice 4.",
             "No Postgres coverage tables are added in Slice 3.",
+            "Coverage records remain in memory/run-step summary only.",
             (
                 "Claim materialization, Sanad linkage, CALC, enrichment, RAG, graph, cache, "
                 "debate, scoring, and deliverables remain downstream."
@@ -1149,7 +1150,7 @@ def _document_preflight_run_integration(files: dict[str, str]) -> WiringItem:
             "Preflight stores safe run-step summary references rather than raw span text.",
         ],
         gaps=[
-            "Methodology extraction planning remains deferred to Slice 4.",
+            "Methodology extraction execution remains deferred after task planning.",
             "No normalized Postgres classification/triage tables are added in Slice 2.",
         ],
         phase_2_action="Phase 3.0 Slice 2",
@@ -1187,7 +1188,7 @@ def _extraction_task_planner(root: Path, files: dict[str, str]) -> WiringItem:
             "`task_planner.py` maps MethodologyQuestion to DocumentClassification and spans.",
             "Planner produces metadata only and does not execute extraction.",
         ],
-        gaps=["Planner is not called by RunExecutionService or API routes."],
+        gaps=["Planner execution is in-memory only and is not persisted to Postgres."],
         phase_2_action="Phase 2.4",
     )
 
@@ -1241,15 +1242,38 @@ def _extraction_task_api_integration(files: dict[str, str]) -> WiringItem:
 def _extraction_task_run_integration(files: dict[str, str]) -> WiringItem:
     run_steps = files.get("src/idis/services/runs/steps.py", "")
     worker = files.get("src/idis/pipeline/worker.py", "")
-    integrated = "InMemoryExtractionTaskPlanner" in run_steps or "ExtractionTask" in worker
+    orchestrator = files.get("src/idis/services/runs/orchestrator.py", "")
+    run_step = files.get("src/idis/models/run_step.py", "")
+    service = files.get("src/idis/services/runs/methodology_extraction_task_planning.py", "")
+    model = files.get("src/idis/models/extraction_task.py", "")
+    integrated = (
+        "METHODOLOGY_EXTRACTION_TASK_PLANNING" in run_step
+        and "methodology_extraction_tasks" in orchestrator
+        and "InMemoryRunMethodologyExtractionTaskPlanningService" in service
+        and "ExtractionTaskPlanningRunResult" in model
+        and "build_run_context" in run_steps
+        and "_default_run_context_factory" in worker
+    )
     return WiringItem(
         key="extraction_task_run_integration",
         label="Extraction task run integration",
         status="PARTIAL" if integrated else "DEFERRED",
-        summary="Extraction task planning is not called by production runs in Phase 2.4.",
-        evidence=["RunExecutionService remains extraction-task-planning agnostic."],
-        gaps=["Future runs must plan tasks before methodology-driven extraction execution."],
-        phase_2_action="Phase 2.4",
+        summary=(
+            "FULL runs plan methodology extraction task metadata after document preflight "
+            "and coverage initialization."
+        ),
+        evidence=[
+            "`METHODOLOGY_EXTRACTION_TASK_PLANNING` is present in FULL step order.",
+            "`RunContext.methodology_extraction_tasks` attaches planned tasks in memory.",
+            "Planning reconstructs inputs from safe preflight summaries and coverage records.",
+            "API and worker share `build_run_context` for planner-capable runs.",
+        ],
+        gaps=[
+            "Extraction task records are not persisted to Postgres.",
+            "Planned tasks are not executed in Slice 4.",
+            "No extraction task API route is exposed.",
+        ],
+        phase_2_action="Phase 3.0 Slice 4",
     )
 
 

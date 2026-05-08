@@ -19,6 +19,7 @@ class StepName(StrEnum):
     INGEST_CHECK = "INGEST_CHECK"
     DOCUMENT_PREFLIGHT = "DOCUMENT_PREFLIGHT"
     METHODOLOGY_COVERAGE_INIT = "METHODOLOGY_COVERAGE_INIT"
+    METHODOLOGY_EXTRACTION_TASK_PLANNING = "METHODOLOGY_EXTRACTION_TASK_PLANNING"
     EXTRACT = "EXTRACT"
     GRADE = "GRADE"
     CALC = "CALC"
@@ -43,14 +44,15 @@ STEP_ORDER: dict[StepName, int] = {
     StepName.INGEST_CHECK: 0,
     StepName.DOCUMENT_PREFLIGHT: 1,
     StepName.METHODOLOGY_COVERAGE_INIT: 2,
-    StepName.EXTRACT: 3,
-    StepName.GRADE: 4,
-    StepName.CALC: 5,
-    StepName.ENRICHMENT: 6,
-    StepName.DEBATE: 7,
-    StepName.ANALYSIS: 8,
-    StepName.SCORING: 9,
-    StepName.DELIVERABLES: 10,
+    StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING: 3,
+    StepName.EXTRACT: 4,
+    StepName.GRADE: 5,
+    StepName.CALC: 6,
+    StepName.ENRICHMENT: 7,
+    StepName.DEBATE: 8,
+    StepName.ANALYSIS: 9,
+    StepName.SCORING: 10,
+    StepName.DELIVERABLES: 11,
 }
 """Canonical ordering for deterministic step iteration."""
 
@@ -68,6 +70,7 @@ FULL_STEPS: list[StepName] = [
     StepName.INGEST_CHECK,
     StepName.DOCUMENT_PREFLIGHT,
     StepName.METHODOLOGY_COVERAGE_INIT,
+    StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING,
     StepName.EXTRACT,
     StepName.GRADE,
     StepName.CALC,
@@ -81,6 +84,7 @@ FULL_STEPS: list[StepName] = [
 
 FULL_ONLY_STEPS: frozenset[StepName] = frozenset(
     {
+        StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING,
         StepName.ENRICHMENT,
         StepName.DEBATE,
         StepName.ANALYSIS,
@@ -95,6 +99,7 @@ IMPLEMENTED_STEPS: frozenset[StepName] = frozenset(
         StepName.INGEST_CHECK,
         StepName.DOCUMENT_PREFLIGHT,
         StepName.METHODOLOGY_COVERAGE_INIT,
+        StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING,
         StepName.EXTRACT,
         StepName.GRADE,
         StepName.CALC,

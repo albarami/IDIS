@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
+from collections.abc import Iterable
 from enum import StrEnum
 from typing import Any
 
@@ -55,6 +57,8 @@ class SourceSpanReference(ExtractionTaskBaseModel):
     span_id: str
     evidence_tags: list[str] = Field(default_factory=list)
     locator: dict[str, Any] = Field(default_factory=dict)
+    span_type: str | None = None
+    content_hash: str | None = None
     text_excerpt: str | None = None
 
     @field_validator("document_id", "span_id")
@@ -62,6 +66,15 @@ class SourceSpanReference(ExtractionTaskBaseModel):
     def _not_blank(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("field must not be blank")
+        return value.strip()
+
+    @field_validator("span_type", "content_hash")
+    @classmethod
+    def _optional_not_blank(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not value.strip():
+            raise ValueError("field must not be blank when provided")
         return value.strip()
 
     @field_validator("evidence_tags")
@@ -124,6 +137,7 @@ class ExtractionTask(ExtractionTaskBaseModel):
     methodology_question_id: str
     methodology_type: MethodologyType
     methodology_section: str
+    coverage_record_id: str | None = None
     document_id: str | None = None
     classification_id: str | None = None
     source_spans: list[SourceSpanReference] = Field(default_factory=list)
@@ -153,7 +167,7 @@ class ExtractionTask(ExtractionTaskBaseModel):
             raise ValueError("field must not be blank")
         return value.strip()
 
-    @field_validator("extraction_task_id", "document_id", "classification_id")
+    @field_validator("extraction_task_id", "coverage_record_id", "document_id", "classification_id")
     @classmethod
     def _optional_strings_not_blank(cls, value: str | None) -> str | None:
         if value is None:
@@ -206,6 +220,7 @@ class ExtractionTask(ExtractionTaskBaseModel):
                 deal_id=self.deal_id,
                 run_id=self.run_id,
                 methodology_question_id=self.methodology_question_id,
+                coverage_record_id=self.coverage_record_id,
                 document_id=self.document_id,
                 source_span_ids=self.source_span_ids,
                 target_fdd_category=self.target_fdd_category,
@@ -242,12 +257,105 @@ class ExtractionTaskPlanningResult(ExtractionTaskBaseModel):
     summary: ExtractionTaskSummary
 
 
+class ExtractionTaskRunStepSummaryRecord(ExtractionTaskBaseModel):
+    """Run-step-safe extraction task summary record."""
+
+    extraction_task_id: str
+    status: ExtractionTaskStatus
+    blocker_reason: ExtractionTaskBlockerReason | None = None
+    coverage_record_id: str | None = None
+    methodology_id: str
+    methodology_version_id: str
+    methodology_question_id: str
+    methodology_type: MethodologyType
+    document_id: str | None = None
+    classification_id: str | None = None
+    source_span_ids: list[str]
+    source_span_count: int
+
+    @classmethod
+    def from_task(cls, task: ExtractionTask) -> ExtractionTaskRunStepSummaryRecord:
+        """Build a safe summary from a full in-memory extraction task."""
+        if task.extraction_task_id is None:
+            raise ValueError("extraction_task_id must be populated before summarizing")
+        source_span_ids = task.source_span_ids
+        return cls(
+            extraction_task_id=task.extraction_task_id,
+            status=task.status,
+            blocker_reason=task.blocker_reason,
+            coverage_record_id=task.coverage_record_id,
+            methodology_id=task.methodology_id,
+            methodology_version_id=task.methodology_version_id,
+            methodology_question_id=task.methodology_question_id,
+            methodology_type=task.methodology_type,
+            document_id=task.document_id,
+            classification_id=task.classification_id,
+            source_span_ids=source_span_ids,
+            source_span_count=len(source_span_ids),
+        )
+
+
+class ExtractionTaskPlanningRunResult(ExtractionTaskBaseModel):
+    """Run-step-safe wrapper around planned extraction tasks."""
+
+    tenant_id: str
+    deal_id: str
+    run_id: str
+    task_ids: list[str]
+    tasks: list[ExtractionTaskRunStepSummaryRecord]
+    summary: ExtractionTaskSummary
+    by_reason_code: dict[str, int]
+
+    @classmethod
+    def from_tasks(
+        cls,
+        *,
+        tenant_id: str,
+        deal_id: str,
+        run_id: str,
+        tasks: list[ExtractionTask],
+    ) -> ExtractionTaskPlanningRunResult:
+        """Build a run-step-safe planning result from full task records."""
+        task_summaries = [ExtractionTaskRunStepSummaryRecord.from_task(task) for task in tasks]
+        return cls(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            run_id=run_id,
+            task_ids=[task.extraction_task_id for task in tasks if task.extraction_task_id],
+            tasks=task_summaries,
+            summary=_build_task_summary(
+                tenant_id=tenant_id,
+                deal_id=deal_id,
+                run_id=run_id,
+                tasks=tasks,
+            ),
+            by_reason_code=_counter(
+                reason_code for task in tasks for reason_code in task.reason_codes
+            ),
+        )
+
+    def to_run_step_summary(self, *, status: str = "COMPLETED") -> dict[str, object]:
+        """Return a compact result_summary without registry or document text."""
+        return {
+            "status": status,
+            "task_ids": list(self.task_ids),
+            "tasks": [task.model_dump(mode="json") for task in self.tasks],
+            "summary": {
+                "total_tasks": self.summary.total_tasks,
+                "by_status": dict(self.summary.by_status),
+                "by_blocker_reason": dict(self.summary.by_blocker_reason),
+                "by_reason_code": dict(self.by_reason_code),
+            },
+        }
+
+
 def generate_extraction_task_id(
     *,
     tenant_id: str,
     deal_id: str,
     run_id: str,
     methodology_question_id: str,
+    coverage_record_id: str | None = None,
     document_id: str | None,
     source_span_ids: list[str],
     target_fdd_category: FddDocumentCategory | None,
@@ -255,12 +363,18 @@ def generate_extraction_task_id(
     status: ExtractionTaskStatus,
     blocker_reason: ExtractionTaskBlockerReason | None,
 ) -> str:
-    """Generate a stable extraction task ID from task identity fields."""
+    """Generate a stable run-scoped task ID from task identity fields.
+
+    ``coverage_record_id`` intentionally participates in the seed because Slice 4
+    task plans are scoped to a run coverage ledger, not to global methodology
+    questions alone.
+    """
     seed = {
         "tenant_id": tenant_id,
         "deal_id": deal_id,
         "run_id": run_id,
         "methodology_question_id": methodology_question_id,
+        "coverage_record_id": coverage_record_id or "no_coverage_record",
         "document_id": document_id or "no_document",
         "source_span_ids": sorted(source_span_ids),
         "target_fdd_category": target_fdd_category.value if target_fdd_category else "none",
@@ -270,3 +384,26 @@ def generate_extraction_task_id(
     }
     encoded = json.dumps(seed, sort_keys=True, separators=(",", ":"))
     return f"et_{hashlib.sha256(encoded.encode('utf-8')).hexdigest()[:24]}"
+
+
+def _build_task_summary(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+    tasks: list[ExtractionTask],
+) -> ExtractionTaskSummary:
+    return ExtractionTaskSummary(
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        run_id=run_id,
+        total_tasks=len(tasks),
+        by_status=_counter(task.status.value for task in tasks),
+        by_blocker_reason=_counter(
+            task.blocker_reason.value for task in tasks if task.blocker_reason is not None
+        ),
+    )
+
+
+def _counter(items: Iterable[str]) -> dict[str, int]:
+    return dict(sorted(Counter(items).items()))

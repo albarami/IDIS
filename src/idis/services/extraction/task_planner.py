@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, field
 
 from idis.methodology.models import MethodologyQuestion, MethodologyRegistry, MethodologyType
 from idis.models.document_classification import (
@@ -22,6 +23,7 @@ from idis.models.extraction_task import (
     ExtractionTaskSummary,
     SourceSpanReference,
 )
+from idis.models.methodology_coverage import MethodologyCoverageRecord
 
 _READY_SUPPORT_STATUSES = {
     DocumentSupportStatus.SUPPORTED,
@@ -77,6 +79,26 @@ _CDD_CATEGORY_ALIASES: dict[str, set[CddDocumentCategory]] = {
 }
 
 
+@dataclass(frozen=True)
+class SafePreflightClassificationInput:
+    """Safe planner input reconstructed from DOCUMENT_PREFLIGHT run-step metadata."""
+
+    tenant_id: str
+    deal_id: str
+    document_id: str
+    classification_id: str | None
+    fdd_category: FddDocumentCategory
+    cdd_category: CddDocumentCategory
+    support_status: DocumentSupportStatus
+    triage_status: DocumentTriageStatus
+    usable_for_methodology_extraction: bool
+    methodology_target_areas: list[str] = field(default_factory=list)
+    reason_codes: list[str] = field(default_factory=list)
+
+
+PlannerClassification = DocumentClassification | SafePreflightClassificationInput
+
+
 class InMemoryExtractionTaskPlanner:
     """Plan extraction task metadata without executing extraction."""
 
@@ -90,8 +112,9 @@ class InMemoryExtractionTaskPlanner:
         deal_id: str,
         run_id: str,
         methodology_registry: MethodologyRegistry,
-        classifications: list[DocumentClassification],
+        classifications: Sequence[PlannerClassification],
         source_spans_by_document_id: dict[str, list[SourceSpanReference]],
+        coverage_records: list[MethodologyCoverageRecord] | None = None,
     ) -> ExtractionTaskPlanningResult:
         """Plan deterministic extraction task metadata."""
         scoped_classifications = sorted(
@@ -107,12 +130,22 @@ class InMemoryExtractionTaskPlanner:
         )
 
         tasks: list[ExtractionTask] = []
-        for question in methodology_registry.current_version.questions:
+        question_records = _question_records_for_planning(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            run_id=run_id,
+            methodology_registry=methodology_registry,
+            coverage_records=coverage_records,
+        )
+        for question, coverage_record in question_records:
             question_tasks = self._plan_for_question(
                 tenant_id=tenant_id,
                 deal_id=deal_id,
                 run_id=run_id,
                 question=question,
+                coverage_record_id=(
+                    coverage_record.coverage_record_id if coverage_record is not None else None
+                ),
                 classifications=scoped_classifications,
                 source_spans_by_document_id=source_spans_by_document_id,
             )
@@ -143,7 +176,8 @@ class InMemoryExtractionTaskPlanner:
         deal_id: str,
         run_id: str,
         question: MethodologyQuestion,
-        classifications: list[DocumentClassification],
+        coverage_record_id: str | None,
+        classifications: Sequence[PlannerClassification],
         source_spans_by_document_id: dict[str, list[SourceSpanReference]],
     ) -> list[ExtractionTask]:
         if not classifications:
@@ -153,6 +187,7 @@ class InMemoryExtractionTaskPlanner:
                     deal_id=deal_id,
                     run_id=run_id,
                     question=question,
+                    coverage_record_id=coverage_record_id,
                     classification=None,
                     source_spans=[],
                     blocker_reason=ExtractionTaskBlockerReason.NO_MATCHING_CLASSIFIED_DOCUMENT,
@@ -171,6 +206,7 @@ class InMemoryExtractionTaskPlanner:
                     deal_id=deal_id,
                     run_id=run_id,
                     question=question,
+                    coverage_record_id=coverage_record_id,
                     classification=None,
                     source_spans=[],
                     blocker_reason=ExtractionTaskBlockerReason.NO_MATCHING_DOCUMENT_CATEGORY,
@@ -196,6 +232,7 @@ class InMemoryExtractionTaskPlanner:
                         deal_id=deal_id,
                         run_id=run_id,
                         question=question,
+                        coverage_record_id=coverage_record_id,
                         classification=classification,
                         source_spans=spans,
                         blocker_reason=blocker_reason,
@@ -214,6 +251,7 @@ class InMemoryExtractionTaskPlanner:
                     methodology_question_id=question.methodology_question_id,
                     methodology_type=question.methodology_type,
                     methodology_section=question.section,
+                    coverage_record_id=coverage_record_id,
                     document_id=classification.document_id,
                     classification_id=classification.classification_id,
                     source_spans=spans,
@@ -249,7 +287,8 @@ def _blocked_task(
     deal_id: str,
     run_id: str,
     question: MethodologyQuestion,
-    classification: DocumentClassification | None,
+    coverage_record_id: str | None,
+    classification: PlannerClassification | None,
     source_spans: list[SourceSpanReference],
     blocker_reason: ExtractionTaskBlockerReason,
 ) -> ExtractionTask:
@@ -269,6 +308,7 @@ def _blocked_task(
         methodology_question_id=question.methodology_question_id,
         methodology_type=question.methodology_type,
         methodology_section=question.section,
+        coverage_record_id=coverage_record_id,
         document_id=classification.document_id if classification else None,
         classification_id=classification.classification_id if classification else None,
         source_spans=source_spans,
@@ -283,7 +323,7 @@ def _blocked_task(
 
 def _classification_matches_question(
     question: MethodologyQuestion,
-    classification: DocumentClassification,
+    classification: PlannerClassification,
 ) -> bool:
     if question.methodology_type == MethodologyType.FINANCIAL_DD:
         return classification.fdd_category in _normalized_fdd_targets(question)
@@ -326,7 +366,7 @@ def _required_evidence_is_present(
 
 
 def _triage_blocker_for(
-    classification: DocumentClassification,
+    classification: PlannerClassification,
 ) -> ExtractionTaskBlockerReason | None:
     support_blocker = _SUPPORT_BLOCKERS.get(classification.support_status)
     if support_blocker is not None:
@@ -381,3 +421,51 @@ def _build_summary(
 
 def _counter(items: Iterable[str]) -> dict[str, int]:
     return dict(sorted(Counter(items).items()))
+
+
+def _question_records_for_planning(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+    methodology_registry: MethodologyRegistry,
+    coverage_records: list[MethodologyCoverageRecord] | None,
+) -> list[tuple[MethodologyQuestion, MethodologyCoverageRecord | None]]:
+    questions_by_id = {
+        question.methodology_question_id: question
+        for question in methodology_registry.current_version.questions
+    }
+    if coverage_records is None:
+        return [(question, None) for question in methodology_registry.current_version.questions]
+    if not coverage_records:
+        raise ValueError("coverage_records must not be empty")
+
+    seen_question_ids: set[str] = set()
+    records_by_question_id: dict[str, MethodologyCoverageRecord] = {}
+    for record in coverage_records:
+        if record.tenant_id != tenant_id or record.deal_id != deal_id or record.run_id != run_id:
+            raise ValueError("coverage record scope mismatch")
+        if record.methodology_id != methodology_registry.methodology_id:
+            raise ValueError("coverage record methodology_id mismatch")
+        if (
+            record.methodology_version_id
+            != methodology_registry.current_version.methodology_version_id
+        ):
+            raise ValueError("coverage record methodology_version_id mismatch")
+        if record.methodology_type != methodology_registry.methodology_type:
+            raise ValueError("coverage record methodology_type mismatch")
+        if record.methodology_question_id not in questions_by_id:
+            raise ValueError("coverage record question not found in registry")
+        if record.methodology_question_id in seen_question_ids:
+            raise ValueError("duplicate coverage record for methodology question")
+        seen_question_ids.add(record.methodology_question_id)
+        records_by_question_id[record.methodology_question_id] = record
+
+    missing_question_ids = sorted(set(questions_by_id) - set(records_by_question_id))
+    if missing_question_ids:
+        raise ValueError("coverage record missing for methodology question")
+
+    return [
+        (question, records_by_question_id[question.methodology_question_id])
+        for question in methodology_registry.current_version.questions
+    ]

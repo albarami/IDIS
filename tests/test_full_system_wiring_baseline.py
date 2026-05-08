@@ -81,7 +81,7 @@ def test_full_system_report_does_not_overstate_methodology_run_wiring() -> None:
 
 
 def test_full_system_inventory_detects_phase_3_0c_coverage_init_baseline() -> None:
-    """Slice 3 coverage init is visible while extraction planning remains deferred."""
+    """Slice 3 coverage init is visible while coverage persistence remains deferred."""
     inventory = collect_wiring_inventory(REPO_ROOT)
 
     coverage_init = inventory["methodology_coverage_init_run_integration"]
@@ -91,11 +91,26 @@ def test_full_system_inventory_detects_phase_3_0c_coverage_init_baseline() -> No
     assert any("METHODOLOGY_COVERAGE_INIT" in item for item in coverage_init.evidence)
     assert any("commercial_dd_v1.json" in item for item in coverage_init.evidence)
     assert any("run-step summary" in item for item in coverage_init.evidence)
-    assert any(
-        "methodology extraction task planning remains deferred" in item
-        for item in coverage_init.gaps
-    )
-    assert extraction_task.status in {"DEFERRED", "PARTIAL"}
+    assert any("Coverage records remain in memory" in item for item in coverage_init.gaps)
+    assert extraction_task.status == "PARTIAL"
+
+
+def test_full_system_inventory_detects_phase_3_0d_task_planning_baseline() -> None:
+    """Slice 4 task planning is visible without claiming persistence or execution."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+
+    extraction_task = inventory["extraction_task_run_integration"]
+    live_execution = inventory["live_methodology_extraction_execution"]
+    persistence = inventory["extraction_task_postgres_persistence"]
+
+    assert extraction_task.status == "PARTIAL"
+    assert any("METHODOLOGY_EXTRACTION_TASK_PLANNING" in item for item in extraction_task.evidence)
+    assert any("methodology_extraction_tasks" in item for item in extraction_task.evidence)
+    assert any("safe preflight summaries" in item for item in extraction_task.evidence)
+    assert any("not persisted to Postgres" in item for item in extraction_task.gaps)
+    assert any("not executed" in item for item in extraction_task.gaps)
+    assert live_execution.status == "DEFERRED"
+    assert persistence.status in {"DEFERRED", "PARTIAL"}
 
 
 def test_full_system_inventory_detects_phase_2_3_document_classification_foundation() -> None:
@@ -147,7 +162,7 @@ def test_full_system_inventory_detects_phase_3_0b_document_preflight_baseline() 
     assert any("DOCUMENT_PREFLIGHT" in item for item in preflight.evidence)
     assert any("preflight_corpus" in item for item in preflight.evidence)
     assert any("run-step summary" in item for item in preflight.evidence)
-    assert any("extraction planning remains deferred" in item.lower() for item in preflight.gaps)
+    assert any("extraction execution remains deferred" in item.lower() for item in preflight.gaps)
 
 
 def test_full_system_report_does_not_overstate_phase_3_0a_full_run_wiring() -> None:
@@ -185,10 +200,7 @@ def test_full_system_inventory_detects_phase_2_4_extraction_task_planning_founda
         "NOT_FOUND",
         "DEFERRED",
     }
-    assert inventory["extraction_task_run_integration"].status in {
-        "NOT_FOUND",
-        "DEFERRED",
-    }
+    assert inventory["extraction_task_run_integration"].status == "PARTIAL"
     assert inventory["live_methodology_extraction_execution"].status in {
         "NOT_FOUND",
         "DEFERRED",

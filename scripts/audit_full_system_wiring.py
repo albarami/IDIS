@@ -117,6 +117,30 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             "extraction_task_api_integration": _extraction_task_api_integration(files),
             "extraction_task_run_integration": _extraction_task_run_integration(files),
             "live_methodology_extraction_execution": _live_methodology_extraction_execution(files),
+            "methodology_extraction_execution_models": (
+                _methodology_extraction_execution_models(root, files)
+            ),
+            "methodology_extraction_task_executor": _methodology_extraction_task_executor(
+                root, files
+            ),
+            "methodology_extraction_execution_audit_contract": (
+                _methodology_extraction_execution_audit_contract(root, files)
+            ),
+            "methodology_extraction_postgres_persistence": (
+                _methodology_extraction_postgres_persistence(root)
+            ),
+            "methodology_extraction_api_integration": _methodology_extraction_api_integration(
+                files
+            ),
+            "methodology_extraction_run_integration": _methodology_extraction_run_integration(
+                files
+            ),
+            "methodology_extraction_live_llm_integration": (
+                _methodology_extraction_live_llm_integration(files)
+            ),
+            "methodology_extraction_coverage_integration": (
+                _methodology_extraction_coverage_integration(files)
+            ),
             "analysis_agents": _analysis_agents(files),
             "commercial_agents": _commercial_agents(files),
             "debate_layer_1": _debate_layer_1(files),
@@ -188,6 +212,9 @@ def render_report(inventory: WiringInventory) -> str:
         "but API/UI/run/Postgres integration is explicitly deferred.",
         "- Methodology-driven extraction task planning now exists as metadata-only, "
         "in-memory planning; live methodology extraction execution remains deferred.",
+        "- Synthetic methodology extraction task execution now produces methodology-linked "
+        "claim draft metadata only; persistence, API/run integration, coverage updates, "
+        "and live LLM execution remain deferred.",
         "- Enrichment connectors and deterministic/Anthropic LLM wiring exist, but baseline "
         "validation is config-only for paid/network providers.",
         "",
@@ -332,6 +359,9 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/models/extraction_task.py",
         "src/idis/services/extraction/task_planner.py",
         "src/idis/services/extraction/task_audit.py",
+        "src/idis/models/extraction_execution.py",
+        "src/idis/services/extraction/task_executor.py",
+        "src/idis/services/extraction/execution_audit.py",
         "src/idis/analysis/agents/__init__.py",
         "src/idis/analysis/runner.py",
         "src/idis/debate/orchestrator.py",
@@ -912,6 +942,145 @@ def _live_methodology_extraction_execution(files: dict[str, str]) -> WiringItem:
         evidence=["Phase 2.4 creates extraction task metadata only."],
         gaps=["Future slices must execute tasks and convert extracted answers into claims."],
         phase_2_action="Phase 2.4",
+    )
+
+
+def _methodology_extraction_execution_models(root: Path, files: dict[str, str]) -> WiringItem:
+    has_models = _exists(root, "src/idis/models/extraction_execution.py") and _contains(
+        files, "src/idis/models/extraction_execution.py", "MethodologyClaimDraft"
+    )
+    return WiringItem(
+        key="methodology_extraction_execution_models",
+        label="Methodology extraction execution models",
+        status="WIRED" if has_models else "NOT_FOUND",
+        summary="Structured models exist for methodology-linked claim draft metadata.",
+        evidence=[
+            "`src/idis/models/extraction_execution.py` defines execution statuses and results.",
+            "Claim drafts preserve extraction task, methodology, document, span, confidence, "
+            "and dhabt metadata.",
+        ],
+        gaps=["Models are not persisted to Postgres in Phase 2.5."],
+        phase_2_action="Phase 2.5",
+    )
+
+
+def _methodology_extraction_task_executor(root: Path, files: dict[str, str]) -> WiringItem:
+    has_executor = _exists(root, "src/idis/services/extraction/task_executor.py") and _contains(
+        files,
+        "src/idis/services/extraction/task_executor.py",
+        "InMemoryMethodologyExtractionTaskExecutor",
+    )
+    return WiringItem(
+        key="methodology_extraction_task_executor",
+        label="Methodology extraction task executor",
+        status="PARTIAL" if has_executor else "NOT_FOUND",
+        summary="Synthetic-only executor processes ready tasks with an injected extractor.",
+        evidence=[
+            "`task_executor.py` skips blocked tasks and validates source-span provenance.",
+            "Executor returns methodology-linked claim draft metadata only.",
+        ],
+        gaps=[
+            "No ClaimService persistence, Sanad creation, coverage update, API, or run "
+            "integration is wired."
+        ],
+        phase_2_action="Phase 2.5",
+    )
+
+
+def _methodology_extraction_execution_audit_contract(
+    root: Path, files: dict[str, str]
+) -> WiringItem:
+    has_contract = _exists(root, "src/idis/services/extraction/execution_audit.py") and _contains(
+        files,
+        "src/idis/services/extraction/execution_audit.py",
+        "EXTRACTION_EXECUTION_AUDIT_EVENTS",
+    )
+    return WiringItem(
+        key="methodology_extraction_execution_audit_contract",
+        label="Methodology extraction execution future audit contract",
+        status="PARTIAL" if has_contract else "NOT_FOUND",
+        summary="Future audit event names and payload keys exist for execution.",
+        evidence=["`execution_audit.py` defines event constants without live audit emission."],
+        gaps=["No live audit sink emission is wired in Phase 2.5."],
+        phase_2_action="Phase 2.5",
+    )
+
+
+def _methodology_extraction_postgres_persistence(root: Path) -> WiringItem:
+    migrations_dir = root / "src/idis/persistence/migrations/versions"
+    has_migration = any(
+        "extraction_execution" in path.name or "methodology_extraction" in path.name
+        for path in migrations_dir.glob("*.py")
+    )
+    return WiringItem(
+        key="methodology_extraction_postgres_persistence",
+        label="Methodology extraction Postgres persistence",
+        status="PARTIAL" if has_migration else "DEFERRED",
+        summary="Methodology extraction execution persistence is intentionally deferred.",
+        evidence=["No Phase 2.5 methodology extraction execution migration is expected."],
+        gaps=["Future slice must define tenant-scoped persistence for execution results."],
+        phase_2_action="Phase 2.5",
+    )
+
+
+def _methodology_extraction_api_integration(files: dict[str, str]) -> WiringItem:
+    api_text = files.get("src/idis/api/main.py", "") + files.get("src/idis/api/routes/runs.py", "")
+    integrated = "InMemoryMethodologyExtractionTaskExecutor" in api_text
+    return WiringItem(
+        key="methodology_extraction_api_integration",
+        label="Methodology extraction API integration",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary="Methodology extraction execution is not exposed through API routes.",
+        evidence=["No Phase 2.5 API route wiring is expected."],
+        gaps=["Future API work may expose synthetic execution summaries or persisted results."],
+        phase_2_action="Phase 2.5",
+    )
+
+
+def _methodology_extraction_run_integration(files: dict[str, str]) -> WiringItem:
+    run_text = files.get("src/idis/services/runs/steps.py", "") + files.get(
+        "src/idis/pipeline/worker.py", ""
+    )
+    integrated = "InMemoryMethodologyExtractionTaskExecutor" in run_text
+    return WiringItem(
+        key="methodology_extraction_run_integration",
+        label="Methodology extraction run integration",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary="Methodology extraction execution is not called by production runs.",
+        evidence=["RunExecutionService remains methodology-extraction-execution agnostic."],
+        gaps=["Future runs must explicitly invoke execution after task planning."],
+        phase_2_action="Phase 2.5",
+    )
+
+
+def _methodology_extraction_live_llm_integration(files: dict[str, str]) -> WiringItem:
+    executor_text = files.get("src/idis/services/extraction/task_executor.py", "")
+    integrated = any(
+        token in executor_text
+        for token in ("LLMClaimExtractor", "Anthropic", "OpenAI", "external_calls_enabled = True")
+    )
+    return WiringItem(
+        key="methodology_extraction_live_llm_integration",
+        label="Methodology extraction live LLM integration",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary="Phase 2.5 does not wire live or production LLM extraction.",
+        evidence=["Task executor requires an injected extractor and makes no network calls."],
+        gaps=["Future production extractor wiring must preserve evidence and gate semantics."],
+        phase_2_action="Phase 2.5",
+    )
+
+
+def _methodology_extraction_coverage_integration(files: dict[str, str]) -> WiringItem:
+    executor_text = files.get("src/idis/services/extraction/task_executor.py", "")
+    integrated = "InMemoryMethodologyCoverageService" in executor_text
+    return WiringItem(
+        key="methodology_extraction_coverage_integration",
+        label="Methodology extraction coverage integration",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary="Phase 2.5 does not update methodology coverage answers.",
+        evidence=["Task executor returns claim drafts only and does not mutate coverage records."],
+        gaps=["Future slice must update coverage after claims and Sanad are created."],
+        phase_2_action="Phase 2.5",
     )
 
 

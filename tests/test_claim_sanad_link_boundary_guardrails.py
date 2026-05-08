@@ -33,12 +33,16 @@ class FailingGetSanadClaimService(TrackingClaimService):
 
 
 def _decisions_from_mapping(mapping: SanadCreationMapping) -> list[Any]:
-    return _service().build_claim_sanad_link_decisions(
-        tenant_id=TENANT_ID,
-        deal_id=DEAL_ID,
-        run_id=RUN_ID,
-        sanad_creation_result=_creation_result(mappings=[mapping]),
-    ).decisions
+    return (
+        _service()
+        .build_claim_sanad_link_decisions(
+            tenant_id=TENANT_ID,
+            deal_id=DEAL_ID,
+            run_id=RUN_ID,
+            sanad_creation_result=_creation_result(mappings=[mapping]),
+        )
+        .decisions
+    )
 
 
 def test_missing_claim_id_fails_closed() -> None:
@@ -143,9 +147,9 @@ def test_exact_duplicate_mapping_is_rejected_deterministically() -> None:
 
     assert result.decisions == []
     assert len(result.rejections) == 2
-    assert {
-        rejection.reason for rejection in result.rejections
-    } == {ClaimSanadLinkReason.EXISTING_CONFLICTING_SANAD}
+    assert {rejection.reason for rejection in result.rejections} == {
+        ClaimSanadLinkReason.EXISTING_CONFLICTING_SANAD
+    }
 
 
 def test_existing_conflicting_sanad_id_fails_closed() -> None:

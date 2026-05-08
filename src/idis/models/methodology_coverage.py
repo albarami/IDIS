@@ -152,11 +152,15 @@ class MethodologyCoverageRecord(CoverageBaseModel):
 
     @model_validator(mode="after")
     def _validate_status_requirements(self) -> MethodologyCoverageRecord:
-        if self.status in {
-            MethodologyCoverageStatus.BLOCKED,
-            MethodologyCoverageStatus.EVIDENCE_MISSING,
-            MethodologyCoverageStatus.UNSUPPORTED_SOURCE,
-        } and not self.reason_code:
+        if (
+            self.status
+            in {
+                MethodologyCoverageStatus.BLOCKED,
+                MethodologyCoverageStatus.EVIDENCE_MISSING,
+                MethodologyCoverageStatus.UNSUPPORTED_SOURCE,
+            }
+            and not self.reason_code
+        ):
             raise ValueError(f"{self.status.value} requires reason_code")
         if self.status == MethodologyCoverageStatus.CONTRADICTED and not (
             self.conflict_ids or self.defect_ids

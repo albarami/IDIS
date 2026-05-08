@@ -83,14 +83,18 @@ def load_documents_for_deal(
 
 def _span_for_run(span: Any) -> dict[str, Any]:
     """Convert a repository span row to the run document span shape."""
-    span_dict = dict(span) if isinstance(span, dict) else {
-        "span_id": str(span.span_id),
-        "text_excerpt": span.text_excerpt,
-        "locator": span.locator if isinstance(span.locator, dict) else {},
-        "span_type": str(span.span_type),
-        "content_hash": getattr(span, "content_hash", None),
-    }
-    result = {
+    span_dict = (
+        dict(span)
+        if isinstance(span, dict)
+        else {
+            "span_id": str(span.span_id),
+            "text_excerpt": span.text_excerpt,
+            "locator": span.locator if isinstance(span.locator, dict) else {},
+            "span_type": str(span.span_type),
+            "content_hash": getattr(span, "content_hash", None),
+        }
+    )
+    result: dict[str, Any] = {
         "span_id": str(span_dict["span_id"]),
         "text_excerpt": span_dict.get("text_excerpt"),
         "locator": span_dict.get("locator") if isinstance(span_dict.get("locator"), dict) else {},

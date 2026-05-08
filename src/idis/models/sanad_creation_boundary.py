@@ -31,9 +31,7 @@ class SanadCreationReason(StrEnum):
     CONTRADICTED_EVIDENCE = "contradicted_evidence"
     CHAIN_BUILD_FAILED = "chain_build_failed"
     SANAD_CREATION_FAILED = "sanad_creation_failed"
-    DUPLICATE_CONFLICTING_READINESS_DECISION = (
-        "duplicate_conflicting_readiness_decision"
-    )
+    DUPLICATE_CONFLICTING_READINESS_DECISION = "duplicate_conflicting_readiness_decision"
     ALREADY_CREATED = "already_created"
     BLOCKED = "blocked"
 
@@ -103,9 +101,7 @@ class SanadCreationMapping(SanadCreationBoundaryBaseModel):
             raise ValueError("evidence_ids must not be empty")
         if self.primary_evidence_id not in self.evidence_ids:
             raise ValueError("primary_evidence_id must be included in evidence_ids")
-        missing_corroborating = set(self.corroborating_evidence_ids) - set(
-            self.evidence_ids
-        )
+        missing_corroborating = set(self.corroborating_evidence_ids) - set(self.evidence_ids)
         if missing_corroborating:
             raise ValueError("corroborating_evidence_ids must be included in evidence_ids")
         return self

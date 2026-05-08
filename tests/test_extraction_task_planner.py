@@ -46,9 +46,7 @@ def _question(
     required_evidence_specs: list[tuple[str, int]] | None = None,
 ) -> MethodologyQuestion:
     methodology_id = (
-        "financial_dd"
-        if methodology_type == MethodologyType.FINANCIAL_DD
-        else "commercial_dd"
+        "financial_dd" if methodology_type == MethodologyType.FINANCIAL_DD else "commercial_dd"
     )
     version_id = f"{methodology_id}_v1"
     return MethodologyQuestion(
@@ -241,8 +239,7 @@ def test_mismatched_category_creates_blocker_reason() -> None:
     )
 
     assert (
-        result.tasks[0].blocker_reason
-        == ExtractionTaskBlockerReason.NO_MATCHING_DOCUMENT_CATEGORY
+        result.tasks[0].blocker_reason == ExtractionTaskBlockerReason.NO_MATCHING_DOCUMENT_CATEGORY
     )
 
 
@@ -271,36 +268,44 @@ def test_section_only_match_does_not_create_ready_task() -> None:
 
 
 def test_no_matching_category_does_not_attach_unrelated_document() -> None:
-    first = InMemoryExtractionTaskPlanner().plan_tasks(
-        tenant_id=TENANT_ID,
-        deal_id=DEAL_ID,
-        run_id=RUN_ID,
-        methodology_registry=_registry(),
-        classifications=[
-            _classification(
-                document_id="doc-market",
-                fdd_category=FddDocumentCategory.MARKET_RESEARCH,
-                cdd_category=CddDocumentCategory.MARKET_RESEARCH,
-                target_areas=["Market"],
-            )
-        ],
-        source_spans_by_document_id={"doc-market": [_span("doc-market")]},
-    ).tasks[0]
-    second = InMemoryExtractionTaskPlanner().plan_tasks(
-        tenant_id=TENANT_ID,
-        deal_id=DEAL_ID,
-        run_id=RUN_ID,
-        methodology_registry=_registry(),
-        classifications=[
-            _classification(
-                document_id="doc-market",
-                fdd_category=FddDocumentCategory.MARKET_RESEARCH,
-                cdd_category=CddDocumentCategory.MARKET_RESEARCH,
-                target_areas=["Market"],
-            )
-        ],
-        source_spans_by_document_id={"doc-market": [_span("doc-market")]},
-    ).tasks[0]
+    first = (
+        InMemoryExtractionTaskPlanner()
+        .plan_tasks(
+            tenant_id=TENANT_ID,
+            deal_id=DEAL_ID,
+            run_id=RUN_ID,
+            methodology_registry=_registry(),
+            classifications=[
+                _classification(
+                    document_id="doc-market",
+                    fdd_category=FddDocumentCategory.MARKET_RESEARCH,
+                    cdd_category=CddDocumentCategory.MARKET_RESEARCH,
+                    target_areas=["Market"],
+                )
+            ],
+            source_spans_by_document_id={"doc-market": [_span("doc-market")]},
+        )
+        .tasks[0]
+    )
+    second = (
+        InMemoryExtractionTaskPlanner()
+        .plan_tasks(
+            tenant_id=TENANT_ID,
+            deal_id=DEAL_ID,
+            run_id=RUN_ID,
+            methodology_registry=_registry(),
+            classifications=[
+                _classification(
+                    document_id="doc-market",
+                    fdd_category=FddDocumentCategory.MARKET_RESEARCH,
+                    cdd_category=CddDocumentCategory.MARKET_RESEARCH,
+                    target_areas=["Market"],
+                )
+            ],
+            source_spans_by_document_id={"doc-market": [_span("doc-market")]},
+        )
+        .tasks[0]
+    )
 
     assert first.blocker_reason == ExtractionTaskBlockerReason.NO_MATCHING_DOCUMENT_CATEGORY
     assert first.document_id is None
@@ -399,12 +404,8 @@ def test_financial_statement_alias_maps_to_fdd_financial_categories() -> None:
         tenant_id=TENANT_ID,
         deal_id=DEAL_ID,
         run_id=RUN_ID,
-        methodology_registry=_registry(
-            [_question(target_categories=["financial_statement"])]
-        ),
-        classifications=[
-            _classification(fdd_category=FddDocumentCategory.CASH_FLOW_SUPPORT)
-        ],
+        methodology_registry=_registry([_question(target_categories=["financial_statement"])]),
+        classifications=[_classification(fdd_category=FddDocumentCategory.CASH_FLOW_SUPPORT)],
         source_spans_by_document_id={"doc-financial-model": [_span()]},
     )
 
@@ -485,9 +486,7 @@ def test_required_evidence_missing_creates_evidence_missing_task() -> None:
             [_question(required_evidence_types=["schedule", "contract"])]
         ),
         classifications=[_classification()],
-        source_spans_by_document_id={
-            "doc-financial-model": [_span(evidence_tags=["schedule"])]
-        },
+        source_spans_by_document_id={"doc-financial-model": [_span(evidence_tags=["schedule"])]},
     )
 
     task = result.tasks[0]
@@ -523,13 +522,9 @@ def test_required_evidence_min_count_one_with_one_tag_is_ready() -> None:
         tenant_id=TENANT_ID,
         deal_id=DEAL_ID,
         run_id=RUN_ID,
-        methodology_registry=_registry(
-            [_question(required_evidence_specs=[("schedule", 1)])]
-        ),
+        methodology_registry=_registry([_question(required_evidence_specs=[("schedule", 1)])]),
         classifications=[_classification()],
-        source_spans_by_document_id={
-            "doc-financial-model": [_span(evidence_tags=["schedule"])]
-        },
+        source_spans_by_document_id={"doc-financial-model": [_span(evidence_tags=["schedule"])]},
     )
 
     assert result.tasks[0].status == ExtractionTaskStatus.READY
@@ -540,13 +535,9 @@ def test_required_evidence_min_count_two_with_one_tag_is_evidence_missing() -> N
         tenant_id=TENANT_ID,
         deal_id=DEAL_ID,
         run_id=RUN_ID,
-        methodology_registry=_registry(
-            [_question(required_evidence_specs=[("schedule", 2)])]
-        ),
+        methodology_registry=_registry([_question(required_evidence_specs=[("schedule", 2)])]),
         classifications=[_classification()],
-        source_spans_by_document_id={
-            "doc-financial-model": [_span(evidence_tags=["schedule"])]
-        },
+        source_spans_by_document_id={"doc-financial-model": [_span(evidence_tags=["schedule"])]},
     )
 
     task = result.tasks[0]
@@ -560,9 +551,7 @@ def test_required_evidence_min_count_two_with_two_tags_is_ready() -> None:
         tenant_id=TENANT_ID,
         deal_id=DEAL_ID,
         run_id=RUN_ID,
-        methodology_registry=_registry(
-            [_question(required_evidence_specs=[("schedule", 2)])]
-        ),
+        methodology_registry=_registry([_question(required_evidence_specs=[("schedule", 2)])]),
         classifications=[_classification()],
         source_spans_by_document_id={
             "doc-financial-model": [
@@ -593,10 +582,7 @@ def test_multiple_required_evidence_types_each_enforce_min_count() -> None:
     )
 
     assert result.tasks[0].status == ExtractionTaskStatus.EVIDENCE_MISSING
-    assert (
-        result.tasks[0].blocker_reason
-        == ExtractionTaskBlockerReason.REQUIRED_EVIDENCE_MISSING
-    )
+    assert result.tasks[0].blocker_reason == ExtractionTaskBlockerReason.REQUIRED_EVIDENCE_MISSING
 
     satisfied = InMemoryExtractionTaskPlanner().plan_tasks(
         tenant_id=TENANT_ID,
@@ -618,14 +604,18 @@ def test_multiple_required_evidence_types_each_enforce_min_count() -> None:
 
 
 def test_expected_answer_schema_is_populated_from_methodology() -> None:
-    task = InMemoryExtractionTaskPlanner().plan_tasks(
-        tenant_id=TENANT_ID,
-        deal_id=DEAL_ID,
-        run_id=RUN_ID,
-        methodology_registry=_registry(),
-        classifications=[_classification()],
-        source_spans_by_document_id={"doc-financial-model": [_span()]},
-    ).tasks[0]
+    task = (
+        InMemoryExtractionTaskPlanner()
+        .plan_tasks(
+            tenant_id=TENANT_ID,
+            deal_id=DEAL_ID,
+            run_id=RUN_ID,
+            methodology_registry=_registry(),
+            classifications=[_classification()],
+            source_spans_by_document_id={"doc-financial-model": [_span()]},
+        )
+        .tasks[0]
+    )
 
     assert task.expected_answer_schema.answer_type == "narrative"
     assert (

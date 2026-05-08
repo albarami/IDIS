@@ -28,25 +28,29 @@ class ParsedCorpusConnection:
         if "SET LOCAL idis.tenant_id" in sql:
             return result
         if "FROM documents" in sql:
-            result.fetchall.return_value = [
-                MagicMock(
-                    _mapping={
-                        "document_id": "doc-1",
-                        "tenant_id": TENANT_ID,
-                        "deal_id": DEAL_ID,
-                        "doc_id": "artifact-1",
-                        "doc_type": "PDF",
-                        "parse_status": "PARSED",
-                        "document_metadata": {"name": "source.pdf"},
-                        "artifact_metadata": {"source": "synthetic"},
-                        "document_name": "source.pdf",
-                        "sha256": "a" * 64,
-                        "uri": "deals/source.pdf",
-                        "created_at": "2026-01-01T00:00:00Z",
-                        "updated_at": "2026-01-01T00:00:00Z",
-                    }
-                )
-            ] if self.with_documents else []
+            result.fetchall.return_value = (
+                [
+                    MagicMock(
+                        _mapping={
+                            "document_id": "doc-1",
+                            "tenant_id": TENANT_ID,
+                            "deal_id": DEAL_ID,
+                            "doc_id": "artifact-1",
+                            "doc_type": "PDF",
+                            "parse_status": "PARSED",
+                            "document_metadata": {"name": "source.pdf"},
+                            "artifact_metadata": {"source": "synthetic"},
+                            "document_name": "source.pdf",
+                            "sha256": "a" * 64,
+                            "uri": "deals/source.pdf",
+                            "created_at": "2026-01-01T00:00:00Z",
+                            "updated_at": "2026-01-01T00:00:00Z",
+                        }
+                    )
+                ]
+                if self.with_documents
+                else []
+            )
             return result
         if "FROM document_spans" in sql:
             result.fetchall.return_value = [
@@ -70,14 +74,18 @@ class ParsedCorpusConnection:
 
 
 def _request_with_db(conn: ParsedCorpusConnection, *, stale_memory_docs: bool = True) -> Any:
-    stale_docs = [
-        {
-            "document_id": "memory-doc",
-            "doc_type": "PDF",
-            "document_name": "memory.pdf",
-            "spans": [],
-        }
-    ] if stale_memory_docs else []
+    stale_docs = (
+        [
+            {
+                "document_id": "memory-doc",
+                "doc_type": "PDF",
+                "document_name": "memory.pdf",
+                "spans": [],
+            }
+        ]
+        if stale_memory_docs
+        else []
+    )
     return SimpleNamespace(
         state=SimpleNamespace(db_conn=conn, snapshot_documents=stale_docs),
         app=SimpleNamespace(state=SimpleNamespace(deal_documents={DEAL_ID: stale_docs})),
@@ -100,22 +108,26 @@ def test_api_and_worker_load_identical_persisted_document_span_corpus() -> None:
         deal_id=DEAL_ID,
     )
 
-    assert api_docs == worker_docs == [
-        {
-            "document_id": "doc-1",
-            "doc_type": "PDF",
-            "document_name": "source.pdf",
-            "spans": [
-                {
-                    "span_id": "span-1",
-                    "text_excerpt": "Revenue was $5M.",
-                    "locator": {"page": 1},
-                    "span_type": "PAGE_TEXT",
-                    "content_hash": "b" * 64,
-                }
-            ],
-        }
-    ]
+    assert (
+        api_docs
+        == worker_docs
+        == [
+            {
+                "document_id": "doc-1",
+                "doc_type": "PDF",
+                "document_name": "source.pdf",
+                "spans": [
+                    {
+                        "span_id": "span-1",
+                        "text_excerpt": "Revenue was $5M.",
+                        "locator": {"page": 1},
+                        "span_type": "PAGE_TEXT",
+                        "content_hash": "b" * 64,
+                    }
+                ],
+            }
+        ]
+    )
     assert any("FROM documents" in sql for sql in api_conn.executed_sql)
 
 

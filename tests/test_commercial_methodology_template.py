@@ -62,9 +62,7 @@ def test_every_commercial_question_has_evidence_agents_and_report_mapping() -> N
 def test_template_validates_through_same_registry_schema() -> None:
     """Commercial DD template uses the exact same MethodologyRegistry schema."""
     registry = load_registry_from_json_file(TEMPLATE_PATH)
-    round_tripped = MethodologyRegistry.model_validate_json(
-        registry.to_deterministic_json()
-    )
+    round_tripped = MethodologyRegistry.model_validate_json(registry.to_deterministic_json())
 
     assert round_tripped.registry_hash == registry.registry_hash
     assert all(

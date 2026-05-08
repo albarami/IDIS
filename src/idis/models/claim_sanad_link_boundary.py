@@ -62,9 +62,7 @@ class ClaimSanadLinkApplyDecision(ClaimSanadLinkBoundaryBaseModel):
     evidence_ids: list[str]
     claim_link_status: str = ClaimSanadLinkReason.READY_FOR_CLAIM_LINK.value
     coverage_update_status: str = "not_applied"
-    claim_promotion_status: ClaimPromotionStatus = (
-        ClaimPromotionStatus.SANAD_LINKED_NOT_IC_READY
-    )
+    claim_promotion_status: ClaimPromotionStatus = ClaimPromotionStatus.SANAD_LINKED_NOT_IC_READY
 
     @field_validator(
         "tenant_id",
@@ -115,9 +113,7 @@ class ClaimSanadLinkApplicationMapping(ClaimSanadLinkBoundaryBaseModel):
     claim_action: str
     ic_bound: bool = False
     coverage_update_status: str = "not_applied"
-    claim_promotion_status: ClaimPromotionStatus = (
-        ClaimPromotionStatus.SANAD_LINKED_NOT_IC_READY
-    )
+    claim_promotion_status: ClaimPromotionStatus = ClaimPromotionStatus.SANAD_LINKED_NOT_IC_READY
 
     @field_validator(
         "tenant_id",
@@ -176,9 +172,7 @@ class ClaimSanadLinkRejection(ClaimSanadLinkBoundaryBaseModel):
     message: str | None = None
     metadata: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
     coverage_update_status: str = "not_applied"
-    claim_promotion_status: ClaimPromotionStatus = (
-        ClaimPromotionStatus.SANAD_LINKED_NOT_IC_READY
-    )
+    claim_promotion_status: ClaimPromotionStatus = ClaimPromotionStatus.SANAD_LINKED_NOT_IC_READY
 
     @field_validator("tenant_id", "deal_id", "run_id", "coverage_update_status")
     @classmethod

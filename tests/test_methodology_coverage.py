@@ -53,9 +53,7 @@ def _question(question_id: str, section: str) -> MethodologyQuestion:
         ],
         target_document_categories=["management_presentation"],
         required_calculations=[],
-        assigned_agents=[
-            AssignedAgent(role="market_agent", responsibility="Assess evidence")
-        ],
+        assigned_agents=[AssignedAgent(role="market_agent", responsibility="Assess evidence")],
         red_flag_rules=[],
         report_mapping=ReportMapping(report_section=section),
         validation_requirements=["requires_claim_or_evidence"],
@@ -99,9 +97,7 @@ def test_initialize_one_record_per_methodology_question() -> None:
     )
 
     assert len(records) == 2
-    assert {record.status for record in records} == {
-        MethodologyCoverageStatus.NOT_STARTED
-    }
+    assert {record.status for record in records} == {MethodologyCoverageStatus.NOT_STARTED}
 
 
 def test_aggregates_by_methodology_type_and_section() -> None:
@@ -162,9 +158,7 @@ def test_invalid_transition_fails_closed() -> None:
         service.update_status(
             record.coverage_record_id,
             MethodologyCoverageStatus.ANSWERED,
-            evidence_links=[
-                MethodologyEvidenceLink(evidence_id="evidence-1", claim_id="claim-1")
-            ],
+            evidence_links=[MethodologyEvidenceLink(evidence_id="evidence-1", claim_id="claim-1")],
         )
 
 
@@ -198,9 +192,7 @@ def test_answered_with_claim_or_evidence_works() -> None:
         record.coverage_record_id,
         MethodologyCoverageStatus.ANSWERED,
         answer=MethodologyAnswer(answer_text="Market is growing", claim_ids=["claim-1"]),
-        evidence_links=[
-            MethodologyEvidenceLink(evidence_id="evidence-1", claim_id="claim-1")
-        ],
+        evidence_links=[MethodologyEvidenceLink(evidence_id="evidence-1", claim_id="claim-1")],
     )
 
     assert updated.status == MethodologyCoverageStatus.ANSWERED

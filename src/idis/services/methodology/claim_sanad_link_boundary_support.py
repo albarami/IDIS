@@ -142,9 +142,7 @@ def pre_update_rejection_for_decision(
     claim: dict[str, Any],
     sanad: dict[str, Any] | None,
 ) -> ClaimSanadLinkRejection | None:
-    def reject(
-        *, reason: ClaimSanadLinkReason, message: str
-    ) -> ClaimSanadLinkRejection:
+    def reject(*, reason: ClaimSanadLinkReason, message: str) -> ClaimSanadLinkRejection:
         return rejection_from_decision(
             tenant_id=tenant_id,
             deal_id=deal_id,
@@ -305,9 +303,7 @@ def duplicate_conflicting_rejections(
     conflicting_claims = {
         claim_id for claim_id, sanad_ids in by_claim.items() if len(sanad_ids) > 1
     }
-    duplicate_targets = {
-        target for target, target_count in by_target.items() if target_count > 1
-    }
+    duplicate_targets = {target for target, target_count in by_target.items() if target_count > 1}
     if not conflicting_claims and not duplicate_targets:
         return []
     return [
@@ -417,9 +413,7 @@ def rejection_from_mapping(
         deal_id=deal_id,
         run_id=run_id,
         claim_id=optional_string(getattr(mapping, "claim_id", None)),
-        methodology_question_id=optional_string(
-            getattr(mapping, "methodology_question_id", None)
-        ),
+        methodology_question_id=optional_string(getattr(mapping, "methodology_question_id", None)),
         sanad_id=optional_string(getattr(mapping, "sanad_id", None)),
         source_span_ids=list(getattr(mapping, "source_span_ids", []) or []),
         evidence_ids=list(getattr(mapping, "evidence_ids", []) or []),

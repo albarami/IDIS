@@ -941,10 +941,14 @@ def _run_snapshot_calc(
     )
     from idis.services.calc.runner import CalcRunner
 
-    typed_calc_types = [
-        calc_type if isinstance(calc_type, CalcType) else CalcType(str(calc_type))
-        for calc_type in calc_types
-    ] if calc_types else None
+    typed_calc_types = (
+        [
+            calc_type if isinstance(calc_type, CalcType) else CalcType(str(calc_type))
+            for calc_type in calc_types
+        ]
+        if calc_types
+        else None
+    )
 
     claims_repo: Any
     sanads_repo: Any

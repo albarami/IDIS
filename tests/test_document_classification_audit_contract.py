@@ -50,8 +50,7 @@ def test_required_payload_keys_are_defined() -> None:
 def test_audit_contract_has_no_confidential_content() -> None:
     serialized = "\n".join(
         sorted(
-            DOCUMENT_CLASSIFICATION_AUDIT_EVENTS
-            | DOCUMENT_CLASSIFICATION_AUDIT_EVENT_PAYLOAD_KEYS
+            DOCUMENT_CLASSIFICATION_AUDIT_EVENTS | DOCUMENT_CLASSIFICATION_AUDIT_EVENT_PAYLOAD_KEYS
         )
     )
 

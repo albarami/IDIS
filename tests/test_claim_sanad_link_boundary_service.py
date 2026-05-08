@@ -253,12 +253,16 @@ def test_apply_claim_sanad_links_uses_injected_claim_service_update_only() -> No
 
 
 def test_already_linked_claim_returns_deterministic_rejection_without_update() -> None:
-    decision = _service().build_claim_sanad_link_decisions(
-        tenant_id=TENANT_ID,
-        deal_id=DEAL_ID,
-        run_id=RUN_ID,
-        sanad_creation_result=_creation_result(),
-    ).decisions[0]
+    decision = (
+        _service()
+        .build_claim_sanad_link_decisions(
+            tenant_id=TENANT_ID,
+            deal_id=DEAL_ID,
+            run_id=RUN_ID,
+            sanad_creation_result=_creation_result(),
+        )
+        .decisions[0]
+    )
     claim_service = TrackingClaimService(
         claims={CLAIM_ID: _claim(sanad_id=SANAD_ID)},
         sanads={SANAD_ID: _sanad()},
@@ -283,12 +287,16 @@ def test_claim_service_update_failure_fails_closed_and_batch_continues() -> None
             _mapping(claim_id=CLAIM_2_ID, sanad_id=SANAD_2_ID),
         ]
     )
-    decisions = _service().build_claim_sanad_link_decisions(
-        tenant_id=TENANT_ID,
-        deal_id=DEAL_ID,
-        run_id=RUN_ID,
-        sanad_creation_result=creation_result,
-    ).decisions
+    decisions = (
+        _service()
+        .build_claim_sanad_link_decisions(
+            tenant_id=TENANT_ID,
+            deal_id=DEAL_ID,
+            run_id=RUN_ID,
+            sanad_creation_result=creation_result,
+        )
+        .decisions
+    )
     claim_service = FailingOnceClaimService(
         claims={
             CLAIM_ID: _claim(claim_id=CLAIM_ID),

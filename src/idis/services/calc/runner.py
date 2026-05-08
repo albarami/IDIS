@@ -249,9 +249,7 @@ def _claim_input_key(claim: dict[str, Any]) -> str | None:
         return predicate.lower()
 
     haystack = " ".join(
-        str(value).lower()
-        for value in (claim.get("claim_class"), claim.get("claim_text"))
-        if value
+        str(value).lower() for value in (claim.get("claim_class"), claim.get("claim_text")) if value
     )
     aliases = {
         "revenue": ("revenue", "sales"),

@@ -287,6 +287,8 @@ def run_integration_tests() -> int:
         "tests/test_api_deals_postgres.py",
         "tests/test_api_claims_postgres.py",
         "tests/test_api_audit_events_postgres.py",
+        "tests/test_documents_repository.py",
+        "tests/test_ingestion_persists_documents_postgres.py",
         "tests/test_postgres_rls_and_audit_immutability.py",
         "tests/test_postgres_break_attempts.py",
     ]

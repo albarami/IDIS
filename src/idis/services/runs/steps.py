@@ -5,9 +5,8 @@ from __future__ import annotations
 from functools import partial
 from typing import Any
 
-from sqlalchemy import text
-
 from idis.audit.sink import AuditSink
+from idis.persistence.repositories.documents import PostgresDocumentsRepository
 from idis.services.runs.orchestrator import RunContext
 
 
@@ -60,62 +59,53 @@ def load_documents_for_deal(
     *,
     db_conn: Any,
     deal_id: str,
+    tenant_id: str,
 ) -> list[dict[str, Any]]:
     """Load parsed documents and spans for a deal from Postgres.
 
-    RLS tenant context must already be set on the connection.
+    The tenant-scoped repository sets RLS context before querying the corpus.
     """
     if db_conn is None:
         return []
 
-    document_rows = db_conn.execute(
-        text(
-            """
-            SELECT document_id, doc_type, metadata
-            FROM documents
-            WHERE deal_id = :deal_id AND parse_status = 'PARSED'
-            ORDER BY created_at, document_id
-            """
-        ),
-        {"deal_id": deal_id},
-    ).fetchall()
-
-    documents: list[dict[str, Any]] = []
-    for document in document_rows:
-        spans = db_conn.execute(
-            text(
-                """
-                SELECT span_id, text_excerpt, locator, span_type
-                FROM document_spans
-                WHERE document_id = :document_id
-                ORDER BY created_at, span_id
-                """
-            ),
-            {"document_id": document.document_id},
-        ).fetchall()
+    repo = PostgresDocumentsRepository(db_conn, tenant_id)
+    run_documents: list[dict[str, Any]] = []
+    for document in repo.list_documents_by_deal(deal_id, parsed_only=True):
+        spans = repo.list_spans_by_document(
+            deal_id=deal_id,
+            document_id=document["document_id"],
+        )
         if not spans:
             continue
+        run_documents.append(_document_for_run(document, spans))
+    return run_documents
 
-        metadata = document.metadata if isinstance(document.metadata, dict) else {}
-        documents.append(
-            {
-                "document_id": str(document.document_id),
-                "doc_type": str(document.doc_type),
-                "document_name": str(
-                    metadata.get("name")
-                    or metadata.get("document_name")
-                    or document.document_id
-                ),
-                "spans": [
-                    {
-                        "span_id": str(span.span_id),
-                        "text_excerpt": span.text_excerpt,
-                        "locator": span.locator if isinstance(span.locator, dict) else {},
-                        "span_type": str(span.span_type),
-                    }
-                    for span in spans
-                ],
-            }
-        )
 
-    return documents
+def _span_for_run(span: Any) -> dict[str, Any]:
+    """Convert a repository span row to the run document span shape."""
+    span_dict = dict(span) if isinstance(span, dict) else {
+        "span_id": str(span.span_id),
+        "text_excerpt": span.text_excerpt,
+        "locator": span.locator if isinstance(span.locator, dict) else {},
+        "span_type": str(span.span_type),
+        "content_hash": getattr(span, "content_hash", None),
+    }
+    result = {
+        "span_id": str(span_dict["span_id"]),
+        "text_excerpt": span_dict.get("text_excerpt"),
+        "locator": span_dict.get("locator") if isinstance(span_dict.get("locator"), dict) else {},
+        "span_type": str(span_dict["span_type"]),
+    }
+    if span_dict.get("content_hash"):
+        result["content_hash"] = span_dict["content_hash"]
+    return result
+
+
+def _document_for_run(document: dict[str, Any], spans: list[dict[str, Any]]) -> dict[str, Any]:
+    """Convert a repository document and spans to the run document shape."""
+    return {
+        "document_id": document["document_id"],
+        "doc_type": document["doc_type"],
+        "document_name": document["document_name"],
+        "spans": [_span_for_run(span) for span in spans],
+    }

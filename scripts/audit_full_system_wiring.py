@@ -82,6 +82,9 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             "snapshot_steps": _snapshot_steps(files),
             "full_steps": _full_steps(files),
             "ingestion_service": _ingestion_service(files),
+            "persisted_ingestion_corpus": _persisted_ingestion_corpus(root, files),
+            "unified_run_document_loader": _unified_run_document_loader(files),
+            "api_worker_document_corpus_split": _api_worker_document_corpus_split(files),
             "parser_wiring": _parser_wiring(files),
             "extraction_pipeline": _extraction_pipeline(files),
             "sanad_wiring": _sanad_wiring(files),
@@ -449,6 +452,9 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/pipeline/worker.py",
         "src/idis/pipeline/executor.py",
         "src/idis/services/ingestion/service.py",
+        "src/idis/persistence/repositories/documents.py",
+        "src/idis/persistence/migrations/versions/0012_document_spans_deal_content_hash.py",
+        "src/idis/models/document_span.py",
         "src/idis/parsers/registry.py",
         "src/idis/services/extraction/pipeline.py",
         "src/idis/services/sanad/auto_grade.py",
@@ -650,6 +656,101 @@ def _ingestion_service(files: dict[str, str]) -> WiringItem:
         ),
         evidence=["`IngestionService.ingest_bytes` stores, parses, and spans raw bytes."],
         gaps=["Default `create_app()` leaves `ingestion_service` optional."],
+    )
+
+
+def _persisted_ingestion_corpus(root: Path, files: dict[str, str]) -> WiringItem:
+    repo_exists = (root / "src/idis/persistence/repositories/documents.py").exists()
+    migration_exists = (
+        root
+        / "src/idis/persistence/migrations/versions/0012_document_spans_deal_content_hash.py"
+    ).exists()
+    service_text = files.get("src/idis/services/ingestion/service.py", "")
+    status = (
+        "PARTIAL"
+        if repo_exists
+        and migration_exists
+        and "PostgresDocumentsRepository" in service_text
+        and "db_conn" in service_text
+        else "DEFERRED"
+    )
+    return WiringItem(
+        key="persisted_ingestion_corpus",
+        label="Persisted ingestion corpus",
+        status=status,
+        summary=(
+            "Parsed ingestion outputs can persist to Postgres documents/document_spans "
+            "when ingestion receives an explicit DB connection."
+        ),
+        evidence=[
+            "`PostgresDocumentsRepository` persists artifacts, documents, and spans.",
+            "`IngestionService` accepts `db_conn` for durable corpus writes.",
+            "`document_spans` includes deal scope and content hash via migration 0012.",
+        ],
+        gaps=[
+            "Default document API creation remains partially in-memory.",
+            "Methodology extraction and downstream FULL-run stages remain deferred.",
+        ],
+    )
+
+
+def _unified_run_document_loader(files: dict[str, str]) -> WiringItem:
+    steps_text = files.get("src/idis/services/runs/steps.py", "")
+    route_text = files.get("src/idis/api/routes/runs.py", "")
+    worker_text = files.get("src/idis/pipeline/worker.py", "")
+    status = (
+        "PARTIAL"
+        if "load_documents_for_deal" in steps_text
+        and "PostgresDocumentsRepository" in steps_text
+        and "load_documents_for_deal" in route_text
+        and "load_documents_for_deal" in worker_text
+        else "DEFERRED"
+    )
+    return WiringItem(
+        key="unified_run_document_loader",
+        label="Unified run document loader",
+        status=status,
+        summary=(
+            "API-started and worker-started runs now share the same parsed "
+            "Postgres document/span loader when a DB connection is present."
+        ),
+        evidence=[
+            "`src/idis/services/runs/steps.py::load_documents_for_deal` is the shared loader.",
+            "API run route calls the shared loader from `request.state.db_conn`.",
+            "Pipeline worker context factory calls the shared loader with tenant scope.",
+        ],
+        gaps=[
+            "The run is still not a real end-to-end FULL diligence flow.",
+            (
+                "Methodology/CALC/enrichment/RAG/Neo4j/debate/agents/deliverables "
+                "wiring remains deferred."
+            ),
+        ],
+    )
+
+
+def _api_worker_document_corpus_split(files: dict[str, str]) -> WiringItem:
+    route_text = files.get("src/idis/api/routes/runs.py", "")
+    worker_text = files.get("src/idis/pipeline/worker.py", "")
+    resolved = (
+        'getattr(request.state, "db_conn", None)' in route_text
+        and "load_documents_for_deal" in route_text
+        and "load_documents_for_deal" in worker_text
+        and "tenant_id=tenant_id" in worker_text
+    )
+    return WiringItem(
+        key="api_worker_document_corpus_split",
+        label="API/worker document corpus split",
+        status="PARTIAL" if resolved else "DEFERRED",
+        summary=(
+            "The previous route-local memory corpus split is resolved for DB-backed runs, "
+            "while explicit test-only memory injection remains for non-DB tests."
+        ),
+        evidence=[
+            "API route prefers persisted DB corpus before memory test hooks.",
+            "Worker path hydrates `RunContext.documents` through the same shared loader.",
+        ],
+        gaps=["No persisted documents still fail closed as `NO_INGESTED_DOCUMENTS`."],
     )
 
 

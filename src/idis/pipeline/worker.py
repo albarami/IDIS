@@ -218,7 +218,11 @@ def _default_run_context_factory(
         run_id=str(run_data["run_id"]),
         deal_id=deal_id,
         mode=str(run_data["mode"]),
-        documents=load_documents_for_deal(db_conn=db_conn, deal_id=deal_id),
+        documents=load_documents_for_deal(
+            db_conn=db_conn,
+            deal_id=deal_id,
+            tenant_id=tenant_id,
+        ),
         audit_sink=audit_sink,
     )
 

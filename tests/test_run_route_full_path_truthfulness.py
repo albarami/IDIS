@@ -20,6 +20,18 @@ def test_api_run_path_uses_run_orchestrator_not_worker_executor() -> None:
     assert any("asyncio.to_thread(execution_service.execute" in item for item in api_run.evidence)
 
 
+def test_api_run_path_prefers_persisted_document_loader_when_db_configured() -> None:
+    """HTTP run route should not use a hidden route-local document fallback before DB corpus."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+    loader = inventory["unified_run_document_loader"]
+    split = inventory["api_worker_document_corpus_split"]
+
+    assert loader.status == "PARTIAL"
+    assert split.status == "PARTIAL"
+    assert any("request.state.db_conn" in item for item in loader.evidence)
+    assert any("prefers persisted DB corpus" in item for item in split.evidence)
+
+
 def test_calc_step_is_truthful_and_persists_eligible_calculations() -> None:
     """The current CALC step must be reported as durable truthful wiring."""
     inventory = collect_wiring_inventory(REPO_ROOT)

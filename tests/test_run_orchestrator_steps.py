@@ -202,6 +202,8 @@ class TestSnapshotStepErrorsPersistedAndReturned:
         result = orchestrator.execute(ctx)
 
         assert result.status == "FAILED"
+        assert result.error_code == "RUNTIMEERROR"
+        assert result.block_reason is None
 
         failed_steps = [s for s in result.steps if s.status == StepStatus.FAILED]
         assert len(failed_steps) == 1
@@ -214,6 +216,34 @@ class TestSnapshotStepErrorsPersistedAndReturned:
         completed_steps = [s for s in result.steps if s.status == StepStatus.COMPLETED]
         assert len(completed_steps) == 1
         assert completed_steps[0].step_name == StepName.INGEST_CHECK
+
+    def test_empty_documents_sets_no_ingested_documents_block_reason(self) -> None:
+        """Empty corpus is an intentional blocked condition, not a generic runtime error."""
+        audit_sink = InMemoryAuditSink()
+        repo = InMemoryRunStepsRepository(TENANT_A)
+        orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
+
+        ctx = RunContext(
+            run_id=str(uuid.uuid4()),
+            tenant_id=TENANT_A,
+            deal_id=str(uuid.uuid4()),
+            mode="SNAPSHOT",
+            documents=[],
+            extract_fn=_stub_extract,
+            grade_fn=_stub_grade,
+            calc_fn=_stub_calc,
+        )
+
+        result = orchestrator.execute(ctx)
+
+        assert result.status == "FAILED"
+        assert result.block_reason == "NO_INGESTED_DOCUMENTS"
+        assert result.error_code == "NO_INGESTED_DOCUMENTS"
+
+        failed_steps = [s for s in result.steps if s.status == StepStatus.FAILED]
+        assert len(failed_steps) == 1
+        assert failed_steps[0].step_name == StepName.INGEST_CHECK
+        assert failed_steps[0].error_code == "NO_INGESTED_DOCUMENTS"
 
 
 def _stub_enrichment(

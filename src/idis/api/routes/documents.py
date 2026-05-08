@@ -483,6 +483,7 @@ def _trigger_auto_ingest(
             media_type=None,
             data=actual_data,
             metadata=artifact.get("metadata"),
+            db_conn=getattr(request.state, "db_conn", None),
         )
 
         if result.success and result.document_id is not None:
@@ -826,6 +827,7 @@ def ingest_document(
                     media_type=None,
                     data=actual_data,
                     metadata=artifact.get("metadata"),
+                    db_conn=getattr(request.state, "db_conn", None),
                 )
 
                 status = RunStatus.SUCCEEDED.value if result.success else RunStatus.FAILED.value

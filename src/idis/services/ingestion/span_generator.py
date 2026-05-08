@@ -168,6 +168,7 @@ class SpanGenerator:
             span_type=self._map_span_type(draft.span_type),
             locator=self._normalize_locator(draft.locator),
             text_excerpt=draft.text_excerpt if draft.text_excerpt else None,
+            content_hash=draft.content_hash,
             created_at=timestamp,
             updated_at=timestamp,
         )

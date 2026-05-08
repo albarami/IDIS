@@ -30,3 +30,15 @@ def test_api_and_worker_share_canonical_execution_path() -> None:
     assert any("RunExecutionService" in item for item in comparison.evidence)
     assert any("RunOrchestrator" in item for item in comparison.evidence)
     assert comparison.gaps == []
+
+
+def test_worker_and_api_share_persisted_document_corpus_loader() -> None:
+    """Worker and API should report the same DB-backed document corpus loader."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+    loader = inventory["unified_run_document_loader"]
+    split = inventory["api_worker_document_corpus_split"]
+
+    assert loader.status == "PARTIAL"
+    assert split.status == "PARTIAL"
+    assert any("Pipeline worker context factory" in item for item in loader.evidence)
+    assert any("Worker path hydrates" in item for item in split.evidence)

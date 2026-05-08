@@ -81,6 +81,12 @@ _EXTENSION_TO_FORMAT = {
     ".docx": "DOCX",
     ".pptx": "PPTX",
 }
+_LIMIT_ERROR_CODES = {
+    ParseErrorCode.MAX_SIZE_EXCEEDED,
+    ParseErrorCode.MAX_PAGES_EXCEEDED,
+    ParseErrorCode.MAX_SHEETS_EXCEEDED,
+    ParseErrorCode.MAX_CELLS_EXCEEDED,
+}
 
 
 def capability_for_document(
@@ -148,17 +154,18 @@ def capability_for_document(
 
 
 def triage_document(
-    descriptor: Any,
+    descriptor: Any | None = None,
     *,
+    filename: str | None = None,
     parse_result: ParseResult | None = None,
     max_bytes: int = DEFAULT_MAX_CLASSIFICATION_BYTES,
 ) -> ParserCapability:
     """Return parser triage for a descriptor and optional parse result."""
     file_size_bytes = getattr(descriptor, "file_size_bytes", None)
-    filename = str(getattr(descriptor, "filename", ""))
+    resolved_filename = str(filename or getattr(descriptor, "filename", ""))
     if parse_result is None:
         return capability_for_document(
-            filename=filename,
+            filename=resolved_filename,
             file_size_bytes=file_size_bytes,
             max_bytes=max_bytes,
         )
@@ -166,7 +173,7 @@ def triage_document(
     error_codes = {error.code for error in parse_result.errors}
     file_type = parse_result.doc_type
 
-    if ParseErrorCode.MAX_SIZE_EXCEEDED in error_codes:
+    if error_codes & _LIMIT_ERROR_CODES:
         return ParserCapability(
             file_type=file_type,
             support_status=DocumentSupportStatus.TOO_LARGE,
@@ -213,7 +220,7 @@ def triage_document(
         )
 
     capability = capability_for_document(
-        filename=filename,
+        filename=resolved_filename,
         file_size_bytes=file_size_bytes,
         detected_format=parse_result.doc_type,
         max_bytes=max_bytes,

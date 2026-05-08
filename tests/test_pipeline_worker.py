@@ -181,6 +181,76 @@ def test_worker_empty_persisted_corpus_preserves_no_ingested_documents_code() ->
     assert steps[0].error_code != "VALUEERROR"
 
 
+def test_worker_no_usable_persisted_corpus_preserves_no_usable_documents_code() -> None:
+    """Worker failed-corpus runs must fail at DOCUMENT_PREFLIGHT with a business code."""
+    conn = MagicMock()
+
+    def execute(statement: object, params: dict[str, str] | None = None) -> MagicMock:
+        sql = str(statement)
+        result = MagicMock()
+        if "SET LOCAL idis.tenant_id" in sql:
+            return result
+        if "FROM documents" in sql:
+            result.fetchall.return_value = [
+                MagicMock(
+                    _mapping={
+                        "document_id": "doc-failed",
+                        "tenant_id": TENANT_ID,
+                        "deal_id": "deal-1",
+                        "doc_id": "artifact-failed",
+                        "doc_type": "PDF",
+                        "parse_status": "FAILED",
+                        "document_metadata": {
+                            "name": "encrypted.pdf",
+                            "parse_error_codes": ["encrypted_pdf"],
+                            "parse_warning_codes": [],
+                            "detected_format": "PDF",
+                            "parser_doc_type": "PDF",
+                        },
+                        "artifact_metadata": {},
+                        "document_name": "encrypted.pdf",
+                        "sha256": "a" * 64,
+                        "uri": "deals/encrypted.pdf",
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "updated_at": "2026-01-01T00:00:00Z",
+                    },
+                )
+            ]
+            return result
+        if "FROM document_spans" in sql:
+            result.fetchall.return_value = []
+            return result
+        raise AssertionError(f"Unexpected SQL: {sql}")
+
+    conn.execute.side_effect = execute
+    engine = MagicMock()
+    engine.connect.return_value.__enter__.return_value = conn
+
+    runs_repo = FakeRunsRepository()
+    run_steps_repo = InMemoryRunStepsRepository(TENANT_ID)
+
+    worker = PipelineWorker(
+        poll_interval=0,
+        tenant_ids=[TENANT_ID],
+        execution_service_factory=lambda **kwargs: RunExecutionService(
+            audit_sink=InMemoryAuditSink(),
+            runs_repo=runs_repo,
+            run_steps_repo=run_steps_repo,
+        ),
+    )
+
+    with (
+        patch("idis.pipeline.worker.get_app_engine", return_value=engine),
+        patch("idis.pipeline.worker.get_runs_repository", return_value=runs_repo),
+    ):
+        processed = asyncio.run(worker._process_queued_runs())
+
+    steps = run_steps_repo.get_by_run_id("run-1")
+    assert processed == 1
+    assert [step.error_code for step in steps] == [None, "NO_USABLE_DOCUMENTS"]
+    assert steps[-1].error_code != "RUNTIMEERROR"
+
+
 def test_default_worker_context_factory_hydrates_persisted_documents() -> None:
     """Default worker context must not claim real runs with an empty document list."""
     conn = MagicMock()
@@ -255,3 +325,4 @@ def test_default_worker_context_factory_hydrates_persisted_documents() -> None:
             ],
         }
     ]
+    assert [doc["document_id"] for doc in ctx.preflight_corpus] == ["doc-1"]

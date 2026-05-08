@@ -4,8 +4,8 @@ Executes pipeline steps in canonical order, records each step in the
 RunStep ledger, emits audit events at every transition, and enforces
 fail-closed semantics on audit failures.
 
-SNAPSHOT: INGEST_CHECK -> EXTRACT -> GRADE -> CALC.
-FULL: INGEST_CHECK -> EXTRACT -> GRADE -> CALC -> ENRICHMENT -> DEBATE
+SNAPSHOT: INGEST_CHECK -> DOCUMENT_PREFLIGHT -> EXTRACT -> GRADE -> CALC.
+FULL: INGEST_CHECK -> DOCUMENT_PREFLIGHT -> EXTRACT -> GRADE -> CALC -> ENRICHMENT -> DEBATE
       -> ANALYSIS -> SCORING -> DELIVERABLES.
 
 No FastAPI globals. All dependencies injected via constructor or execute().
@@ -25,6 +25,7 @@ from pydantic import BaseModel
 
 from idis.audit.sink import AuditSink, AuditSinkError
 from idis.models.deterministic_calculation import CalcType
+from idis.models.document_preflight import DocumentPreflightResult
 from idis.models.run_step import (
     FULL_STEPS,
     IMPLEMENTED_STEPS,
@@ -40,14 +41,22 @@ logger = logging.getLogger(__name__)
 
 BLOCK_REASON_DEBATE_NOT_IMPLEMENTED = "DEBATE_NOT_IMPLEMENTED"
 BLOCK_REASON_NO_INGESTED_DOCUMENTS = "NO_INGESTED_DOCUMENTS"
+BLOCK_REASON_NO_USABLE_DOCUMENTS = "NO_USABLE_DOCUMENTS"
 
 
 class RunStepBlockedError(ValueError):
     """Machine-readable fail-closed run step blocker."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        result_summary: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.result_summary = result_summary
 
 
 @dataclass
@@ -78,7 +87,8 @@ class RunContext:
         tenant_id: Tenant scope.
         deal_id: Deal UUID.
         mode: SNAPSHOT or FULL.
-        documents: Ingested document dicts gathered by the route handler.
+        documents: Extraction-ready parsed document dicts.
+        preflight_corpus: Full persisted corpus, including failed/no-span rows.
         extract_fn: Callable that executes extraction, returns result dict.
         grade_fn: Callable that executes grading, returns summary dict.
         calc_fn: Optional callable that executes calculations, returns result dict.
@@ -92,6 +102,10 @@ class RunContext:
     documents: list[dict[str, Any]]
     extract_fn: Callable[..., dict[str, Any]]
     grade_fn: Callable[..., dict[str, Any]]
+    preflight_corpus: list[dict[str, Any]] = field(default_factory=list)
+    document_preflight_fn: (
+        Callable[..., tuple[DocumentPreflightResult, list[dict[str, Any]]]] | None
+    ) = None
     calc_fn: Callable[..., dict[str, Any]] | None = None
     calc_types: list[CalcType] | None = None
     enrich_fn: Callable[..., dict[str, Any]] | None = None
@@ -131,8 +145,8 @@ class RunOrchestrator:
     def execute(self, ctx: RunContext) -> OrchestratorResult:
         """Execute all pipeline steps for the given run context.
 
-        For SNAPSHOT: INGEST_CHECK -> EXTRACT -> GRADE -> CALC.
-        For FULL: INGEST_CHECK -> EXTRACT -> GRADE -> CALC -> ENRICHMENT
+        For SNAPSHOT: INGEST_CHECK -> DOCUMENT_PREFLIGHT -> EXTRACT -> GRADE -> CALC.
+        For FULL: INGEST_CHECK -> DOCUMENT_PREFLIGHT -> EXTRACT -> GRADE -> CALC -> ENRICHMENT
                   -> DEBATE -> ANALYSIS -> SCORING -> DELIVERABLES.
 
         Skips steps that are already COMPLETED (idempotent resume).
@@ -220,6 +234,8 @@ class RunOrchestrator:
         """
         if step_name == StepName.INGEST_CHECK:
             return self._execute_ingest_check(ctx)
+        if step_name == StepName.DOCUMENT_PREFLIGHT:
+            return self._execute_document_preflight(ctx)
         if step_name == StepName.EXTRACT:
             return self._execute_extract(ctx)
         if step_name == StepName.GRADE:
@@ -250,12 +266,45 @@ class RunOrchestrator:
         Raises:
             RunStepBlockedError: If no documents found.
         """
-        if not ctx.documents:
+        corpus = ctx.preflight_corpus or ctx.documents
+        if not corpus:
             raise RunStepBlockedError(
                 BLOCK_REASON_NO_INGESTED_DOCUMENTS,
                 "No ingested documents found for this deal",
             )
-        return {"document_count": len(ctx.documents)}
+        return {"document_count": len(corpus)}
+
+    def _execute_document_preflight(self, ctx: RunContext) -> dict[str, Any]:
+        """Classify/triage the full corpus and filter extraction inputs."""
+        corpus = ctx.preflight_corpus or ctx.documents
+        if ctx.document_preflight_fn is not None:
+            preflight_result, eligible_documents = ctx.document_preflight_fn(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                corpus=corpus,
+            )
+        else:
+            from idis.services.runs.document_preflight import (
+                InMemoryRunDocumentPreflightService,
+            )
+
+            preflight_result, eligible_documents = InMemoryRunDocumentPreflightService().run(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                corpus=corpus,
+            )
+
+        summary: dict[str, Any] = preflight_result.to_run_step_summary()
+        if not eligible_documents:
+            raise RunStepBlockedError(
+                BLOCK_REASON_NO_USABLE_DOCUMENTS,
+                "No usable documents remain after document preflight",
+                result_summary=summary,
+            )
+        ctx.documents = eligible_documents
+        return summary
 
     def _execute_extract(self, ctx: RunContext) -> dict[str, Any]:
         """Run extraction pipeline via injected callable.
@@ -602,6 +651,9 @@ class RunOrchestrator:
         step.finished_at = now
         step.error_code = getattr(exc, "code", type(exc).__name__.upper())
         step.error_message = str(exc)[:500]
+        result_summary = getattr(exc, "result_summary", None)
+        if result_summary is not None:
+            step.result_summary = self._sanitize_for_json(result_summary)
         self._steps_repo.update(step)
 
         self._emit_audit_event(

@@ -101,8 +101,8 @@ def test_full_system_inventory_detects_phase_2_3_document_classification_foundat
         "DEFERRED",
     }
     assert inventory["document_classification_run_integration"].status in {
-        "NOT_FOUND",
         "DEFERRED",
+        "PARTIAL",
     }
 
 
@@ -117,6 +117,19 @@ def test_full_system_inventory_detects_phase_3_0a_persisted_corpus_baseline() ->
         "Methodology/CALC/enrichment/RAG/Neo4j/debate/agents/deliverables" in gap
         for gap in inventory["unified_run_document_loader"].gaps
     )
+
+
+def test_full_system_inventory_detects_phase_3_0b_document_preflight_baseline() -> None:
+    """Slice 2 preflight is visible without claiming Slice 3+ run extraction wiring."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+
+    preflight = inventory["document_preflight_run_integration"]
+
+    assert preflight.status == "PARTIAL"
+    assert any("DOCUMENT_PREFLIGHT" in item for item in preflight.evidence)
+    assert any("preflight_corpus" in item for item in preflight.evidence)
+    assert any("run-step summary" in item for item in preflight.evidence)
+    assert any("live extraction remains deferred" in item for item in preflight.gaps)
 
 
 def test_full_system_report_does_not_overstate_phase_3_0a_full_run_wiring() -> None:

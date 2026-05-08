@@ -227,6 +227,7 @@ class TestStepOrderingConstants:
         """FULL_STEPS matches the v6.3 canonical order exactly."""
         assert FULL_STEPS == [
             StepName.INGEST_CHECK,
+            StepName.DOCUMENT_PREFLIGHT,
             StepName.EXTRACT,
             StepName.GRADE,
             StepName.CALC,
@@ -261,8 +262,8 @@ class TestStepOrderingConstants:
 class TestFullVsSnapshotEnforcement:
     """FULL-only steps must not execute in SNAPSHOT mode."""
 
-    def test_snapshot_has_only_four_steps(self) -> None:
-        """SNAPSHOT mode completes with only 4 steps (no FULL-only steps)."""
+    def test_snapshot_has_only_five_steps(self) -> None:
+        """SNAPSHOT mode completes with 5 steps (no FULL-only steps)."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -281,13 +282,13 @@ class TestFullVsSnapshotEnforcement:
         result = orchestrator.execute(ctx)
 
         assert result.status == "SUCCEEDED"
-        assert len(result.steps) == 4
+        assert len(result.steps) == 5
         step_names = {s.step_name for s in result.steps}
         for full_only in FULL_ONLY_STEPS:
             assert full_only not in step_names
 
-    def test_full_has_nine_steps(self) -> None:
-        """FULL mode completes with all 9 steps."""
+    def test_full_has_ten_steps(self) -> None:
+        """FULL mode completes with all 10 steps."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -296,7 +297,7 @@ class TestFullVsSnapshotEnforcement:
         result = orchestrator.execute(ctx)
 
         assert result.status == "SUCCEEDED"
-        assert len(result.steps) == 9
+        assert len(result.steps) == 10
 
 
 class TestMissingCallableFailClosed:
@@ -382,7 +383,7 @@ class TestResumeSkipsCompletedSteps:
 
         result1 = orchestrator.execute(ctx)
         assert result1.status == "SUCCEEDED"
-        assert len(result1.steps) == 9
+        assert len(result1.steps) == 10
 
         call_count = {"enrichment": 0}
         original_enrich = _stub_enrichment

@@ -137,8 +137,8 @@ async def start_run(
     if not runs_repo.deal_exists(deal_id):
         raise IdisHttpError(status_code=404, code="NOT_FOUND", message="Deal not found")
 
-    documents = _gather_snapshot_documents(request, tenant_ctx.tenant_id, deal_id)
-    if not documents:
+    preflight_corpus = _gather_preflight_corpus(request, tenant_ctx.tenant_id, deal_id)
+    if not preflight_corpus:
         raise IdisHttpError(
             status_code=400,
             code="NO_INGESTED_DOCUMENTS",
@@ -146,6 +146,7 @@ async def start_run(
                 "Deal has no ingested documents; ingest at least one document before starting a run"
             ),
         )
+    documents = _extraction_ready_documents_from_preflight_corpus(preflight_corpus)
 
     run_data = runs_repo.create(
         run_id=run_id,
@@ -179,6 +180,7 @@ async def start_run(
         deal_id=deal_id,
         mode=request_body.mode,
         documents=documents,
+        preflight_corpus=preflight_corpus,
         audit_sink=audit_sink,
     )
 
@@ -347,6 +349,50 @@ def _gather_snapshot_documents(
         )
 
     return documents
+
+
+def _gather_preflight_corpus(
+    request: Request,
+    tenant_id: str,
+    deal_id: str,
+) -> list[dict[str, Any]]:
+    """Gather the full persisted corpus for DOCUMENT_PREFLIGHT."""
+    db_conn = getattr(request.state, "db_conn", None)
+    if db_conn is not None:
+        from idis.services.runs.steps import load_document_preflight_corpus_for_deal
+
+        return load_document_preflight_corpus_for_deal(
+            db_conn=db_conn,
+            deal_id=deal_id,
+            tenant_id=tenant_id,
+        )
+
+    test_docs: list[dict[str, Any]] = getattr(
+        request.state,
+        "snapshot_documents",
+        [],
+    )
+    if test_docs:
+        return test_docs
+
+    deal_documents: dict[str, list[dict[str, Any]]] = getattr(
+        request.app.state,
+        "deal_documents",
+        {},
+    )
+    if deal_id in deal_documents:
+        return deal_documents[deal_id]
+
+    return _gather_snapshot_documents(request, tenant_id, deal_id)
+
+
+def _extraction_ready_documents_from_preflight_corpus(
+    corpus: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Derive parsed extraction-ready documents from the full preflight corpus."""
+    from idis.services.runs.steps import extraction_ready_documents_from_preflight_corpus
+
+    return extraction_ready_documents_from_preflight_corpus(corpus)
 
 
 def _get_audit_sink(request: Request) -> AuditSink:

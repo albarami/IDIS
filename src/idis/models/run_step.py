@@ -17,6 +17,7 @@ class StepName(StrEnum):
     """Canonical pipeline step names in execution order."""
 
     INGEST_CHECK = "INGEST_CHECK"
+    DOCUMENT_PREFLIGHT = "DOCUMENT_PREFLIGHT"
     EXTRACT = "EXTRACT"
     GRADE = "GRADE"
     CALC = "CALC"
@@ -39,19 +40,21 @@ class StepStatus(StrEnum):
 
 STEP_ORDER: dict[StepName, int] = {
     StepName.INGEST_CHECK: 0,
-    StepName.EXTRACT: 1,
-    StepName.GRADE: 2,
-    StepName.CALC: 3,
-    StepName.ENRICHMENT: 4,
-    StepName.DEBATE: 5,
-    StepName.ANALYSIS: 6,
-    StepName.SCORING: 7,
-    StepName.DELIVERABLES: 8,
+    StepName.DOCUMENT_PREFLIGHT: 1,
+    StepName.EXTRACT: 2,
+    StepName.GRADE: 3,
+    StepName.CALC: 4,
+    StepName.ENRICHMENT: 5,
+    StepName.DEBATE: 6,
+    StepName.ANALYSIS: 7,
+    StepName.SCORING: 8,
+    StepName.DELIVERABLES: 9,
 }
 """Canonical ordering for deterministic step iteration."""
 
 SNAPSHOT_STEPS: list[StepName] = [
     StepName.INGEST_CHECK,
+    StepName.DOCUMENT_PREFLIGHT,
     StepName.EXTRACT,
     StepName.GRADE,
     StepName.CALC,
@@ -60,6 +63,7 @@ SNAPSHOT_STEPS: list[StepName] = [
 
 FULL_STEPS: list[StepName] = [
     StepName.INGEST_CHECK,
+    StepName.DOCUMENT_PREFLIGHT,
     StepName.EXTRACT,
     StepName.GRADE,
     StepName.CALC,
@@ -85,6 +89,7 @@ FULL_ONLY_STEPS: frozenset[StepName] = frozenset(
 IMPLEMENTED_STEPS: frozenset[StepName] = frozenset(
     {
         StepName.INGEST_CHECK,
+        StepName.DOCUMENT_PREFLIGHT,
         StepName.EXTRACT,
         StepName.GRADE,
         StepName.CALC,

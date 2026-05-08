@@ -148,3 +148,41 @@ def test_full_system_report_does_not_overstate_extraction_task_planning_wiring()
     assert "extraction task" in report.lower()
     assert "live methodology extraction execution" in report.lower()
     assert "Methodology-driven extraction is fully wired into production runs" not in report
+
+
+def test_full_system_inventory_detects_phase_2_5_execution_foundation() -> None:
+    """Phase 2.5 synthetic execution exists while live integration remains deferred."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+
+    assert inventory["methodology_extraction_execution_models"].status in {"WIRED", "PARTIAL"}
+    assert inventory["methodology_extraction_task_executor"].status == "PARTIAL"
+    assert inventory["methodology_extraction_execution_audit_contract"].status == "PARTIAL"
+    assert inventory["methodology_extraction_postgres_persistence"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+    assert inventory["methodology_extraction_api_integration"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+    assert inventory["methodology_extraction_run_integration"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+    assert inventory["methodology_extraction_live_llm_integration"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+    assert inventory["methodology_extraction_coverage_integration"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+
+
+def test_full_system_report_does_not_overstate_phase_2_5_execution_wiring() -> None:
+    """Wiring audit must not claim synthetic task execution is production extraction."""
+    report = render_report(collect_wiring_inventory(REPO_ROOT))
+
+    assert "methodology extraction task executor" in report.lower()
+    assert "methodology extraction run integration" in report.lower()
+    assert "Methodology extraction execution is fully wired into production runs" not in report

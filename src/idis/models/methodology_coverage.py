@@ -25,6 +25,13 @@ class MethodologyCoverageStatus(StrEnum):
     BLOCKED = "blocked"
 
 
+class MethodologyCoverageInitializationStatus(StrEnum):
+    """Lifecycle status for run-scoped coverage initialization."""
+
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
 class CoverageBaseModel(BaseModel):
     """Base model for deterministic coverage serialization."""
 
@@ -185,3 +192,117 @@ class MethodologyCoverageSummary(CoverageBaseModel):
     by_status: dict[str, int]
     by_methodology_type: dict[str, int]
     by_section: dict[str, int]
+
+
+class MethodologyCoverageRecordSummary(CoverageBaseModel):
+    """Stable run-step-safe coverage record summary."""
+
+    coverage_record_id: str
+    methodology_question_id: str
+    methodology_id: str
+    methodology_version_id: str
+    methodology_type: MethodologyType
+    status: MethodologyCoverageStatus
+
+    @classmethod
+    def from_record(cls, record: MethodologyCoverageRecord) -> MethodologyCoverageRecordSummary:
+        """Build a safe summary from a full in-memory coverage record."""
+        return cls(
+            coverage_record_id=record.coverage_record_id,
+            methodology_question_id=record.methodology_question_id,
+            methodology_id=record.methodology_id,
+            methodology_version_id=record.methodology_version_id,
+            methodology_type=record.methodology_type,
+            status=record.status,
+        )
+
+    @field_validator(
+        "coverage_record_id",
+        "methodology_question_id",
+        "methodology_id",
+        "methodology_version_id",
+    )
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("field must not be blank")
+        return value.strip()
+
+
+class MethodologyCoverageInitializationResult(CoverageBaseModel):
+    """Run-step-safe result for methodology coverage initialization."""
+
+    status: MethodologyCoverageInitializationStatus
+    tenant_id: str
+    deal_id: str
+    run_id: str
+    methodology_id: str
+    methodology_version_id: str
+    methodology_type: MethodologyType
+    registry_hash: str
+    coverage_record_ids: list[str]
+    methodology_question_ids: list[str]
+    coverage_records: list[MethodologyCoverageRecordSummary]
+    summary: MethodologyCoverageSummary
+
+    def to_deterministic_json(self) -> str:
+        """Serialize the initialization result deterministically."""
+        return json.dumps(self.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+
+    def to_run_step_summary(self) -> dict[str, object]:
+        """Return a compact result_summary without raw document or question text."""
+        return {
+            "status": self.status.value,
+            "methodology_id": self.methodology_id,
+            "methodology_version_id": self.methodology_version_id,
+            "methodology_type": self.methodology_type.value,
+            "registry_hash": self.registry_hash,
+            "coverage_record_ids": list(self.coverage_record_ids),
+            "methodology_question_ids": list(self.methodology_question_ids),
+            "coverage_records": [
+                record.model_dump(mode="json") for record in self.coverage_records
+            ],
+            "summary": {
+                "total_questions": self.summary.total_questions,
+                "by_status": dict(self.summary.by_status),
+                "by_methodology_type": dict(self.summary.by_methodology_type),
+            },
+        }
+
+    @field_validator(
+        "tenant_id",
+        "deal_id",
+        "run_id",
+        "methodology_id",
+        "methodology_version_id",
+        "registry_hash",
+    )
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("field must not be blank")
+        return value.strip()
+
+    @field_validator("coverage_record_ids", "methodology_question_ids")
+    @classmethod
+    def _ids_not_empty_or_blank(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("list must not be empty")
+        cleaned = [item.strip() for item in value]
+        if any(not item for item in cleaned):
+            raise ValueError("list items must not be blank")
+        return cleaned
+
+    @model_validator(mode="after")
+    def _summary_scope_matches(self) -> MethodologyCoverageInitializationResult:
+        if self.summary.tenant_id != self.tenant_id:
+            raise ValueError("summary tenant_id must match initialization result")
+        if self.summary.deal_id != self.deal_id:
+            raise ValueError("summary deal_id must match initialization result")
+        if self.summary.run_id != self.run_id:
+            raise ValueError("summary run_id must match initialization result")
+        if self.summary.total_questions != len(self.methodology_question_ids):
+            raise ValueError("summary total_questions must match initialized questions")
+        if len(self.coverage_records) != len(self.methodology_question_ids):
+            raise ValueError("coverage_records must match initialized questions")
+        return self

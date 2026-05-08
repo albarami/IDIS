@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import partial
 from typing import Any
 
 from idis.audit.sink import AuditSink
+from idis.methodology.models import MethodologyRegistry
+from idis.models.methodology_coverage import (
+    MethodologyCoverageInitializationResult,
+    MethodologyCoverageRecord,
+)
 from idis.persistence.repositories.documents import PostgresDocumentsRepository
+from idis.services.runs.methodology_coverage_init import load_default_methodology_registry
 from idis.services.runs.orchestrator import RunContext
+
+CoverageInitFn = Callable[
+    ...,
+    tuple[MethodologyCoverageInitializationResult, list[MethodologyCoverageRecord]],
+]
 
 
 def build_run_context(
@@ -20,6 +32,9 @@ def build_run_context(
     documents: list[dict[str, Any]],
     preflight_corpus: list[dict[str, Any]] | None = None,
     audit_sink: AuditSink,
+    methodology_registry: MethodologyRegistry | None = None,
+    methodology_registry_loader_fn: Callable[[], MethodologyRegistry] | None = None,
+    methodology_coverage_init_fn: CoverageInitFn | None = None,
 ) -> RunContext:
     """Build a RunContext with the canonical step callables.
 
@@ -46,6 +61,10 @@ def build_run_context(
         mode=mode,
         documents=documents,
         preflight_corpus=preflight_corpus or documents,
+        methodology_registry=methodology_registry,
+        methodology_registry_loader_fn=methodology_registry_loader_fn
+        or load_default_methodology_registry,
+        methodology_coverage_init_fn=methodology_coverage_init_fn,
         extract_fn=partial(_run_snapshot_extraction, db_conn=db_conn),
         grade_fn=partial(_run_snapshot_auto_grade, db_conn=db_conn),
         calc_fn=partial(_run_snapshot_calc, db_conn=db_conn),

@@ -97,6 +97,9 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             "methodology_coverage_service": _methodology_coverage_service(root, files),
             "methodology_postgres_persistence": _methodology_postgres_persistence(root),
             "methodology_run_integration": _methodology_run_integration(files),
+            "methodology_coverage_init_run_integration": (
+                _methodology_coverage_init_run_integration(files)
+            ),
             "document_classification_models": _document_classification_models(root, files),
             "parser_capability_registry": _parser_capability_registry(root, files),
             "document_classification_service": _document_classification_service(root, files),
@@ -465,6 +468,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/methodology/templates/commercial_dd_v1.json",
         "src/idis/models/methodology_coverage.py",
         "src/idis/services/methodology/coverage.py",
+        "src/idis/services/runs/methodology_coverage_init.py",
         "src/idis/models/document_classification.py",
         "src/idis/services/documents/parser_capabilities.py",
         "src/idis/services/documents/classifier.py",
@@ -916,14 +920,59 @@ def _methodology_postgres_persistence(root: Path) -> WiringItem:
 
 def _methodology_run_integration(files: dict[str, str]) -> WiringItem:
     run_steps = files.get("src/idis/services/runs/steps.py", "")
-    integrated = "methodology_question_id" in run_steps or "MethodologyRegistry" in run_steps
+    orchestrator = files.get("src/idis/services/runs/orchestrator.py", "")
+    integrated = "MethodologyRegistry" in run_steps and "METHODOLOGY_COVERAGE_INIT" in orchestrator
     return WiringItem(
         key="methodology_run_integration",
         label="Methodology run integration",
         status="PARTIAL" if integrated else "DEFERRED",
-        summary="Methodology registry is not yet wired into production run execution.",
-        evidence=["RunExecutionService remains methodology-agnostic in Phase 2.2."],
-        gaps=["Future run slices must initialize coverage per methodology question."],
+        summary="Methodology registry is wired only for run-scoped coverage initialization.",
+        evidence=[
+            "`build_run_context` injects a deterministic methodology registry loader.",
+            "`METHODOLOGY_COVERAGE_INIT` initializes coverage before legacy extraction.",
+        ],
+        gaps=["Methodology extraction task planning and execution remain deferred."],
+    )
+
+
+def _methodology_coverage_init_run_integration(files: dict[str, str]) -> WiringItem:
+    orchestrator = files.get("src/idis/services/runs/orchestrator.py", "")
+    steps = files.get("src/idis/services/runs/steps.py", "")
+    run_step = files.get("src/idis/models/run_step.py", "")
+    service = files.get("src/idis/services/runs/methodology_coverage_init.py", "")
+    coverage_models = files.get("src/idis/models/methodology_coverage.py", "")
+
+    wired = (
+        "METHODOLOGY_COVERAGE_INIT" in run_step
+        and "METHODOLOGY_COVERAGE_INIT" in orchestrator
+        and "load_default_methodology_registry" in steps
+        and "commercial_dd_v1.json" in service
+        and "to_run_step_summary" in coverage_models
+    )
+    return WiringItem(
+        key="methodology_coverage_init_run_integration",
+        label="Methodology coverage init run integration",
+        status="PARTIAL" if wired else "DEFERRED",
+        summary=(
+            "Run execution initializes in-memory methodology coverage records before legacy "
+            "extraction."
+        ),
+        evidence=[
+            "`METHODOLOGY_COVERAGE_INIT` is present after `DOCUMENT_PREFLIGHT`.",
+            "`build_run_context` wires a shared default registry loader for API and worker.",
+            "API and worker share `build_run_context` for methodology coverage initialization.",
+            "`commercial_dd_v1.json` is the deterministic local registry source.",
+            "Coverage initialization persists only safe IDs/counts in run-step summary.",
+        ],
+        gaps=[
+            "methodology extraction task planning remains deferred to Slice 4.",
+            "No Postgres coverage tables are added in Slice 3.",
+            (
+                "Claim materialization, Sanad linkage, CALC, enrichment, RAG, graph, cache, "
+                "debate, scoring, and deliverables remain downstream."
+            ),
+        ],
+        phase_2_action="Phase 3.0 Slice 3",
     )
 
 
@@ -1100,7 +1149,7 @@ def _document_preflight_run_integration(files: dict[str, str]) -> WiringItem:
             "Preflight stores safe run-step summary references rather than raw span text.",
         ],
         gaps=[
-            "Methodology live extraction remains deferred to Slice 3.",
+            "Methodology extraction planning remains deferred to Slice 4.",
             "No normalized Postgres classification/triage tables are added in Slice 2.",
         ],
         phase_2_action="Phase 3.0 Slice 2",

@@ -54,3 +54,13 @@ def test_worker_and_api_share_document_preflight_behavior() -> None:
     assert any(
         "worker context factory loads full preflight corpus" in item for item in preflight.evidence
     )
+
+
+def test_worker_and_api_share_methodology_coverage_init_behavior() -> None:
+    """Worker and API should both get coverage init through shared RunContext wiring."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+    coverage_init = inventory["methodology_coverage_init_run_integration"]
+
+    assert coverage_init.status == "PARTIAL"
+    assert any("build_run_context" in item for item in coverage_init.evidence)
+    assert any("API and worker share" in item for item in coverage_init.evidence)

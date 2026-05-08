@@ -64,3 +64,14 @@ def test_worker_and_api_share_methodology_coverage_init_behavior() -> None:
     assert coverage_init.status == "PARTIAL"
     assert any("build_run_context" in item for item in coverage_init.evidence)
     assert any("API and worker share" in item for item in coverage_init.evidence)
+
+
+def test_worker_and_api_share_methodology_task_planning_behavior() -> None:
+    """Worker and API should both get task planning through shared RunContext wiring."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+    task_planning = inventory["extraction_task_run_integration"]
+
+    assert task_planning.status == "PARTIAL"
+    assert any("METHODOLOGY_EXTRACTION_TASK_PLANNING" in item for item in task_planning.evidence)
+    assert any("build_run_context" in item for item in task_planning.evidence)
+    assert any("not executed" in item for item in task_planning.gaps)

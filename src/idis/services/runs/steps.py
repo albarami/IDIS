@@ -8,6 +8,7 @@ from typing import Any
 
 from idis.audit.sink import AuditSink
 from idis.methodology.models import MethodologyRegistry
+from idis.models.extraction_task import ExtractionTask, ExtractionTaskPlanningRunResult
 from idis.models.methodology_coverage import (
     MethodologyCoverageInitializationResult,
     MethodologyCoverageRecord,
@@ -19,6 +20,10 @@ from idis.services.runs.orchestrator import RunContext
 CoverageInitFn = Callable[
     ...,
     tuple[MethodologyCoverageInitializationResult, list[MethodologyCoverageRecord]],
+]
+TaskPlanningFn = Callable[
+    ...,
+    tuple[ExtractionTaskPlanningRunResult, list[ExtractionTask]],
 ]
 
 
@@ -35,6 +40,7 @@ def build_run_context(
     methodology_registry: MethodologyRegistry | None = None,
     methodology_registry_loader_fn: Callable[[], MethodologyRegistry] | None = None,
     methodology_coverage_init_fn: CoverageInitFn | None = None,
+    methodology_extraction_task_planning_fn: TaskPlanningFn | None = None,
 ) -> RunContext:
     """Build a RunContext with the canonical step callables.
 
@@ -65,6 +71,7 @@ def build_run_context(
         methodology_registry_loader_fn=methodology_registry_loader_fn
         or load_default_methodology_registry,
         methodology_coverage_init_fn=methodology_coverage_init_fn,
+        methodology_extraction_task_planning_fn=methodology_extraction_task_planning_fn,
         extract_fn=partial(_run_snapshot_extraction, db_conn=db_conn),
         grade_fn=partial(_run_snapshot_auto_grade, db_conn=db_conn),
         calc_fn=partial(_run_snapshot_calc, db_conn=db_conn),

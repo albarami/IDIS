@@ -13,6 +13,7 @@ from idis.models.extraction_task import (
     ExpectedAnswerSchema,
     ExtractionTask,
     ExtractionTaskBlockerReason,
+    ExtractionTaskPlanningRunResult,
     ExtractionTaskStatus,
     SourceSpanReference,
     generate_extraction_task_id,
@@ -43,6 +44,8 @@ def _span() -> SourceSpanReference:
         span_id="span-001",
         evidence_tags=["schedule"],
         locator={"sheet": "P&L", "cell": "A1"},
+        span_type="CELL",
+        content_hash="b" * 64,
         text_excerpt="Revenue",
     )
 
@@ -58,6 +61,7 @@ def test_valid_ready_task_model() -> None:
         methodology_question_id="mq_financial_dd_revenue_quality_0001",
         methodology_type=MethodologyType.FINANCIAL_DD,
         methodology_section="P&L",
+        coverage_record_id="mc_123456789012345678901234",
         document_id="doc-financial-model",
         classification_id="dc_financial_model",
         source_spans=[_span()],
@@ -71,15 +75,66 @@ def test_valid_ready_task_model() -> None:
 
     assert task.extraction_task_id.startswith("et_")
     assert task.source_span_ids == ["span-001"]
+    assert task.coverage_record_id == "mc_123456789012345678901234"
+    assert task.source_spans[0].span_type == "CELL"
+    assert task.source_spans[0].content_hash == "b" * 64
     assert task.blocker_reason is None
 
 
+def test_task_planning_run_summary_serializes_safe_fields_only() -> None:
+    task = ExtractionTask(
+        tenant_id=TENANT_ID,
+        deal_id=DEAL_ID,
+        run_id=RUN_ID,
+        status=ExtractionTaskStatus.READY,
+        methodology_id="financial_dd",
+        methodology_version_id="financial_dd_v1",
+        methodology_question_id="mq_financial_dd_revenue_quality_0001",
+        methodology_type=MethodologyType.FINANCIAL_DD,
+        methodology_section="Arbitrary Registry Section",
+        coverage_record_id="mc_123456789012345678901234",
+        document_id="doc-financial-model",
+        classification_id="dc_financial_model",
+        source_spans=[_span()],
+        target_fdd_category=FddDocumentCategory.FINANCIAL_SCHEDULE_MODEL,
+        target_cdd_category=CddDocumentCategory.BUSINESS_PLAN_ASSUMPTIONS,
+        required_evidence=[RequiredEvidence(evidence_type="schedule", description="P&L schedule")],
+        expected_answer_schema=_answer_schema(),
+        validation_requirements=["cite source spans"],
+        reason_codes=["ready"],
+    )
+
+    result = ExtractionTaskPlanningRunResult.from_tasks(
+        tenant_id=TENANT_ID,
+        deal_id=DEAL_ID,
+        run_id=RUN_ID,
+        tasks=[task],
+    )
+
+    summary = result.to_run_step_summary()
+    serialized = json.dumps(summary, sort_keys=True)
+    assert summary["task_ids"] == [task.extraction_task_id]
+    assert summary["tasks"][0]["coverage_record_id"] == "mc_123456789012345678901234"
+    assert summary["tasks"][0]["source_span_ids"] == ["span-001"]
+    assert summary["tasks"][0]["source_span_count"] == 1
+    assert summary["summary"]["by_reason_code"] == {"ready": 1}
+    assert "Explain revenue quality" not in serialized
+    assert "Arbitrary Registry Section" not in serialized
+    assert "Revenue" not in serialized
+    assert "question_text" not in serialized
+    assert "text_excerpt" not in serialized
+    assert "expected_answer_schema" not in serialized
+    assert "reason_codes" not in serialized
+
+
 def test_deterministic_task_id_generation_sorts_source_spans() -> None:
+    """Task IDs are run-coverage-scoped, so coverage_record_id is part of identity."""
     first = generate_extraction_task_id(
         tenant_id=TENANT_ID,
         deal_id=DEAL_ID,
         run_id=RUN_ID,
         methodology_question_id="mq_financial_dd_revenue_quality_0001",
+        coverage_record_id="mc_123456789012345678901234",
         document_id="doc-financial-model",
         source_span_ids=["span-002", "span-001"],
         target_fdd_category=FddDocumentCategory.FINANCIAL_SCHEDULE_MODEL,
@@ -92,6 +147,7 @@ def test_deterministic_task_id_generation_sorts_source_spans() -> None:
         deal_id=DEAL_ID,
         run_id=RUN_ID,
         methodology_question_id="mq_financial_dd_revenue_quality_0001",
+        coverage_record_id="mc_123456789012345678901234",
         document_id="doc-financial-model",
         source_span_ids=["span-001", "span-002"],
         target_fdd_category=FddDocumentCategory.FINANCIAL_SCHEDULE_MODEL,

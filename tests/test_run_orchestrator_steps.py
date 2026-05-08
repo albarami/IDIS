@@ -4,11 +4,11 @@ Covers:
 - SNAPSHOT records six steps in order
   (INGEST_CHECK → DOCUMENT_PREFLIGHT → METHODOLOGY_COVERAGE_INIT → EXTRACT → GRADE → CALC)
 - Step errors persisted and returned
-- FULL completes all 11 steps in correct order
+- FULL completes all 12 steps in correct order
 - Cross-tenant run step read returns 404 (no existence leak)
 - Audit failure aborts run fail-closed
 
-Updated for Phase 3.0 Slice 3: FULL mode now has 11 steps.
+Updated for Phase 3.0 Slice 4: FULL mode now has 12 steps.
 """
 
 from __future__ import annotations
@@ -25,7 +25,8 @@ from idis.api.main import create_app
 from idis.api.routes.deals import clear_deals_store
 from idis.api.routes.runs import clear_runs_store
 from idis.audit.sink import AuditSinkError, InMemoryAuditSink
-from idis.models.run_step import StepName, StepStatus
+from idis.models.extraction_task import ExtractionTaskPlanningRunResult
+from idis.models.run_step import STEP_ORDER, StepName, StepStatus
 from idis.persistence.repositories.run_steps import (
     InMemoryRunStepsRepository,
     clear_run_steps_store,
@@ -229,7 +230,7 @@ class TestSnapshotRecordsSixStepsInOrder:
         for i, step in enumerate(result.steps):
             assert step.step_name == expected_names[i]
             assert step.status == StepStatus.COMPLETED
-            assert step.step_order == i
+            assert step.step_order == STEP_ORDER[step.step_name]
             assert step.started_at is not None
             assert step.finished_at is not None
 
@@ -525,6 +526,108 @@ class TestSnapshotStepErrorsPersistedAndReturned:
         assert init_calls == 0
         assert resumed_ctx.methodology_coverage_records
 
+    def test_resume_reattaches_completed_planned_tasks_without_injected_planner(self) -> None:
+        """A resumed FULL context keeps planned tasks available after skipping planning."""
+        audit_sink = InMemoryAuditSink()
+        repo = InMemoryRunStepsRepository(TENANT_A)
+        orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
+        run_id = str(uuid.uuid4())
+
+        first_ctx = RunContext(
+            run_id=run_id,
+            tenant_id=TENANT_A,
+            deal_id="deal-preflight",
+            mode="FULL",
+            documents=[],
+            preflight_corpus=[_make_preflight_document(document_id="doc-usable")],
+            extract_fn=_stub_extract,
+            grade_fn=_stub_grade,
+            calc_fn=_stub_calc,
+            enrich_fn=_stub_enrichment,
+            debate_fn=_stub_debate,
+            analysis_fn=_stub_analysis,
+            scoring_fn=_stub_scoring,
+            deliverables_fn=_stub_deliverables,
+        )
+        first_result = orchestrator.execute(first_ctx)
+        assert first_result.status == "SUCCEEDED"
+        assert first_ctx.methodology_extraction_tasks
+
+        planning_calls = 0
+
+        def forbidden_planning_fn(**kwargs: Any) -> Any:
+            nonlocal planning_calls
+            planning_calls += 1
+            raise AssertionError("completed task planning should not call injected planner")
+
+        resumed_ctx = RunContext(
+            run_id=run_id,
+            tenant_id=TENANT_A,
+            deal_id="deal-preflight",
+            mode="FULL",
+            documents=[],
+            preflight_corpus=[_make_preflight_document(document_id="doc-usable")],
+            methodology_extraction_task_planning_fn=forbidden_planning_fn,
+            extract_fn=_stub_extract,
+            grade_fn=_stub_grade,
+            calc_fn=_stub_calc,
+            enrich_fn=_stub_enrichment,
+            debate_fn=_stub_debate,
+            analysis_fn=_stub_analysis,
+            scoring_fn=_stub_scoring,
+            deliverables_fn=_stub_deliverables,
+        )
+
+        resumed_result = orchestrator.execute(resumed_ctx)
+
+        assert resumed_result.status == "SUCCEEDED"
+        assert planning_calls == 0
+        assert resumed_ctx.methodology_coverage_records
+        assert resumed_ctx.methodology_extraction_tasks
+
+    def test_zero_extraction_tasks_fail_closed_with_business_blocker(self) -> None:
+        """A truly empty task plan is an intentional blocked condition."""
+        audit_sink = InMemoryAuditSink()
+        repo = InMemoryRunStepsRepository(TENANT_A)
+        orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
+
+        def empty_planning_fn(**kwargs: Any) -> Any:
+            return (
+                ExtractionTaskPlanningRunResult.from_tasks(
+                    tenant_id=kwargs["tenant_id"],
+                    deal_id=kwargs["deal_id"],
+                    run_id=kwargs["run_id"],
+                    tasks=[],
+                ),
+                [],
+            )
+
+        ctx = RunContext(
+            run_id=str(uuid.uuid4()),
+            tenant_id=TENANT_A,
+            deal_id="deal-preflight",
+            mode="FULL",
+            documents=[],
+            preflight_corpus=[_make_preflight_document(document_id="doc-usable")],
+            methodology_extraction_task_planning_fn=empty_planning_fn,
+            extract_fn=_stub_extract,
+            grade_fn=_stub_grade,
+            calc_fn=_stub_calc,
+            enrich_fn=_stub_enrichment,
+            debate_fn=_stub_debate,
+            analysis_fn=_stub_analysis,
+            scoring_fn=_stub_scoring,
+            deliverables_fn=_stub_deliverables,
+        )
+
+        result = orchestrator.execute(ctx)
+
+        assert result.status == "FAILED"
+        assert result.error_code == "NO_ELIGIBLE_EXTRACTION_TASKS"
+        assert result.block_reason == "NO_ELIGIBLE_EXTRACTION_TASKS"
+        assert result.steps[-1].step_name == StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING
+        assert result.steps[-1].result_summary["status"] == "FAILED"
+
 
 def _stub_enrichment(
     *,
@@ -615,7 +718,7 @@ class TestFullCompletesAllElevenSteps:
     """test_full_completes_all_nine_steps."""
 
     def test_full_completes_all_ten_steps(self) -> None:
-        """FULL run completes all 11 steps in canonical order."""
+        """FULL run completes all 12 steps in canonical order."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -642,11 +745,12 @@ class TestFullCompletesAllElevenSteps:
         assert result.block_reason is None
 
         completed = [s for s in result.steps if s.status == StepStatus.COMPLETED]
-        assert len(completed) == 11
+        assert len(completed) == 12
         assert [s.step_name for s in completed] == [
             StepName.INGEST_CHECK,
             StepName.DOCUMENT_PREFLIGHT,
             StepName.METHODOLOGY_COVERAGE_INIT,
+            StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING,
             StepName.EXTRACT,
             StepName.GRADE,
             StepName.CALC,
@@ -656,6 +760,13 @@ class TestFullCompletesAllElevenSteps:
             StepName.SCORING,
             StepName.DELIVERABLES,
         ]
+        planning_step = next(
+            step
+            for step in completed
+            if step.step_name == StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING
+        )
+        assert planning_step.result_summary["task_ids"]
+        assert ctx.methodology_extraction_tasks
 
 
 class TestCrossTenantRunStepReadReturns404:

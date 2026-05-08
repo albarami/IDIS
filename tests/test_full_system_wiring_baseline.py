@@ -224,3 +224,53 @@ def test_full_system_report_does_not_overstate_claim_materialization_wiring() ->
     assert "methodology claim materializer" in report.lower()
     assert "claim materialization run integration" in report.lower()
     assert "Methodology claim materialization is fully wired into production runs" not in report
+
+
+def test_full_system_inventory_detects_phase_2_7_sanad_coverage_boundary() -> None:
+    """Phase 2.7 boundary exists while live integrations remain deferred."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+
+    assert inventory["methodology_sanad_coverage_boundary_models"].status in {
+        "WIRED",
+        "PARTIAL",
+    }
+    assert inventory["methodology_sanad_coverage_boundary_service"].status == "PARTIAL"
+    assert inventory["methodology_sanad_coverage_boundary_audit_contract"].status == "PARTIAL"
+    assert inventory["methodology_sanad_readiness_boundary"].status == "PARTIAL"
+    assert inventory["methodology_coverage_decision_boundary"].status == "PARTIAL"
+    assert inventory["methodology_live_coverage_updates"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+    assert inventory["methodology_boundary_sanad_creation"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+    assert inventory["methodology_boundary_ic_promotion"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+    assert inventory["methodology_boundary_postgres_persistence"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+    assert inventory["methodology_boundary_api_run_ui_integration"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+    assert inventory["methodology_boundary_rag_graph_cache_integration"].status in {
+        "NOT_FOUND",
+        "DEFERRED",
+    }
+
+
+def test_full_system_report_does_not_overstate_phase_2_7_wiring() -> None:
+    """Wiring audit must not claim boundary decisions are live updates."""
+    report = render_report(collect_wiring_inventory(REPO_ROOT))
+
+    assert "sanad readiness boundary" in report.lower()
+    assert "coverage update decisions" in report.lower()
+    assert "live coverage updates are not wired" in report.lower()
+    assert "Sanad creation is wired for methodology boundary decisions" not in report
+    assert "Coverage updates are live in production" not in report
+    assert "IC-bound promotion is wired" not in report

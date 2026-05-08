@@ -163,6 +163,35 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             "methodology_claim_materialization_coverage_integration": (
                 _methodology_claim_materialization_coverage_integration(files)
             ),
+            "methodology_sanad_coverage_boundary_models": (
+                _methodology_sanad_coverage_boundary_models(root, files)
+            ),
+            "methodology_sanad_coverage_boundary_service": (
+                _methodology_sanad_coverage_boundary_service(root, files)
+            ),
+            "methodology_sanad_coverage_boundary_audit_contract": (
+                _methodology_sanad_coverage_boundary_audit_contract(root, files)
+            ),
+            "methodology_sanad_readiness_boundary": (
+                _methodology_sanad_readiness_boundary(files)
+            ),
+            "methodology_coverage_decision_boundary": (
+                _methodology_coverage_decision_boundary(files)
+            ),
+            "methodology_live_coverage_updates": _methodology_live_coverage_updates(files),
+            "methodology_boundary_sanad_creation": _methodology_boundary_sanad_creation(
+                files
+            ),
+            "methodology_boundary_ic_promotion": _methodology_boundary_ic_promotion(files),
+            "methodology_boundary_postgres_persistence": (
+                _methodology_boundary_postgres_persistence(root)
+            ),
+            "methodology_boundary_api_run_ui_integration": (
+                _methodology_boundary_api_run_ui_integration(files)
+            ),
+            "methodology_boundary_rag_graph_cache_integration": (
+                _methodology_boundary_rag_graph_cache_integration(files)
+            ),
             "analysis_agents": _analysis_agents(files),
             "commercial_agents": _commercial_agents(files),
             "debate_layer_1": _debate_layer_1(files),
@@ -237,6 +266,8 @@ def render_report(inventory: WiringInventory) -> str:
         "- Synthetic methodology extraction task execution now produces methodology-linked "
         "claim draft metadata only; persistence, API/run integration, coverage updates, "
         "and live LLM execution remain deferred.",
+        "- Sanad readiness boundary and coverage update decisions now exist, while "
+        "live coverage updates are not wired and Sanad creation remains deferred.",
         "- Enrichment connectors and deterministic/Anthropic LLM wiring exist, but baseline "
         "validation is config-only for paid/network providers.",
         "",
@@ -387,6 +418,9 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/models/claim_materialization.py",
         "src/idis/services/extraction/claim_materializer.py",
         "src/idis/services/extraction/claim_materialization_audit.py",
+        "src/idis/models/sanad_coverage_boundary.py",
+        "src/idis/services/methodology/sanad_coverage_boundary.py",
+        "src/idis/services/methodology/sanad_coverage_boundary_audit.py",
         "src/idis/analysis/agents/__init__.py",
         "src/idis/analysis/runner.py",
         "src/idis/debate/orchestrator.py",
@@ -1248,6 +1282,208 @@ def _methodology_claim_materialization_coverage_integration(files: dict[str, str
         evidence=["Materialized claims carry coverage_status='deferred' in corroboration."],
         gaps=["Future slice must update coverage after claim and evidence chain creation."],
         phase_2_action="Phase 2.6",
+    )
+
+
+def _methodology_sanad_coverage_boundary_models(
+    root: Path, files: dict[str, str]
+) -> WiringItem:
+    has_models = _exists(root, "src/idis/models/sanad_coverage_boundary.py") and _contains(
+        files,
+        "src/idis/models/sanad_coverage_boundary.py",
+        "SanadCoverageBoundaryResult",
+    )
+    return WiringItem(
+        key="methodology_sanad_coverage_boundary_models",
+        label="Methodology Sanad and coverage boundary models",
+        status="WIRED" if has_models else "NOT_FOUND",
+        summary="Structured Sanad readiness and coverage update decision models exist.",
+        evidence=[
+            "`sanad_coverage_boundary.py` defines readiness and coverage decision records.",
+            "Boundary decisions carry `ic_promotion_status='deferred_until_sanad'`.",
+        ],
+        gaps=["Models are not persisted to a dedicated Phase 2.7 schema."],
+        phase_2_action="Phase 2.7",
+    )
+
+
+def _methodology_sanad_coverage_boundary_service(
+    root: Path, files: dict[str, str]
+) -> WiringItem:
+    service_text = files.get("src/idis/services/methodology/sanad_coverage_boundary.py", "")
+    has_service = _exists(
+        root, "src/idis/services/methodology/sanad_coverage_boundary.py"
+    ) and "SanadCoverageBoundaryService" in service_text
+    return WiringItem(
+        key="methodology_sanad_coverage_boundary_service",
+        label="Methodology Sanad and coverage boundary service",
+        status="PARTIAL" if has_service else "NOT_FOUND",
+        summary=(
+            "Synthetic-only boundary service creates decisions without live coverage "
+            "mutation."
+        ),
+        evidence=[
+            "`build_decisions` returns decision records from materialized claims.",
+            "The default flow does not create Sanad records or promote claims.",
+        ],
+        gaps=["No API, run, UI, Postgres, RAG, graph, or cache integration is wired."],
+        phase_2_action="Phase 2.7",
+    )
+
+
+def _methodology_sanad_coverage_boundary_audit_contract(
+    root: Path, files: dict[str, str]
+) -> WiringItem:
+    has_contract = _exists(
+        root, "src/idis/services/methodology/sanad_coverage_boundary_audit.py"
+    ) and _contains(
+        files,
+        "src/idis/services/methodology/sanad_coverage_boundary_audit.py",
+        "SANAD_COVERAGE_BOUNDARY_AUDIT_EVENTS",
+    )
+    return WiringItem(
+        key="methodology_sanad_coverage_boundary_audit_contract",
+        label="Sanad coverage boundary future audit contract",
+        status="PARTIAL" if has_contract else "NOT_FOUND",
+        summary="Future audit event names and payload keys exist without live emission.",
+        evidence=[
+            "`sanad_coverage_boundary_audit.py` defines Phase 2.7 audit constants."
+        ],
+        gaps=["No live audit sink emission is wired in Phase 2.7."],
+        phase_2_action="Phase 2.7",
+    )
+
+
+def _methodology_sanad_readiness_boundary(files: dict[str, str]) -> WiringItem:
+    service_text = files.get("src/idis/services/methodology/sanad_coverage_boundary.py", "")
+    has_boundary = "SanadReadinessDecision" in service_text and "ready_for_future_sanad" in (
+        service_text
+    )
+    return WiringItem(
+        key="methodology_sanad_readiness_boundary",
+        label="Sanad readiness boundary",
+        status="PARTIAL" if has_boundary else "NOT_FOUND",
+        summary="Sanad readiness boundary exists as decision output only.",
+        evidence=["Boundary service emits readiness decisions for future Sanad work."],
+        gaps=["Actual Sanad chain creation remains deferred."],
+        phase_2_action="Phase 2.7",
+    )
+
+
+def _methodology_coverage_decision_boundary(files: dict[str, str]) -> WiringItem:
+    service_text = files.get("src/idis/services/methodology/sanad_coverage_boundary.py", "")
+    has_decisions = "CoverageUpdateDecision" in service_text and "build_decisions" in (
+        service_text
+    )
+    return WiringItem(
+        key="methodology_coverage_decision_boundary",
+        label="Coverage update decisions",
+        status="PARTIAL" if has_decisions else "NOT_FOUND",
+        summary="Coverage update decisions exist, but live coverage updates are not wired.",
+        evidence=[
+            "`build_decisions` returns deterministic coverage decisions by target status."
+        ],
+        gaps=["Default boundary flow intentionally does not mutate coverage records."],
+        phase_2_action="Phase 2.7",
+    )
+
+
+def _methodology_live_coverage_updates(files: dict[str, str]) -> WiringItem:
+    service_text = files.get("src/idis/services/methodology/sanad_coverage_boundary.py", "")
+    default_flow_has_live_mutation = "build_decisions" in service_text and (
+        "coverage_service.update_status" in service_text.split("apply_decisions_in_memory")[0]
+    )
+    return WiringItem(
+        key="methodology_live_coverage_updates",
+        label="Live methodology coverage updates",
+        status="PARTIAL" if default_flow_has_live_mutation else "DEFERRED",
+        summary="Live coverage updates are not wired by the default boundary flow.",
+        evidence=[
+            "Phase 2.7 produces CoverageUpdateDecision records by default.",
+            "Optional in-memory application is separate and explicitly injected.",
+        ],
+        gaps=["Production coverage mutation must be introduced in a later phase."],
+        phase_2_action="Phase 2.7",
+    )
+
+
+def _methodology_boundary_sanad_creation(files: dict[str, str]) -> WiringItem:
+    service_text = files.get("src/idis/services/methodology/sanad_coverage_boundary.py", "")
+    integrated = "build_sanad_chain" in service_text or "SanadService" in service_text
+    return WiringItem(
+        key="methodology_boundary_sanad_creation",
+        label="Boundary Sanad creation",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary="Sanad creation is not wired for Phase 2.7 boundary decisions.",
+        evidence=["Readiness decisions carry deferred Sanad status only."],
+        gaps=["Future work must create evidence-backed source-span-linked chains."],
+        phase_2_action="Phase 2.7",
+    )
+
+
+def _methodology_boundary_ic_promotion(files: dict[str, str]) -> WiringItem:
+    service_text = files.get("src/idis/services/methodology/sanad_coverage_boundary.py", "")
+    integrated = "ic_bound=True" in service_text or "VERIFIED" in service_text
+    return WiringItem(
+        key="methodology_boundary_ic_promotion",
+        label="Boundary IC-bound promotion",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary="IC-bound promotion is not wired; all decisions defer until Sanad exists.",
+        evidence=["Decision records include `deferred_until_sanad` promotion status."],
+        gaps=["Future promotion must require an existing Sanad chain."],
+        phase_2_action="Phase 2.7",
+    )
+
+
+def _methodology_boundary_postgres_persistence(root: Path) -> WiringItem:
+    migrations_dir = root / "src/idis/persistence/migrations/versions"
+    has_migration = any(
+        "sanad_coverage_boundary" in path.name for path in migrations_dir.glob("*.py")
+    )
+    return WiringItem(
+        key="methodology_boundary_postgres_persistence",
+        label="Boundary Postgres persistence",
+        status="PARTIAL" if has_migration else "DEFERRED",
+        summary="Phase 2.7 has no Postgres persistence for boundary decisions.",
+        evidence=["No Phase 2.7 migration is expected for the synthetic boundary slice."],
+        gaps=["Future persistence must preserve deterministic decision provenance."],
+        phase_2_action="Phase 2.7",
+    )
+
+
+def _methodology_boundary_api_run_ui_integration(files: dict[str, str]) -> WiringItem:
+    integration_text = (
+        files.get("src/idis/api/main.py", "")
+        + files.get("src/idis/api/routes/runs.py", "")
+        + files.get("src/idis/services/runs/steps.py", "")
+        + files.get("src/idis/pipeline/worker.py", "")
+    )
+    integrated = "SanadCoverageBoundaryService" in integration_text
+    return WiringItem(
+        key="methodology_boundary_api_run_ui_integration",
+        label="Boundary API/run/UI integration",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary="API/run/UI integration is not wired for Phase 2.7 boundary decisions.",
+        evidence=["Boundary service is not called from API routes or run execution paths."],
+        gaps=["Future integration must keep decision-only and mutation paths explicit."],
+        phase_2_action="Phase 2.7",
+    )
+
+
+def _methodology_boundary_rag_graph_cache_integration(files: dict[str, str]) -> WiringItem:
+    service_text = files.get("src/idis/services/methodology/sanad_coverage_boundary.py", "")
+    integrated = any(
+        token in service_text.lower()
+        for token in ["retrieval", "pgvector", "neo4j", "redis"]
+    )
+    return WiringItem(
+        key="methodology_boundary_rag_graph_cache_integration",
+        label="Boundary RAG/vector/Neo4j/Redis integration",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary="RAG/vector/Neo4j/Redis integration remains deferred for Phase 2.7.",
+        evidence=["Boundary decisions are built from synthetic in-memory inputs only."],
+        gaps=["Future retrieval, graph, and cache integrations must stay source-span linked."],
+        phase_2_action="Phase 2.7",
     )
 
 

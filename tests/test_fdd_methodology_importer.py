@@ -95,12 +95,8 @@ def test_produces_deterministic_registry_hash() -> None:
     second = import_fdd_workbook(workbook_bytes)
 
     assert first.registry_hash == second.registry_hash
-    assert [
-        question.methodology_question_id
-        for question in first.current_version.questions
-    ] == [
-        question.methodology_question_id
-        for question in second.current_version.questions
+    assert [question.methodology_question_id for question in first.current_version.questions] == [
+        question.methodology_question_id for question in second.current_version.questions
     ]
 
 
@@ -129,11 +125,14 @@ def test_preserves_source_question_text_while_ids_use_trace_context() -> None:
     )
 
     assert pl_question.question_text == "Review P&L Mixed CASE Support"
-    assert pl_question.methodology_question_id != next(
-        item
-        for item in registry.current_version.questions
-        if item.source_trace.sheet_or_section == "Cash Flow"
-    ).methodology_question_id
+    assert (
+        pl_question.methodology_question_id
+        != next(
+            item
+            for item in registry.current_version.questions
+            if item.source_trace.sheet_or_section == "Cash Flow"
+        ).methodology_question_id
+    )
 
 
 def test_duplicate_question_id_fails_closed() -> None:

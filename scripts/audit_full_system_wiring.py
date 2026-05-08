@@ -82,6 +82,9 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             "snapshot_steps": _snapshot_steps(files),
             "full_steps": _full_steps(files),
             "ingestion_service": _ingestion_service(files),
+            "persisted_ingestion_corpus": _persisted_ingestion_corpus(root, files),
+            "unified_run_document_loader": _unified_run_document_loader(files),
+            "api_worker_document_corpus_split": _api_worker_document_corpus_split(files),
             "parser_wiring": _parser_wiring(files),
             "extraction_pipeline": _extraction_pipeline(files),
             "sanad_wiring": _sanad_wiring(files),
@@ -104,9 +107,7 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             "document_classification_api_integration": _document_classification_api_integration(
                 files
             ),
-            "document_classification_ui_integration": _document_classification_ui_integration(
-                root
-            ),
+            "document_classification_ui_integration": _document_classification_ui_integration(root),
             "document_classification_run_integration": _document_classification_run_integration(
                 files
             ),
@@ -172,16 +173,12 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             "methodology_sanad_coverage_boundary_audit_contract": (
                 _methodology_sanad_coverage_boundary_audit_contract(root, files)
             ),
-            "methodology_sanad_readiness_boundary": (
-                _methodology_sanad_readiness_boundary(files)
-            ),
+            "methodology_sanad_readiness_boundary": (_methodology_sanad_readiness_boundary(files)),
             "methodology_coverage_decision_boundary": (
                 _methodology_coverage_decision_boundary(files)
             ),
             "methodology_live_coverage_updates": _methodology_live_coverage_updates(files),
-            "methodology_boundary_sanad_creation": _methodology_boundary_sanad_creation(
-                files
-            ),
+            "methodology_boundary_sanad_creation": _methodology_boundary_sanad_creation(files),
             "methodology_boundary_ic_promotion": _methodology_boundary_ic_promotion(files),
             "methodology_boundary_postgres_persistence": (
                 _methodology_boundary_postgres_persistence(root)
@@ -449,6 +446,9 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/pipeline/worker.py",
         "src/idis/pipeline/executor.py",
         "src/idis/services/ingestion/service.py",
+        "src/idis/persistence/repositories/documents.py",
+        "src/idis/persistence/migrations/versions/0012_document_spans_deal_content_hash.py",
+        "src/idis/models/document_span.py",
         "src/idis/parsers/registry.py",
         "src/idis/services/extraction/pipeline.py",
         "src/idis/services/sanad/auto_grade.py",
@@ -645,11 +645,104 @@ def _ingestion_service(files: dict[str, str]) -> WiringItem:
         label="Ingestion service",
         status="PARTIAL",
         summary=(
-            "Ingestion service exists and is route-accessible, but default app wiring is "
-            "optional."
+            "Ingestion service exists and is route-accessible, but default app wiring is optional."
         ),
         evidence=["`IngestionService.ingest_bytes` stores, parses, and spans raw bytes."],
         gaps=["Default `create_app()` leaves `ingestion_service` optional."],
+    )
+
+
+def _persisted_ingestion_corpus(root: Path, files: dict[str, str]) -> WiringItem:
+    repo_exists = (root / "src/idis/persistence/repositories/documents.py").exists()
+    migration_exists = (
+        root / "src/idis/persistence/migrations/versions/0012_document_spans_deal_content_hash.py"
+    ).exists()
+    service_text = files.get("src/idis/services/ingestion/service.py", "")
+    status = (
+        "PARTIAL"
+        if repo_exists
+        and migration_exists
+        and "PostgresDocumentsRepository" in service_text
+        and "db_conn" in service_text
+        else "DEFERRED"
+    )
+    return WiringItem(
+        key="persisted_ingestion_corpus",
+        label="Persisted ingestion corpus",
+        status=status,
+        summary=(
+            "Parsed ingestion outputs can persist to Postgres documents/document_spans "
+            "when ingestion receives an explicit DB connection."
+        ),
+        evidence=[
+            "`PostgresDocumentsRepository` persists artifacts, documents, and spans.",
+            "`IngestionService` accepts `db_conn` for durable corpus writes.",
+            "`document_spans` includes deal scope and content hash via migration 0012.",
+        ],
+        gaps=[
+            "Default document API creation remains partially in-memory.",
+            "Methodology extraction and downstream FULL-run stages remain deferred.",
+        ],
+    )
+
+
+def _unified_run_document_loader(files: dict[str, str]) -> WiringItem:
+    steps_text = files.get("src/idis/services/runs/steps.py", "")
+    route_text = files.get("src/idis/api/routes/runs.py", "")
+    worker_text = files.get("src/idis/pipeline/worker.py", "")
+    status = (
+        "PARTIAL"
+        if "load_documents_for_deal" in steps_text
+        and "PostgresDocumentsRepository" in steps_text
+        and "load_documents_for_deal" in route_text
+        and "load_documents_for_deal" in worker_text
+        else "DEFERRED"
+    )
+    return WiringItem(
+        key="unified_run_document_loader",
+        label="Unified run document loader",
+        status=status,
+        summary=(
+            "API-started and worker-started runs now share the same parsed "
+            "Postgres document/span loader when a DB connection is present."
+        ),
+        evidence=[
+            "`src/idis/services/runs/steps.py::load_documents_for_deal` is the shared loader.",
+            "API run route calls the shared loader from `request.state.db_conn`.",
+            "Pipeline worker context factory calls the shared loader with tenant scope.",
+        ],
+        gaps=[
+            "The run is still not a real end-to-end FULL diligence flow.",
+            (
+                "Methodology/CALC/enrichment/RAG/Neo4j/debate/agents/deliverables "
+                "wiring remains deferred."
+            ),
+        ],
+    )
+
+
+def _api_worker_document_corpus_split(files: dict[str, str]) -> WiringItem:
+    route_text = files.get("src/idis/api/routes/runs.py", "")
+    worker_text = files.get("src/idis/pipeline/worker.py", "")
+    resolved = (
+        'getattr(request.state, "db_conn", None)' in route_text
+        and "load_documents_for_deal" in route_text
+        and "load_documents_for_deal" in worker_text
+        and "tenant_id=tenant_id" in worker_text
+    )
+    return WiringItem(
+        key="api_worker_document_corpus_split",
+        label="API/worker document corpus split",
+        status="PARTIAL" if resolved else "DEFERRED",
+        summary=(
+            "The previous route-local memory corpus split is resolved for DB-backed runs, "
+            "while explicit test-only memory injection remains for non-DB tests."
+        ),
+        evidence=[
+            "API route prefers persisted DB corpus before memory test hooks.",
+            "Worker path hydrates `RunContext.documents` through the same shared loader.",
+        ],
+        gaps=["No persisted documents still fail closed as `NO_INGESTED_DOCUMENTS`."],
     )
 
 
@@ -1056,9 +1149,7 @@ def _extraction_task_run_integration(files: dict[str, str]) -> WiringItem:
 def _live_methodology_extraction_execution(files: dict[str, str]) -> WiringItem:
     planner_text = files.get("src/idis/services/extraction/task_planner.py", "")
     integrated = (
-        "ClaimExtractor" in planner_text
-        or "LLM" in planner_text
-        or "create_claim" in planner_text
+        "ClaimExtractor" in planner_text or "LLM" in planner_text or "create_claim" in planner_text
     )
     return WiringItem(
         key="live_methodology_extraction_execution",
@@ -1232,9 +1323,10 @@ def _methodology_claim_materialization_models(root: Path, files: dict[str, str])
 
 def _methodology_claim_materializer(root: Path, files: dict[str, str]) -> WiringItem:
     materializer_text = files.get("src/idis/services/extraction/claim_materializer.py", "")
-    has_materializer = _exists(
-        root, "src/idis/services/extraction/claim_materializer.py"
-    ) and "MethodologyClaimMaterializationService" in materializer_text
+    has_materializer = (
+        _exists(root, "src/idis/services/extraction/claim_materializer.py")
+        and "MethodologyClaimMaterializationService" in materializer_text
+    )
     return WiringItem(
         key="methodology_claim_materializer",
         label="Methodology claim materializer",
@@ -1278,8 +1370,7 @@ def _methodology_claim_materialization_audit_contract(
 def _methodology_claim_materialization_postgres_schema(root: Path) -> WiringItem:
     migrations_dir = root / "src/idis/persistence/migrations/versions"
     has_migration = any(
-        "claim_materialization" in path.name
-        for path in migrations_dir.glob("*.py")
+        "claim_materialization" in path.name for path in migrations_dir.glob("*.py")
     )
     return WiringItem(
         key="methodology_claim_materialization_postgres_schema",
@@ -1352,9 +1443,7 @@ def _methodology_claim_materialization_coverage_integration(files: dict[str, str
     )
 
 
-def _methodology_sanad_coverage_boundary_models(
-    root: Path, files: dict[str, str]
-) -> WiringItem:
+def _methodology_sanad_coverage_boundary_models(root: Path, files: dict[str, str]) -> WiringItem:
     has_models = _exists(root, "src/idis/models/sanad_coverage_boundary.py") and _contains(
         files,
         "src/idis/models/sanad_coverage_boundary.py",
@@ -1374,20 +1463,18 @@ def _methodology_sanad_coverage_boundary_models(
     )
 
 
-def _methodology_sanad_coverage_boundary_service(
-    root: Path, files: dict[str, str]
-) -> WiringItem:
+def _methodology_sanad_coverage_boundary_service(root: Path, files: dict[str, str]) -> WiringItem:
     service_text = files.get("src/idis/services/methodology/sanad_coverage_boundary.py", "")
-    has_service = _exists(
-        root, "src/idis/services/methodology/sanad_coverage_boundary.py"
-    ) and "SanadCoverageBoundaryService" in service_text
+    has_service = (
+        _exists(root, "src/idis/services/methodology/sanad_coverage_boundary.py")
+        and "SanadCoverageBoundaryService" in service_text
+    )
     return WiringItem(
         key="methodology_sanad_coverage_boundary_service",
         label="Methodology Sanad and coverage boundary service",
         status="PARTIAL" if has_service else "NOT_FOUND",
         summary=(
-            "Synthetic-only boundary service creates decisions without live coverage "
-            "mutation."
+            "Synthetic-only boundary service creates decisions without live coverage mutation."
         ),
         evidence=[
             "`build_decisions` returns decision records from materialized claims.",
@@ -1413,9 +1500,7 @@ def _methodology_sanad_coverage_boundary_audit_contract(
         label="Sanad coverage boundary future audit contract",
         status="PARTIAL" if has_contract else "NOT_FOUND",
         summary="Future audit event names and payload keys exist without live emission.",
-        evidence=[
-            "`sanad_coverage_boundary_audit.py` defines Phase 2.7 audit constants."
-        ],
+        evidence=["`sanad_coverage_boundary_audit.py` defines Phase 2.7 audit constants."],
         gaps=["No live audit sink emission is wired in Phase 2.7."],
         phase_2_action="Phase 2.7",
     )
@@ -1439,17 +1524,13 @@ def _methodology_sanad_readiness_boundary(files: dict[str, str]) -> WiringItem:
 
 def _methodology_coverage_decision_boundary(files: dict[str, str]) -> WiringItem:
     service_text = files.get("src/idis/services/methodology/sanad_coverage_boundary.py", "")
-    has_decisions = "CoverageUpdateDecision" in service_text and "build_decisions" in (
-        service_text
-    )
+    has_decisions = "CoverageUpdateDecision" in service_text and "build_decisions" in (service_text)
     return WiringItem(
         key="methodology_coverage_decision_boundary",
         label="Coverage update decisions",
         status="PARTIAL" if has_decisions else "NOT_FOUND",
         summary="Coverage update decisions exist, but live coverage updates are not wired.",
-        evidence=[
-            "`build_decisions` returns deterministic coverage decisions by target status."
-        ],
+        evidence=["`build_decisions` returns deterministic coverage decisions by target status."],
         gaps=["Default boundary flow intentionally does not mutate coverage records."],
         phase_2_action="Phase 2.7",
     )
@@ -1540,8 +1621,7 @@ def _methodology_boundary_api_run_ui_integration(files: dict[str, str]) -> Wirin
 def _methodology_boundary_rag_graph_cache_integration(files: dict[str, str]) -> WiringItem:
     service_text = files.get("src/idis/services/methodology/sanad_coverage_boundary.py", "")
     integrated = any(
-        token in service_text.lower()
-        for token in ["retrieval", "pgvector", "neo4j", "redis"]
+        token in service_text.lower() for token in ["retrieval", "pgvector", "neo4j", "redis"]
     )
     return WiringItem(
         key="methodology_boundary_rag_graph_cache_integration",
@@ -1554,9 +1634,7 @@ def _methodology_boundary_rag_graph_cache_integration(files: dict[str, str]) -> 
     )
 
 
-def _methodology_sanad_creation_boundary_models(
-    root: Path, files: dict[str, str]
-) -> WiringItem:
+def _methodology_sanad_creation_boundary_models(root: Path, files: dict[str, str]) -> WiringItem:
     has_models = _exists(root, "src/idis/models/sanad_creation_boundary.py") and _contains(
         files,
         "src/idis/models/sanad_creation_boundary.py",
@@ -1577,13 +1655,12 @@ def _methodology_sanad_creation_boundary_models(
     )
 
 
-def _methodology_sanad_creation_boundary_service(
-    root: Path, files: dict[str, str]
-) -> WiringItem:
+def _methodology_sanad_creation_boundary_service(root: Path, files: dict[str, str]) -> WiringItem:
     service_text = files.get("src/idis/services/methodology/sanad_creation_boundary.py", "")
-    has_service = _exists(
-        root, "src/idis/services/methodology/sanad_creation_boundary.py"
-    ) and "SanadCreationBoundaryService" in service_text
+    has_service = (
+        _exists(root, "src/idis/services/methodology/sanad_creation_boundary.py")
+        and "SanadCreationBoundaryService" in service_text
+    )
     return WiringItem(
         key="methodology_sanad_creation_boundary_service",
         label="Methodology Sanad creation boundary service",
@@ -1616,20 +1693,18 @@ def _methodology_sanad_creation_boundary_audit_contract(
         label="Sanad creation boundary future audit contract",
         status="PARTIAL" if has_contract else "NOT_FOUND",
         summary="Future audit event names and payload keys exist without live emission.",
-        evidence=[
-            "`sanad_creation_boundary_audit.py` defines Phase 2.8 audit constants."
-        ],
+        evidence=["`sanad_creation_boundary_audit.py` defines Phase 2.8 audit constants."],
         gaps=["No live audit sink emission is wired in Phase 2.8."],
         phase_2_action="Phase 2.8",
     )
 
 
 def _methodology_synthetic_sanad_creation_path(files: dict[str, str]) -> WiringItem:
-    service_text = files.get(
-        "src/idis/services/methodology/sanad_creation_boundary.py", ""
-    ) + files.get(
-        "src/idis/services/methodology/sanad_creation_boundary_results.py", ""
-    ) + files.get("src/idis/services/methodology/sanad_creation_boundary_support.py", "")
+    service_text = (
+        files.get("src/idis/services/methodology/sanad_creation_boundary.py", "")
+        + files.get("src/idis/services/methodology/sanad_creation_boundary_results.py", "")
+        + files.get("src/idis/services/methodology/sanad_creation_boundary_support.py", "")
+    )
     has_path = all(
         token in service_text
         for token in [
@@ -1654,11 +1729,11 @@ def _methodology_synthetic_sanad_creation_path(files: dict[str, str]) -> WiringI
 
 
 def _methodology_sanad_creation_claim_link_application(files: dict[str, str]) -> WiringItem:
-    service_text = files.get(
-        "src/idis/services/methodology/sanad_creation_boundary.py", ""
-    ) + files.get(
-        "src/idis/services/methodology/sanad_creation_boundary_results.py", ""
-    ) + files.get("src/idis/services/methodology/sanad_creation_boundary_support.py", "")
+    service_text = (
+        files.get("src/idis/services/methodology/sanad_creation_boundary.py", "")
+        + files.get("src/idis/services/methodology/sanad_creation_boundary_results.py", "")
+        + files.get("src/idis/services/methodology/sanad_creation_boundary_support.py", "")
+    )
     claim_link_live = "ClaimService" in service_text or "claim_action" in service_text
     return WiringItem(
         key="methodology_sanad_creation_claim_link_application",
@@ -1672,11 +1747,11 @@ def _methodology_sanad_creation_claim_link_application(files: dict[str, str]) ->
 
 
 def _methodology_sanad_creation_ic_promotion(files: dict[str, str]) -> WiringItem:
-    service_text = files.get(
-        "src/idis/services/methodology/sanad_creation_boundary.py", ""
-    ) + files.get(
-        "src/idis/services/methodology/sanad_creation_boundary_results.py", ""
-    ) + files.get("src/idis/services/methodology/sanad_creation_boundary_support.py", "")
+    service_text = (
+        files.get("src/idis/services/methodology/sanad_creation_boundary.py", "")
+        + files.get("src/idis/services/methodology/sanad_creation_boundary_results.py", "")
+        + files.get("src/idis/services/methodology/sanad_creation_boundary_support.py", "")
+    )
     integrated = "ic_bound=True" in service_text or "VERIFIED" in service_text
     return WiringItem(
         key="methodology_sanad_creation_ic_promotion",
@@ -1690,11 +1765,11 @@ def _methodology_sanad_creation_ic_promotion(files: dict[str, str]) -> WiringIte
 
 
 def _methodology_sanad_creation_coverage_updates(files: dict[str, str]) -> WiringItem:
-    service_text = files.get(
-        "src/idis/services/methodology/sanad_creation_boundary.py", ""
-    ) + files.get(
-        "src/idis/services/methodology/sanad_creation_boundary_results.py", ""
-    ) + files.get("src/idis/services/methodology/sanad_creation_boundary_support.py", "")
+    service_text = (
+        files.get("src/idis/services/methodology/sanad_creation_boundary.py", "")
+        + files.get("src/idis/services/methodology/sanad_creation_boundary_results.py", "")
+        + files.get("src/idis/services/methodology/sanad_creation_boundary_support.py", "")
+    )
     live_coverage = "update_status" in service_text or "apply_decisions_in_memory" in service_text
     return WiringItem(
         key="methodology_sanad_creation_coverage_updates",
@@ -1711,21 +1786,18 @@ def _methodology_sanad_creation_postgres_api_run_ui_integration(
     files: dict[str, str],
 ) -> WiringItem:
     service_text = files.get("src/idis/services/methodology/sanad_creation_boundary.py", "")
-    results_text = files.get(
-        "src/idis/services/methodology/sanad_creation_boundary_results.py", ""
-    )
-    support_text = files.get(
-        "src/idis/services/methodology/sanad_creation_boundary_support.py", ""
-    )
+    results_text = files.get("src/idis/services/methodology/sanad_creation_boundary_results.py", "")
+    support_text = files.get("src/idis/services/methodology/sanad_creation_boundary_support.py", "")
     integration_text = (
         files.get("src/idis/api/main.py", "")
         + files.get("src/idis/api/routes/runs.py", "")
         + files.get("src/idis/services/runs/steps.py", "")
         + files.get("src/idis/pipeline/worker.py", "")
     )
-    integrated = "SanadCreationBoundaryService" in integration_text or "sqlalchemy" in (
-        service_text + results_text + support_text
-    ).lower()
+    integrated = (
+        "SanadCreationBoundaryService" in integration_text
+        or "sqlalchemy" in (service_text + results_text + support_text).lower()
+    )
     return WiringItem(
         key="methodology_sanad_creation_postgres_api_run_ui_integration",
         label="Sanad creation Postgres/API/run/UI integration",
@@ -1738,14 +1810,13 @@ def _methodology_sanad_creation_postgres_api_run_ui_integration(
 
 
 def _methodology_sanad_creation_rag_graph_cache_integration(files: dict[str, str]) -> WiringItem:
-    service_text = files.get(
-        "src/idis/services/methodology/sanad_creation_boundary.py", ""
-    ) + files.get(
-        "src/idis/services/methodology/sanad_creation_boundary_results.py", ""
-    ) + files.get("src/idis/services/methodology/sanad_creation_boundary_support.py", "")
+    service_text = (
+        files.get("src/idis/services/methodology/sanad_creation_boundary.py", "")
+        + files.get("src/idis/services/methodology/sanad_creation_boundary_results.py", "")
+        + files.get("src/idis/services/methodology/sanad_creation_boundary_support.py", "")
+    )
     integrated = any(
-        token in service_text.lower()
-        for token in ["retrieval", "pgvector", "neo4j", "redis"]
+        token in service_text.lower() for token in ["retrieval", "pgvector", "neo4j", "redis"]
     )
     return WiringItem(
         key="methodology_sanad_creation_rag_graph_cache_integration",
@@ -1759,18 +1830,13 @@ def _methodology_sanad_creation_rag_graph_cache_integration(files: dict[str, str
 
 
 def _claim_sanad_link_text(files: dict[str, str]) -> str:
-    return (
-        files.get("src/idis/services/methodology/claim_sanad_link_boundary.py", "")
-        + files.get("src/idis/services/methodology/claim_sanad_link_boundary_support.py", "")
+    return files.get("src/idis/services/methodology/claim_sanad_link_boundary.py", "") + files.get(
+        "src/idis/services/methodology/claim_sanad_link_boundary_support.py", ""
     )
 
 
-def _methodology_claim_sanad_link_boundary_models(
-    root: Path, files: dict[str, str]
-) -> WiringItem:
-    has_models = _exists(
-        root, "src/idis/models/claim_sanad_link_boundary.py"
-    ) and _contains(
+def _methodology_claim_sanad_link_boundary_models(root: Path, files: dict[str, str]) -> WiringItem:
+    has_models = _exists(root, "src/idis/models/claim_sanad_link_boundary.py") and _contains(
         files,
         "src/idis/models/claim_sanad_link_boundary.py",
         "ClaimSanadLinkApplicationResult",
@@ -1789,13 +1855,12 @@ def _methodology_claim_sanad_link_boundary_models(
     )
 
 
-def _methodology_claim_sanad_link_boundary_service(
-    root: Path, files: dict[str, str]
-) -> WiringItem:
+def _methodology_claim_sanad_link_boundary_service(root: Path, files: dict[str, str]) -> WiringItem:
     service_text = _claim_sanad_link_text(files)
-    has_service = _exists(
-        root, "src/idis/services/methodology/claim_sanad_link_boundary.py"
-    ) and "ClaimSanadLinkBoundaryService" in service_text
+    has_service = (
+        _exists(root, "src/idis/services/methodology/claim_sanad_link_boundary.py")
+        and "ClaimSanadLinkBoundaryService" in service_text
+    )
     return WiringItem(
         key="methodology_claim_sanad_link_boundary_service",
         label="Claim-Sanad link boundary service",
@@ -1828,9 +1893,7 @@ def _methodology_claim_sanad_link_boundary_audit_contract(
         label="Claim-Sanad link boundary future audit contract",
         status="PARTIAL" if has_contract else "NOT_FOUND",
         summary="Future audit event names and payload keys exist without live emission.",
-        evidence=[
-            "`claim_sanad_link_boundary_audit.py` defines Phase 2.9 audit constants."
-        ],
+        evidence=["`claim_sanad_link_boundary_audit.py` defines Phase 2.9 audit constants."],
         gaps=["No live audit sink emission is wired in Phase 2.9."],
         phase_2_action="Phase 2.9",
     )
@@ -1918,9 +1981,10 @@ def _methodology_claim_sanad_link_postgres_api_run_ui_integration(
         + files.get("src/idis/services/runs/steps.py", "")
         + files.get("src/idis/pipeline/worker.py", "")
     )
-    integrated = "ClaimSanadLinkBoundaryService" in integration_text or "sqlalchemy" in (
-        service_text
-    ).lower()
+    integrated = (
+        "ClaimSanadLinkBoundaryService" in integration_text
+        or "sqlalchemy" in (service_text).lower()
+    )
     return WiringItem(
         key="methodology_claim_sanad_link_postgres_api_run_ui_integration",
         label="Claim-Sanad link Postgres/API/run/UI integration",
@@ -1935,8 +1999,7 @@ def _methodology_claim_sanad_link_postgres_api_run_ui_integration(
 def _methodology_claim_sanad_link_rag_graph_cache_integration(files: dict[str, str]) -> WiringItem:
     service_text = _claim_sanad_link_text(files)
     integrated = any(
-        token in service_text.lower()
-        for token in ["retrieval", "pgvector", "neo4j", "redis"]
+        token in service_text.lower() for token in ["retrieval", "pgvector", "neo4j", "redis"]
     )
     return WiringItem(
         key="methodology_claim_sanad_link_rag_graph_cache_integration",
@@ -2095,8 +2158,7 @@ def _redis(files: dict[str, str]) -> WiringItem:
         label="Redis",
         status="CONFIG_ONLY",
         summary=(
-            "Redis is configured in Docker/env examples, but runtime code uses in-memory "
-            "stores."
+            "Redis is configured in Docker/env examples, but runtime code uses in-memory stores."
         ),
         evidence=["`docker-compose.yml` defines `redis`; `.env.example` defines Redis URL names."],
         gaps=["Redis URL is not consumed by runtime code for cache/rate/queue."],
@@ -2147,8 +2209,7 @@ def _anthropic_llm(files: dict[str, str]) -> WiringItem:
         label="Anthropic LLM",
         status="PARTIAL",
         summary=(
-            "Anthropic client is wired behind backend env selection, but baseline is dry-run "
-            "only."
+            "Anthropic client is wired behind backend env selection, but baseline is dry-run only."
         ),
         evidence=["Anthropic client present; config-validated only with no live paid call."],
         gaps=["Live paid calls require explicit approval and valid `ANTHROPIC_API_KEY`."],

@@ -37,8 +37,7 @@ def test_redis_and_pgvector_are_configured_without_runtime_use() -> None:
     assert any("not consumed by runtime code" in item for item in inventory["redis"].gaps)
     assert inventory["rag_vector_retrieval"].status == "CONFIG_ONLY"
     assert any(
-        "no embedding/index/query path" in item
-        for item in inventory["rag_vector_retrieval"].gaps
+        "no embedding/index/query path" in item for item in inventory["rag_vector_retrieval"].gaps
     )
 
 

@@ -24,7 +24,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 from idis.api.auth import TenantContext
@@ -37,6 +37,9 @@ from idis.parsers.base import ParseError, ParseLimits, ParseResult
 from idis.parsers.registry import parse_bytes
 from idis.services.ingestion.span_generator import SpanGenerator
 from idis.storage.compliant_store import ComplianceEnforcedStore
+
+if TYPE_CHECKING:
+    from sqlalchemy import Connection
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +157,7 @@ class IngestionService:
         compliant_store: ComplianceEnforcedStore,
         audit_sink: AuditSink | None = None,
         span_generator: SpanGenerator | None = None,
+        db_conn: Connection | None = None,
         max_bytes: int = DEFAULT_MAX_BYTES,
         parse_limits: ParseLimits | None = None,
     ) -> None:
@@ -164,12 +168,14 @@ class IngestionService:
                             This wrapper enforces BYOK and legal hold at the boundary.
             audit_sink: Audit sink for event emission.
             span_generator: Span generator (uses default if None).
+            db_conn: Optional Postgres connection for durable corpus persistence.
             max_bytes: Maximum file size in bytes.
             parse_limits: Parser limits configuration.
         """
         self._compliant_store = compliant_store
         self._audit_sink = audit_sink or InMemoryAuditSink()
         self._span_generator = span_generator or SpanGenerator()
+        self._db_conn = db_conn
         self._max_bytes = max_bytes
         self._parse_limits = parse_limits or ParseLimits()
 
@@ -186,6 +192,7 @@ class IngestionService:
         media_type: str | None,
         data: bytes,
         metadata: dict[str, Any] | None = None,
+        db_conn: Connection | None = None,
     ) -> IngestionResult:
         """Ingest raw document bytes into the system.
 
@@ -205,6 +212,7 @@ class IngestionService:
             media_type: MIME type (for metadata, not format detection).
             data: Raw document bytes.
             metadata: Optional additional metadata.
+            db_conn: Optional request-scoped Postgres connection for durable corpus writes.
 
         Returns:
             IngestionResult with operation outcome.
@@ -222,6 +230,7 @@ class IngestionService:
                 media_type=media_type,
                 data=data,
                 metadata=metadata or {},
+                db_conn=db_conn,
             )
         except Exception as e:
             logger.exception("Unexpected error during ingestion")
@@ -244,6 +253,7 @@ class IngestionService:
         media_type: str | None,
         data: bytes,
         metadata: dict[str, Any],
+        db_conn: Connection | None,
     ) -> IngestionResult:
         """Implementation of ingest_bytes with exception propagation."""
         validation_error = self._validate_input(data, filename)
@@ -311,9 +321,9 @@ class IngestionService:
                 document_id=document_id,
             )
 
-        self._persist_artifact(ctx.tenant_id, artifact)
-        self._persist_document(ctx.tenant_id, document)
-        self._persist_spans(ctx.tenant_id, document_id, spans)
+        self._persist_artifact(ctx.tenant_id, artifact, db_conn=db_conn)
+        self._persist_document(ctx.tenant_id, document, db_conn=db_conn)
+        self._persist_spans(ctx.tenant_id, deal_id, document_id, spans, db_conn=db_conn)
 
         self._emit_document_created(ctx, artifact, sha256)
 
@@ -539,32 +549,86 @@ class IngestionService:
             updated_at=timestamp,
         )
 
-    def _persist_artifact(self, tenant_id: UUID, artifact: DocumentArtifact) -> None:
-        """Persist DocumentArtifact (in-memory for now).
-
-        Note: This will be replaced with Postgres persistence
-        once the repository layer is implemented.
-        """
+    def _persist_artifact(
+        self,
+        tenant_id: UUID,
+        artifact: DocumentArtifact,
+        *,
+        db_conn: Connection | None,
+    ) -> None:
+        """Persist DocumentArtifact to memory and optional Postgres corpus."""
         key = f"{tenant_id}:{artifact.doc_id}"
         self._artifacts[key] = artifact
+        repo = self._documents_repo(tenant_id, db_conn=db_conn)
+        if repo is not None:
+            repo.create_artifact(
+                doc_id=str(artifact.doc_id),
+                deal_id=str(artifact.deal_id),
+                doc_type=artifact.doc_type.value,
+                title=artifact.title,
+                source_system=artifact.source_system,
+                version_id=artifact.version_id,
+                ingested_at=artifact.ingested_at,
+                sha256=artifact.sha256,
+                uri=artifact.uri,
+                metadata=artifact.metadata,
+            )
 
-    def _persist_document(self, tenant_id: UUID, document: Document) -> None:
-        """Persist Document (in-memory for now).
-
-        Note: This will be replaced with Postgres persistence
-        once the repository layer is implemented.
-        """
+    def _persist_document(
+        self,
+        tenant_id: UUID,
+        document: Document,
+        *,
+        db_conn: Connection | None,
+    ) -> None:
+        """Persist Document to memory and optional Postgres corpus."""
         key = f"{tenant_id}:{document.document_id}"
         self._documents[key] = document
+        repo = self._documents_repo(tenant_id, db_conn=db_conn)
+        if repo is not None:
+            repo.create_document(
+                document_id=str(document.document_id),
+                deal_id=str(document.deal_id),
+                doc_id=str(document.doc_id),
+                doc_type=document.doc_type.value,
+                parse_status=document.parse_status.value,
+                metadata=document.metadata,
+            )
 
-    def _persist_spans(self, tenant_id: UUID, document_id: UUID, spans: list[DocumentSpan]) -> None:
-        """Persist DocumentSpans (in-memory for now).
-
-        Note: This will be replaced with Postgres bulk insert
-        once the repository layer is implemented.
-        """
+    def _persist_spans(
+        self,
+        tenant_id: UUID,
+        deal_id: UUID,
+        document_id: UUID,
+        spans: list[DocumentSpan],
+        *,
+        db_conn: Connection | None,
+    ) -> None:
+        """Persist DocumentSpans to memory and optional Postgres corpus."""
         key = f"{tenant_id}:{document_id}"
-        self._spans[key] = spans
+        scoped_spans = [span.model_copy(update={"deal_id": deal_id}) for span in spans]
+        self._spans[key] = scoped_spans
+        repo = self._documents_repo(tenant_id, db_conn=db_conn)
+        if repo is not None:
+            for span in scoped_spans:
+                repo.create_document_span(
+                    span_id=str(span.span_id),
+                    deal_id=str(deal_id),
+                    document_id=str(span.document_id),
+                    span_type=span.span_type.value,
+                    locator=span.locator,
+                    text_excerpt=span.text_excerpt,
+                    content_hash=span.content_hash,
+                )
+
+    def _documents_repo(self, tenant_id: UUID, *, db_conn: Connection | None) -> Any | None:
+        """Return tenant-scoped Postgres document repository when configured."""
+        effective_conn = db_conn or self._db_conn
+        if effective_conn is None:
+            return None
+        from idis.persistence.repositories.documents import PostgresDocumentsRepository
+
+        return PostgresDocumentsRepository(effective_conn, str(tenant_id))
 
     def _convert_parse_errors(self, parse_errors: list[ParseError]) -> list[IngestionError]:
         """Convert ParseErrors to IngestionErrors."""

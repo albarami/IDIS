@@ -156,6 +156,5 @@ def test_execution_status_and_reason_enums_cover_required_failures() -> None:
         == "hallucinated_source_reference"
     )
     assert (
-        MethodologyExtractionExecutionReason.MISSING_GATE_METADATA.value
-        == "missing_gate_metadata"
+        MethodologyExtractionExecutionReason.MISSING_GATE_METADATA.value == "missing_gate_metadata"
     )

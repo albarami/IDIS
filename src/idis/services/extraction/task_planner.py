@@ -318,11 +318,7 @@ def _required_evidence_is_present(
     question: MethodologyQuestion,
     spans: list[SourceSpanReference],
 ) -> bool:
-    available_counts = Counter(
-        tag.lower().strip()
-        for span in spans
-        for tag in span.evidence_tags
-    )
+    available_counts = Counter(tag.lower().strip() for span in spans for tag in span.evidence_tags)
     return all(
         available_counts[evidence.evidence_type.lower().strip()] >= evidence.min_count
         for evidence in question.required_evidence

@@ -28,6 +28,7 @@ from idis.persistence.repositories.deals import (
     clear_in_memory_store,
     get_deals_repository,
 )
+from idis.persistence.repositories.documents import PostgresDocumentsRepository
 from idis.persistence.repositories.evidence import (
     EvidenceRepo,
     PostgresEvidenceRepository,
@@ -62,6 +63,7 @@ __all__ = [
     "InMemorySanadsRepository",
     "EvidenceRepo",
     "PostgresEvidenceRepository",
+    "PostgresDocumentsRepository",
     "PostgresRunStepsRepository",
     "RunStepsRepo",
     "PostgresRunsRepository",

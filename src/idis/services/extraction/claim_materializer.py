@@ -57,9 +57,7 @@ class MethodologyClaimMaterializationService:
     ) -> ClaimMaterializationResult:
         """Materialize accepted methodology drafts into persisted claims."""
         source_drafts = (
-            execution_result.accepted_claim_drafts
-            if execution_result is not None
-            else drafts or []
+            execution_result.accepted_claim_drafts if execution_result is not None else drafts or []
         )
         mappings: list[DraftClaimMapping] = []
         rejections: list[ClaimMaterializationDraftRejection] = []
@@ -335,8 +333,8 @@ def _source_span_metadata(draft: MethodologyClaimDraft) -> list[dict[str, Any]]:
 
 
 def _raw_source_span_metadata(draft: MethodologyClaimDraft) -> list[dict[str, Any]]:
-    metadata = (
-        draft.future_claim_input_preview.get("corroboration", {}).get("source_span_metadata", [])
+    metadata = draft.future_claim_input_preview.get("corroboration", {}).get(
+        "source_span_metadata", []
     )
     if not isinstance(metadata, list):
         return []
@@ -439,9 +437,7 @@ def _build_summary(
     mappings: list[DraftClaimMapping],
     rejections: list[ClaimMaterializationDraftRejection],
 ) -> MethodologyClaimMaterializationSummary:
-    status_counts = Counter(
-        ["completed"] * len(mappings) + ["rejected"] * len(rejections)
-    )
+    status_counts = Counter(["completed"] * len(mappings) + ["rejected"] * len(rejections))
     return MethodologyClaimMaterializationSummary(
         tenant_id=tenant_id,
         deal_id=deal_id,

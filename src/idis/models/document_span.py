@@ -72,10 +72,12 @@ class DocumentSpan(BaseModel):
     Attributes:
         span_id: Unique identifier (UUID).
         tenant_id: Tenant scope (required for RLS).
+        deal_id: Parent deal reference, when materialized for persistence.
         document_id: Parent document reference.
         span_type: Type of span (PAGE_TEXT, CELL, etc.).
         locator: Stable JSON locator for reproducible citation.
         text_excerpt: Extracted text content (may be truncated).
+        content_hash: SHA-256 of text_excerpt for dedup/integrity.
         created_at: Record creation timestamp.
         updated_at: Record update timestamp.
     """
@@ -88,6 +90,7 @@ class DocumentSpan(BaseModel):
 
     span_id: Annotated[UUID, Field(description="Unique span identifier")]
     tenant_id: Annotated[UUID, Field(description="Tenant scope for RLS isolation")]
+    deal_id: Annotated[UUID | None, Field(description="Parent deal reference")] = None
     document_id: Annotated[UUID, Field(description="Parent document reference")]
     span_type: Annotated[SpanType, Field(description="Span classification")]
     locator: Annotated[
@@ -98,5 +101,9 @@ class DocumentSpan(BaseModel):
         str | None,
         Field(default=None, description="Extracted text content"),
     ]
+    content_hash: Annotated[
+        str | None,
+        Field(min_length=64, max_length=64, description="Span content hash"),
+    ] = None
     created_at: Annotated[datetime, Field(description="Record creation timestamp")]
     updated_at: Annotated[datetime, Field(description="Record update timestamp")]

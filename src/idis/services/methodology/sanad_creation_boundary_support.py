@@ -347,9 +347,7 @@ def initial_rejection_for_decision(
             message="readiness decision reason is not eligible for Sanad creation",
         )
     if not (
-        decision.claim_id
-        and decision.methodology_question_id.strip()
-        and decision.source_span_ids
+        decision.claim_id and decision.methodology_question_id.strip() and decision.source_span_ids
     ):
         return rejection_from_decision(
             tenant_id=tenant_id,
@@ -521,5 +519,3 @@ def evidence_items_from_references(
         )
         for reference in references
     ]
-
-

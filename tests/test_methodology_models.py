@@ -50,12 +50,8 @@ def _question(methodology_type: MethodologyType) -> MethodologyQuestion:
             )
         ],
         target_document_categories=["financial_statement", "trial_balance"],
-        required_calculations=[
-            RequiredCalculation(calc_type="GROSS_MARGIN", required=True)
-        ],
-        assigned_agents=[
-            AssignedAgent(role="financial_agent", responsibility="Validate revenue")
-        ],
+        required_calculations=[RequiredCalculation(calc_type="GROSS_MARGIN", required=True)],
+        assigned_agents=[AssignedAgent(role="financial_agent", responsibility="Validate revenue")],
         red_flag_rules=[
             RedFlagRule(
                 rule_id="rev_missing_support",

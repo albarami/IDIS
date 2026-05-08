@@ -172,10 +172,14 @@ class MethodologyTaskExecutionResult(ExtractionExecutionBaseModel):
 
     @model_validator(mode="after")
     def _reason_required_for_non_completed(self) -> MethodologyTaskExecutionResult:
-        if self.status in {
-            MethodologyTaskExecutionStatus.FAILED,
-            MethodologyTaskExecutionStatus.SKIPPED,
-        } and self.reason is None:
+        if (
+            self.status
+            in {
+                MethodologyTaskExecutionStatus.FAILED,
+                MethodologyTaskExecutionStatus.SKIPPED,
+            }
+            and self.reason is None
+        ):
             raise ValueError("failed/skipped task results require reason")
         return self
 

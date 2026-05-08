@@ -386,9 +386,7 @@ def test_available_sanad_reference_is_preserved_without_ic_promotion() -> None:
         run_id=RUN_ID,
         materialization_result=_materialization_result(),
         coverage_records=[_coverage_record()],
-        evidence_references=[
-            _evidence_ref(sanad_id="sanad-001", sanad_status="available")
-        ],
+        evidence_references=[_evidence_ref(sanad_id="sanad-001", sanad_status="available")],
     )
 
     readiness = result.readiness_decisions[0]
@@ -498,14 +496,18 @@ def test_apply_decisions_in_memory_matches_full_tenant_deal_run_scope() -> None:
     tenant_a_record = _coverage_record()
     tenant_b_record = _coverage_record(tenant_id=OTHER_TENANT_ID)
     service = TrackingCoverageService([tenant_b_record])
-    decision = _service().build_decisions(
-        tenant_id=TENANT_ID,
-        deal_id=DEAL_ID,
-        run_id=RUN_ID,
-        materialization_result=_materialization_result(),
-        coverage_records=[tenant_a_record],
-        evidence_references=[_evidence_ref()],
-    ).coverage_decisions[0]
+    decision = (
+        _service()
+        .build_decisions(
+            tenant_id=TENANT_ID,
+            deal_id=DEAL_ID,
+            run_id=RUN_ID,
+            materialization_result=_materialization_result(),
+            coverage_records=[tenant_a_record],
+            evidence_references=[_evidence_ref()],
+        )
+        .coverage_decisions[0]
+    )
 
     with pytest.raises(InvalidCoverageDecisionScopeError):
         _service().apply_decisions_in_memory(

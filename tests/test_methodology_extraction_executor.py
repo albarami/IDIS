@@ -298,8 +298,7 @@ def test_extractor_unavailable_fails_closed() -> None:
 
     assert result.task_results[0].status == MethodologyTaskExecutionStatus.FAILED
     assert (
-        result.task_results[0].reason
-        == MethodologyExtractionExecutionReason.EXTRACTOR_UNAVAILABLE
+        result.task_results[0].reason == MethodologyExtractionExecutionReason.EXTRACTOR_UNAVAILABLE
     )
     assert result.accepted_claim_drafts == []
 

@@ -166,9 +166,7 @@ class SanadCoverageBoundaryService:
         decisions: Sequence[CoverageUpdateDecision],
     ) -> list[MethodologyCoverageRecord]:
         """Apply decisions to an explicitly injected synthetic in-memory ledger."""
-        records_by_scope = {
-            _coverage_scope_key(record): record for record in coverage_records
-        }
+        records_by_scope = {_coverage_scope_key(record): record for record in coverage_records}
         updated_records: list[MethodologyCoverageRecord] = []
         for decision in sorted(decisions, key=_coverage_scope_key):
             record = records_by_scope.get(_coverage_scope_key(decision))
@@ -284,9 +282,7 @@ def _decisions_for_mapping(
             methodology_question_id=mapping.methodology_question_id,
             claim_id=mapping.claim_id,
             source_span_ids=mapping.source_span_ids,
-            evidence_ids=[
-                reference.evidence_id for reference in mismatched_scoped_candidates
-            ],
+            evidence_ids=[reference.evidence_id for reference in mismatched_scoped_candidates],
             calc_ids=[],
             ready=False,
             reason=reason,
@@ -305,9 +301,7 @@ def _decisions_for_mapping(
         return readiness, coverage
 
     matching_references = [
-        reference
-        for reference in scoped_candidates
-        if reference.source_span_id in span_ids
+        reference for reference in scoped_candidates if reference.source_span_id in span_ids
     ]
     if scoped_candidates and not matching_references:
         reason = SanadCoverageBoundaryReason.SOURCE_SPAN_MISMATCH
@@ -404,17 +398,15 @@ def _decisions_for_mapping(
         calc_id for reference in matching_references for calc_id in reference.calc_ids
     )
     conflict_ids = _sorted_unique(
-        conflict_id
-        for reference in matching_references
-        for conflict_id in reference.conflict_ids
+        conflict_id for reference in matching_references for conflict_id in reference.conflict_ids
     )
     defect_ids = _sorted_unique(
         defect_id for reference in matching_references for defect_id in reference.defect_ids
     )
     sanad_id = _first_present(reference.sanad_id for reference in matching_references)
-    sanad_status = _first_present(
-        reference.sanad_status for reference in matching_references
-    ) or "deferred"
+    sanad_status = (
+        _first_present(reference.sanad_status for reference in matching_references) or "deferred"
+    )
     is_ready = target_status not in {
         MethodologyCoverageStatus.BLOCKED,
         MethodologyCoverageStatus.EVIDENCE_MISSING,
@@ -497,8 +489,7 @@ def _duplicate_conflicting_mapping_context(
         existing.append(mapping)
     for question_id, question_mappings in sorted(by_question.items()):
         unique_targets = {
-            (mapping.claim_id, tuple(mapping.source_span_ids))
-            for mapping in question_mappings
+            (mapping.claim_id, tuple(mapping.source_span_ids)) for mapping in question_mappings
         }
         if len(unique_targets) > 1:
             return question_id, question_mappings
@@ -655,9 +646,7 @@ def _summary(
     coverage_decisions: Sequence[CoverageUpdateDecision],
 ) -> SanadCoverageBoundarySummary:
     by_reason = Counter(decision.reason.value for decision in coverage_decisions)
-    by_coverage_status = Counter(
-        decision.target_status.value for decision in coverage_decisions
-    )
+    by_coverage_status = Counter(decision.target_status.value for decision in coverage_decisions)
     return SanadCoverageBoundarySummary(
         tenant_id=tenant_id,
         deal_id=deal_id,
@@ -691,9 +680,7 @@ def _aggregate_status(
         if decision.target_status
         in {MethodologyCoverageStatus.BLOCKED, MethodologyCoverageStatus.EVIDENCE_MISSING}
     )
-    ready_count = sum(
-        1 for decision in readiness_decisions if decision.ready_for_future_sanad
-    )
+    ready_count = sum(1 for decision in readiness_decisions if decision.ready_for_future_sanad)
     if ready_count and blocked_count:
         return SanadCoverageBoundaryStatus.PARTIAL
     if blocked_count:

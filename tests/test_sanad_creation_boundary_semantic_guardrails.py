@@ -65,9 +65,7 @@ def _readiness(
     source_span_ids: list[str] | None = None,
     evidence_ids: list[str] | None = None,
     ready_for_future_sanad: bool = True,
-    reason: SanadCoverageBoundaryReason = (
-        SanadCoverageBoundaryReason.READY_FOR_FUTURE_SANAD
-    ),
+    reason: SanadCoverageBoundaryReason = (SanadCoverageBoundaryReason.READY_FOR_FUTURE_SANAD),
 ) -> SanadReadinessDecision:
     return SanadReadinessDecision(
         tenant_id=TENANT_ID,

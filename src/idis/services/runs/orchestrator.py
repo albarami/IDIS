@@ -39,6 +39,15 @@ from idis.persistence.repositories.run_steps import RunStepsRepo
 logger = logging.getLogger(__name__)
 
 BLOCK_REASON_DEBATE_NOT_IMPLEMENTED = "DEBATE_NOT_IMPLEMENTED"
+BLOCK_REASON_NO_INGESTED_DOCUMENTS = "NO_INGESTED_DOCUMENTS"
+
+
+class RunStepBlockedError(ValueError):
+    """Machine-readable fail-closed run step blocker."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass
@@ -174,9 +183,11 @@ class RunOrchestrator:
             except Exception as exc:
                 self._fail_step(step, exc)
                 all_steps = self._steps_repo.get_by_run_id(ctx.run_id)
+                block_reason = step.error_code if isinstance(exc, RunStepBlockedError) else None
                 return OrchestratorResult(
                     status="FAILED",
                     steps=all_steps,
+                    block_reason=block_reason,
                     error_code=step.error_code,
                     error_message=step.error_message,
                 )
@@ -237,10 +248,13 @@ class RunOrchestrator:
             Dict with document_count.
 
         Raises:
-            ValueError: If no documents found.
+            RunStepBlockedError: If no documents found.
         """
         if not ctx.documents:
-            raise ValueError("No ingested documents found for this deal")
+            raise RunStepBlockedError(
+                BLOCK_REASON_NO_INGESTED_DOCUMENTS,
+                "No ingested documents found for this deal",
+            )
         return {"document_count": len(ctx.documents)}
 
     def _execute_extract(self, ctx: RunContext) -> dict[str, Any]:
@@ -586,7 +600,7 @@ class RunOrchestrator:
         now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         step.status = StepStatus.FAILED
         step.finished_at = now
-        step.error_code = type(exc).__name__.upper()
+        step.error_code = getattr(exc, "code", type(exc).__name__.upper())
         step.error_message = str(exc)[:500]
         self._steps_repo.update(step)
 

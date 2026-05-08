@@ -59,9 +59,7 @@ def test_required_audit_payload_keys_are_defined() -> None:
 
 def test_audit_contract_does_not_reference_confidential_sources() -> None:
     """Audit contract must not include file paths or confidential workbook names."""
-    serialized = "\n".join(
-        sorted(METHODOLOGY_AUDIT_EVENTS | METHODOLOGY_AUDIT_EVENT_PAYLOAD_KEYS)
-    )
+    serialized = "\n".join(sorted(METHODOLOGY_AUDIT_EVENTS | METHODOLOGY_AUDIT_EVENT_PAYLOAD_KEYS))
 
     assert "financial Due Diligence.xlsx" not in serialized
     assert "real_example" not in serialized

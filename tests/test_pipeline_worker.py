@@ -6,7 +6,9 @@ import asyncio
 from unittest.mock import MagicMock, patch
 
 from idis.audit.sink import InMemoryAuditSink
+from idis.persistence.repositories.run_steps import InMemoryRunStepsRepository
 from idis.pipeline.worker import PipelineWorker, _default_run_context_factory
+from idis.services.runs.execution import RunExecutionService
 
 TENANT_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 
@@ -29,6 +31,10 @@ class FakeRunsRepository:
                 "tenant_id": TENANT_ID,
             }
         ]
+
+    def try_mark_running(self, run_id: str) -> bool:
+        """Allow canonical execution service to claim the fake run."""
+        return run_id == "run-1"
 
     def complete(
         self,
@@ -131,29 +137,95 @@ def test_worker_persists_failed_status_after_execution_exception() -> None:
     assert runs_repo.completed[0][2] is not None
 
 
+def test_worker_empty_persisted_corpus_preserves_no_ingested_documents_code() -> None:
+    """Worker no-document failures must not collapse into VALUEERROR."""
+    conn = MagicMock()
+
+    def execute(statement: object, params: dict[str, str] | None = None) -> MagicMock:
+        sql = str(statement)
+        result = MagicMock()
+        if "SET LOCAL idis.tenant_id" in sql:
+            return result
+        if "FROM documents" in sql:
+            result.fetchall.return_value = []
+            return result
+        raise AssertionError(f"Unexpected SQL: {sql}")
+
+    conn.execute.side_effect = execute
+    engine = MagicMock()
+    engine.connect.return_value.__enter__.return_value = conn
+
+    runs_repo = FakeRunsRepository()
+    run_steps_repo = InMemoryRunStepsRepository(TENANT_ID)
+
+    worker = PipelineWorker(
+        poll_interval=0,
+        tenant_ids=[TENANT_ID],
+        execution_service_factory=lambda **kwargs: RunExecutionService(
+            audit_sink=InMemoryAuditSink(),
+            runs_repo=runs_repo,
+            run_steps_repo=run_steps_repo,
+        ),
+    )
+
+    with (
+        patch("idis.pipeline.worker.get_app_engine", return_value=engine),
+        patch("idis.pipeline.worker.get_runs_repository", return_value=runs_repo),
+    ):
+        processed = asyncio.run(worker._process_queued_runs())
+
+    steps = run_steps_repo.get_by_run_id("run-1")
+    assert processed == 1
+    assert len(steps) == 1
+    assert steps[0].error_code == "NO_INGESTED_DOCUMENTS"
+    assert steps[0].error_code != "VALUEERROR"
+
+
 def test_default_worker_context_factory_hydrates_persisted_documents() -> None:
     """Default worker context must not claim real runs with an empty document list."""
     conn = MagicMock()
 
-    def execute(statement: object, params: dict[str, str]) -> MagicMock:
+    def execute(statement: object, params: dict[str, str] | None = None) -> MagicMock:
         sql = str(statement)
         result = MagicMock()
+        if "SET LOCAL idis.tenant_id" in sql:
+            return result
         if "FROM documents" in sql:
             result.fetchall.return_value = [
                 MagicMock(
-                    document_id="doc-1",
-                    doc_type="PDF",
-                    metadata={"name": "source.pdf"},
+                    _mapping={
+                        "document_id": "doc-1",
+                        "tenant_id": TENANT_ID,
+                        "deal_id": "deal-1",
+                        "doc_id": "artifact-1",
+                        "doc_type": "PDF",
+                        "parse_status": "PARSED",
+                        "document_metadata": {"name": "source.pdf"},
+                        "artifact_metadata": {},
+                        "document_name": "source.pdf",
+                        "sha256": "a" * 64,
+                        "uri": "deals/source.pdf",
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "updated_at": "2026-01-01T00:00:00Z",
+                    },
                 )
             ]
             return result
         if "FROM document_spans" in sql:
             result.fetchall.return_value = [
                 MagicMock(
-                    span_id="span-1",
-                    text_excerpt="Revenue was $5M.",
-                    locator={"page": 1},
-                    span_type="PAGE_TEXT",
+                    _mapping={
+                        "span_id": "span-1",
+                        "tenant_id": TENANT_ID,
+                        "deal_id": "deal-1",
+                        "document_id": "doc-1",
+                        "span_type": "PAGE_TEXT",
+                        "locator": {"page": 1},
+                        "text_excerpt": "Revenue was $5M.",
+                        "content_hash": None,
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "updated_at": "2026-01-01T00:00:00Z",
+                    },
                 )
             ]
             return result

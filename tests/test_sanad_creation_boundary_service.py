@@ -476,5 +476,3 @@ def test_existing_sanad_id_is_reported_as_already_created_and_skipped() -> None:
     assert result.rejections[0].reason == SanadCreationReason.ALREADY_CREATED
     assert result.summary.already_created_count == 1
     assert sanad_service.create_calls == []
-
-

@@ -326,9 +326,7 @@ def test_source_span_metadata_must_match_span_ids_and_document_id() -> None:
         _draft(source_span_metadata=[]),
         incomplete_multi_span,
         _draft(
-            source_span_metadata=[
-                {"span_id": "span-999", "document_id": "doc-financial-model"}
-            ]
+            source_span_metadata=[{"span_id": "span-999", "document_id": "doc-financial-model"}]
         ),
         _draft(source_span_metadata=[{"span_id": "span-001", "document_id": "doc-other"}]),
         _draft(

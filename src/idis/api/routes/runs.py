@@ -274,8 +274,8 @@ def _gather_snapshot_documents(
 ) -> list[dict[str, Any]]:
     """Gather ingested document spans for SNAPSHOT extraction.
 
-    Checks request.state.snapshot_documents first (for testing),
-    then falls back to IngestionService if available.
+    Loads from the request-scoped Postgres corpus first when DB is configured.
+    Test-only in-memory documents are used only when no DB connection exists.
 
     Args:
         request: FastAPI request.
@@ -285,6 +285,16 @@ def _gather_snapshot_documents(
     Returns:
         List of document dicts with doc_type, document_id, spans.
     """
+    db_conn = getattr(request.state, "db_conn", None)
+    if db_conn is not None:
+        from idis.services.runs.steps import load_documents_for_deal
+
+        return load_documents_for_deal(
+            db_conn=db_conn,
+            deal_id=deal_id,
+            tenant_id=tenant_id,
+        )
+
     test_docs: list[dict[str, Any]] = getattr(
         request.state,
         "snapshot_documents",
@@ -931,10 +941,14 @@ def _run_snapshot_calc(
     )
     from idis.services.calc.runner import CalcRunner
 
-    typed_calc_types = [
-        calc_type if isinstance(calc_type, CalcType) else CalcType(str(calc_type))
-        for calc_type in calc_types
-    ] if calc_types else None
+    typed_calc_types = (
+        [
+            calc_type if isinstance(calc_type, CalcType) else CalcType(str(calc_type))
+            for calc_type in calc_types
+        ]
+        if calc_types
+        else None
+    )
 
     claims_repo: Any
     sanads_repo: Any

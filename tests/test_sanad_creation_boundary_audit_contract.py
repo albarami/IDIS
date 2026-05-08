@@ -45,8 +45,7 @@ def test_required_payload_keys_are_defined() -> None:
 def test_audit_contract_has_no_confidential_or_raw_source_content() -> None:
     serialized = "\n".join(
         sorted(
-            SANAD_CREATION_BOUNDARY_AUDIT_EVENTS
-            | SANAD_CREATION_BOUNDARY_AUDIT_EVENT_PAYLOAD_KEYS
+            SANAD_CREATION_BOUNDARY_AUDIT_EVENTS | SANAD_CREATION_BOUNDARY_AUDIT_EVENT_PAYLOAD_KEYS
         )
     )
 

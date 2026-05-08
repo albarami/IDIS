@@ -106,6 +106,29 @@ def test_full_system_inventory_detects_phase_2_3_document_classification_foundat
     }
 
 
+def test_full_system_inventory_detects_phase_3_0a_persisted_corpus_baseline() -> None:
+    """Phase 3.0A persistence and loader work must be detected without overstating E2E."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+
+    assert inventory["persisted_ingestion_corpus"].status == "PARTIAL"
+    assert inventory["unified_run_document_loader"].status == "PARTIAL"
+    assert inventory["api_worker_document_corpus_split"].status == "PARTIAL"
+    assert any(
+        "Methodology/CALC/enrichment/RAG/Neo4j/debate/agents/deliverables" in gap
+        for gap in inventory["unified_run_document_loader"].gaps
+    )
+
+
+def test_full_system_report_does_not_overstate_phase_3_0a_full_run_wiring() -> None:
+    """The audit must not present Slice 1 as a complete FULL-run integration."""
+    report = render_report(collect_wiring_inventory(REPO_ROOT))
+
+    assert "persisted ingestion corpus" in report.lower()
+    assert "unified run document loader" in report.lower()
+    assert "methodology/calc/enrichment/rag/neo4j/debate/agents/deliverables" in report.lower()
+    assert "real end-to-end FULL diligence flow is wired" not in report
+
+
 def test_full_system_report_does_not_overstate_document_classification_wiring() -> None:
     """Wiring audit must not claim live document-classification run integration."""
     report = render_report(collect_wiring_inventory(REPO_ROOT))

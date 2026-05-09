@@ -8,6 +8,10 @@ from typing import Any
 
 from idis.audit.sink import AuditSink
 from idis.methodology.models import MethodologyRegistry
+from idis.models.claim_materialization import (
+    MethodologyOutputClaimMaterializationRunResult,
+    RunScopedMaterializedClaim,
+)
 from idis.models.extraction_execution import (
     MethodologyExtractionExecutionResult,
     MethodologyExtractionExecutionRunResult,
@@ -33,6 +37,10 @@ TaskExecutionFn = Callable[
     ...,
     tuple[MethodologyExtractionExecutionRunResult, MethodologyExtractionExecutionResult],
 ]
+ClaimMaterializationFn = Callable[
+    ...,
+    tuple[MethodologyOutputClaimMaterializationRunResult, list[RunScopedMaterializedClaim]],
+]
 
 
 def build_run_context(
@@ -50,6 +58,7 @@ def build_run_context(
     methodology_coverage_init_fn: CoverageInitFn | None = None,
     methodology_extraction_task_planning_fn: TaskPlanningFn | None = None,
     methodology_extraction_task_execution_fn: TaskExecutionFn | None = None,
+    methodology_claim_materialization_fn: ClaimMaterializationFn | None = None,
 ) -> RunContext:
     """Build a RunContext with the canonical step callables.
 
@@ -82,6 +91,7 @@ def build_run_context(
         methodology_coverage_init_fn=methodology_coverage_init_fn,
         methodology_extraction_task_planning_fn=methodology_extraction_task_planning_fn,
         methodology_extraction_task_execution_fn=methodology_extraction_task_execution_fn,
+        methodology_claim_materialization_fn=methodology_claim_materialization_fn,
         extract_fn=partial(_run_snapshot_extraction, db_conn=db_conn),
         grade_fn=partial(_run_snapshot_auto_grade, db_conn=db_conn),
         calc_fn=partial(_run_snapshot_calc, db_conn=db_conn),

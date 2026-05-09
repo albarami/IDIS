@@ -187,30 +187,49 @@ def test_full_system_inventory_detects_phase_3_0b_document_preflight_baseline() 
 
 
 def test_full_system_inventory_detects_phase_3_0k_evidence_trust_court_boundary() -> None:
-    """Slice 11 Evidence Trust Court must be visible without overstating Slice 12."""
+    """Slice 11 Evidence Trust Court must be visible without overstating downstream layers."""
     inventory = collect_wiring_inventory(REPO_ROOT)
     court = inventory["methodology_evidence_trust_court_run_integration"]
 
     assert court.status == "PARTIAL"
     assert any("METHODOLOGY_EVIDENCE_TRUST_COURT" in item for item in court.evidence)
     assert any("Layer 1 Evidence Trust Court boundary exists" in item for item in court.evidence)
-    assert any(
+    assert not any(
         "Validated Evidence Package remains deferred to Slice 12" in gap for gap in court.gaps
     )
     assert any("Layer 2 IC debate" in gap for gap in court.gaps)
 
 
-def test_full_system_report_keeps_slice_11_deferred_boundaries_explicit() -> None:
-    """Rendered audit wording must keep Slice 11 separate from downstream IC layers."""
+def test_full_system_inventory_detects_phase_3_0l_validated_evidence_package_boundary() -> None:
+    """Slice 12 VEP must be visible without overstating downstream IC layers."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+    vep = inventory["methodology_validated_evidence_package_run_integration"]
+
+    assert vep.status == "PARTIAL"
+    assert any("METHODOLOGY_VALIDATED_EVIDENCE_PACKAGE" in item for item in vep.evidence)
+    assert any(
+        "Layer 1 Validated Evidence Package boundary exists" in item for item in vep.evidence
+    )
+    assert any("Layer 2 IC debate" in gap for gap in vep.gaps)
+    assert any("enrichment/API checks" in gap for gap in vep.gaps)
+    assert any("GO/CONDITIONAL/NO-GO" in gap for gap in vep.gaps)
+    assert any("deliverables, API/UI/OpenAPI" in gap for gap in vep.gaps)
+    assert any("durable Validated Evidence Package persistence" in gap for gap in vep.gaps)
+    assert any("real E2E" in gap for gap in vep.gaps)
+
+
+def test_full_system_report_keeps_slice_12_deferred_boundaries_explicit() -> None:
+    """Rendered audit wording must keep Slice 12 separate from downstream IC layers."""
     report = render_report(collect_wiring_inventory(REPO_ROOT))
 
     assert "in-memory run-scoped Layer 1 Evidence Trust Court boundary exists" in report
-    assert "Validated Evidence Package remains deferred to Slice 12" in report
+    assert "in-memory run-scoped Layer 1 Validated Evidence Package boundary exists" in report
+    assert "Validated Evidence Package remains deferred to Slice 12" not in report
     assert "enrichment/API checks" in report
     assert "Layer 2 IC debate" in report
     assert "GO/CONDITIONAL/NO-GO" in report
     assert "deliverables, API/UI/OpenAPI, and real E2E remain deferred" in report
-    assert "Evidence Trust Court produces Validated Evidence Packages" not in report
+    assert "Validated Evidence Package produces IC recommendations" not in report
 
 
 def test_full_system_report_does_not_overstate_phase_3_0a_full_run_wiring() -> None:
@@ -432,10 +451,8 @@ def test_full_system_inventory_detects_phase_3_0h_sanad_boundary() -> None:
     assert any("CALC remains deferred" in item for item in sanad_boundary.gaps)
     assert any("enrichment/API checks remain deferred" in item for item in sanad_boundary.gaps)
     assert any(
-        "Layer 1 Evidence Trust Court remains deferred" in item for item in sanad_boundary.gaps
-    )
-    assert any(
-        "Validated Evidence Package remains deferred" in item for item in sanad_boundary.gaps
+        "Layer 1 Evidence Trust Court and Validated Evidence Package run later in FULL mode" in item
+        for item in sanad_boundary.gaps
     )
     assert any("Layer 2 IC Debate remains deferred" in item for item in sanad_boundary.gaps)
     assert any(
@@ -469,9 +486,9 @@ def test_full_system_inventory_detects_phase_3_0i_deterministic_calc_boundary() 
     assert any("Truth Dashboard remains deferred" in item for item in calc_boundary.gaps)
     assert any("enrichment/API checks remain deferred" in item for item in calc_boundary.gaps)
     assert any(
-        "Layer 1 Evidence Trust Court remains deferred" in item for item in calc_boundary.gaps
+        "Layer 1 Evidence Trust Court and Validated Evidence Package run later in FULL mode" in item
+        for item in calc_boundary.gaps
     )
-    assert any("Validated Evidence Package remains deferred" in item for item in calc_boundary.gaps)
     assert any("Layer 2 IC Debate remains deferred" in item for item in calc_boundary.gaps)
     assert any(
         "GO/CONDITIONAL/NO-GO package remains deferred" in item for item in calc_boundary.gaps
@@ -501,8 +518,12 @@ def test_full_system_inventory_detects_phase_3_0j_truth_dashboard_boundary() -> 
     assert not any(
         "Layer 1 Evidence Trust Court remains deferred" in item for item in truth_boundary.gaps
     )
-    assert any(
+    assert not any(
         "Validated Evidence Package remains deferred" in item for item in truth_boundary.gaps
+    )
+    assert any(
+        "Validated Evidence Package is a downstream Layer 1 run-scoped package step" in item
+        for item in truth_boundary.gaps
     )
     assert any("Layer 2 IC Debate remains deferred" in item for item in truth_boundary.gaps)
     assert any(

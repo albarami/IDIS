@@ -165,6 +165,8 @@ def test_resume_skips_completed_truth_dashboard_step_and_rehydrates_safe_shell()
     ctx2.methodology_truth_dashboard_fn = failing_truth_dashboard
     result = orchestrator.execute(ctx2)
 
-    assert result.status == "SUCCEEDED"
+    assert result.status == "FAILED"
+    assert result.error_code == "METHODOLOGY_EVIDENCE_TRUST_COURT_FAILED"
     assert call_count["truth_dashboard"] == 0
     assert isinstance(ctx2.methodology_truth_dashboard, RunScopedTruthDashboardShell)
+    assert ctx2.methodology_evidence_trust_court is None

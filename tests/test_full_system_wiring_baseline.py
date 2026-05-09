@@ -186,6 +186,33 @@ def test_full_system_inventory_detects_phase_3_0b_document_preflight_baseline() 
     assert any("extraction execution remains deferred" in item.lower() for item in preflight.gaps)
 
 
+def test_full_system_inventory_detects_phase_3_0k_evidence_trust_court_boundary() -> None:
+    """Slice 11 Evidence Trust Court must be visible without overstating Slice 12."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+    court = inventory["methodology_evidence_trust_court_run_integration"]
+
+    assert court.status == "PARTIAL"
+    assert any("METHODOLOGY_EVIDENCE_TRUST_COURT" in item for item in court.evidence)
+    assert any("Layer 1 Evidence Trust Court boundary exists" in item for item in court.evidence)
+    assert any(
+        "Validated Evidence Package remains deferred to Slice 12" in gap for gap in court.gaps
+    )
+    assert any("Layer 2 IC debate" in gap for gap in court.gaps)
+
+
+def test_full_system_report_keeps_slice_11_deferred_boundaries_explicit() -> None:
+    """Rendered audit wording must keep Slice 11 separate from downstream IC layers."""
+    report = render_report(collect_wiring_inventory(REPO_ROOT))
+
+    assert "in-memory run-scoped Layer 1 Evidence Trust Court boundary exists" in report
+    assert "Validated Evidence Package remains deferred to Slice 12" in report
+    assert "enrichment/API checks" in report
+    assert "Layer 2 IC debate" in report
+    assert "GO/CONDITIONAL/NO-GO" in report
+    assert "deliverables, API/UI/OpenAPI, and real E2E remain deferred" in report
+    assert "Evidence Trust Court produces Validated Evidence Packages" not in report
+
+
 def test_full_system_report_does_not_overstate_phase_3_0a_full_run_wiring() -> None:
     """The audit must not present Slice 1 as a complete FULL-run integration."""
     report = render_report(collect_wiring_inventory(REPO_ROOT))
@@ -471,7 +498,7 @@ def test_full_system_inventory_detects_phase_3_0j_truth_dashboard_boundary() -> 
     )
     assert any("API/UI/OpenAPI exposure remains deferred" in item for item in truth_boundary.gaps)
     assert any("deliverables integration remains deferred" in item for item in truth_boundary.gaps)
-    assert any(
+    assert not any(
         "Layer 1 Evidence Trust Court remains deferred" in item for item in truth_boundary.gaps
     )
     assert any(

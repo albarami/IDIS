@@ -503,15 +503,14 @@ class RunOrchestrator:
                 InMemoryRunMethodologyExtractionTaskExecutionService,
             )
 
-            run_result, execution_result = (
-                InMemoryRunMethodologyExtractionTaskExecutionService().run(
-                    tenant_id=ctx.tenant_id,
-                    deal_id=ctx.deal_id,
-                    run_id=ctx.run_id,
-                    tasks=ctx.methodology_extraction_tasks,
-                    documents=ctx.documents,
-                    extractor=None,
-                )
+            execution_service = InMemoryRunMethodologyExtractionTaskExecutionService()
+            run_result, execution_result = execution_service.run(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                tasks=ctx.methodology_extraction_tasks,
+                documents=ctx.documents,
+                extractor=None,
             )
 
         ctx.methodology_extraction_execution_result = execution_result
@@ -522,7 +521,7 @@ class RunOrchestrator:
         ctx: RunContext,
         result_summary: dict[str, Any],
     ) -> None:
-        """Attach a safe placeholder when completed execution is skipped on resume."""
+        """Attach a safe execution result shell when completed execution is skipped."""
         if ctx.methodology_extraction_execution_result is not None:
             return
         ctx.methodology_extraction_execution_result = _execution_result_shell_from_summary(

@@ -453,6 +453,37 @@ def test_full_system_inventory_detects_phase_3_0i_deterministic_calc_boundary() 
     assert any("real data-room E2E remains deferred" in item for item in calc_boundary.gaps)
 
 
+def test_full_system_inventory_detects_phase_3_0j_truth_dashboard_boundary() -> None:
+    """Slice 10 creates a run-scoped dashboard without overstating downstream layers."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+
+    truth_boundary = inventory["methodology_truth_dashboard_run_integration"]
+
+    assert truth_boundary.status == "PARTIAL"
+    assert any("METHODOLOGY_TRUTH_DASHBOARD" in item for item in truth_boundary.evidence)
+    assert any(
+        "in-memory run-scoped Truth Dashboard boundary exists" in item
+        for item in [truth_boundary.summary, *truth_boundary.evidence, *truth_boundary.gaps]
+    )
+    assert any(
+        "durable Truth Dashboard persistence remains deferred" in item
+        for item in truth_boundary.gaps
+    )
+    assert any("API/UI/OpenAPI exposure remains deferred" in item for item in truth_boundary.gaps)
+    assert any("deliverables integration remains deferred" in item for item in truth_boundary.gaps)
+    assert any(
+        "Layer 1 Evidence Trust Court remains deferred" in item for item in truth_boundary.gaps
+    )
+    assert any(
+        "Validated Evidence Package remains deferred" in item for item in truth_boundary.gaps
+    )
+    assert any("Layer 2 IC Debate remains deferred" in item for item in truth_boundary.gaps)
+    assert any(
+        "GO/CONDITIONAL/NO-GO package remains deferred" in item for item in truth_boundary.gaps
+    )
+    assert any("real data-room E2E remains deferred" in item for item in truth_boundary.gaps)
+
+
 def test_full_system_inventory_detects_phase_2_7_sanad_coverage_boundary() -> None:
     """Phase 2.7 boundary exists while live integrations remain deferred."""
     inventory = collect_wiring_inventory(REPO_ROOT)

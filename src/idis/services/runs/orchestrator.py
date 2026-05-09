@@ -82,6 +82,11 @@ from idis.models.sanad_materialization import (
     RunScopedSanadRecord,
     RunScopedSanadShell,
 )
+from idis.models.truth_dashboard_materialization import (
+    MethodologyTruthDashboardRunResult,
+    RunScopedTruthDashboardRecord,
+    RunScopedTruthDashboardShell,
+)
 from idis.persistence.repositories.run_steps import RunStepsRepo
 
 logger = logging.getLogger(__name__)
@@ -244,6 +249,19 @@ class RunContext:
     methodology_calc_sanads: list[RunScopedCalcSanadRecord | RunScopedCalcSanadShell] = field(
         default_factory=list
     )
+    methodology_truth_dashboard_fn: (
+        Callable[
+            ...,
+            tuple[
+                MethodologyTruthDashboardRunResult,
+                list[RunScopedTruthDashboardRecord],
+            ],
+        ]
+        | None
+    ) = None
+    methodology_truth_dashboard: (
+        RunScopedTruthDashboardRecord | RunScopedTruthDashboardShell | None
+    ) = None
     calc_fn: Callable[..., dict[str, Any]] | None = None
     calc_types: list[CalcType] | None = None
     enrich_fn: Callable[..., dict[str, Any]] | None = None
@@ -340,6 +358,8 @@ class RunOrchestrator:
                     self._rehydrate_methodology_sanads(ctx, existing.result_summary)
                 if step_name == StepName.METHODOLOGY_DETERMINISTIC_CALCULATION:
                     self._rehydrate_methodology_calculations(ctx, existing.result_summary)
+                if step_name == StepName.METHODOLOGY_TRUTH_DASHBOARD:
+                    self._rehydrate_methodology_truth_dashboard(ctx, existing.result_summary)
                 continue
 
             step = self._start_step(ctx, step_name, existing)
@@ -404,6 +424,8 @@ class RunOrchestrator:
             return self._execute_methodology_sanad_creation_linking_grading(ctx)
         if step_name == StepName.METHODOLOGY_DETERMINISTIC_CALCULATION:
             return self._execute_methodology_deterministic_calculation(ctx)
+        if step_name == StepName.METHODOLOGY_TRUTH_DASHBOARD:
+            return self._execute_methodology_truth_dashboard(ctx)
         if step_name == StepName.EXTRACT:
             return self._execute_extract(ctx)
         if step_name == StepName.GRADE:
@@ -806,6 +828,73 @@ class RunOrchestrator:
             )
         return summary
 
+    def _execute_methodology_truth_dashboard(self, ctx: RunContext) -> dict[str, Any]:
+        """Build a run-scoped Truth Dashboard from Slice 6-9 outputs."""
+        if ctx.methodology_materialized_claims is None:
+            raise RunStepBlockedError(
+                "METHODOLOGY_MATERIALIZED_CLAIMS_MISSING",
+                "Truth Dashboard requires claim materialization context",
+            )
+        if ctx.methodology_evidence_items is None:
+            raise RunStepBlockedError(
+                "METHODOLOGY_EVIDENCE_ITEMS_MISSING",
+                "Truth Dashboard requires evidence item materialization context",
+            )
+        no_claims = len(ctx.methodology_materialized_claims) == 0
+        if not no_claims and not ctx.methodology_sanads:
+            raise RunStepBlockedError(
+                "METHODOLOGY_SANADS_MISSING",
+                "Truth Dashboard requires run-scoped Sanads",
+            )
+        if ctx.methodology_sanad_grades is None:
+            raise RunStepBlockedError(
+                "METHODOLOGY_SANAD_GRADES_MISSING",
+                "Truth Dashboard requires run-scoped Sanad grades",
+            )
+
+        if ctx.methodology_truth_dashboard_fn is not None:
+            run_result, dashboards = ctx.methodology_truth_dashboard_fn(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                materialized_claims=ctx.methodology_materialized_claims,
+                evidence_items=ctx.methodology_evidence_items,
+                source_provenance=ctx.methodology_evidence_source_provenance,
+                sanads=ctx.methodology_sanads,
+                sanad_grades=ctx.methodology_sanad_grades,
+                sanad_defects=ctx.methodology_sanad_defects,
+                calculations=ctx.methodology_calculations,
+                calc_sanads=ctx.methodology_calc_sanads,
+            )
+        else:
+            from idis.services.runs.methodology_truth_dashboard import (
+                InMemoryRunMethodologyTruthDashboardService,
+            )
+
+            run_result, dashboards = InMemoryRunMethodologyTruthDashboardService().run(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                materialized_claims=ctx.methodology_materialized_claims,
+                evidence_items=ctx.methodology_evidence_items,
+                source_provenance=ctx.methodology_evidence_source_provenance,
+                sanads=ctx.methodology_sanads,
+                sanad_grades=ctx.methodology_sanad_grades,
+                sanad_defects=ctx.methodology_sanad_defects,
+                calculations=ctx.methodology_calculations,
+                calc_sanads=ctx.methodology_calc_sanads,
+            )
+
+        ctx.methodology_truth_dashboard = dashboards[0] if dashboards else None
+        summary = run_result.to_run_step_summary()
+        if run_result.status.value == "failed":
+            raise RunStepBlockedError(
+                "METHODOLOGY_TRUTH_DASHBOARD_FAILED",
+                "Truth Dashboard failed closed",
+                result_summary=summary,
+            )
+        return summary
+
     def _rehydrate_methodology_extraction_execution(
         self,
         ctx: RunContext,
@@ -970,6 +1059,23 @@ class RunOrchestrator:
             if shell is not None
         )
         ctx.methodology_calc_sanads = calc_sanad_shells
+
+    def _rehydrate_methodology_truth_dashboard(
+        self,
+        ctx: RunContext,
+        result_summary: dict[str, Any],
+    ) -> None:
+        """Attach a safe Truth Dashboard shell when completed Slice 10 is skipped."""
+        if ctx.methodology_truth_dashboard is not None:
+            return
+        shell = _truth_dashboard_shell_from_summary(
+            tenant_id=ctx.tenant_id,
+            deal_id=ctx.deal_id,
+            run_id=ctx.run_id,
+            result_summary=result_summary,
+        )
+        if shell is not None:
+            ctx.methodology_truth_dashboard = shell
 
     def _execute_extract(self, ctx: RunContext) -> dict[str, Any]:
         """Run extraction pipeline via injected callable.
@@ -1669,6 +1775,39 @@ def _calc_sanad_shell_from_summary(
             extraction_task_id=str(shell.get("extraction_task_id") or ""),
             coverage_record_id=str(shell.get("coverage_record_id") or ""),
             status=str(shell.get("status") or "created"),
+        )
+    except ValueError:
+        return None
+
+
+def _truth_dashboard_shell_from_summary(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+    result_summary: dict[str, Any],
+) -> RunScopedTruthDashboardShell | None:
+    dashboard_ids = _str_list(result_summary.get("dashboard_ids"))
+    if not dashboard_ids:
+        return None
+    raw_summary = result_summary.get("summary")
+    summary: dict[str, Any] = raw_summary if isinstance(raw_summary, dict) else {}
+    try:
+        return RunScopedTruthDashboardShell(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            run_id=run_id,
+            dashboard_id=dashboard_ids[0],
+            row_ids=_str_list(result_summary.get("row_ids")),
+            claim_ids=_str_list(result_summary.get("claim_ids")),
+            evidence_ids=_str_list(result_summary.get("evidence_ids")),
+            sanad_ids=_str_list(result_summary.get("sanad_ids")),
+            calc_ids=_str_list(result_summary.get("calc_ids")),
+            defect_ids=_str_list(result_summary.get("defect_ids")),
+            row_count=_int_from_summary(summary, "created_row_count", 0),
+            by_verdict=_dict_from_summary(summary, "by_verdict"),
+            by_grade=_dict_from_summary(summary, "by_grade"),
+            status=str(result_summary.get("status") or "completed"),
         )
     except ValueError:
         return None

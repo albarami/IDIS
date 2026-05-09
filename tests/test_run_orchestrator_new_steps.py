@@ -234,6 +234,7 @@ class TestStepOrderingConstants:
             StepName.METHODOLOGY_CLAIM_MATERIALIZATION,
             StepName.METHODOLOGY_EVIDENCE_ITEM_MATERIALIZATION,
             StepName.METHODOLOGY_SANAD_CREATION_LINKING_GRADING,
+            StepName.METHODOLOGY_DETERMINISTIC_CALCULATION,
             StepName.EXTRACT,
             StepName.GRADE,
             StepName.CALC,
@@ -256,6 +257,7 @@ class TestStepOrderingConstants:
             StepName.METHODOLOGY_CLAIM_MATERIALIZATION,
             StepName.METHODOLOGY_EVIDENCE_ITEM_MATERIALIZATION,
             StepName.METHODOLOGY_SANAD_CREATION_LINKING_GRADING,
+            StepName.METHODOLOGY_DETERMINISTIC_CALCULATION,
             StepName.ENRICHMENT,
             StepName.ANALYSIS,
             StepName.SCORING,
@@ -297,8 +299,8 @@ class TestFullVsSnapshotEnforcement:
         for full_only in FULL_ONLY_STEPS:
             assert full_only not in step_names
 
-    def test_full_has_sixteen_steps(self) -> None:
-        """FULL mode completes with all 16 steps."""
+    def test_full_has_seventeen_steps(self) -> None:
+        """FULL mode completes with all 17 steps."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -307,7 +309,7 @@ class TestFullVsSnapshotEnforcement:
         result = orchestrator.execute(ctx)
 
         assert result.status == "SUCCEEDED"
-        assert len(result.steps) == 16
+        assert len(result.steps) == 17
         step_names = [step.step_name for step in result.steps]
         assert step_names.index(StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING) < (
             step_names.index(StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION)
@@ -322,6 +324,9 @@ class TestFullVsSnapshotEnforcement:
             step_names.index(StepName.METHODOLOGY_SANAD_CREATION_LINKING_GRADING)
         )
         assert step_names.index(StepName.METHODOLOGY_SANAD_CREATION_LINKING_GRADING) < (
+            step_names.index(StepName.METHODOLOGY_DETERMINISTIC_CALCULATION)
+        )
+        assert step_names.index(StepName.METHODOLOGY_DETERMINISTIC_CALCULATION) < (
             step_names.index(StepName.EXTRACT)
         )
 
@@ -409,7 +414,7 @@ class TestResumeSkipsCompletedSteps:
 
         result1 = orchestrator.execute(ctx)
         assert result1.status == "SUCCEEDED"
-        assert len(result1.steps) == 16
+        assert len(result1.steps) == 17
 
         call_count = {"enrichment": 0}
         original_enrich = _stub_enrichment

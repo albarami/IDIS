@@ -168,6 +168,9 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             "methodology_sanad_creation_linking_grading_run_integration": (
                 _methodology_sanad_creation_linking_grading_run_integration(root, files)
             ),
+            "methodology_deterministic_calculation_run_integration": (
+                _methodology_deterministic_calculation_run_integration(root, files)
+            ),
             "methodology_claim_materialization_sanad_integration": (
                 _methodology_claim_materialization_sanad_integration(files)
             ),
@@ -493,11 +496,14 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/models/evidence_item.py",
         "src/idis/models/evidence_item_materialization.py",
         "src/idis/models/sanad_materialization.py",
+        "src/idis/models/calc_materialization.py",
         "src/idis/services/extraction/claim_materializer.py",
         "src/idis/services/runs/methodology_claim_materialization.py",
         "src/idis/services/runs/methodology_evidence_item_materialization.py",
         "src/idis/services/runs/methodology_sanad_creation_linking_grading.py",
         "src/idis/services/runs/methodology_sanad_creation_helpers.py",
+        "src/idis/services/runs/methodology_deterministic_calculation.py",
+        "src/idis/services/runs/methodology_deterministic_calculation_helpers.py",
         "src/idis/services/extraction/claim_materialization_audit.py",
         "src/idis/models/sanad_coverage_boundary.py",
         "src/idis/services/methodology/sanad_coverage_boundary.py",
@@ -1750,6 +1756,69 @@ def _methodology_sanad_creation_linking_grading_run_integration(
             "real data-room E2E remains deferred.",
         ],
         phase_2_action="Phase 3.0 Slice 8",
+    )
+
+
+def _methodology_deterministic_calculation_run_integration(
+    root: Path,
+    files: dict[str, str],
+) -> WiringItem:
+    model_text = files.get("src/idis/models/calc_materialization.py", "")
+    service_text = files.get("src/idis/services/runs/methodology_deterministic_calculation.py", "")
+    helper_text = files.get(
+        "src/idis/services/runs/methodology_deterministic_calculation_helpers.py", ""
+    )
+    run_text = (
+        files.get("src/idis/models/run_step.py", "")
+        + files.get("src/idis/services/runs/orchestrator.py", "")
+        + files.get("src/idis/services/runs/steps.py", "")
+    )
+    integrated = (
+        _exists(root, "src/idis/calc/engine.py")
+        and _exists(root, "src/idis/calc/formulas/core.py")
+        and _exists(root, "src/idis/models/deterministic_calculation.py")
+        and _exists(root, "src/idis/models/calc_sanad.py")
+        and _exists(root, "src/idis/models/calc_materialization.py")
+        and _exists(root, "src/idis/services/runs/methodology_deterministic_calculation.py")
+        and "METHODOLOGY_DETERMINISTIC_CALCULATION" in run_text
+        and "InMemoryRunMethodologyDeterministicCalculationService" in service_text
+        and "task.expected_answer_schema.required_calculations" in helper_text
+        and "CalcEngine" in service_text
+        and "register_core_formulas" in service_text
+        and "RunScopedDeterministicCalculationRecord" in model_text
+        and "RunScopedCalcSanadRecord" in model_text
+    )
+    return WiringItem(
+        key="methodology_deterministic_calculation_run_integration",
+        label="Methodology deterministic calculation run integration",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary=(
+            "in-memory run-scoped deterministic calculation boundary exists; durable "
+            "Calc/CalcSanad persistence over durable Claim/Sanad inputs remains deferred."
+        ),
+        evidence=[
+            "FULL runs include METHODOLOGY_DETERMINISTIC_CALCULATION after Sanad "
+            "creation/linking/grading and before legacy EXTRACT.",
+            "Slice 9 reuses CalcEngine, register_core_formulas, DeterministicCalculation, "
+            "CalcSanad, and CalcRunner input/blocker helpers where safe.",
+            "Candidate selection reads task.expected_answer_schema.required_calculations.",
+            "RunContext carries methodology_calculations and methodology_calc_sanads in memory.",
+            "Run-step summaries include safe IDs, hashes, statuses, counts, reason codes, "
+            "and output scalar metadata only.",
+        ],
+        gaps=[
+            "durable Calc/CalcSanad persistence over durable Claim/Sanad inputs remains deferred.",
+            "calculations do not promote claims, Sanads, or deals to IC readiness.",
+            "Truth Dashboard remains deferred.",
+            "enrichment/API checks remain deferred.",
+            "Layer 1 Evidence Trust Court remains deferred.",
+            "Validated Evidence Package remains deferred.",
+            "Layer 2 IC Debate remains deferred.",
+            "GO/CONDITIONAL/NO-GO package remains deferred.",
+            "deliverables remain deferred.",
+            "real data-room E2E remains deferred.",
+        ],
+        phase_2_action="Phase 3.0 Slice 9",
     )
 
 

@@ -26,6 +26,12 @@ from pydantic import BaseModel
 
 from idis.audit.sink import AuditSink, AuditSinkError
 from idis.methodology.models import MethodologyRegistry
+from idis.models.claim_materialization import (
+    MaterializedClaimSourceRef,
+    MethodologyOutputClaimMaterializationRunResult,
+    RunScopedMaterializedClaim,
+    RunScopedMaterializedClaimShell,
+)
 from idis.models.deterministic_calculation import CalcType
 from idis.models.document_preflight import DocumentPreflightResult
 from idis.models.extraction_execution import (
@@ -146,6 +152,19 @@ class RunContext:
         | None
     ) = None
     methodology_extraction_execution_result: MethodologyExtractionExecutionResult | None = None
+    methodology_claim_materialization_fn: (
+        Callable[
+            ...,
+            tuple[
+                MethodologyOutputClaimMaterializationRunResult,
+                list[RunScopedMaterializedClaim],
+            ],
+        ]
+        | None
+    ) = None
+    methodology_materialized_claims: list[
+        RunScopedMaterializedClaim | RunScopedMaterializedClaimShell
+    ] = field(default_factory=list)
     calc_fn: Callable[..., dict[str, Any]] | None = None
     calc_types: list[CalcType] | None = None
     enrich_fn: Callable[..., dict[str, Any]] | None = None
@@ -234,6 +253,8 @@ class RunOrchestrator:
                     self._rehydrate_methodology_extraction_tasks(ctx, accumulated)
                 if step_name == StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION:
                     self._rehydrate_methodology_extraction_execution(ctx, existing.result_summary)
+                if step_name == StepName.METHODOLOGY_CLAIM_MATERIALIZATION:
+                    self._rehydrate_methodology_materialized_claims(ctx, existing.result_summary)
                 continue
 
             step = self._start_step(ctx, step_name, existing)
@@ -290,6 +311,8 @@ class RunOrchestrator:
             return self._execute_methodology_extraction_task_planning(ctx, accumulated)
         if step_name == StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION:
             return self._execute_methodology_extraction_task_execution(ctx)
+        if step_name == StepName.METHODOLOGY_CLAIM_MATERIALIZATION:
+            return self._execute_methodology_claim_materialization(ctx)
         if step_name == StepName.EXTRACT:
             return self._execute_extract(ctx)
         if step_name == StepName.GRADE:
@@ -516,6 +539,41 @@ class RunOrchestrator:
         ctx.methodology_extraction_execution_result = execution_result
         return run_result.to_run_step_summary()
 
+    def _execute_methodology_claim_materialization(self, ctx: RunContext) -> dict[str, Any]:
+        """Materialize accepted neutral execution outputs into in-memory claims."""
+        if ctx.methodology_extraction_execution_result is None:
+            raise RunStepBlockedError(
+                "METHODOLOGY_EXECUTION_RESULT_MISSING",
+                "Methodology claim materialization requires execution results",
+            )
+
+        if ctx.methodology_claim_materialization_fn is not None:
+            run_result, materialized_claims = ctx.methodology_claim_materialization_fn(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                execution_result=ctx.methodology_extraction_execution_result,
+            )
+        else:
+            from idis.services.runs.methodology_claim_materialization import (
+                InMemoryRunMethodologyClaimMaterializationService,
+            )
+
+            run_result, materialized_claims = (
+                InMemoryRunMethodologyClaimMaterializationService().run(
+                    tenant_id=ctx.tenant_id,
+                    deal_id=ctx.deal_id,
+                    run_id=ctx.run_id,
+                    execution_result=ctx.methodology_extraction_execution_result,
+                )
+            )
+
+        claims_for_context: list[RunScopedMaterializedClaim | RunScopedMaterializedClaimShell] = (
+            list(materialized_claims)
+        )
+        ctx.methodology_materialized_claims = claims_for_context
+        return run_result.to_run_step_summary()
+
     def _rehydrate_methodology_extraction_execution(
         self,
         ctx: RunContext,
@@ -530,6 +588,32 @@ class RunOrchestrator:
             run_id=ctx.run_id,
             result_summary=result_summary,
         )
+
+    def _rehydrate_methodology_materialized_claims(
+        self,
+        ctx: RunContext,
+        result_summary: dict[str, Any],
+    ) -> None:
+        """Attach safe materialized claim shells when completed materialization is skipped."""
+        if ctx.methodology_materialized_claims:
+            return
+        raw_mappings = result_summary.get("output_claim_mappings")
+        mappings: list[Any] = raw_mappings if isinstance(raw_mappings, list) else []
+        shells: list[RunScopedMaterializedClaimShell] = []
+        for mapping in mappings:
+            if not isinstance(mapping, dict):
+                continue
+            shell = _materialized_claim_shell_from_mapping(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                mapping=mapping,
+            )
+            if shell is not None:
+                shells.append(shell)
+        shell_claims: list[RunScopedMaterializedClaim | RunScopedMaterializedClaimShell] = []
+        shell_claims.extend(shells)
+        ctx.methodology_materialized_claims = shell_claims
 
     def _execute_extract(self, ctx: RunContext) -> dict[str, Any]:
         """Run extraction pipeline via injected callable.
@@ -961,6 +1045,45 @@ class RunOrchestrator:
         if has_failed:
             return "FAILED"
         return "SUCCEEDED"
+
+
+def _materialized_claim_shell_from_mapping(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+    mapping: dict[str, Any],
+) -> RunScopedMaterializedClaimShell | None:
+    source_span_ids = mapping.get("source_span_ids")
+    document_id = _optional_str(mapping.get("document_id"))
+    if not isinstance(source_span_ids, list) or document_id is None:
+        return None
+    source_refs = [
+        MaterializedClaimSourceRef(
+            document_id=document_id,
+            source_span_id=str(source_span_id),
+            locator=None,
+        )
+        for source_span_id in source_span_ids
+        if str(source_span_id).strip()
+    ]
+    if not source_refs:
+        return None
+    try:
+        return RunScopedMaterializedClaimShell(
+            claim_id=str(mapping.get("claim_id") or ""),
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            run_id=run_id,
+            source_refs=source_refs,
+            methodology_question_id=str(mapping.get("methodology_question_id") or ""),
+            coverage_record_id=str(mapping.get("coverage_record_id") or ""),
+            extraction_task_id=str(mapping.get("extraction_task_id") or ""),
+            extraction_output_id=str(mapping.get("extraction_output_id") or ""),
+            status="materialized_unverified",
+        )
+    except ValueError:
+        return None
 
 
 def _execution_result_shell_from_summary(

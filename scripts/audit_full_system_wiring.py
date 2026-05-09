@@ -485,6 +485,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/services/extraction/execution_audit.py",
         "src/idis/models/claim_materialization.py",
         "src/idis/services/extraction/claim_materializer.py",
+        "src/idis/services/runs/methodology_claim_materialization.py",
         "src/idis/services/extraction/claim_materialization_audit.py",
         "src/idis/models/sanad_coverage_boundary.py",
         "src/idis/services/methodology/sanad_coverage_boundary.py",
@@ -1464,45 +1465,67 @@ def _methodology_extraction_coverage_integration(files: dict[str, str]) -> Wirin
 
 
 def _methodology_claim_materialization_models(root: Path, files: dict[str, str]) -> WiringItem:
-    has_models = _exists(root, "src/idis/models/claim_materialization.py") and _contains(
-        files,
-        "src/idis/models/claim_materialization.py",
-        "ClaimMaterializationResult",
+    model_text = files.get("src/idis/models/claim_materialization.py", "")
+    has_models = _exists(root, "src/idis/models/claim_materialization.py") and all(
+        token in model_text
+        for token in [
+            "RunScopedMaterializedClaim",
+            "MaterializedClaimType",
+            "MaterializedClaimValueStruct",
+            "MethodologyOutputClaimMaterializationRunResult",
+        ]
     )
     return WiringItem(
         key="methodology_claim_materialization_models",
         label="Methodology claim materialization models",
         status="WIRED" if has_models else "NOT_FOUND",
-        summary="Structured models exist for claim materialization results and rejections.",
+        summary=("Structured models exist for Slice 6 in-memory governed claim materialization."),
         evidence=[
-            "`src/idis/models/claim_materialization.py` defines materialization statuses.",
-            "Draft-to-claim mappings and rejection reasons are machine-readable.",
+            "`src/idis/models/claim_materialization.py` defines run-scoped materialized claims.",
+            "Semantic claim type, typed value struct, source refs, mappings, and rejections "
+            "are machine-readable.",
         ],
-        gaps=["Models are not persisted to a dedicated Phase 2.6 schema."],
-        phase_2_action="Phase 2.6",
+        gaps=[
+            "in-memory governed claim boundary exists; durable Claim Registry persistence "
+            "remains deferred."
+        ],
+        phase_2_action="Phase 3.0 Slice 6",
     )
 
 
 def _methodology_claim_materializer(root: Path, files: dict[str, str]) -> WiringItem:
     materializer_text = files.get("src/idis/services/extraction/claim_materializer.py", "")
+    run_materializer_text = files.get(
+        "src/idis/services/runs/methodology_claim_materialization.py", ""
+    )
     has_materializer = (
         _exists(root, "src/idis/services/extraction/claim_materializer.py")
         and "MethodologyClaimMaterializationService" in materializer_text
+        and "InMemoryRunMethodologyClaimMaterializationService" in run_materializer_text
     )
     return WiringItem(
         key="methodology_claim_materializer",
         label="Methodology claim materializer",
         status="PARTIAL" if has_materializer else "NOT_FOUND",
-        summary="Synthetic-only materializer converts accepted drafts through ClaimService.",
+        summary=(
+            "Slice 6 run materializer converts neutral MethodologyExtractionOutput records "
+            "into in-memory governed claims."
+        ),
         evidence=[
-            "`claim_materializer.py` validates drafts before calling `ClaimService.create`.",
-            "Created claims remain unverified and non-IC-bound while downstream work is deferred.",
+            "`methodology_claim_materialization.py` consumes accepted_outputs only.",
+            "Legacy draft materializer remains isolated in `claim_materializer.py`.",
+            "Created run-scoped claims remain unverified and non-IC-bound while downstream "
+            "work is deferred.",
         ],
         gaps=[
-            "No run, API, UI, coverage, dedicated schema, or production data-room integration "
-            "is wired."
+            "EvidenceItems remain deferred.",
+            "Sanads remain deferred.",
+            "Truth Dashboard remains deferred.",
+            "Layer 1 Evidence Trust Court remains deferred.",
+            "Layer 2 IC Decision Debate remains deferred.",
+            "CALC, enrichment, deliverables, and real data-room E2E remain deferred.",
         ],
-        phase_2_action="Phase 2.6",
+        phase_2_action="Phase 3.0 Slice 6",
     )
 
 
@@ -1538,10 +1561,13 @@ def _methodology_claim_materialization_postgres_schema(root: Path) -> WiringItem
         key="methodology_claim_materialization_postgres_schema",
         label="Claim materialization Postgres schema",
         status="PARTIAL" if has_migration else "DEFERRED",
-        summary="Dedicated claim materialization schema work is intentionally deferred.",
-        evidence=["Phase 2.6 uses existing ClaimService persistence only."],
-        gaps=["Future slice may add idempotency and materialization audit persistence."],
-        phase_2_action="Phase 2.6",
+        summary="Durable claim materialization schema work is intentionally deferred.",
+        evidence=[
+            "in-memory governed claim boundary exists; durable Claim Registry persistence "
+            "remains deferred."
+        ],
+        gaps=["Future slice must add durable Claim Registry persistence and idempotency."],
+        phase_2_action="Phase 3.0 Slice 6",
     )
 
 
@@ -1560,18 +1586,40 @@ def _methodology_claim_materialization_api_integration(files: dict[str, str]) ->
 
 
 def _methodology_claim_materialization_run_integration(files: dict[str, str]) -> WiringItem:
-    run_text = files.get("src/idis/services/runs/steps.py", "") + files.get(
-        "src/idis/pipeline/worker.py", ""
+    run_text = (
+        files.get("src/idis/models/run_step.py", "")
+        + files.get("src/idis/services/runs/orchestrator.py", "")
+        + files.get("src/idis/services/runs/steps.py", "")
+        + files.get("src/idis/services/runs/methodology_claim_materialization.py", "")
     )
-    integrated = "MethodologyClaimMaterializationService" in run_text
+    integrated = (
+        "METHODOLOGY_CLAIM_MATERIALIZATION" in run_text
+        and "InMemoryRunMethodologyClaimMaterializationService" in run_text
+        and "MethodologyExtractionOutput" in run_text
+    )
     return WiringItem(
         key="methodology_claim_materialization_run_integration",
         label="Claim materialization run integration",
         status="PARTIAL" if integrated else "DEFERRED",
-        summary="Claim materialization is not called by production runs.",
-        evidence=["RunExecutionService remains claim-materialization agnostic."],
-        gaps=["Future runs must explicitly invoke materialization after accepted drafts exist."],
-        phase_2_action="Phase 2.6",
+        summary=(
+            "in-memory governed claim boundary exists; durable Claim Registry persistence "
+            "remains deferred."
+        ),
+        evidence=[
+            "FULL runs include METHODOLOGY_CLAIM_MATERIALIZATION after task execution.",
+            "Run materialization consumes MethodologyExtractionOutput accepted_outputs.",
+            "RunContext carries methodology_materialized_claims in memory with resume shells.",
+        ],
+        gaps=[
+            "Durable Claim Registry persistence remains deferred.",
+            "EvidenceItems remain deferred.",
+            "Sanads remain deferred.",
+            "Truth Dashboard remains deferred.",
+            "Layer 1 Evidence Trust Court remains deferred.",
+            "Layer 2 IC Decision Debate remains deferred.",
+            "CALC, enrichment, deliverables, and real data-room E2E remain deferred.",
+        ],
+        phase_2_action="Phase 3.0 Slice 6",
     )
 
 
@@ -1582,12 +1630,10 @@ def _methodology_claim_materialization_sanad_integration(files: dict[str, str]) 
         key="methodology_claim_materialization_sanad_integration",
         label="Claim materialization Sanad integration",
         status="PARTIAL" if integrated else "DEFERRED",
-        summary="Phase 2.6 does not create Sanad records or promote claims.",
-        evidence=[
-            "Created claims are unverified, non-IC-bound, and carry deferred status metadata."
-        ],
+        summary="Slice 6 does not create Sanad records or promote claims.",
+        evidence=["Run-scoped materialized claims remain unverified and non-IC-bound."],
         gaps=["Future slice must create evidence chains before IC-bound promotion."],
-        phase_2_action="Phase 2.6",
+        phase_2_action="Phase 3.0 Slice 6",
     )
 
 
@@ -1598,10 +1644,10 @@ def _methodology_claim_materialization_coverage_integration(files: dict[str, str
         key="methodology_claim_materialization_coverage_integration",
         label="Claim materialization coverage integration",
         status="PARTIAL" if integrated else "DEFERRED",
-        summary="Phase 2.6 does not mutate methodology coverage answers.",
-        evidence=["Materialized claims carry coverage_status='deferred' in corroboration."],
+        summary="Slice 6 does not mutate methodology coverage answers.",
+        evidence=["Materialized claims carry coverage_record_id linkage only."],
         gaps=["Future slice must update coverage after claim and evidence chain creation."],
-        phase_2_action="Phase 2.6",
+        phase_2_action="Phase 3.0 Slice 6",
     )
 
 

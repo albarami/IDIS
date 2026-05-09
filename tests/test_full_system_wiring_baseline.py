@@ -291,8 +291,7 @@ def test_full_system_inventory_detects_phase_2_6_claim_materialization_foundatio
         "DEFERRED",
     }
     assert inventory["methodology_claim_materialization_run_integration"].status in {
-        "NOT_FOUND",
-        "DEFERRED",
+        "PARTIAL",
     }
     assert inventory["methodology_claim_materialization_sanad_integration"].status in {
         "NOT_FOUND",
@@ -311,6 +310,40 @@ def test_full_system_report_does_not_overstate_claim_materialization_wiring() ->
     assert "methodology claim materializer" in report.lower()
     assert "claim materialization run integration" in report.lower()
     assert "Methodology claim materialization is fully wired into production runs" not in report
+
+
+def test_full_system_inventory_detects_phase_3_0f_claim_materialization_boundary() -> None:
+    """Slice 6 materializes in-memory claims without overstating persistence."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+
+    run_integration = inventory["methodology_claim_materialization_run_integration"]
+    postgres_schema = inventory["methodology_claim_materialization_postgres_schema"]
+    sanad_integration = inventory["methodology_claim_materialization_sanad_integration"]
+    coverage_integration = inventory["methodology_claim_materialization_coverage_integration"]
+
+    assert run_integration.status == "PARTIAL"
+    assert any("METHODOLOGY_CLAIM_MATERIALIZATION" in item for item in run_integration.evidence)
+    assert any("MethodologyExtractionOutput" in item for item in run_integration.evidence)
+    durable_deferral = (
+        "in-memory governed claim boundary exists; durable Claim Registry persistence "
+        "remains deferred"
+    )
+    assert any(
+        durable_deferral in item
+        for item in [run_integration.summary, *run_integration.evidence, *run_integration.gaps]
+    )
+    assert any("EvidenceItems remain deferred" in item for item in run_integration.gaps)
+    assert any("Sanads remain deferred" in item for item in run_integration.gaps)
+    assert any("Truth Dashboard remains deferred" in item for item in run_integration.gaps)
+    assert any(
+        "Layer 1 Evidence Trust Court remains deferred" in item for item in run_integration.gaps
+    )
+    assert any(
+        "Layer 2 IC Decision Debate remains deferred" in item for item in run_integration.gaps
+    )
+    assert postgres_schema.status in {"DEFERRED", "PARTIAL"}
+    assert sanad_integration.status == "DEFERRED"
+    assert coverage_integration.status == "DEFERRED"
 
 
 def test_full_system_inventory_detects_phase_2_7_sanad_coverage_boundary() -> None:

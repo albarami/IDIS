@@ -32,6 +32,7 @@ from idis.models.claim_materialization import (
     RunScopedMaterializedClaim,
     RunScopedMaterializedClaimShell,
 )
+from idis.models.defect import CureProtocol, DefectSeverity, DefectStatus, DefectType
 from idis.models.deterministic_calculation import CalcType
 from idis.models.document_preflight import DocumentPreflightResult
 from idis.models.evidence_item_materialization import (
@@ -62,6 +63,16 @@ from idis.models.run_step import (
     RunStep,
     StepName,
     StepStatus,
+)
+from idis.models.sanad import SanadGrade
+from idis.models.sanad_materialization import (
+    MethodologySanadMaterializationRunResult,
+    RunScopedSanadDefectRecord,
+    RunScopedSanadDefectShell,
+    RunScopedSanadGradeRecord,
+    RunScopedSanadLinkRecord,
+    RunScopedSanadRecord,
+    RunScopedSanadShell,
 )
 from idis.persistence.repositories.run_steps import RunStepsRepo
 
@@ -181,10 +192,31 @@ class RunContext:
         ]
         | None
     ) = None
-    methodology_evidence_items: list[RunScopedEvidenceItemRecord | RunScopedEvidenceItemShell] = (
-        field(default_factory=list)
-    )
+    methodology_evidence_items: (
+        list[RunScopedEvidenceItemRecord | RunScopedEvidenceItemShell] | None
+    ) = None
     methodology_evidence_source_provenance: list[RunScopedEvidenceProvenanceRef] = field(
+        default_factory=list
+    )
+    methodology_sanad_creation_linking_grading_fn: (
+        Callable[
+            ...,
+            tuple[
+                MethodologySanadMaterializationRunResult,
+                list[RunScopedSanadRecord],
+                list[RunScopedSanadLinkRecord],
+                list[RunScopedSanadGradeRecord],
+                list[RunScopedSanadDefectRecord],
+            ],
+        ]
+        | None
+    ) = None
+    methodology_sanads: list[RunScopedSanadRecord | RunScopedSanadShell] = field(
+        default_factory=list
+    )
+    methodology_sanad_links: list[RunScopedSanadLinkRecord] = field(default_factory=list)
+    methodology_sanad_grades: list[RunScopedSanadGradeRecord] = field(default_factory=list)
+    methodology_sanad_defects: list[RunScopedSanadDefectRecord | RunScopedSanadDefectShell] = field(
         default_factory=list
     )
     calc_fn: Callable[..., dict[str, Any]] | None = None
@@ -279,6 +311,8 @@ class RunOrchestrator:
                     self._rehydrate_methodology_materialized_claims(ctx, existing.result_summary)
                 if step_name == StepName.METHODOLOGY_EVIDENCE_ITEM_MATERIALIZATION:
                     self._rehydrate_methodology_evidence_items(ctx, existing.result_summary)
+                if step_name == StepName.METHODOLOGY_SANAD_CREATION_LINKING_GRADING:
+                    self._rehydrate_methodology_sanads(ctx, existing.result_summary)
                 continue
 
             step = self._start_step(ctx, step_name, existing)
@@ -339,6 +373,8 @@ class RunOrchestrator:
             return self._execute_methodology_claim_materialization(ctx)
         if step_name == StepName.METHODOLOGY_EVIDENCE_ITEM_MATERIALIZATION:
             return self._execute_methodology_evidence_item_materialization(ctx)
+        if step_name == StepName.METHODOLOGY_SANAD_CREATION_LINKING_GRADING:
+            return self._execute_methodology_sanad_creation_linking_grading(ctx)
         if step_name == StepName.EXTRACT:
             return self._execute_extract(ctx)
         if step_name == StepName.GRADE:
@@ -638,6 +674,56 @@ class RunOrchestrator:
         ]
         return run_result.to_run_step_summary()
 
+    def _execute_methodology_sanad_creation_linking_grading(
+        self,
+        ctx: RunContext,
+    ) -> dict[str, Any]:
+        """Create, link, and grade run-scoped Sanads from Slice 6/7 outputs."""
+        if ctx.methodology_materialized_claims is None:
+            raise RunStepBlockedError(
+                "METHODOLOGY_MATERIALIZED_CLAIMS_MISSING",
+                "Sanad creation requires claim materialization context",
+            )
+        if ctx.methodology_evidence_items is None:
+            raise RunStepBlockedError(
+                "METHODOLOGY_EVIDENCE_ITEMS_MISSING",
+                "Sanad creation requires evidence item materialization context",
+            )
+        evidence_items = ctx.methodology_evidence_items
+
+        if ctx.methodology_sanad_creation_linking_grading_fn is not None:
+            run_result, sanad_records, links, grades, defects = (
+                ctx.methodology_sanad_creation_linking_grading_fn(
+                    tenant_id=ctx.tenant_id,
+                    deal_id=ctx.deal_id,
+                    run_id=ctx.run_id,
+                    materialized_claims=ctx.methodology_materialized_claims,
+                    evidence_items=evidence_items,
+                    source_provenance=ctx.methodology_evidence_source_provenance,
+                )
+            )
+        else:
+            from idis.services.runs.methodology_sanad_creation_linking_grading import (
+                InMemoryRunMethodologySanadCreationLinkingGradingService,
+            )
+
+            run_result, sanad_records, links, grades, defects = (
+                InMemoryRunMethodologySanadCreationLinkingGradingService().run(
+                    tenant_id=ctx.tenant_id,
+                    deal_id=ctx.deal_id,
+                    run_id=ctx.run_id,
+                    materialized_claims=ctx.methodology_materialized_claims,
+                    evidence_items=evidence_items,
+                    source_provenance=ctx.methodology_evidence_source_provenance,
+                )
+            )
+
+        ctx.methodology_sanads = list(sanad_records)
+        ctx.methodology_sanad_links = list(links)
+        ctx.methodology_sanad_grades = list(grades)
+        ctx.methodology_sanad_defects = list(defects)
+        return run_result.to_run_step_summary()
+
     def _rehydrate_methodology_extraction_execution(
         self,
         ctx: RunContext,
@@ -709,6 +795,54 @@ class RunOrchestrator:
         evidence_items.extend(shells)
         ctx.methodology_evidence_items = evidence_items
         ctx.methodology_evidence_source_provenance = provenance_refs
+
+    def _rehydrate_methodology_sanads(
+        self,
+        ctx: RunContext,
+        result_summary: dict[str, Any],
+    ) -> None:
+        """Attach safe Sanad shells when completed Slice 8 step is skipped."""
+        if ctx.methodology_sanads:
+            return
+        raw_mappings = result_summary.get("sanad_mappings")
+        mappings: list[Any] = raw_mappings if isinstance(raw_mappings, list) else []
+        shells: list[RunScopedSanadShell] = []
+        for mapping in mappings:
+            if not isinstance(mapping, dict):
+                continue
+            shell = _sanad_shell_from_mapping(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                mapping=mapping,
+            )
+            if shell is not None:
+                shells.append(shell)
+        sanad_shells: list[RunScopedSanadRecord | RunScopedSanadShell] = []
+        sanad_shells.extend(shells)
+        ctx.methodology_sanads = sanad_shells
+        ctx.methodology_sanad_links = _sanad_links_from_summary(
+            tenant_id=ctx.tenant_id,
+            deal_id=ctx.deal_id,
+            run_id=ctx.run_id,
+            result_summary=result_summary,
+        )
+        ctx.methodology_sanad_grades = _sanad_grades_from_summary(
+            tenant_id=ctx.tenant_id,
+            deal_id=ctx.deal_id,
+            run_id=ctx.run_id,
+            result_summary=result_summary,
+        )
+        defect_shells: list[RunScopedSanadDefectRecord | RunScopedSanadDefectShell] = []
+        defect_shells.extend(
+            _sanad_defects_from_summary(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                result_summary=result_summary,
+            )
+        )
+        ctx.methodology_sanad_defects = defect_shells
 
     def _execute_extract(self, ctx: RunContext) -> dict[str, Any]:
         """Run extraction pipeline via injected callable.
@@ -1220,6 +1354,143 @@ def _evidence_provenance_from_mapping(
         return None
 
 
+def _sanad_shell_from_mapping(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+    mapping: dict[str, Any],
+) -> RunScopedSanadShell | None:
+    try:
+        evidence_ids = _str_list(mapping.get("evidence_ids"))
+        defect_ids = _str_list(mapping.get("defect_ids"))
+        chain_node_types = _str_list(mapping.get("chain_node_types"))
+        return RunScopedSanadShell(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            run_id=run_id,
+            claim_id=str(mapping.get("claim_id") or ""),
+            sanad_id=str(mapping.get("sanad_id") or ""),
+            primary_evidence_id=str(mapping.get("primary_evidence_id") or ""),
+            evidence_ids=evidence_ids,
+            source_span_ids=_str_list(mapping.get("source_span_ids")),
+            sanad_grade=SanadGrade(str(mapping.get("sanad_grade") or "D")),
+            defect_ids=defect_ids,
+            transmission_chain_node_count=_int_value(
+                mapping.get("transmission_chain_node_count"),
+                len(chain_node_types) or 1,
+            ),
+            chain_node_types=chain_node_types or ["INGEST", "EXTRACT"],
+            methodology_question_id=str(mapping.get("methodology_question_id") or ""),
+            coverage_record_id=str(mapping.get("coverage_record_id") or ""),
+            extraction_task_id=str(mapping.get("extraction_task_id") or ""),
+            extraction_output_id=str(mapping.get("extraction_output_id") or ""),
+            status="created_linked_graded",
+        )
+    except ValueError:
+        return None
+
+
+def _sanad_links_from_summary(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+    result_summary: dict[str, Any],
+) -> list[RunScopedSanadLinkRecord]:
+    raw_links = result_summary.get("claim_sanad_links")
+    links: list[Any] = raw_links if isinstance(raw_links, list) else []
+    records: list[RunScopedSanadLinkRecord] = []
+    for link in links:
+        if not isinstance(link, dict):
+            continue
+        try:
+            records.append(
+                RunScopedSanadLinkRecord(
+                    tenant_id=tenant_id,
+                    deal_id=deal_id,
+                    run_id=run_id,
+                    claim_id=str(link.get("claim_id") or ""),
+                    sanad_id=str(link.get("sanad_id") or ""),
+                    evidence_ids=_str_list(link.get("evidence_ids")),
+                    source_span_ids=_str_list(link.get("source_span_ids")),
+                    claim_link_status=str(link.get("claim_link_status") or "linked_run_scoped"),
+                )
+            )
+        except ValueError:
+            continue
+    return records
+
+
+def _sanad_grades_from_summary(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+    result_summary: dict[str, Any],
+) -> list[RunScopedSanadGradeRecord]:
+    raw_grades = result_summary.get("grade_records")
+    grades: list[Any] = raw_grades if isinstance(raw_grades, list) else []
+    records: list[RunScopedSanadGradeRecord] = []
+    for grade in grades:
+        if not isinstance(grade, dict):
+            continue
+        try:
+            records.append(
+                RunScopedSanadGradeRecord(
+                    tenant_id=tenant_id,
+                    deal_id=deal_id,
+                    run_id=run_id,
+                    claim_id=str(grade.get("claim_id") or ""),
+                    sanad_id=str(grade.get("sanad_id") or ""),
+                    sanad_grade=SanadGrade(str(grade.get("sanad_grade") or "D")),
+                    grade_reason_codes=_str_list(grade.get("grade_reason_codes")),
+                    defect_ids=_str_list(grade.get("defect_ids")),
+                    fatal_defect_count=_int_value(grade.get("fatal_defect_count"), 0),
+                    major_defect_count=_int_value(grade.get("major_defect_count"), 0),
+                    minor_defect_count=_int_value(grade.get("minor_defect_count"), 0),
+                )
+            )
+        except ValueError:
+            continue
+    return records
+
+
+def _sanad_defects_from_summary(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+    result_summary: dict[str, Any],
+) -> list[RunScopedSanadDefectShell]:
+    raw_defects = result_summary.get("defect_shells")
+    defects: list[Any] = raw_defects if isinstance(raw_defects, list) else []
+    shells: list[RunScopedSanadDefectShell] = []
+    for defect in defects:
+        if not isinstance(defect, dict):
+            continue
+        try:
+            shells.append(
+                RunScopedSanadDefectShell(
+                    tenant_id=tenant_id,
+                    deal_id=deal_id,
+                    run_id=run_id,
+                    claim_id=str(defect.get("claim_id") or ""),
+                    sanad_id=str(defect.get("sanad_id") or ""),
+                    defect_id=str(defect.get("defect_id") or ""),
+                    defect_type=DefectType(str(defect.get("defect_type") or "INCONSISTENCY")),
+                    severity=DefectSeverity(str(defect.get("severity") or "MINOR")),
+                    cure_protocol=CureProtocol(
+                        str(defect.get("cure_protocol") or "HUMAN_ARBITRATION")
+                    ),
+                    status=DefectStatus(str(defect.get("status") or "OPEN")),
+                )
+            )
+        except ValueError:
+            continue
+    return shells
+
+
 def _execution_result_shell_from_summary(
     *,
     tenant_id: str,
@@ -1344,6 +1615,16 @@ def _dict_from_summary(summary_data: dict[str, Any], key: str) -> dict[str, int]
         for item_key, item_value in value.items()
         if isinstance(item_value, int) and item_value >= 0
     }
+
+
+def _str_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item).strip()]
+
+
+def _int_value(value: object, default: int) -> int:
+    return value if isinstance(value, int) and value >= 0 else default
 
 
 def _optional_str(value: object) -> str | None:

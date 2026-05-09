@@ -165,6 +165,9 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             "methodology_evidence_item_materialization_run_integration": (
                 _methodology_evidence_item_materialization_run_integration(root, files)
             ),
+            "methodology_sanad_creation_linking_grading_run_integration": (
+                _methodology_sanad_creation_linking_grading_run_integration(root, files)
+            ),
             "methodology_claim_materialization_sanad_integration": (
                 _methodology_claim_materialization_sanad_integration(files)
             ),
@@ -489,9 +492,12 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/models/claim_materialization.py",
         "src/idis/models/evidence_item.py",
         "src/idis/models/evidence_item_materialization.py",
+        "src/idis/models/sanad_materialization.py",
         "src/idis/services/extraction/claim_materializer.py",
         "src/idis/services/runs/methodology_claim_materialization.py",
         "src/idis/services/runs/methodology_evidence_item_materialization.py",
+        "src/idis/services/runs/methodology_sanad_creation_linking_grading.py",
+        "src/idis/services/runs/methodology_sanad_creation_helpers.py",
         "src/idis/services/extraction/claim_materialization_audit.py",
         "src/idis/models/sanad_coverage_boundary.py",
         "src/idis/services/methodology/sanad_coverage_boundary.py",
@@ -1681,6 +1687,69 @@ def _methodology_evidence_item_materialization_run_integration(
             "real data-room E2E remains deferred.",
         ],
         phase_2_action="Phase 3.0 Slice 7",
+    )
+
+
+def _methodology_sanad_creation_linking_grading_run_integration(
+    root: Path,
+    files: dict[str, str],
+) -> WiringItem:
+    model_text = files.get("src/idis/models/sanad_materialization.py", "")
+    service_text = files.get(
+        "src/idis/services/runs/methodology_sanad_creation_linking_grading.py", ""
+    )
+    helper_text = files.get("src/idis/services/runs/methodology_sanad_creation_helpers.py", "")
+    run_text = (
+        files.get("src/idis/models/run_step.py", "")
+        + files.get("src/idis/services/runs/orchestrator.py", "")
+        + files.get("src/idis/services/runs/steps.py", "")
+    )
+    integrated = (
+        _exists(root, "src/idis/models/sanad.py")
+        and _exists(root, "src/idis/models/transmission_node.py")
+        and _exists(root, "src/idis/models/defect.py")
+        and _exists(root, "src/idis/models/sanad_materialization.py")
+        and _exists(root, "src/idis/services/runs/methodology_sanad_creation_linking_grading.py")
+        and "METHODOLOGY_SANAD_CREATION_LINKING_GRADING" in run_text
+        and "InMemoryRunMethodologySanadCreationLinkingGradingService" in service_text
+        and "grade_sanad_v2" in service_text
+        and "RunScopedSanadRecord" in model_text
+        and "RunScopedSanadGradeRecord" in model_text
+        and "materialize_defects" in helper_text
+    )
+    return WiringItem(
+        key="methodology_sanad_creation_linking_grading_run_integration",
+        label="Sanad creation/linking/grading run integration",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary=(
+            "in-memory governed Sanad creation/linking/grading boundary exists; "
+            "durable Postgres Sanad/Defect/Claim persistence remains deferred."
+        ),
+        evidence=[
+            "FULL runs include METHODOLOGY_SANAD_CREATION_LINKING_GRADING after "
+            "EvidenceItem materialization and before legacy EXTRACT.",
+            "Slice 8 reuses existing Sanad, TransmissionNode, Defect, and "
+            "grade_sanad_v2/calculate_sanad_grade grading concepts.",
+            "RunContext carries methodology_sanads, links, grades, and defects in memory.",
+            "Run-step summaries include safe IDs/counts/statuses/reason codes only.",
+        ],
+        gaps=[
+            "Durable Postgres Sanad/Defect/Claim persistence remains deferred because "
+            "durable Claim Registry persistence remains deferred and current tables expect "
+            "UUID claim IDs.",
+            "Claim-to-Sanad links are run-scoped only and do not promote claims to "
+            "IC-ready status.",
+            "Truth Dashboard remains deferred.",
+            "CALC remains deferred.",
+            "enrichment/API checks remain deferred.",
+            "Layer 1 Evidence Trust Court remains deferred.",
+            "Validated Evidence Package remains deferred.",
+            "Layer 2 IC Debate remains deferred.",
+            "GO/CONDITIONAL/NO-GO package remains deferred.",
+            "deliverables remain deferred.",
+            "real data-room E2E remains deferred.",
+        ],
+        phase_2_action="Phase 3.0 Slice 8",
     )
 
 

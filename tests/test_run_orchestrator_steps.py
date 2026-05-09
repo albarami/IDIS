@@ -717,8 +717,8 @@ def _stub_deliverables(
 class TestFullCompletesAllElevenSteps:
     """test_full_completes_all_nine_steps."""
 
-    def test_full_completes_all_fifteen_steps(self) -> None:
-        """FULL run completes all 15 steps in canonical order."""
+    def test_full_completes_all_sixteen_steps(self) -> None:
+        """FULL run completes all 16 steps in canonical order."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -745,7 +745,7 @@ class TestFullCompletesAllElevenSteps:
         assert result.block_reason is None
 
         completed = [s for s in result.steps if s.status == StepStatus.COMPLETED]
-        assert len(completed) == 15
+        assert len(completed) == 16
         assert [s.step_name for s in completed] == [
             StepName.INGEST_CHECK,
             StepName.DOCUMENT_PREFLIGHT,
@@ -754,6 +754,7 @@ class TestFullCompletesAllElevenSteps:
             StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION,
             StepName.METHODOLOGY_CLAIM_MATERIALIZATION,
             StepName.METHODOLOGY_EVIDENCE_ITEM_MATERIALIZATION,
+            StepName.METHODOLOGY_SANAD_CREATION_LINKING_GRADING,
             StepName.EXTRACT,
             StepName.GRADE,
             StepName.CALC,

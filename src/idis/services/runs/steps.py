@@ -25,6 +25,13 @@ from idis.models.methodology_coverage import (
     MethodologyCoverageInitializationResult,
     MethodologyCoverageRecord,
 )
+from idis.models.sanad_materialization import (
+    MethodologySanadMaterializationRunResult,
+    RunScopedSanadDefectRecord,
+    RunScopedSanadGradeRecord,
+    RunScopedSanadLinkRecord,
+    RunScopedSanadRecord,
+)
 from idis.persistence.repositories.documents import PostgresDocumentsRepository
 from idis.services.runs.methodology_coverage_init import load_default_methodology_registry
 from idis.services.runs.orchestrator import RunContext
@@ -49,6 +56,16 @@ EvidenceItemMaterializationFn = Callable[
     ...,
     tuple[MethodologyEvidenceItemMaterializationRunResult, list[RunScopedEvidenceItemRecord]],
 ]
+SanadCreationLinkingGradingFn = Callable[
+    ...,
+    tuple[
+        MethodologySanadMaterializationRunResult,
+        list[RunScopedSanadRecord],
+        list[RunScopedSanadLinkRecord],
+        list[RunScopedSanadGradeRecord],
+        list[RunScopedSanadDefectRecord],
+    ],
+]
 
 
 def build_run_context(
@@ -68,6 +85,7 @@ def build_run_context(
     methodology_extraction_task_execution_fn: TaskExecutionFn | None = None,
     methodology_claim_materialization_fn: ClaimMaterializationFn | None = None,
     methodology_evidence_item_materialization_fn: EvidenceItemMaterializationFn | None = None,
+    methodology_sanad_creation_linking_grading_fn: SanadCreationLinkingGradingFn | None = None,
 ) -> RunContext:
     """Build a RunContext with the canonical step callables.
 
@@ -102,6 +120,7 @@ def build_run_context(
         methodology_extraction_task_execution_fn=methodology_extraction_task_execution_fn,
         methodology_claim_materialization_fn=methodology_claim_materialization_fn,
         methodology_evidence_item_materialization_fn=methodology_evidence_item_materialization_fn,
+        methodology_sanad_creation_linking_grading_fn=methodology_sanad_creation_linking_grading_fn,
         extract_fn=partial(_run_snapshot_extraction, db_conn=db_conn),
         grade_fn=partial(_run_snapshot_auto_grade, db_conn=db_conn),
         calc_fn=partial(_run_snapshot_calc, db_conn=db_conn),

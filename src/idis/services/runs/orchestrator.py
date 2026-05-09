@@ -93,6 +93,13 @@ from idis.models.truth_dashboard_materialization import (
     RunScopedTruthDashboardRecord,
     RunScopedTruthDashboardShell,
 )
+from idis.models.validated_evidence_package_materialization import (
+    MethodologyValidatedEvidencePackageRunResult,
+    MethodologyValidatedEvidencePackageStatus,
+    RunScopedValidatedEvidencePackageRecord,
+    RunScopedValidatedEvidencePackageShell,
+    RunScopedValidatedEvidencePackageSummary,
+)
 from idis.persistence.repositories.run_steps import RunStepsRepo
 
 logger = logging.getLogger(__name__)
@@ -281,6 +288,19 @@ class RunContext:
     methodology_evidence_trust_court: (
         RunScopedEvidenceTrustCourtRecord | RunScopedEvidenceTrustCourtShell | None
     ) = None
+    methodology_validated_evidence_package_fn: (
+        Callable[
+            ...,
+            tuple[
+                MethodologyValidatedEvidencePackageRunResult,
+                list[RunScopedValidatedEvidencePackageRecord],
+            ],
+        ]
+        | None
+    ) = None
+    methodology_validated_evidence_package: (
+        RunScopedValidatedEvidencePackageRecord | RunScopedValidatedEvidencePackageShell | None
+    ) = None
     calc_fn: Callable[..., dict[str, Any]] | None = None
     calc_types: list[CalcType] | None = None
     enrich_fn: Callable[..., dict[str, Any]] | None = None
@@ -384,6 +404,11 @@ class RunOrchestrator:
                         ctx,
                         existing.result_summary,
                     )
+                if step_name == StepName.METHODOLOGY_VALIDATED_EVIDENCE_PACKAGE:
+                    self._rehydrate_methodology_validated_evidence_package(
+                        ctx,
+                        existing.result_summary,
+                    )
                 continue
 
             step = self._start_step(ctx, step_name, existing)
@@ -452,6 +477,8 @@ class RunOrchestrator:
             return self._execute_methodology_truth_dashboard(ctx)
         if step_name == StepName.METHODOLOGY_EVIDENCE_TRUST_COURT:
             return self._execute_methodology_evidence_trust_court(ctx)
+        if step_name == StepName.METHODOLOGY_VALIDATED_EVIDENCE_PACKAGE:
+            return self._execute_methodology_validated_evidence_package(ctx, accumulated)
         if step_name == StepName.EXTRACT:
             return self._execute_extract(ctx)
         if step_name == StepName.GRADE:
@@ -1001,6 +1028,53 @@ class RunOrchestrator:
             )
         return summary
 
+    def _execute_methodology_validated_evidence_package(
+        self,
+        ctx: RunContext,
+        accumulated: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Build a Layer 1 Validated Evidence Package from a full court record."""
+        if ctx.methodology_evidence_trust_court is None:
+            if accumulated is not None and _is_empty_evidence_trust_court_summary(accumulated):
+                return _empty_validated_evidence_package_summary(
+                    tenant_id=ctx.tenant_id,
+                    deal_id=ctx.deal_id,
+                    run_id=ctx.run_id,
+                )
+            raise RunStepBlockedError(
+                "METHODOLOGY_EVIDENCE_TRUST_COURT_MISSING",
+                "Validated Evidence Package requires Evidence Trust Court context",
+            )
+
+        if ctx.methodology_validated_evidence_package_fn is not None:
+            run_result, packages = ctx.methodology_validated_evidence_package_fn(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                evidence_trust_courts=[ctx.methodology_evidence_trust_court],
+            )
+        else:
+            from idis.services.runs.methodology_validated_evidence_package import (
+                InMemoryRunMethodologyValidatedEvidencePackageService,
+            )
+
+            run_result, packages = InMemoryRunMethodologyValidatedEvidencePackageService().run(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                evidence_trust_courts=[ctx.methodology_evidence_trust_court],
+            )
+
+        ctx.methodology_validated_evidence_package = packages[0] if packages else None
+        summary = run_result.to_run_step_summary()
+        if run_result.status.value == "failed":
+            raise RunStepBlockedError(
+                "METHODOLOGY_VALIDATED_EVIDENCE_PACKAGE_FAILED",
+                "Validated Evidence Package failed closed",
+                result_summary=summary,
+            )
+        return summary
+
     def _rehydrate_methodology_extraction_execution(
         self,
         ctx: RunContext,
@@ -1199,6 +1273,23 @@ class RunOrchestrator:
         )
         if shell is not None:
             ctx.methodology_evidence_trust_court = shell
+
+    def _rehydrate_methodology_validated_evidence_package(
+        self,
+        ctx: RunContext,
+        result_summary: dict[str, Any],
+    ) -> None:
+        """Attach a safe Validated Evidence Package shell when Slice 12 is skipped."""
+        if ctx.methodology_validated_evidence_package is not None:
+            return
+        shell = _validated_evidence_package_shell_from_summary(
+            tenant_id=ctx.tenant_id,
+            deal_id=ctx.deal_id,
+            run_id=ctx.run_id,
+            result_summary=result_summary,
+        )
+        if shell is not None:
+            ctx.methodology_validated_evidence_package = shell
 
     def _execute_extract(self, ctx: RunContext) -> dict[str, Any]:
         """Run extraction pipeline via injected callable.
@@ -1974,6 +2065,54 @@ def _evidence_trust_court_shell_from_summary(
         return None
 
 
+def _validated_evidence_package_shell_from_summary(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+    result_summary: dict[str, Any],
+) -> RunScopedValidatedEvidencePackageShell | None:
+    package_ids = _str_list(result_summary.get("package_ids"))
+    court_ids = _str_list(result_summary.get("court_ids"))
+    dashboard_ids = _str_list(result_summary.get("dashboard_ids"))
+    if not package_ids or not court_ids or not dashboard_ids:
+        return None
+    raw_summary = result_summary.get("summary")
+    summary: dict[str, Any] = raw_summary if isinstance(raw_summary, dict) else {}
+    try:
+        return RunScopedValidatedEvidencePackageShell(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            run_id=run_id,
+            package_id=package_ids[0],
+            court_id=court_ids[0],
+            dashboard_id=dashboard_ids[0],
+            claim_ids_by_disposition=_dict_list_from_summary(
+                result_summary,
+                "claim_ids_by_disposition",
+            ),
+            evidence_ids=_str_list(result_summary.get("evidence_ids")),
+            source_span_ids=_str_list(result_summary.get("source_span_ids")),
+            sanad_ids=_str_list(result_summary.get("sanad_ids")),
+            defect_ids=_str_list(result_summary.get("defect_ids")),
+            calc_ids=_str_list(result_summary.get("calc_ids")),
+            finding_ids=_str_list(result_summary.get("finding_ids")),
+            finding_types=_str_list(result_summary.get("finding_types")),
+            role_names=_str_list(result_summary.get("role_names")),
+            reason_codes=_str_list(result_summary.get("reason_codes")),
+            by_disposition=_dict_from_summary(summary, "by_disposition"),
+            by_grade=_dict_from_summary(summary, "by_grade"),
+            by_dashboard_verdict=_dict_from_summary(summary, "by_dashboard_verdict"),
+            by_finding_type=_dict_from_summary(summary, "by_finding_type"),
+            by_reason=_dict_from_summary(summary, "by_reason"),
+            status=MethodologyValidatedEvidencePackageStatus(
+                str(result_summary.get("status") or "completed")
+            ),
+        )
+    except ValueError:
+        return None
+
+
 def _empty_evidence_trust_court_summary(
     *,
     tenant_id: str,
@@ -2003,6 +2142,46 @@ def _empty_evidence_trust_court_summary(
         rejections=[],
         summary=summary,
     ).to_run_step_summary()
+
+
+def _empty_validated_evidence_package_summary(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+) -> dict[str, Any]:
+    summary = RunScopedValidatedEvidencePackageSummary(
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        run_id=run_id,
+        package_count=0,
+        packaged_claim_count=0,
+        finding_count=0,
+        by_disposition={},
+        by_grade={},
+        by_dashboard_verdict={},
+        by_finding_type={},
+        by_reason={},
+    )
+    return MethodologyValidatedEvidencePackageRunResult(
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        run_id=run_id,
+        status=MethodologyValidatedEvidencePackageStatus.COMPLETED,
+        package_shells=[],
+        rejections=[],
+        summary=summary,
+    ).to_run_step_summary()
+
+
+def _is_empty_evidence_trust_court_summary(result_summary: dict[str, Any]) -> bool:
+    raw_summary = result_summary.get("summary")
+    summary: dict[str, Any] = raw_summary if isinstance(raw_summary, dict) else {}
+    return (
+        not _str_list(result_summary.get("court_ids"))
+        and _int_from_summary(summary, "total_claims", 0) == 0
+        and _int_from_summary(summary, "assessed_claim_count", 0) == 0
+    )
 
 
 def _execution_result_shell_from_summary(
@@ -2128,6 +2307,17 @@ def _dict_from_summary(summary_data: dict[str, Any], key: str) -> dict[str, int]
         str(item_key): item_value
         for item_key, item_value in value.items()
         if isinstance(item_value, int) and item_value >= 0
+    }
+
+
+def _dict_list_from_summary(summary_data: dict[str, Any], key: str) -> dict[str, list[str]]:
+    value = summary_data.get(key)
+    if not isinstance(value, dict):
+        return {}
+    return {
+        str(item_key): _str_list(item_value)
+        for item_key, item_value in value.items()
+        if str(item_key).strip()
     }
 
 

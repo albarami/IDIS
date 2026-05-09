@@ -26,6 +26,14 @@ from pydantic import BaseModel
 
 from idis.audit.sink import AuditSink, AuditSinkError
 from idis.methodology.models import MethodologyRegistry
+from idis.models.calc_materialization import (
+    MethodologyCalculationRunResult,
+    RunScopedCalcSanadRecord,
+    RunScopedCalcSanadShell,
+    RunScopedCalculationShell,
+    RunScopedDeterministicCalculationRecord,
+)
+from idis.models.calc_sanad import SanadGrade as CalcSanadGrade
 from idis.models.claim_materialization import (
     MaterializedClaimSourceRef,
     MethodologyOutputClaimMaterializationRunResult,
@@ -215,8 +223,25 @@ class RunContext:
         default_factory=list
     )
     methodology_sanad_links: list[RunScopedSanadLinkRecord] = field(default_factory=list)
-    methodology_sanad_grades: list[RunScopedSanadGradeRecord] = field(default_factory=list)
+    methodology_sanad_grades: list[RunScopedSanadGradeRecord] | None = None
     methodology_sanad_defects: list[RunScopedSanadDefectRecord | RunScopedSanadDefectShell] = field(
+        default_factory=list
+    )
+    methodology_deterministic_calculation_fn: (
+        Callable[
+            ...,
+            tuple[
+                MethodologyCalculationRunResult,
+                list[RunScopedDeterministicCalculationRecord],
+                list[RunScopedCalcSanadRecord],
+            ],
+        ]
+        | None
+    ) = None
+    methodology_calculations: list[
+        RunScopedDeterministicCalculationRecord | RunScopedCalculationShell
+    ] = field(default_factory=list)
+    methodology_calc_sanads: list[RunScopedCalcSanadRecord | RunScopedCalcSanadShell] = field(
         default_factory=list
     )
     calc_fn: Callable[..., dict[str, Any]] | None = None
@@ -313,6 +338,8 @@ class RunOrchestrator:
                     self._rehydrate_methodology_evidence_items(ctx, existing.result_summary)
                 if step_name == StepName.METHODOLOGY_SANAD_CREATION_LINKING_GRADING:
                     self._rehydrate_methodology_sanads(ctx, existing.result_summary)
+                if step_name == StepName.METHODOLOGY_DETERMINISTIC_CALCULATION:
+                    self._rehydrate_methodology_calculations(ctx, existing.result_summary)
                 continue
 
             step = self._start_step(ctx, step_name, existing)
@@ -375,6 +402,8 @@ class RunOrchestrator:
             return self._execute_methodology_evidence_item_materialization(ctx)
         if step_name == StepName.METHODOLOGY_SANAD_CREATION_LINKING_GRADING:
             return self._execute_methodology_sanad_creation_linking_grading(ctx)
+        if step_name == StepName.METHODOLOGY_DETERMINISTIC_CALCULATION:
+            return self._execute_methodology_deterministic_calculation(ctx)
         if step_name == StepName.EXTRACT:
             return self._execute_extract(ctx)
         if step_name == StepName.GRADE:
@@ -724,6 +753,59 @@ class RunOrchestrator:
         ctx.methodology_sanad_defects = list(defects)
         return run_result.to_run_step_summary()
 
+    def _execute_methodology_deterministic_calculation(self, ctx: RunContext) -> dict[str, Any]:
+        """Run deterministic CDD/FDD calculations from Slice 6/8 outputs."""
+        if ctx.methodology_materialized_claims is None:
+            raise RunStepBlockedError(
+                "METHODOLOGY_MATERIALIZED_CLAIMS_MISSING",
+                "Deterministic calculation requires claim materialization context",
+            )
+        if ctx.methodology_sanad_grades is None and _tasks_request_calculations(
+            ctx.methodology_extraction_tasks
+        ):
+            raise RunStepBlockedError(
+                "METHODOLOGY_SANAD_GRADES_MISSING",
+                "Deterministic calculation requires Slice 8 Sanad grades",
+            )
+
+        if ctx.methodology_deterministic_calculation_fn is not None:
+            run_result, calculations, calc_sanads = ctx.methodology_deterministic_calculation_fn(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                materialized_claims=ctx.methodology_materialized_claims,
+                sanads=ctx.methodology_sanads,
+                sanad_grades=ctx.methodology_sanad_grades or [],
+                extraction_tasks=ctx.methodology_extraction_tasks,
+            )
+        else:
+            from idis.services.runs.methodology_deterministic_calculation import (
+                InMemoryRunMethodologyDeterministicCalculationService,
+            )
+
+            run_result, calculations, calc_sanads = (
+                InMemoryRunMethodologyDeterministicCalculationService().run(
+                    tenant_id=ctx.tenant_id,
+                    deal_id=ctx.deal_id,
+                    run_id=ctx.run_id,
+                    materialized_claims=ctx.methodology_materialized_claims,
+                    sanads=ctx.methodology_sanads,
+                    sanad_grades=ctx.methodology_sanad_grades or [],
+                    extraction_tasks=ctx.methodology_extraction_tasks,
+                )
+            )
+
+        ctx.methodology_calculations = list(calculations)
+        ctx.methodology_calc_sanads = list(calc_sanads)
+        summary = run_result.to_run_step_summary()
+        if run_result.status.value == "failed":
+            raise RunStepBlockedError(
+                "METHODOLOGY_DETERMINISTIC_CALCULATION_FAILED",
+                "Deterministic calculation failed closed",
+                result_summary=summary,
+            )
+        return summary
+
     def _rehydrate_methodology_extraction_execution(
         self,
         ctx: RunContext,
@@ -843,6 +925,51 @@ class RunOrchestrator:
             )
         )
         ctx.methodology_sanad_defects = defect_shells
+
+    def _rehydrate_methodology_calculations(
+        self,
+        ctx: RunContext,
+        result_summary: dict[str, Any],
+    ) -> None:
+        """Attach safe calculation shells when completed Slice 9 step is skipped."""
+        if ctx.methodology_calculations:
+            return
+        raw_shells = result_summary.get("calculation_shells")
+        shells: list[Any] = raw_shells if isinstance(raw_shells, list) else []
+        calculation_shells: list[RunScopedCalculationShell] = []
+        for shell in shells:
+            if not isinstance(shell, dict):
+                continue
+            calc_shell = _calculation_shell_from_summary(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                shell=shell,
+            )
+            if calc_shell is not None:
+                calculation_shells.append(calc_shell)
+        calculations: list[RunScopedDeterministicCalculationRecord | RunScopedCalculationShell] = []
+        calculations.extend(calculation_shells)
+        ctx.methodology_calculations = calculations
+
+        raw_sanad_shells = result_summary.get("calc_sanad_shells")
+        sanad_shells: list[Any] = raw_sanad_shells if isinstance(raw_sanad_shells, list) else []
+        calc_sanad_shells: list[RunScopedCalcSanadRecord | RunScopedCalcSanadShell] = []
+        calc_sanad_shells.extend(
+            shell
+            for shell in (
+                _calc_sanad_shell_from_summary(
+                    tenant_id=ctx.tenant_id,
+                    deal_id=ctx.deal_id,
+                    run_id=ctx.run_id,
+                    shell=raw_shell,
+                )
+                for raw_shell in sanad_shells
+                if isinstance(raw_shell, dict)
+            )
+            if shell is not None
+        )
+        ctx.methodology_calc_sanads = calc_sanad_shells
 
     def _execute_extract(self, ctx: RunContext) -> dict[str, Any]:
         """Run extraction pipeline via injected callable.
@@ -1491,6 +1618,62 @@ def _sanad_defects_from_summary(
     return shells
 
 
+def _calculation_shell_from_summary(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+    shell: dict[str, Any],
+) -> RunScopedCalculationShell | None:
+    try:
+        return RunScopedCalculationShell(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            run_id=run_id,
+            calc_id=str(shell.get("calc_id") or ""),
+            calc_type=CalcType(str(shell.get("calc_type") or "GROSS_MARGIN")),
+            input_claim_ids=_str_list(shell.get("input_claim_ids")),
+            input_sanad_ids=_str_list(shell.get("input_sanad_ids")),
+            formula_hash=str(shell.get("formula_hash") or ""),
+            reproducibility_hash=str(shell.get("reproducibility_hash") or ""),
+            output_primary_value=str(shell.get("output_primary_value") or ""),
+            output_unit=_optional_str(shell.get("output_unit")),
+            output_currency=_optional_str(shell.get("output_currency")),
+            methodology_question_id=str(shell.get("methodology_question_id") or ""),
+            extraction_task_id=str(shell.get("extraction_task_id") or ""),
+            coverage_record_id=str(shell.get("coverage_record_id") or ""),
+            status=str(shell.get("status") or "created"),
+        )
+    except ValueError:
+        return None
+
+
+def _calc_sanad_shell_from_summary(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+    shell: dict[str, Any],
+) -> RunScopedCalcSanadShell | None:
+    try:
+        return RunScopedCalcSanadShell(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            run_id=run_id,
+            calc_id=str(shell.get("calc_id") or ""),
+            calc_sanad_id=str(shell.get("calc_sanad_id") or ""),
+            input_claim_ids=_str_list(shell.get("input_claim_ids")),
+            input_min_sanad_grade=CalcSanadGrade(str(shell.get("input_min_sanad_grade") or "D")),
+            calc_grade=CalcSanadGrade(str(shell.get("calc_grade") or "D")),
+            methodology_question_id=str(shell.get("methodology_question_id") or ""),
+            extraction_task_id=str(shell.get("extraction_task_id") or ""),
+            coverage_record_id=str(shell.get("coverage_record_id") or ""),
+            status=str(shell.get("status") or "created"),
+        )
+    except ValueError:
+        return None
+
+
 def _execution_result_shell_from_summary(
     *,
     tenant_id: str,
@@ -1632,3 +1815,7 @@ def _optional_str(value: object) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _tasks_request_calculations(tasks: list[ExtractionTask]) -> bool:
+    return any(task.expected_answer_schema.required_calculations for task in tasks)

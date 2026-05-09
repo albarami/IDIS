@@ -418,6 +418,41 @@ def test_full_system_inventory_detects_phase_3_0h_sanad_boundary() -> None:
     assert any("real data-room E2E remains deferred" in item for item in sanad_boundary.gaps)
 
 
+def test_full_system_inventory_detects_phase_3_0i_deterministic_calc_boundary() -> None:
+    """Slice 9 creates run-scoped calcs without overstating downstream layers."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+
+    calc_boundary = inventory["methodology_deterministic_calculation_run_integration"]
+
+    assert calc_boundary.status == "PARTIAL"
+    assert any("METHODOLOGY_DETERMINISTIC_CALCULATION" in item for item in calc_boundary.evidence)
+    assert any(
+        "in-memory run-scoped deterministic calculation boundary exists" in item
+        for item in [calc_boundary.summary, *calc_boundary.evidence, *calc_boundary.gaps]
+    )
+    assert any(
+        "durable Calc/CalcSanad persistence over durable Claim/Sanad inputs remains deferred"
+        in item
+        for item in calc_boundary.gaps
+    )
+    assert any(
+        "calculations do not promote claims, Sanads, or deals to IC readiness" in item
+        for item in calc_boundary.gaps
+    )
+    assert any("Truth Dashboard remains deferred" in item for item in calc_boundary.gaps)
+    assert any("enrichment/API checks remain deferred" in item for item in calc_boundary.gaps)
+    assert any(
+        "Layer 1 Evidence Trust Court remains deferred" in item for item in calc_boundary.gaps
+    )
+    assert any("Validated Evidence Package remains deferred" in item for item in calc_boundary.gaps)
+    assert any("Layer 2 IC Debate remains deferred" in item for item in calc_boundary.gaps)
+    assert any(
+        "GO/CONDITIONAL/NO-GO package remains deferred" in item for item in calc_boundary.gaps
+    )
+    assert any("deliverables remain deferred" in item for item in calc_boundary.gaps)
+    assert any("real data-room E2E remains deferred" in item for item in calc_boundary.gaps)
+
+
 def test_full_system_inventory_detects_phase_2_7_sanad_coverage_boundary() -> None:
     """Phase 2.7 boundary exists while live integrations remain deferred."""
     inventory = collect_wiring_inventory(REPO_ROOT)

@@ -230,6 +230,7 @@ class TestStepOrderingConstants:
             StepName.DOCUMENT_PREFLIGHT,
             StepName.METHODOLOGY_COVERAGE_INIT,
             StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING,
+            StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION,
             StepName.EXTRACT,
             StepName.GRADE,
             StepName.CALC,
@@ -248,6 +249,7 @@ class TestStepOrderingConstants:
     def test_new_steps_in_implemented(self) -> None:
         """All new steps are in IMPLEMENTED_STEPS."""
         for step in [
+            StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION,
             StepName.ENRICHMENT,
             StepName.ANALYSIS,
             StepName.SCORING,
@@ -289,8 +291,8 @@ class TestFullVsSnapshotEnforcement:
         for full_only in FULL_ONLY_STEPS:
             assert full_only not in step_names
 
-    def test_full_has_twelve_steps(self) -> None:
-        """FULL mode completes with all 12 steps."""
+    def test_full_has_thirteen_steps(self) -> None:
+        """FULL mode completes with all 13 steps."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -299,7 +301,14 @@ class TestFullVsSnapshotEnforcement:
         result = orchestrator.execute(ctx)
 
         assert result.status == "SUCCEEDED"
-        assert len(result.steps) == 12
+        assert len(result.steps) == 13
+        step_names = [step.step_name for step in result.steps]
+        assert step_names.index(StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING) < (
+            step_names.index(StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION)
+        )
+        assert step_names.index(StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION) < (
+            step_names.index(StepName.EXTRACT)
+        )
 
 
 class TestMissingCallableFailClosed:
@@ -385,7 +394,7 @@ class TestResumeSkipsCompletedSteps:
 
         result1 = orchestrator.execute(ctx)
         assert result1.status == "SUCCEEDED"
-        assert len(result1.steps) == 12
+        assert len(result1.steps) == 13
 
         call_count = {"enrichment": 0}
         original_enrich = _stub_enrichment
@@ -400,9 +409,63 @@ class TestResumeSkipsCompletedSteps:
         assert result2.status == "SUCCEEDED"
         assert call_count["enrichment"] == 0
 
+    def test_resume_skips_completed_methodology_task_execution(self) -> None:
+        """Completed methodology task execution is not rerun on resume."""
+        audit_sink = InMemoryAuditSink()
+        repo = InMemoryRunStepsRepository(TENANT_A)
+        orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
+
+        run_id = str(uuid.uuid4())
+        ctx = _make_full_ctx(run_id=run_id)
+        result1 = orchestrator.execute(ctx)
+        assert result1.status == "SUCCEEDED"
+
+        call_count = {"execution": 0}
+
+        def counting_execution(**kwargs: Any) -> Any:
+            call_count["execution"] += 1
+            raise AssertionError("completed execution step must not rerun")
+
+        ctx2 = _make_full_ctx(
+            run_id=run_id,
+            methodology_extraction_task_execution_fn=counting_execution,
+        )
+        result2 = orchestrator.execute(ctx2)
+
+        assert result2.status == "SUCCEEDED"
+        assert call_count["execution"] == 0
+        assert ctx2.methodology_extraction_execution_result is not None
+        serialized = str(ctx2.methodology_extraction_execution_result.model_dump(mode="json"))
+        assert "accepted_claim_drafts" not in serialized
+        assert "future_claim_input_preview" not in serialized
+
 
 class TestResultSummaryContracts:
     """Each new step writes the correct result_summary keys."""
+
+    def test_methodology_extraction_task_execution_result_summary_is_safe(self) -> None:
+        """Execution step summary contains only IDs/counts/status/reasons."""
+        audit_sink = InMemoryAuditSink()
+        repo = InMemoryRunStepsRepository(TENANT_A)
+        orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
+
+        ctx = _make_full_ctx()
+        result = orchestrator.execute(ctx)
+
+        execution_steps = [
+            step
+            for step in result.steps
+            if step.step_name == StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION
+        ]
+        assert len(execution_steps) == 1
+        summary = execution_steps[0].result_summary
+        serialized = str(summary)
+        assert "task_results" in summary
+        assert "summary" in summary
+        assert "accepted_output_count" in summary["summary"]
+        assert "text_excerpt" not in serialized
+        assert "Revenue was $5M" not in serialized
+        assert "test.pdf" not in serialized
 
     def test_enrichment_result_summary(self) -> None:
         """ENRICHMENT step result_summary has provider_count, result_count, blocked_count."""

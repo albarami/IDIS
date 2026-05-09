@@ -13,6 +13,7 @@ from idis.models.extraction_execution import (
     MethodologyExtractionExecutionResult,
     MethodologyExtractionExecutionStatus,
     MethodologyExtractionExecutionSummary,
+    MethodologyExtractionOutput,
     MethodologyTaskExecutionResult,
     MethodologyTaskExecutionStatus,
     generate_methodology_claim_draft_id,
@@ -64,6 +65,7 @@ class InMemoryMethodologyExtractionTaskExecutor:
         accepted_claim_drafts = [
             draft for result in task_results for draft in result.accepted_drafts
         ]
+        accepted_outputs = [output for result in task_results for output in result.accepted_outputs]
         summary = _build_summary(
             tenant_id=tenant_id,
             deal_id=deal_id,
@@ -76,6 +78,7 @@ class InMemoryMethodologyExtractionTaskExecutor:
             run_id=run_id,
             status=_aggregate_status(task_results),
             task_results=task_results,
+            accepted_outputs=accepted_outputs,
             accepted_claim_drafts=accepted_claim_drafts,
             summary=summary,
         )
@@ -163,10 +166,11 @@ class InMemoryMethodologyExtractionTaskExecutor:
                 rejected_drafts=[{"reason": "malformed_extractor_output"}],
             )
 
-        accepted: list[MethodologyClaimDraft] = []
+        accepted_drafts: list[MethodologyClaimDraft] = []
+        accepted_outputs: list[MethodologyExtractionOutput] = []
         rejected: list[dict[str, Any]] = []
         for raw_draft in raw_drafts:
-            draft, validation_reason = _validate_and_convert_draft(
+            draft, output, validation_reason = _validate_and_convert_draft(
                 tenant_id=tenant_id,
                 deal_id=deal_id,
                 run_id=run_id,
@@ -176,13 +180,23 @@ class InMemoryMethodologyExtractionTaskExecutor:
             if draft is None:
                 rejected.append({"reason": validation_reason.value})
                 continue
-            accepted.append(draft)
+            if output is None:
+                rejected.append(
+                    {
+                        "reason": (
+                            MethodologyExtractionExecutionReason.MALFORMED_EXTRACTOR_OUTPUT.value
+                        )
+                    }
+                )
+                continue
+            accepted_drafts.append(draft)
+            accepted_outputs.append(output)
 
         execution_reason: MethodologyExtractionExecutionReason | None
-        if accepted and rejected:
+        if accepted_outputs and rejected:
             status = MethodologyTaskExecutionStatus.PARTIAL
             execution_reason = None
-        elif accepted:
+        elif accepted_outputs:
             status = MethodologyTaskExecutionStatus.COMPLETED
             execution_reason = None
         else:
@@ -196,8 +210,10 @@ class InMemoryMethodologyExtractionTaskExecutor:
             task=task,
             status=status,
             reason=execution_reason,
-            accepted_drafts=accepted,
+            accepted_drafts=accepted_drafts,
+            accepted_outputs=accepted_outputs,
             rejected_drafts=rejected,
+            rejected_outputs=rejected,
         )
 
 
@@ -208,23 +224,37 @@ def _validate_and_convert_draft(
     run_id: str,
     task: ExtractionTask,
     raw_draft: Any,
-) -> tuple[MethodologyClaimDraft | None, MethodologyExtractionExecutionReason]:
+) -> tuple[
+    MethodologyClaimDraft | None,
+    MethodologyExtractionOutput | None,
+    MethodologyExtractionExecutionReason,
+]:
     if not isinstance(raw_draft, ExtractedClaimDraft):
-        return None, MethodologyExtractionExecutionReason.MALFORMED_EXTRACTOR_OUTPUT
+        return None, None, MethodologyExtractionExecutionReason.MALFORMED_EXTRACTOR_OUTPUT
 
-    if not raw_draft.span_id:
-        return None, MethodologyExtractionExecutionReason.MALFORMED_EXTRACTOR_OUTPUT
+    if not isinstance(raw_draft.span_id, str) or not raw_draft.span_id.strip():
+        return None, None, MethodologyExtractionExecutionReason.MALFORMED_EXTRACTOR_OUTPUT
 
     task_span_ids = set(task.source_span_ids)
     if raw_draft.span_id not in task_span_ids:
-        return None, MethodologyExtractionExecutionReason.HALLUCINATED_SOURCE_REFERENCE
+        return None, None, MethodologyExtractionExecutionReason.HALLUCINATED_SOURCE_REFERENCE
 
-    if not raw_draft.claim_text.strip() or not raw_draft.claim_class.strip():
-        return None, MethodologyExtractionExecutionReason.MALFORMED_EXTRACTOR_OUTPUT
-    if not raw_draft.predicate or not raw_draft.predicate.strip():
-        return None, MethodologyExtractionExecutionReason.MALFORMED_EXTRACTOR_OUTPUT
-    if not isinstance(raw_draft.value, dict) or not raw_draft.value:
-        return None, MethodologyExtractionExecutionReason.MALFORMED_EXTRACTOR_OUTPUT
+    if (
+        not isinstance(raw_draft.claim_text, str)
+        or not raw_draft.claim_text.strip()
+        or not isinstance(raw_draft.claim_class, str)
+        or not raw_draft.claim_class.strip()
+    ):
+        return None, None, MethodologyExtractionExecutionReason.MALFORMED_EXTRACTOR_OUTPUT
+    if not isinstance(raw_draft.predicate, str) or not raw_draft.predicate.strip():
+        return None, None, MethodologyExtractionExecutionReason.MALFORMED_EXTRACTOR_OUTPUT
+    raw_value = raw_draft.value
+    if not isinstance(raw_value, dict) or not raw_value:
+        return None, None, MethodologyExtractionExecutionReason.MALFORMED_EXTRACTOR_OUTPUT
+
+    answer = _answer_from_schema(task=task, raw_draft=raw_draft)
+    if answer is None:
+        return None, None, MethodologyExtractionExecutionReason.SCHEMA_VALIDATION_FAILED
 
     gate_decision = evaluate_extraction_gate(
         ExtractionGateInput(
@@ -235,9 +265,27 @@ def _validate_and_convert_draft(
         )
     )
     if gate_decision.blocked:
-        return None, _reason_from_gate(gate_decision.reason)
+        return None, None, _reason_from_gate(gate_decision.reason)
 
     source_span_ids = [raw_draft.span_id]
+    confidence = gate_decision.extraction_confidence or Decimal("0")
+    dhabt = gate_decision.dhabt_score or Decimal("0")
+    output = MethodologyExtractionOutput(
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        run_id=run_id,
+        extraction_task_id=task.extraction_task_id or "",
+        methodology_id=task.methodology_id,
+        methodology_version_id=task.methodology_version_id,
+        methodology_question_id=task.methodology_question_id,
+        coverage_record_id=task.coverage_record_id,
+        document_id=task.document_id or "",
+        source_span_ids=source_span_ids,
+        answer_type=task.expected_answer_schema.answer_type,
+        answer=answer,
+        extraction_confidence=confidence,
+        dhabt_score=dhabt,
+    )
     draft_id = generate_methodology_claim_draft_id(
         tenant_id=tenant_id,
         deal_id=deal_id,
@@ -248,7 +296,7 @@ def _validate_and_convert_draft(
         source_span_ids=source_span_ids,
         predicate=raw_draft.predicate,
         claim_text=raw_draft.claim_text,
-        value=raw_draft.value,
+        value=raw_value,
     )
     draft = MethodologyClaimDraft(
         methodology_claim_draft_id=draft_id,
@@ -264,18 +312,47 @@ def _validate_and_convert_draft(
         claim_text=raw_draft.claim_text,
         claim_class=raw_draft.claim_class,
         predicate=raw_draft.predicate,
-        value=raw_draft.value,
-        extraction_confidence=gate_decision.extraction_confidence or Decimal("0"),
-        dhabt_score=gate_decision.dhabt_score or Decimal("0"),
+        value=raw_value,
+        extraction_confidence=confidence,
+        dhabt_score=dhabt,
         future_claim_input_preview=_build_future_claim_input_preview(
             task=task,
             draft=raw_draft,
             draft_id=draft_id,
-            confidence=gate_decision.extraction_confidence or Decimal("0"),
-            dhabt=gate_decision.dhabt_score or Decimal("0"),
+            confidence=confidence,
+            dhabt=dhabt,
         ),
     )
-    return draft, MethodologyExtractionExecutionReason.MALFORMED_EXTRACTOR_OUTPUT
+    return draft, output, MethodologyExtractionExecutionReason.MALFORMED_EXTRACTOR_OUTPUT
+
+
+def _answer_from_schema(
+    *,
+    task: ExtractionTask,
+    raw_draft: ExtractedClaimDraft,
+) -> dict[str, Any] | None:
+    raw_value = raw_draft.value
+    if not isinstance(raw_value, dict):
+        return None
+    answer_type = task.expected_answer_schema.answer_type.lower().strip()
+    if answer_type == "narrative":
+        return {"text": raw_draft.claim_text.strip()}
+    if answer_type == "numeric":
+        value = raw_value.get("value")
+        if isinstance(value, bool) or not isinstance(value, int | float | Decimal):
+            return None
+        return dict(raw_value)
+    if answer_type == "boolean":
+        value = raw_value.get("value")
+        if not isinstance(value, bool):
+            return None
+        return dict(raw_value)
+    if answer_type == "table":
+        rows = raw_value.get("rows")
+        if not isinstance(rows, list):
+            return None
+        return dict(raw_value)
+    return None
 
 
 def _build_future_claim_input_preview(
@@ -323,6 +400,8 @@ def _task_result(
     status: MethodologyTaskExecutionStatus,
     reason: MethodologyExtractionExecutionReason | None,
     reason_codes: list[str] | None = None,
+    accepted_outputs: list[MethodologyExtractionOutput] | None = None,
+    rejected_outputs: list[dict[str, Any]] | None = None,
     accepted_drafts: list[MethodologyClaimDraft] | None = None,
     rejected_drafts: list[dict[str, Any]] | None = None,
 ) -> MethodologyTaskExecutionResult:
@@ -331,7 +410,11 @@ def _task_result(
         deal_id=deal_id,
         run_id=run_id,
         extraction_task_id=task.extraction_task_id or "",
+        methodology_question_id=task.methodology_question_id,
+        coverage_record_id=task.coverage_record_id,
         status=status,
+        accepted_outputs=accepted_outputs or [],
+        rejected_outputs=rejected_outputs or [],
         accepted_drafts=accepted_drafts or [],
         rejected_drafts=rejected_drafts or [],
         reason=reason,
@@ -453,6 +536,8 @@ def _build_summary(
         failed_tasks=sum(
             result.status == MethodologyTaskExecutionStatus.FAILED for result in task_results
         ),
+        accepted_output_count=sum(len(result.accepted_outputs) for result in task_results),
+        rejected_output_count=sum(len(result.rejected_outputs) for result in task_results),
         accepted_draft_count=sum(len(result.accepted_drafts) for result in task_results),
         rejected_draft_count=sum(len(result.rejected_drafts) for result in task_results),
         by_status=_counter(result.status.value for result in task_results),

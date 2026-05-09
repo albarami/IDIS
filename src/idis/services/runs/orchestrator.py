@@ -49,6 +49,12 @@ from idis.models.evidence_item_materialization import (
     RunScopedEvidenceItemShell,
     RunScopedEvidenceProvenanceRef,
 )
+from idis.models.evidence_trust_court_materialization import (
+    MethodologyEvidenceTrustCourtRunResult,
+    RunScopedEvidenceTrustCourtRecord,
+    RunScopedEvidenceTrustCourtShell,
+    RunScopedEvidenceTrustCourtSummary,
+)
 from idis.models.extraction_execution import (
     MethodologyExtractionExecutionReason,
     MethodologyExtractionExecutionResult,
@@ -262,6 +268,19 @@ class RunContext:
     methodology_truth_dashboard: (
         RunScopedTruthDashboardRecord | RunScopedTruthDashboardShell | None
     ) = None
+    methodology_evidence_trust_court_fn: (
+        Callable[
+            ...,
+            tuple[
+                MethodologyEvidenceTrustCourtRunResult,
+                list[RunScopedEvidenceTrustCourtRecord],
+            ],
+        ]
+        | None
+    ) = None
+    methodology_evidence_trust_court: (
+        RunScopedEvidenceTrustCourtRecord | RunScopedEvidenceTrustCourtShell | None
+    ) = None
     calc_fn: Callable[..., dict[str, Any]] | None = None
     calc_types: list[CalcType] | None = None
     enrich_fn: Callable[..., dict[str, Any]] | None = None
@@ -360,6 +379,11 @@ class RunOrchestrator:
                     self._rehydrate_methodology_calculations(ctx, existing.result_summary)
                 if step_name == StepName.METHODOLOGY_TRUTH_DASHBOARD:
                     self._rehydrate_methodology_truth_dashboard(ctx, existing.result_summary)
+                if step_name == StepName.METHODOLOGY_EVIDENCE_TRUST_COURT:
+                    self._rehydrate_methodology_evidence_trust_court(
+                        ctx,
+                        existing.result_summary,
+                    )
                 continue
 
             step = self._start_step(ctx, step_name, existing)
@@ -426,6 +450,8 @@ class RunOrchestrator:
             return self._execute_methodology_deterministic_calculation(ctx)
         if step_name == StepName.METHODOLOGY_TRUTH_DASHBOARD:
             return self._execute_methodology_truth_dashboard(ctx)
+        if step_name == StepName.METHODOLOGY_EVIDENCE_TRUST_COURT:
+            return self._execute_methodology_evidence_trust_court(ctx)
         if step_name == StepName.EXTRACT:
             return self._execute_extract(ctx)
         if step_name == StepName.GRADE:
@@ -895,6 +921,86 @@ class RunOrchestrator:
             )
         return summary
 
+    def _execute_methodology_evidence_trust_court(self, ctx: RunContext) -> dict[str, Any]:
+        """Build a Layer 1 Evidence Trust Court record from Slice 6-10 outputs."""
+        if ctx.methodology_materialized_claims is None:
+            raise RunStepBlockedError(
+                "METHODOLOGY_MATERIALIZED_CLAIMS_MISSING",
+                "Evidence Trust Court requires claim materialization context",
+            )
+        if ctx.methodology_evidence_items is None:
+            raise RunStepBlockedError(
+                "METHODOLOGY_EVIDENCE_ITEMS_MISSING",
+                "Evidence Trust Court requires evidence item materialization context",
+            )
+        no_claims = len(ctx.methodology_materialized_claims) == 0
+        if not no_claims and not ctx.methodology_sanads:
+            raise RunStepBlockedError(
+                "METHODOLOGY_SANADS_MISSING",
+                "Evidence Trust Court requires run-scoped Sanads",
+            )
+        if ctx.methodology_sanad_grades is None:
+            raise RunStepBlockedError(
+                "METHODOLOGY_SANAD_GRADES_MISSING",
+                "Evidence Trust Court requires run-scoped Sanad grades",
+            )
+        if ctx.methodology_truth_dashboard is None:
+            if no_claims:
+                return _empty_evidence_trust_court_summary(
+                    tenant_id=ctx.tenant_id,
+                    deal_id=ctx.deal_id,
+                    run_id=ctx.run_id,
+                )
+            raise RunStepBlockedError(
+                "METHODOLOGY_TRUTH_DASHBOARD_MISSING",
+                "Evidence Trust Court requires a full Truth Dashboard record",
+            )
+
+        if ctx.methodology_evidence_trust_court_fn is not None:
+            run_result, courts = ctx.methodology_evidence_trust_court_fn(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                materialized_claims=ctx.methodology_materialized_claims,
+                evidence_items=ctx.methodology_evidence_items,
+                source_provenance=ctx.methodology_evidence_source_provenance,
+                sanads=ctx.methodology_sanads,
+                sanad_grades=ctx.methodology_sanad_grades,
+                sanad_defects=ctx.methodology_sanad_defects,
+                calculations=ctx.methodology_calculations,
+                calc_sanads=ctx.methodology_calc_sanads,
+                truth_dashboards=[ctx.methodology_truth_dashboard],
+            )
+        else:
+            from idis.services.runs.methodology_evidence_trust_court import (
+                InMemoryRunMethodologyEvidenceTrustCourtService,
+            )
+
+            run_result, courts = InMemoryRunMethodologyEvidenceTrustCourtService().run(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                materialized_claims=ctx.methodology_materialized_claims,
+                evidence_items=ctx.methodology_evidence_items,
+                source_provenance=ctx.methodology_evidence_source_provenance,
+                sanads=ctx.methodology_sanads,
+                sanad_grades=ctx.methodology_sanad_grades,
+                sanad_defects=ctx.methodology_sanad_defects,
+                calculations=ctx.methodology_calculations,
+                calc_sanads=ctx.methodology_calc_sanads,
+                truth_dashboards=[ctx.methodology_truth_dashboard],
+            )
+
+        ctx.methodology_evidence_trust_court = courts[0] if courts else None
+        summary = run_result.to_run_step_summary()
+        if run_result.status.value == "failed":
+            raise RunStepBlockedError(
+                "METHODOLOGY_EVIDENCE_TRUST_COURT_FAILED",
+                "Evidence Trust Court failed closed",
+                result_summary=summary,
+            )
+        return summary
+
     def _rehydrate_methodology_extraction_execution(
         self,
         ctx: RunContext,
@@ -1076,6 +1182,23 @@ class RunOrchestrator:
         )
         if shell is not None:
             ctx.methodology_truth_dashboard = shell
+
+    def _rehydrate_methodology_evidence_trust_court(
+        self,
+        ctx: RunContext,
+        result_summary: dict[str, Any],
+    ) -> None:
+        """Attach a safe Evidence Trust Court shell when completed Slice 11 is skipped."""
+        if ctx.methodology_evidence_trust_court is not None:
+            return
+        shell = _evidence_trust_court_shell_from_summary(
+            tenant_id=ctx.tenant_id,
+            deal_id=ctx.deal_id,
+            run_id=ctx.run_id,
+            result_summary=result_summary,
+        )
+        if shell is not None:
+            ctx.methodology_evidence_trust_court = shell
 
     def _execute_extract(self, ctx: RunContext) -> dict[str, Any]:
         """Run extraction pipeline via injected callable.
@@ -1811,6 +1934,75 @@ def _truth_dashboard_shell_from_summary(
         )
     except ValueError:
         return None
+
+
+def _evidence_trust_court_shell_from_summary(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+    result_summary: dict[str, Any],
+) -> RunScopedEvidenceTrustCourtShell | None:
+    court_ids = _str_list(result_summary.get("court_ids"))
+    dashboard_ids = _str_list(result_summary.get("dashboard_ids"))
+    if not court_ids or not dashboard_ids:
+        return None
+    raw_summary = result_summary.get("summary")
+    summary: dict[str, Any] = raw_summary if isinstance(raw_summary, dict) else {}
+    try:
+        return RunScopedEvidenceTrustCourtShell(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            run_id=run_id,
+            court_id=court_ids[0],
+            dashboard_id=dashboard_ids[0],
+            claim_ids=_str_list(result_summary.get("claim_ids")),
+            evidence_ids=_str_list(result_summary.get("evidence_ids")),
+            source_span_ids=_str_list(result_summary.get("source_span_ids")),
+            sanad_ids=_str_list(result_summary.get("sanad_ids")),
+            calc_ids=_str_list(result_summary.get("calc_ids")),
+            defect_ids=_str_list(result_summary.get("defect_ids")),
+            finding_ids=_str_list(result_summary.get("finding_ids")),
+            assessed_claim_count=_int_from_summary(summary, "assessed_claim_count", 0),
+            finding_count=_int_from_summary(summary, "finding_count", 0),
+            by_disposition=_dict_from_summary(summary, "by_disposition"),
+            by_grade=_dict_from_summary(summary, "by_grade"),
+            by_dashboard_verdict=_dict_from_summary(summary, "by_dashboard_verdict"),
+            status=str(result_summary.get("status") or "completed"),
+        )
+    except ValueError:
+        return None
+
+
+def _empty_evidence_trust_court_summary(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+) -> dict[str, Any]:
+    summary = RunScopedEvidenceTrustCourtSummary(
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        run_id=run_id,
+        total_claims=0,
+        assessed_claim_count=0,
+        finding_count=0,
+        rejected_count=0,
+        by_disposition={},
+        by_reason={},
+        by_grade={},
+        by_dashboard_verdict={},
+    )
+    return MethodologyEvidenceTrustCourtRunResult(
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        run_id=run_id,
+        status=summary.aggregate_status(),
+        court_shells=[],
+        role_summaries=[],
+        rejections=[],
+        summary=summary,
+    ).to_run_step_summary()
 
 
 def _execution_result_shell_from_summary(

@@ -174,6 +174,9 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             "methodology_truth_dashboard_run_integration": (
                 _methodology_truth_dashboard_run_integration(root, files)
             ),
+            "methodology_evidence_trust_court_run_integration": (
+                _methodology_evidence_trust_court_run_integration(root, files)
+            ),
             "methodology_claim_materialization_sanad_integration": (
                 _methodology_claim_materialization_sanad_integration(files)
             ),
@@ -501,6 +504,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/models/sanad_materialization.py",
         "src/idis/models/calc_materialization.py",
         "src/idis/models/truth_dashboard_materialization.py",
+        "src/idis/models/evidence_trust_court_materialization.py",
         "src/idis/services/extraction/claim_materializer.py",
         "src/idis/services/runs/methodology_claim_materialization.py",
         "src/idis/services/runs/methodology_evidence_item_materialization.py",
@@ -509,6 +513,8 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/services/runs/methodology_deterministic_calculation.py",
         "src/idis/services/runs/methodology_deterministic_calculation_helpers.py",
         "src/idis/services/runs/methodology_truth_dashboard.py",
+        "src/idis/services/runs/methodology_evidence_trust_court.py",
+        "src/idis/services/runs/methodology_evidence_trust_court_helpers.py",
         "src/idis/services/extraction/claim_materialization_audit.py",
         "src/idis/models/sanad_coverage_boundary.py",
         "src/idis/services/methodology/sanad_coverage_boundary.py",
@@ -1876,7 +1882,6 @@ def _methodology_truth_dashboard_run_integration(
             "durable Truth Dashboard persistence remains deferred.",
             "API/UI/OpenAPI exposure remains deferred.",
             "deliverables integration remains deferred.",
-            "Layer 1 Evidence Trust Court remains deferred.",
             "Validated Evidence Package remains deferred.",
             "enrichment/API checks remain deferred.",
             "Layer 2 IC Debate remains deferred.",
@@ -1884,6 +1889,64 @@ def _methodology_truth_dashboard_run_integration(
             "real data-room E2E remains deferred.",
         ],
         phase_2_action="Phase 3.0 Slice 10",
+    )
+
+
+def _methodology_evidence_trust_court_run_integration(
+    root: Path,
+    files: dict[str, str],
+) -> WiringItem:
+    model_text = files.get("src/idis/models/evidence_trust_court_materialization.py", "")
+    service_text = files.get("src/idis/services/runs/methodology_evidence_trust_court.py", "")
+    helper_text = files.get(
+        "src/idis/services/runs/methodology_evidence_trust_court_helpers.py", ""
+    )
+    debate_text = files.get("src/idis/debate/orchestrator.py", "")
+    gate_text = files.get("src/idis/debate/muhasabah_gate.py", "")
+    run_text = (
+        files.get("src/idis/models/run_step.py", "")
+        + files.get("src/idis/services/runs/orchestrator.py", "")
+        + files.get("src/idis/services/runs/steps.py", "")
+    )
+    integrated = (
+        _exists(root, "src/idis/models/evidence_trust_court_materialization.py")
+        and _exists(root, "src/idis/services/runs/methodology_evidence_trust_court.py")
+        and "METHODOLOGY_EVIDENCE_TRUST_COURT" in run_text
+        and "InMemoryRunMethodologyEvidenceTrustCourtService" in service_text
+        and "DebateOrchestrator" in helper_text
+        and "MuhasabahGate" in gate_text
+        and "RunScopedEvidenceTrustCourtRecord" in model_text
+        and "RunScopedEvidenceTrustCourtShell" in model_text
+        and "DebateOrchestrator" in debate_text
+    )
+    return WiringItem(
+        key="methodology_evidence_trust_court_run_integration",
+        label="Methodology Evidence Trust Court run integration",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary=(
+            "in-memory run-scoped Layer 1 Evidence Trust Court boundary exists; "
+            "Validated Evidence Package remains deferred to Slice 12."
+        ),
+        evidence=[
+            "FULL runs include METHODOLOGY_EVIDENCE_TRUST_COURT after Truth Dashboard "
+            "and before legacy EXTRACT.",
+            "Layer 1 Evidence Trust Court boundary exists for evidence integrity, "
+            "provenance, Sanad trust, contradictions, and Truth Dashboard consistency.",
+            "Slice 11 reuses DebateOrchestrator, DebateState, role protocols, "
+            "MuhasabahGate, and validators through a run-scoped adapter.",
+            "RunContext carries a methodology_evidence_trust_court record or safe shell in memory.",
+            "Run-step summaries include safe IDs, dispositions, verdict/grade counts, "
+            "role names, and reason codes only.",
+        ],
+        gaps=[
+            "Validated Evidence Package remains deferred to Slice 12.",
+            "enrichment/API checks remain deferred.",
+            "Layer 2 IC debate remains deferred.",
+            "GO/CONDITIONAL/NO-GO remains deferred.",
+            "deliverables, API/UI/OpenAPI, and real E2E remain deferred.",
+            "durable Evidence Trust Court persistence remains deferred.",
+        ],
+        phase_2_action="Phase 3.0 Slice 11",
     )
 
 

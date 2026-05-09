@@ -34,6 +34,12 @@ from idis.models.claim_materialization import (
 )
 from idis.models.deterministic_calculation import CalcType
 from idis.models.document_preflight import DocumentPreflightResult
+from idis.models.evidence_item_materialization import (
+    MethodologyEvidenceItemMaterializationRunResult,
+    RunScopedEvidenceItemRecord,
+    RunScopedEvidenceItemShell,
+    RunScopedEvidenceProvenanceRef,
+)
 from idis.models.extraction_execution import (
     MethodologyExtractionExecutionReason,
     MethodologyExtractionExecutionResult,
@@ -162,9 +168,25 @@ class RunContext:
         ]
         | None
     ) = None
-    methodology_materialized_claims: list[
-        RunScopedMaterializedClaim | RunScopedMaterializedClaimShell
-    ] = field(default_factory=list)
+    methodology_materialized_claims: (
+        list[RunScopedMaterializedClaim | RunScopedMaterializedClaimShell] | None
+    ) = None
+    methodology_evidence_item_materialization_fn: (
+        Callable[
+            ...,
+            tuple[
+                MethodologyEvidenceItemMaterializationRunResult,
+                list[RunScopedEvidenceItemRecord],
+            ],
+        ]
+        | None
+    ) = None
+    methodology_evidence_items: list[RunScopedEvidenceItemRecord | RunScopedEvidenceItemShell] = (
+        field(default_factory=list)
+    )
+    methodology_evidence_source_provenance: list[RunScopedEvidenceProvenanceRef] = field(
+        default_factory=list
+    )
     calc_fn: Callable[..., dict[str, Any]] | None = None
     calc_types: list[CalcType] | None = None
     enrich_fn: Callable[..., dict[str, Any]] | None = None
@@ -255,6 +277,8 @@ class RunOrchestrator:
                     self._rehydrate_methodology_extraction_execution(ctx, existing.result_summary)
                 if step_name == StepName.METHODOLOGY_CLAIM_MATERIALIZATION:
                     self._rehydrate_methodology_materialized_claims(ctx, existing.result_summary)
+                if step_name == StepName.METHODOLOGY_EVIDENCE_ITEM_MATERIALIZATION:
+                    self._rehydrate_methodology_evidence_items(ctx, existing.result_summary)
                 continue
 
             step = self._start_step(ctx, step_name, existing)
@@ -313,6 +337,8 @@ class RunOrchestrator:
             return self._execute_methodology_extraction_task_execution(ctx)
         if step_name == StepName.METHODOLOGY_CLAIM_MATERIALIZATION:
             return self._execute_methodology_claim_materialization(ctx)
+        if step_name == StepName.METHODOLOGY_EVIDENCE_ITEM_MATERIALIZATION:
+            return self._execute_methodology_evidence_item_materialization(ctx)
         if step_name == StepName.EXTRACT:
             return self._execute_extract(ctx)
         if step_name == StepName.GRADE:
@@ -574,6 +600,44 @@ class RunOrchestrator:
         ctx.methodology_materialized_claims = claims_for_context
         return run_result.to_run_step_summary()
 
+    def _execute_methodology_evidence_item_materialization(self, ctx: RunContext) -> dict[str, Any]:
+        """Materialize EvidenceItems from Slice 6 run-scoped claims."""
+        if ctx.methodology_materialized_claims is None:
+            raise RunStepBlockedError(
+                "METHODOLOGY_MATERIALIZED_CLAIMS_MISSING",
+                "Evidence item materialization requires claim materialization context",
+            )
+
+        if ctx.methodology_evidence_item_materialization_fn is not None:
+            run_result, evidence_records = ctx.methodology_evidence_item_materialization_fn(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                materialized_claims=ctx.methodology_materialized_claims,
+            )
+        else:
+            from idis.services.runs.methodology_evidence_item_materialization import (
+                InMemoryRunMethodologyEvidenceItemMaterializationService,
+            )
+
+            run_result, evidence_records = (
+                InMemoryRunMethodologyEvidenceItemMaterializationService().run(
+                    tenant_id=ctx.tenant_id,
+                    deal_id=ctx.deal_id,
+                    run_id=ctx.run_id,
+                    materialized_claims=ctx.methodology_materialized_claims,
+                )
+            )
+
+        evidence_for_context: list[RunScopedEvidenceItemRecord | RunScopedEvidenceItemShell] = list(
+            evidence_records
+        )
+        ctx.methodology_evidence_items = evidence_for_context
+        ctx.methodology_evidence_source_provenance = [
+            record.source_ref for record in evidence_records
+        ]
+        return run_result.to_run_step_summary()
+
     def _rehydrate_methodology_extraction_execution(
         self,
         ctx: RunContext,
@@ -614,6 +678,37 @@ class RunOrchestrator:
         shell_claims: list[RunScopedMaterializedClaim | RunScopedMaterializedClaimShell] = []
         shell_claims.extend(shells)
         ctx.methodology_materialized_claims = shell_claims
+
+    def _rehydrate_methodology_evidence_items(
+        self,
+        ctx: RunContext,
+        result_summary: dict[str, Any],
+    ) -> None:
+        """Attach safe EvidenceItem shells when completed Slice 7 step is skipped."""
+        if ctx.methodology_evidence_items:
+            return
+        raw_mappings = result_summary.get("evidence_item_mappings")
+        mappings: list[Any] = raw_mappings if isinstance(raw_mappings, list) else []
+        shells: list[RunScopedEvidenceItemShell] = []
+        provenance_refs: list[RunScopedEvidenceProvenanceRef] = []
+        for mapping in mappings:
+            if not isinstance(mapping, dict):
+                continue
+            shell = _evidence_item_shell_from_mapping(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                mapping=mapping,
+            )
+            provenance_ref = _evidence_provenance_from_mapping(mapping)
+            if shell is not None:
+                shells.append(shell)
+            if provenance_ref is not None:
+                provenance_refs.append(provenance_ref)
+        evidence_items: list[RunScopedEvidenceItemRecord | RunScopedEvidenceItemShell] = []
+        evidence_items.extend(shells)
+        ctx.methodology_evidence_items = evidence_items
+        ctx.methodology_evidence_source_provenance = provenance_refs
 
     def _execute_extract(self, ctx: RunContext) -> dict[str, Any]:
         """Run extraction pipeline via injected callable.
@@ -1081,6 +1176,45 @@ def _materialized_claim_shell_from_mapping(
             extraction_task_id=str(mapping.get("extraction_task_id") or ""),
             extraction_output_id=str(mapping.get("extraction_output_id") or ""),
             status="materialized_unverified",
+        )
+    except ValueError:
+        return None
+
+
+def _evidence_item_shell_from_mapping(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+    mapping: dict[str, Any],
+) -> RunScopedEvidenceItemShell | None:
+    try:
+        return RunScopedEvidenceItemShell(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            run_id=run_id,
+            claim_id=str(mapping.get("claim_id") or ""),
+            evidence_id=str(mapping.get("evidence_id") or ""),
+            document_id=str(mapping.get("document_id") or ""),
+            source_span_id=str(mapping.get("source_span_id") or ""),
+            methodology_question_id=str(mapping.get("methodology_question_id") or ""),
+            coverage_record_id=str(mapping.get("coverage_record_id") or ""),
+            extraction_task_id=str(mapping.get("extraction_task_id") or ""),
+            extraction_output_id=str(mapping.get("extraction_output_id") or ""),
+            status="materialized_unverified",
+        )
+    except ValueError:
+        return None
+
+
+def _evidence_provenance_from_mapping(
+    mapping: dict[str, Any],
+) -> RunScopedEvidenceProvenanceRef | None:
+    try:
+        return RunScopedEvidenceProvenanceRef(
+            document_id=str(mapping.get("document_id") or ""),
+            source_span_id=str(mapping.get("source_span_id") or ""),
+            locator=None,
         )
     except ValueError:
         return None

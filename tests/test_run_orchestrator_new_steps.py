@@ -232,6 +232,7 @@ class TestStepOrderingConstants:
             StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING,
             StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION,
             StepName.METHODOLOGY_CLAIM_MATERIALIZATION,
+            StepName.METHODOLOGY_EVIDENCE_ITEM_MATERIALIZATION,
             StepName.EXTRACT,
             StepName.GRADE,
             StepName.CALC,
@@ -292,8 +293,8 @@ class TestFullVsSnapshotEnforcement:
         for full_only in FULL_ONLY_STEPS:
             assert full_only not in step_names
 
-    def test_full_has_fourteen_steps(self) -> None:
-        """FULL mode completes with all 14 steps."""
+    def test_full_has_fifteen_steps(self) -> None:
+        """FULL mode completes with all 15 steps."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -302,7 +303,7 @@ class TestFullVsSnapshotEnforcement:
         result = orchestrator.execute(ctx)
 
         assert result.status == "SUCCEEDED"
-        assert len(result.steps) == 14
+        assert len(result.steps) == 15
         step_names = [step.step_name for step in result.steps]
         assert step_names.index(StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING) < (
             step_names.index(StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION)
@@ -311,6 +312,9 @@ class TestFullVsSnapshotEnforcement:
             step_names.index(StepName.METHODOLOGY_CLAIM_MATERIALIZATION)
         )
         assert step_names.index(StepName.METHODOLOGY_CLAIM_MATERIALIZATION) < (
+            step_names.index(StepName.METHODOLOGY_EVIDENCE_ITEM_MATERIALIZATION)
+        )
+        assert step_names.index(StepName.METHODOLOGY_EVIDENCE_ITEM_MATERIALIZATION) < (
             step_names.index(StepName.EXTRACT)
         )
 
@@ -398,7 +402,7 @@ class TestResumeSkipsCompletedSteps:
 
         result1 = orchestrator.execute(ctx)
         assert result1.status == "SUCCEEDED"
-        assert len(result1.steps) == 14
+        assert len(result1.steps) == 15
 
         call_count = {"enrichment": 0}
         original_enrich = _stub_enrichment

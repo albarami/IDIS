@@ -162,6 +162,9 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             "methodology_claim_materialization_run_integration": (
                 _methodology_claim_materialization_run_integration(files)
             ),
+            "methodology_evidence_item_materialization_run_integration": (
+                _methodology_evidence_item_materialization_run_integration(root, files)
+            ),
             "methodology_claim_materialization_sanad_integration": (
                 _methodology_claim_materialization_sanad_integration(files)
             ),
@@ -484,8 +487,11 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/services/extraction/task_executor.py",
         "src/idis/services/extraction/execution_audit.py",
         "src/idis/models/claim_materialization.py",
+        "src/idis/models/evidence_item.py",
+        "src/idis/models/evidence_item_materialization.py",
         "src/idis/services/extraction/claim_materializer.py",
         "src/idis/services/runs/methodology_claim_materialization.py",
+        "src/idis/services/runs/methodology_evidence_item_materialization.py",
         "src/idis/services/extraction/claim_materialization_audit.py",
         "src/idis/models/sanad_coverage_boundary.py",
         "src/idis/services/methodology/sanad_coverage_boundary.py",
@@ -1620,6 +1626,61 @@ def _methodology_claim_materialization_run_integration(files: dict[str, str]) ->
             "CALC, enrichment, deliverables, and real data-room E2E remain deferred.",
         ],
         phase_2_action="Phase 3.0 Slice 6",
+    )
+
+
+def _methodology_evidence_item_materialization_run_integration(
+    root: Path,
+    files: dict[str, str],
+) -> WiringItem:
+    model_text = files.get("src/idis/models/evidence_item_materialization.py", "")
+    service_text = files.get(
+        "src/idis/services/runs/methodology_evidence_item_materialization.py", ""
+    )
+    run_text = (
+        files.get("src/idis/models/run_step.py", "")
+        + files.get("src/idis/services/runs/orchestrator.py", "")
+        + files.get("src/idis/services/runs/steps.py", "")
+    )
+    integrated = (
+        _exists(root, "src/idis/models/evidence_item.py")
+        and _exists(root, "src/idis/models/evidence_item_materialization.py")
+        and _exists(root, "src/idis/services/runs/methodology_evidence_item_materialization.py")
+        and "METHODOLOGY_EVIDENCE_ITEM_MATERIALIZATION" in run_text
+        and "InMemoryRunMethodologyEvidenceItemMaterializationService" in service_text
+        and "RunScopedEvidenceProvenanceRef" in model_text
+        and "MaterializedClaimSourceRef" in model_text
+    )
+    return WiringItem(
+        key="methodology_evidence_item_materialization_run_integration",
+        label="EvidenceItem/source-provenance run integration",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary=(
+            "in-memory governed EvidenceItem/source-provenance boundary exists; "
+            "durable Postgres evidence persistence remains deferred."
+        ),
+        evidence=[
+            "FULL runs include METHODOLOGY_EVIDENCE_ITEM_MATERIALIZATION after "
+            "claim materialization.",
+            "Slice 7 reuses existing EvidenceItem plus MaterializedClaimSourceRef safety.",
+            "RunContext carries methodology_evidence_items and safe provenance in memory.",
+            "Run-step summaries include safe IDs/counts/statuses/reason codes only.",
+        ],
+        gaps=[
+            "Durable Postgres evidence persistence remains deferred because durable Claim Registry "
+            "persistence remains deferred and the current evidence table expects UUID "
+            "claim/source IDs.",
+            "Sanad creation/linking/grading remains deferred to Slice 8.",
+            "Truth Dashboard remains deferred.",
+            "CALC remains deferred.",
+            "enrichment/API checks remain deferred.",
+            "Layer 1 Evidence Trust Court remains deferred.",
+            "Layer 2 IC Debate remains deferred.",
+            "GO/CONDITIONAL/NO-GO package remains deferred.",
+            "deliverables remain deferred.",
+            "real data-room E2E remains deferred.",
+        ],
+        phase_2_action="Phase 3.0 Slice 7",
     )
 
 

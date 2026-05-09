@@ -346,6 +346,42 @@ def test_full_system_inventory_detects_phase_3_0f_claim_materialization_boundary
     assert coverage_integration.status == "DEFERRED"
 
 
+def test_full_system_inventory_detects_phase_3_0g_evidence_item_boundary() -> None:
+    """Slice 7 creates in-memory EvidenceItems without overstating persistence."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+
+    evidence_boundary = inventory["methodology_evidence_item_materialization_run_integration"]
+
+    assert evidence_boundary.status == "PARTIAL"
+    assert any(
+        "METHODOLOGY_EVIDENCE_ITEM_MATERIALIZATION" in item for item in evidence_boundary.evidence
+    )
+    assert any(
+        "in-memory governed EvidenceItem/source-provenance boundary exists" in item
+        for item in [
+            evidence_boundary.summary,
+            *evidence_boundary.evidence,
+            *evidence_boundary.gaps,
+        ]
+    )
+    assert any(
+        "Durable Postgres evidence persistence remains deferred" in item
+        for item in evidence_boundary.gaps
+    )
+    assert any(
+        "Sanad creation/linking/grading remains deferred" in item for item in evidence_boundary.gaps
+    )
+    assert any("Truth Dashboard remains deferred" in item for item in evidence_boundary.gaps)
+    assert any("CALC remains deferred" in item for item in evidence_boundary.gaps)
+    assert any("enrichment/API checks remain deferred" in item for item in evidence_boundary.gaps)
+    assert any(
+        "Layer 1 Evidence Trust Court remains deferred" in item for item in evidence_boundary.gaps
+    )
+    assert any("Layer 2 IC Debate remains deferred" in item for item in evidence_boundary.gaps)
+    assert any("deliverables remain deferred" in item for item in evidence_boundary.gaps)
+    assert any("real data-room E2E remains deferred" in item for item in evidence_boundary.gaps)
+
+
 def test_full_system_inventory_detects_phase_2_7_sanad_coverage_boundary() -> None:
     """Phase 2.7 boundary exists while live integrations remain deferred."""
     inventory = collect_wiring_inventory(REPO_ROOT)

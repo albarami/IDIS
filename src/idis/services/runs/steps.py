@@ -12,6 +12,10 @@ from idis.models.claim_materialization import (
     MethodologyOutputClaimMaterializationRunResult,
     RunScopedMaterializedClaim,
 )
+from idis.models.evidence_item_materialization import (
+    MethodologyEvidenceItemMaterializationRunResult,
+    RunScopedEvidenceItemRecord,
+)
 from idis.models.extraction_execution import (
     MethodologyExtractionExecutionResult,
     MethodologyExtractionExecutionRunResult,
@@ -41,6 +45,10 @@ ClaimMaterializationFn = Callable[
     ...,
     tuple[MethodologyOutputClaimMaterializationRunResult, list[RunScopedMaterializedClaim]],
 ]
+EvidenceItemMaterializationFn = Callable[
+    ...,
+    tuple[MethodologyEvidenceItemMaterializationRunResult, list[RunScopedEvidenceItemRecord]],
+]
 
 
 def build_run_context(
@@ -59,6 +67,7 @@ def build_run_context(
     methodology_extraction_task_planning_fn: TaskPlanningFn | None = None,
     methodology_extraction_task_execution_fn: TaskExecutionFn | None = None,
     methodology_claim_materialization_fn: ClaimMaterializationFn | None = None,
+    methodology_evidence_item_materialization_fn: EvidenceItemMaterializationFn | None = None,
 ) -> RunContext:
     """Build a RunContext with the canonical step callables.
 
@@ -92,6 +101,7 @@ def build_run_context(
         methodology_extraction_task_planning_fn=methodology_extraction_task_planning_fn,
         methodology_extraction_task_execution_fn=methodology_extraction_task_execution_fn,
         methodology_claim_materialization_fn=methodology_claim_materialization_fn,
+        methodology_evidence_item_materialization_fn=methodology_evidence_item_materialization_fn,
         extract_fn=partial(_run_snapshot_extraction, db_conn=db_conn),
         grade_fn=partial(_run_snapshot_auto_grade, db_conn=db_conn),
         calc_fn=partial(_run_snapshot_calc, db_conn=db_conn),

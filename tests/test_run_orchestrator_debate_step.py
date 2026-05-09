@@ -187,8 +187,8 @@ def _clear_stores() -> None:
 class TestDebateStepHappyPath:
     """DEBATE step completes when debate_fn is provided and returns valid output."""
 
-    def test_full_run_with_debate_fn_completes_all_fourteen_steps(self) -> None:
-        """FULL run completes all 14 steps including DEBATE."""
+    def test_full_run_with_debate_fn_completes_all_fifteen_steps(self) -> None:
+        """FULL run completes all 15 steps including DEBATE."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -212,7 +212,7 @@ class TestDebateStepHappyPath:
         result = orchestrator.execute(ctx)
 
         assert result.status == "SUCCEEDED"
-        assert len(result.steps) == 14
+        assert len(result.steps) == 15
 
         expected_names = [
             StepName.INGEST_CHECK,
@@ -221,6 +221,7 @@ class TestDebateStepHappyPath:
             StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING,
             StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION,
             StepName.METHODOLOGY_CLAIM_MATERIALIZATION,
+            StepName.METHODOLOGY_EVIDENCE_ITEM_MATERIALIZATION,
             StepName.EXTRACT,
             StepName.GRADE,
             StepName.CALC,
@@ -347,7 +348,7 @@ class TestDebateStepFailClosed:
         assert "debate_fn not provided" in (result.error_message or "")
 
         completed = [s for s in result.steps if s.status == StepStatus.COMPLETED]
-        assert len(completed) == 10
+        assert len(completed) == 11
         assert [s.step_name for s in completed] == [
             StepName.INGEST_CHECK,
             StepName.DOCUMENT_PREFLIGHT,
@@ -355,6 +356,7 @@ class TestDebateStepFailClosed:
             StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING,
             StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION,
             StepName.METHODOLOGY_CLAIM_MATERIALIZATION,
+            StepName.METHODOLOGY_EVIDENCE_ITEM_MATERIALIZATION,
             StepName.EXTRACT,
             StepName.GRADE,
             StepName.CALC,

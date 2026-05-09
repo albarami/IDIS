@@ -330,3 +330,5 @@ def test_default_worker_context_factory_hydrates_persisted_documents() -> None:
     assert ctx.methodology_coverage_records == []
     assert ctx.methodology_extraction_task_planning_fn is None
     assert ctx.methodology_extraction_tasks == []
+    assert ctx.methodology_extraction_task_execution_fn is None
+    assert ctx.methodology_extraction_execution_result is None

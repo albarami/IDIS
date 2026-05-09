@@ -20,6 +20,7 @@ class StepName(StrEnum):
     DOCUMENT_PREFLIGHT = "DOCUMENT_PREFLIGHT"
     METHODOLOGY_COVERAGE_INIT = "METHODOLOGY_COVERAGE_INIT"
     METHODOLOGY_EXTRACTION_TASK_PLANNING = "METHODOLOGY_EXTRACTION_TASK_PLANNING"
+    METHODOLOGY_EXTRACTION_TASK_EXECUTION = "METHODOLOGY_EXTRACTION_TASK_EXECUTION"
     EXTRACT = "EXTRACT"
     GRADE = "GRADE"
     CALC = "CALC"
@@ -45,14 +46,15 @@ STEP_ORDER: dict[StepName, int] = {
     StepName.DOCUMENT_PREFLIGHT: 1,
     StepName.METHODOLOGY_COVERAGE_INIT: 2,
     StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING: 3,
-    StepName.EXTRACT: 4,
-    StepName.GRADE: 5,
-    StepName.CALC: 6,
-    StepName.ENRICHMENT: 7,
-    StepName.DEBATE: 8,
-    StepName.ANALYSIS: 9,
-    StepName.SCORING: 10,
-    StepName.DELIVERABLES: 11,
+    StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION: 4,
+    StepName.EXTRACT: 5,
+    StepName.GRADE: 6,
+    StepName.CALC: 7,
+    StepName.ENRICHMENT: 8,
+    StepName.DEBATE: 9,
+    StepName.ANALYSIS: 10,
+    StepName.SCORING: 11,
+    StepName.DELIVERABLES: 12,
 }
 """Canonical ordering for deterministic step iteration."""
 
@@ -71,6 +73,7 @@ FULL_STEPS: list[StepName] = [
     StepName.DOCUMENT_PREFLIGHT,
     StepName.METHODOLOGY_COVERAGE_INIT,
     StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING,
+    StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION,
     StepName.EXTRACT,
     StepName.GRADE,
     StepName.CALC,
@@ -85,6 +88,7 @@ FULL_STEPS: list[StepName] = [
 FULL_ONLY_STEPS: frozenset[StepName] = frozenset(
     {
         StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING,
+        StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION,
         StepName.ENRICHMENT,
         StepName.DEBATE,
         StepName.ANALYSIS,
@@ -100,6 +104,7 @@ IMPLEMENTED_STEPS: frozenset[StepName] = frozenset(
         StepName.DOCUMENT_PREFLIGHT,
         StepName.METHODOLOGY_COVERAGE_INIT,
         StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING,
+        StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION,
         StepName.EXTRACT,
         StepName.GRADE,
         StepName.CALC,

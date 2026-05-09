@@ -718,7 +718,7 @@ class TestFullCompletesAllElevenSteps:
     """test_full_completes_all_nine_steps."""
 
     def test_full_completes_all_ten_steps(self) -> None:
-        """FULL run completes all 12 steps in canonical order."""
+        """FULL run completes all 13 steps in canonical order."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -745,12 +745,13 @@ class TestFullCompletesAllElevenSteps:
         assert result.block_reason is None
 
         completed = [s for s in result.steps if s.status == StepStatus.COMPLETED]
-        assert len(completed) == 12
+        assert len(completed) == 13
         assert [s.step_name for s in completed] == [
             StepName.INGEST_CHECK,
             StepName.DOCUMENT_PREFLIGHT,
             StepName.METHODOLOGY_COVERAGE_INIT,
             StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING,
+            StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION,
             StepName.EXTRACT,
             StepName.GRADE,
             StepName.CALC,

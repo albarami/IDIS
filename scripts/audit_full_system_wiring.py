@@ -476,6 +476,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/services/documents/audit.py",
         "src/idis/services/runs/document_preflight.py",
         "src/idis/services/runs/methodology_extraction_task_planning.py",
+        "src/idis/services/runs/methodology_extraction_task_execution.py",
         "src/idis/models/extraction_task.py",
         "src/idis/services/extraction/task_planner.py",
         "src/idis/services/extraction/task_audit.py",
@@ -1270,7 +1271,7 @@ def _extraction_task_run_integration(files: dict[str, str]) -> WiringItem:
         ],
         gaps=[
             "Extraction task records are not persisted to Postgres.",
-            "Planned tasks are not executed in Slice 4.",
+            "Slice 5 execution remains in memory and persists only safe run-step summaries.",
             "No extraction task API route is exposed.",
         ],
         phase_2_action="Phase 3.0 Slice 4",
@@ -1295,17 +1296,17 @@ def _live_methodology_extraction_execution(files: dict[str, str]) -> WiringItem:
 
 def _methodology_extraction_execution_models(root: Path, files: dict[str, str]) -> WiringItem:
     has_models = _exists(root, "src/idis/models/extraction_execution.py") and _contains(
-        files, "src/idis/models/extraction_execution.py", "MethodologyClaimDraft"
+        files, "src/idis/models/extraction_execution.py", "MethodologyExtractionOutput"
     )
     return WiringItem(
         key="methodology_extraction_execution_models",
         label="Methodology extraction execution models",
         status="WIRED" if has_models else "NOT_FOUND",
-        summary="Structured models exist for methodology-linked claim draft metadata.",
+        summary="Structured models exist for methodology task execution output metadata.",
         evidence=[
             "`src/idis/models/extraction_execution.py` defines execution statuses and results.",
-            "Claim drafts preserve extraction task, methodology, document, span, confidence, "
-            "and dhabt metadata.",
+            "Neutral execution outputs preserve extraction task, coverage, methodology, document, "
+            "span, confidence, and dhabt metadata.",
         ],
         gaps=["Models are not persisted to Postgres in Phase 2.5."],
         phase_2_action="Phase 2.5",
@@ -1322,10 +1323,11 @@ def _methodology_extraction_task_executor(root: Path, files: dict[str, str]) -> 
         key="methodology_extraction_task_executor",
         label="Methodology extraction task executor",
         status="PARTIAL" if has_executor else "NOT_FOUND",
-        summary="Synthetic-only executor processes ready tasks with an injected extractor.",
+        summary="Executor processes ready tasks only with an injected extractor/provider.",
         evidence=[
             "`task_executor.py` skips blocked tasks and validates source-span provenance.",
-            "Executor returns methodology-linked claim draft metadata only.",
+            "Executor produces schema-validated neutral outputs and fails closed "
+            "without an extractor.",
         ],
         gaps=[
             "No ClaimService persistence, Sanad creation, coverage update, API, or run "
@@ -1389,15 +1391,44 @@ def _methodology_extraction_run_integration(files: dict[str, str]) -> WiringItem
     run_text = files.get("src/idis/services/runs/steps.py", "") + files.get(
         "src/idis/pipeline/worker.py", ""
     )
-    integrated = "InMemoryMethodologyExtractionTaskExecutor" in run_text
+    orchestrator = files.get("src/idis/services/runs/orchestrator.py", "")
+    run_step = files.get("src/idis/models/run_step.py", "")
+    service = files.get("src/idis/services/runs/methodology_extraction_task_execution.py", "")
+    integrated = (
+        "METHODOLOGY_EXTRACTION_TASK_EXECUTION" in run_step
+        and "methodology_extraction_execution_result" in orchestrator
+        and "InMemoryRunMethodologyExtractionTaskExecutionService" in service
+        and "TaskExecutionFn" in run_text
+    )
     return WiringItem(
         key="methodology_extraction_run_integration",
         label="Methodology extraction run integration",
         status="PARTIAL" if integrated else "DEFERRED",
-        summary="Methodology extraction execution is not called by production runs.",
-        evidence=["RunExecutionService remains methodology-extraction-execution agnostic."],
-        gaps=["Future runs must explicitly invoke execution after task planning."],
-        phase_2_action="Phase 2.5",
+        summary=(
+            "FULL runs execute planned methodology tasks in memory after task planning, "
+            "without materializing claims."
+        ),
+        evidence=[
+            "`METHODOLOGY_EXTRACTION_TASK_EXECUTION` is present in FULL step order.",
+            "`RunContext.methodology_extraction_execution_result` attaches in-memory results.",
+            "Run adapter hydrates source span text in memory and persists only safe summaries.",
+            "Execution outputs are schema-validated and fail closed with stable reason codes.",
+        ],
+        gaps=[
+            "Claims remain deferred until Phase 3.0 Slice 6.",
+            "EvidenceItems remain deferred until a later provenance slice.",
+            "Sanad creation/linking/grading remains deferred.",
+            "Truth Dashboard remains deferred.",
+            "Layer 1 Evidence Trust Court remains deferred.",
+            "Enrichment/API checks remain deferred.",
+            "Deterministic FDD CALC integration remains deferred.",
+            "Layer 2 IC Decision Debate remains deferred.",
+            "GO / CONDITIONAL / NO-GO package remains deferred.",
+            "Deliverables remain deferred.",
+            "Postgres execution-result persistence remains deferred.",
+            "real data-room E2E remains deferred.",
+        ],
+        phase_2_action="Phase 3.0 Slice 5",
     )
 
 

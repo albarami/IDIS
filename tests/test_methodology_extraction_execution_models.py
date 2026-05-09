@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 
 import pytest
@@ -10,8 +11,10 @@ from pydantic import ValidationError
 from idis.models.extraction_execution import (
     MethodologyClaimDraft,
     MethodologyExtractionExecutionReason,
+    MethodologyExtractionExecutionRunResult,
     MethodologyExtractionExecutionStatus,
     MethodologyExtractionExecutionSummary,
+    MethodologyExtractionOutput,
     MethodologyTaskExecutionResult,
     MethodologyTaskExecutionStatus,
 )
@@ -19,6 +22,76 @@ from idis.models.extraction_execution import (
 TENANT_ID = "11111111-1111-1111-1111-111111111111"
 DEAL_ID = "22222222-2222-2222-2222-222222222222"
 RUN_ID = "33333333-3333-3333-3333-333333333333"
+COVERAGE_RECORD_ID = "mc_123456789012345678901234"
+
+
+def _execution_output() -> MethodologyExtractionOutput:
+    return MethodologyExtractionOutput(
+        tenant_id=TENANT_ID,
+        deal_id=DEAL_ID,
+        run_id=RUN_ID,
+        extraction_task_id="et_abc123",
+        methodology_id="financial_dd",
+        methodology_version_id="financial_dd_v1",
+        methodology_question_id="mq_financial_dd_revenue_quality_0001",
+        coverage_record_id=COVERAGE_RECORD_ID,
+        document_id="doc-financial-model",
+        source_span_ids=["span-001"],
+        answer_type="numeric",
+        answer={"value": 10_000_000, "unit": "USD"},
+        extraction_confidence=Decimal("0.97"),
+        dhabt_score=Decimal("0.95"),
+    )
+
+
+def test_methodology_extraction_output_preserves_run_task_coverage_and_source_links() -> None:
+    output = _execution_output()
+
+    assert output.methodology_extraction_output_id.startswith("meo_")
+    assert output.tenant_id == TENANT_ID
+    assert output.deal_id == DEAL_ID
+    assert output.run_id == RUN_ID
+    assert output.extraction_task_id == "et_abc123"
+    assert output.methodology_question_id == "mq_financial_dd_revenue_quality_0001"
+    assert output.coverage_record_id == COVERAGE_RECORD_ID
+    assert output.source_span_ids == ["span-001"]
+    assert output.extraction_confidence == Decimal("0.97")
+
+
+def test_execution_run_step_summary_excludes_answers_and_raw_text() -> None:
+    task_result = MethodologyTaskExecutionResult(
+        tenant_id=TENANT_ID,
+        deal_id=DEAL_ID,
+        run_id=RUN_ID,
+        extraction_task_id="et_abc123",
+        methodology_question_id="mq_financial_dd_revenue_quality_0001",
+        coverage_record_id=COVERAGE_RECORD_ID,
+        status=MethodologyTaskExecutionStatus.COMPLETED,
+        accepted_outputs=[_execution_output()],
+        rejected_outputs=[],
+        reason=None,
+        reason_codes=["completed"],
+        source_span_ids=["span-001"],
+    )
+    run_result = MethodologyExtractionExecutionRunResult.from_task_results(
+        tenant_id=TENANT_ID,
+        deal_id=DEAL_ID,
+        run_id=RUN_ID,
+        task_results=[task_result],
+    )
+
+    summary = run_result.to_run_step_summary()
+    serialized = json.dumps(summary, sort_keys=True)
+
+    assert summary["status"] == "COMPLETED"
+    assert summary["summary"]["accepted_output_count"] == 1
+    assert summary["task_results"][0]["coverage_record_id"] == COVERAGE_RECORD_ID
+    assert summary["task_results"][0]["confidence"] == "0.97"
+    assert "span-001" in serialized
+    assert "10000000" not in serialized
+    assert "Revenue was" not in serialized
+    assert "claim_text" not in serialized
+    assert "text_excerpt" not in serialized
 
 
 def _claim_draft() -> MethodologyClaimDraft:

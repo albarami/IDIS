@@ -28,6 +28,15 @@ from idis.audit.sink import AuditSink, AuditSinkError
 from idis.methodology.models import MethodologyRegistry
 from idis.models.deterministic_calculation import CalcType
 from idis.models.document_preflight import DocumentPreflightResult
+from idis.models.extraction_execution import (
+    MethodologyExtractionExecutionReason,
+    MethodologyExtractionExecutionResult,
+    MethodologyExtractionExecutionRunResult,
+    MethodologyExtractionExecutionStatus,
+    MethodologyExtractionExecutionSummary,
+    MethodologyTaskExecutionResult,
+    MethodologyTaskExecutionStatus,
+)
 from idis.models.extraction_task import ExtractionTask, ExtractionTaskPlanningRunResult
 from idis.models.methodology_coverage import (
     MethodologyCoverageInitializationResult,
@@ -50,6 +59,7 @@ BLOCK_REASON_DEBATE_NOT_IMPLEMENTED = "DEBATE_NOT_IMPLEMENTED"
 BLOCK_REASON_NO_INGESTED_DOCUMENTS = "NO_INGESTED_DOCUMENTS"
 BLOCK_REASON_NO_USABLE_DOCUMENTS = "NO_USABLE_DOCUMENTS"
 BLOCK_REASON_NO_ELIGIBLE_EXTRACTION_TASKS = "NO_ELIGIBLE_EXTRACTION_TASKS"
+BLOCK_REASON_NO_PLANNED_EXTRACTION_TASKS = "NO_PLANNED_EXTRACTION_TASKS"
 
 
 class RunStepBlockedError(ValueError):
@@ -128,6 +138,14 @@ class RunContext:
         Callable[..., tuple[ExtractionTaskPlanningRunResult, list[ExtractionTask]]] | None
     ) = None
     methodology_extraction_tasks: list[ExtractionTask] = field(default_factory=list)
+    methodology_extraction_task_execution_fn: (
+        Callable[
+            ...,
+            tuple[MethodologyExtractionExecutionRunResult, MethodologyExtractionExecutionResult],
+        ]
+        | None
+    ) = None
+    methodology_extraction_execution_result: MethodologyExtractionExecutionResult | None = None
     calc_fn: Callable[..., dict[str, Any]] | None = None
     calc_types: list[CalcType] | None = None
     enrich_fn: Callable[..., dict[str, Any]] | None = None
@@ -214,6 +232,8 @@ class RunOrchestrator:
                     self._rehydrate_methodology_coverage_records(ctx)
                 if step_name == StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING:
                     self._rehydrate_methodology_extraction_tasks(ctx, accumulated)
+                if step_name == StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION:
+                    self._rehydrate_methodology_extraction_execution(ctx, existing.result_summary)
                 continue
 
             step = self._start_step(ctx, step_name, existing)
@@ -268,6 +288,8 @@ class RunOrchestrator:
             return self._execute_methodology_coverage_init(ctx)
         if step_name == StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING:
             return self._execute_methodology_extraction_task_planning(ctx, accumulated)
+        if step_name == StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION:
+            return self._execute_methodology_extraction_task_execution(ctx)
         if step_name == StepName.EXTRACT:
             return self._execute_extract(ctx)
         if step_name == StepName.GRADE:
@@ -456,6 +478,58 @@ class RunOrchestrator:
 
         ctx.methodology_registry = load_default_methodology_registry()
         return ctx.methodology_registry
+
+    def _execute_methodology_extraction_task_execution(
+        self,
+        ctx: RunContext,
+    ) -> dict[str, Any]:
+        """Execute planned methodology tasks without materializing claims."""
+        if not ctx.methodology_extraction_tasks:
+            raise RunStepBlockedError(
+                BLOCK_REASON_NO_PLANNED_EXTRACTION_TASKS,
+                "No planned methodology extraction tasks are attached to the run context",
+            )
+
+        if ctx.methodology_extraction_task_execution_fn is not None:
+            run_result, execution_result = ctx.methodology_extraction_task_execution_fn(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                tasks=ctx.methodology_extraction_tasks,
+                documents=ctx.documents,
+            )
+        else:
+            from idis.services.runs.methodology_extraction_task_execution import (
+                InMemoryRunMethodologyExtractionTaskExecutionService,
+            )
+
+            execution_service = InMemoryRunMethodologyExtractionTaskExecutionService()
+            run_result, execution_result = execution_service.run(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                tasks=ctx.methodology_extraction_tasks,
+                documents=ctx.documents,
+                extractor=None,
+            )
+
+        ctx.methodology_extraction_execution_result = execution_result
+        return run_result.to_run_step_summary()
+
+    def _rehydrate_methodology_extraction_execution(
+        self,
+        ctx: RunContext,
+        result_summary: dict[str, Any],
+    ) -> None:
+        """Attach a safe execution result shell when completed execution is skipped."""
+        if ctx.methodology_extraction_execution_result is not None:
+            return
+        ctx.methodology_extraction_execution_result = _execution_result_shell_from_summary(
+            tenant_id=ctx.tenant_id,
+            deal_id=ctx.deal_id,
+            run_id=ctx.run_id,
+            result_summary=result_summary,
+        )
 
     def _execute_extract(self, ctx: RunContext) -> dict[str, Any]:
         """Run extraction pipeline via injected callable.
@@ -887,3 +961,136 @@ class RunOrchestrator:
         if has_failed:
             return "FAILED"
         return "SUCCEEDED"
+
+
+def _execution_result_shell_from_summary(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+    result_summary: dict[str, Any],
+) -> MethodologyExtractionExecutionResult:
+    raw_summary = result_summary.get("summary")
+    summary_data: dict[str, Any] = raw_summary if isinstance(raw_summary, dict) else {}
+    raw_task_records = result_summary.get("task_results")
+    task_records: list[Any] = raw_task_records if isinstance(raw_task_records, list) else []
+    task_results = [
+        _task_result_shell_from_summary(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            run_id=run_id,
+            record=record,
+        )
+        for record in task_records
+        if isinstance(record, dict)
+    ]
+    summary = MethodologyExtractionExecutionSummary(
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        run_id=run_id,
+        total_tasks=_int_from_summary(summary_data, "total_tasks", len(task_results)),
+        executed_tasks=_int_from_summary(summary_data, "executed_tasks", 0),
+        skipped_tasks=_int_from_summary(summary_data, "skipped_tasks", 0),
+        failed_tasks=_int_from_summary(summary_data, "failed_tasks", 0),
+        accepted_output_count=_int_from_summary(summary_data, "accepted_output_count", 0),
+        rejected_output_count=_int_from_summary(summary_data, "rejected_output_count", 0),
+        accepted_draft_count=0,
+        rejected_draft_count=0,
+        by_status=_dict_from_summary(summary_data, "by_status"),
+        by_reason=_dict_from_summary(summary_data, "by_reason"),
+    )
+    return MethodologyExtractionExecutionResult(
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        run_id=run_id,
+        status=_execution_status_from_summary(result_summary, summary),
+        task_results=task_results,
+        accepted_outputs=[],
+        summary=summary,
+    )
+
+
+def _task_result_shell_from_summary(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+    record: dict[str, Any],
+) -> MethodologyTaskExecutionResult:
+    reason = _execution_reason(record.get("reason"))
+    reason_codes = record.get("reason_codes")
+    source_span_ids = record.get("source_span_ids")
+    return MethodologyTaskExecutionResult(
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        run_id=run_id,
+        extraction_task_id=str(record.get("extraction_task_id") or "unknown_execution_task"),
+        methodology_question_id=_optional_str(record.get("methodology_question_id")),
+        coverage_record_id=_optional_str(record.get("coverage_record_id")),
+        status=_task_status(record.get("status")),
+        accepted_outputs=[],
+        rejected_outputs=[],
+        reason=reason,
+        reason_codes=(
+            [str(item) for item in reason_codes]
+            if isinstance(reason_codes, list) and reason_codes
+            else ([reason.value] if reason is not None else ["rehydrated"])
+        ),
+        source_span_ids=(
+            [str(item) for item in source_span_ids] if isinstance(source_span_ids, list) else []
+        ),
+    )
+
+
+def _execution_status_from_summary(
+    result_summary: dict[str, Any],
+    summary: MethodologyExtractionExecutionSummary,
+) -> MethodologyExtractionExecutionStatus:
+    raw_status = str(result_summary.get("status") or "").lower()
+    try:
+        return MethodologyExtractionExecutionStatus(raw_status)
+    except ValueError:
+        if summary.failed_tasks == summary.total_tasks and summary.total_tasks > 0:
+            return MethodologyExtractionExecutionStatus.FAILED
+        if summary.failed_tasks > 0:
+            return MethodologyExtractionExecutionStatus.PARTIAL
+        return MethodologyExtractionExecutionStatus.COMPLETED
+
+
+def _task_status(value: object) -> MethodologyTaskExecutionStatus:
+    try:
+        return MethodologyTaskExecutionStatus(str(value).lower())
+    except ValueError:
+        return MethodologyTaskExecutionStatus.FAILED
+
+
+def _execution_reason(value: object) -> MethodologyExtractionExecutionReason | None:
+    if value is None:
+        return None
+    try:
+        return MethodologyExtractionExecutionReason(str(value).lower())
+    except ValueError:
+        return MethodologyExtractionExecutionReason.MALFORMED_EXTRACTOR_OUTPUT
+
+
+def _int_from_summary(summary_data: dict[str, Any], key: str, default: int) -> int:
+    value = summary_data.get(key)
+    return value if isinstance(value, int) and value >= 0 else default
+
+
+def _dict_from_summary(summary_data: dict[str, Any], key: str) -> dict[str, int]:
+    value = summary_data.get(key)
+    if not isinstance(value, dict):
+        return {}
+    return {
+        str(item_key): item_value
+        for item_key, item_value in value.items()
+        if isinstance(item_value, int) and item_value >= 0
+    }
+
+
+def _optional_str(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None

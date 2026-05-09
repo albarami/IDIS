@@ -62,9 +62,9 @@ def _span(span_id: str = "span-001") -> SourceSpanReference:
     )
 
 
-def _answer_schema() -> ExpectedAnswerSchema:
+def _answer_schema(answer_type: str = "narrative") -> ExpectedAnswerSchema:
     return ExpectedAnswerSchema(
-        answer_type="narrative",
+        answer_type=answer_type,
         question_text="Explain revenue quality.",
         required_evidence=[RequiredEvidence(evidence_type="schedule", description="Schedule")],
         required_calculations=[],
@@ -76,7 +76,7 @@ def _answer_schema() -> ExpectedAnswerSchema:
     )
 
 
-def _ready_task() -> ExtractionTask:
+def _ready_task(answer_type: str = "narrative") -> ExtractionTask:
     return ExtractionTask(
         tenant_id=TENANT_ID,
         deal_id=DEAL_ID,
@@ -94,7 +94,7 @@ def _ready_task() -> ExtractionTask:
         target_fdd_category=FddDocumentCategory.FINANCIAL_SCHEDULE_MODEL,
         target_cdd_category=CddDocumentCategory.BUSINESS_PLAN_ASSUMPTIONS,
         required_evidence=[RequiredEvidence(evidence_type="schedule", description="Schedule")],
-        expected_answer_schema=_answer_schema(),
+        expected_answer_schema=_answer_schema(answer_type),
         validation_requirements=["cite source spans"],
     )
 
@@ -165,8 +165,18 @@ def test_ready_task_with_synthetic_span_produces_methodology_linked_claim_draft(
     result = _execute([_ready_task()], extractor)
 
     assert result.summary.accepted_draft_count == 1
+    assert result.summary.accepted_output_count == 1
     assert extractor.calls[0][0]["span_id"] == "span-001"
     assert extractor.calls[0][1]["span_id"] == "span-002"
+
+    output = result.task_results[0].accepted_outputs[0]
+    assert output.methodology_extraction_output_id.startswith("meo_")
+    assert output.extraction_task_id == result.task_results[0].extraction_task_id
+    assert output.methodology_question_id == "mq_financial_dd_revenue_quality_0001"
+    assert output.answer_type == "narrative"
+    assert output.answer == {"text": "Revenue was $10M in FY2024."}
+    assert output.source_span_ids == ["span-001"]
+    assert output.extraction_confidence == Decimal("0.97")
 
     draft = result.accepted_claim_drafts[0]
     assert draft.methodology_claim_draft_id.startswith("mcd_")
@@ -196,6 +206,20 @@ def test_ready_task_with_synthetic_span_produces_methodology_linked_claim_draft(
         }
     ]
     assert "Revenue was $10M" not in str(span_metadata)
+
+
+def test_ready_task_output_must_match_expected_answer_schema() -> None:
+    result = _execute(
+        [_ready_task(answer_type="numeric")],
+        RecordingExtractor([_draft(value={"text": "not numeric"})]),
+    )
+
+    task_result = result.task_results[0]
+    assert task_result.status == MethodologyTaskExecutionStatus.FAILED
+    assert task_result.reason == MethodologyExtractionExecutionReason.SCHEMA_VALIDATION_FAILED
+    assert task_result.accepted_outputs == []
+    assert result.summary.accepted_output_count == 0
+    assert result.summary.rejected_output_count == 1
 
 
 def test_blocked_evidence_missing_and_not_applicable_tasks_are_skipped() -> None:
@@ -370,6 +394,23 @@ def test_blank_claim_text_class_missing_predicate_and_invalid_value_are_rejected
         )
 
 
+def test_wrong_type_draft_fields_are_rejected_without_crashing() -> None:
+    cases = [
+        _draft(claim_text=None),  # type: ignore[arg-type]
+        _draft(claim_class=None),  # type: ignore[arg-type]
+        _draft(predicate=123),  # type: ignore[arg-type]
+        _draft(span_id=123),  # type: ignore[arg-type]
+    ]
+
+    for draft in cases:
+        result = _execute([_ready_task()], RecordingExtractor([draft]))
+        assert result.task_results[0].status == MethodologyTaskExecutionStatus.FAILED
+        assert (
+            result.task_results[0].reason
+            == MethodologyExtractionExecutionReason.MALFORMED_EXTRACTOR_OUTPUT
+        )
+
+
 def test_extractor_exception_fails_closed() -> None:
     result = _execute([_ready_task()], RecordingExtractor(raises=RuntimeError("boom")))
 
@@ -384,7 +425,7 @@ def test_executor_does_not_import_persistence_or_external_integrations() -> None
     forbidden = [
         "ClaimService",
         "Sanad",
-        "coverage",
+        "InMemoryMethodologyCoverageService",
         "sqlalchemy",
         "FastAPI",
         "APIRouter",

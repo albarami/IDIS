@@ -96,7 +96,7 @@ def test_full_system_inventory_detects_phase_3_0c_coverage_init_baseline() -> No
 
 
 def test_full_system_inventory_detects_phase_3_0d_task_planning_baseline() -> None:
-    """Slice 4 task planning is visible without claiming persistence or execution."""
+    """Slice 4 task planning is visible without claiming persistence."""
     inventory = collect_wiring_inventory(REPO_ROOT)
 
     extraction_task = inventory["extraction_task_run_integration"]
@@ -108,8 +108,29 @@ def test_full_system_inventory_detects_phase_3_0d_task_planning_baseline() -> No
     assert any("methodology_extraction_tasks" in item for item in extraction_task.evidence)
     assert any("safe preflight summaries" in item for item in extraction_task.evidence)
     assert any("not persisted to Postgres" in item for item in extraction_task.gaps)
-    assert any("not executed" in item for item in extraction_task.gaps)
+    assert any("execution remains in memory" in item for item in extraction_task.gaps)
     assert live_execution.status == "DEFERRED"
+    assert persistence.status in {"DEFERRED", "PARTIAL"}
+
+
+def test_full_system_inventory_detects_phase_3_0e_task_execution_baseline() -> None:
+    """Slice 5 task execution is visible while downstream product layers stay deferred."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+
+    execution = inventory["methodology_extraction_run_integration"]
+    live_llm = inventory["methodology_extraction_live_llm_integration"]
+    persistence = inventory["methodology_extraction_postgres_persistence"]
+
+    assert execution.status == "PARTIAL"
+    assert any("METHODOLOGY_EXTRACTION_TASK_EXECUTION" in item for item in execution.evidence)
+    assert any("in-memory" in item.lower() for item in execution.evidence)
+    assert any("schema-validated" in item.lower() for item in execution.evidence)
+    assert any("Claims remain deferred" in item for item in execution.gaps)
+    assert any("EvidenceItems remain deferred" in item for item in execution.gaps)
+    assert any("Layer 1 Evidence Trust Court remains deferred" in item for item in execution.gaps)
+    assert any("Layer 2 IC Decision Debate remains deferred" in item for item in execution.gaps)
+    assert any("real data-room E2E remains deferred" in item for item in execution.gaps)
+    assert live_llm.status == "DEFERRED"
     assert persistence.status in {"DEFERRED", "PARTIAL"}
 
 
@@ -232,8 +253,8 @@ def test_full_system_inventory_detects_phase_2_5_execution_foundation() -> None:
         "DEFERRED",
     }
     assert inventory["methodology_extraction_run_integration"].status in {
-        "NOT_FOUND",
         "DEFERRED",
+        "PARTIAL",
     }
     assert inventory["methodology_extraction_live_llm_integration"].status in {
         "NOT_FOUND",

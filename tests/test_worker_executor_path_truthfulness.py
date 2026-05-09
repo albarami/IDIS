@@ -74,4 +74,4 @@ def test_worker_and_api_share_methodology_task_planning_behavior() -> None:
     assert task_planning.status == "PARTIAL"
     assert any("METHODOLOGY_EXTRACTION_TASK_PLANNING" in item for item in task_planning.evidence)
     assert any("build_run_context" in item for item in task_planning.evidence)
-    assert any("not executed" in item for item in task_planning.gaps)
+    assert any("execution remains in memory" in item for item in task_planning.gaps)

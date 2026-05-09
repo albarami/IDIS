@@ -235,6 +235,7 @@ class TestStepOrderingConstants:
             StepName.METHODOLOGY_EVIDENCE_ITEM_MATERIALIZATION,
             StepName.METHODOLOGY_SANAD_CREATION_LINKING_GRADING,
             StepName.METHODOLOGY_DETERMINISTIC_CALCULATION,
+            StepName.METHODOLOGY_TRUTH_DASHBOARD,
             StepName.EXTRACT,
             StepName.GRADE,
             StepName.CALC,
@@ -258,6 +259,7 @@ class TestStepOrderingConstants:
             StepName.METHODOLOGY_EVIDENCE_ITEM_MATERIALIZATION,
             StepName.METHODOLOGY_SANAD_CREATION_LINKING_GRADING,
             StepName.METHODOLOGY_DETERMINISTIC_CALCULATION,
+            StepName.METHODOLOGY_TRUTH_DASHBOARD,
             StepName.ENRICHMENT,
             StepName.ANALYSIS,
             StepName.SCORING,
@@ -299,8 +301,8 @@ class TestFullVsSnapshotEnforcement:
         for full_only in FULL_ONLY_STEPS:
             assert full_only not in step_names
 
-    def test_full_has_seventeen_steps(self) -> None:
-        """FULL mode completes with all 17 steps."""
+    def test_full_has_eighteen_steps(self) -> None:
+        """FULL mode completes with all 18 steps."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -309,7 +311,7 @@ class TestFullVsSnapshotEnforcement:
         result = orchestrator.execute(ctx)
 
         assert result.status == "SUCCEEDED"
-        assert len(result.steps) == 17
+        assert len(result.steps) == 18
         step_names = [step.step_name for step in result.steps]
         assert step_names.index(StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING) < (
             step_names.index(StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION)
@@ -414,7 +416,7 @@ class TestResumeSkipsCompletedSteps:
 
         result1 = orchestrator.execute(ctx)
         assert result1.status == "SUCCEEDED"
-        assert len(result1.steps) == 17
+        assert len(result1.steps) == 18
 
         call_count = {"enrichment": 0}
         original_enrich = _stub_enrichment

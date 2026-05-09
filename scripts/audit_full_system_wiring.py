@@ -171,6 +171,9 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             "methodology_deterministic_calculation_run_integration": (
                 _methodology_deterministic_calculation_run_integration(root, files)
             ),
+            "methodology_truth_dashboard_run_integration": (
+                _methodology_truth_dashboard_run_integration(root, files)
+            ),
             "methodology_claim_materialization_sanad_integration": (
                 _methodology_claim_materialization_sanad_integration(files)
             ),
@@ -497,6 +500,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/models/evidence_item_materialization.py",
         "src/idis/models/sanad_materialization.py",
         "src/idis/models/calc_materialization.py",
+        "src/idis/models/truth_dashboard_materialization.py",
         "src/idis/services/extraction/claim_materializer.py",
         "src/idis/services/runs/methodology_claim_materialization.py",
         "src/idis/services/runs/methodology_evidence_item_materialization.py",
@@ -504,6 +508,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/services/runs/methodology_sanad_creation_helpers.py",
         "src/idis/services/runs/methodology_deterministic_calculation.py",
         "src/idis/services/runs/methodology_deterministic_calculation_helpers.py",
+        "src/idis/services/runs/methodology_truth_dashboard.py",
         "src/idis/services/extraction/claim_materialization_audit.py",
         "src/idis/models/sanad_coverage_boundary.py",
         "src/idis/services/methodology/sanad_coverage_boundary.py",
@@ -523,6 +528,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/debate/muhasabah_gate.py",
         "src/idis/validators/no_free_facts.py",
         "src/idis/validators/deliverable.py",
+        "src/idis/deliverables/truth_dashboard.py",
         "src/idis/deliverables/generator.py",
         "src/idis/audit/sink.py",
         "src/idis/audit/postgres_sink.py",
@@ -1819,6 +1825,65 @@ def _methodology_deterministic_calculation_run_integration(
             "real data-room E2E remains deferred.",
         ],
         phase_2_action="Phase 3.0 Slice 9",
+    )
+
+
+def _methodology_truth_dashboard_run_integration(
+    root: Path,
+    files: dict[str, str],
+) -> WiringItem:
+    model_text = files.get("src/idis/models/truth_dashboard_materialization.py", "")
+    service_text = files.get("src/idis/services/runs/methodology_truth_dashboard.py", "")
+    deliverable_text = files.get("src/idis/deliverables/truth_dashboard.py", "")
+    validator_text = files.get("src/idis/validators/deliverable.py", "")
+    run_text = (
+        files.get("src/idis/models/run_step.py", "")
+        + files.get("src/idis/services/runs/orchestrator.py", "")
+        + files.get("src/idis/services/runs/steps.py", "")
+    )
+    integrated = (
+        _exists(root, "src/idis/models/truth_dashboard_materialization.py")
+        and _exists(root, "src/idis/services/runs/methodology_truth_dashboard.py")
+        and "METHODOLOGY_TRUTH_DASHBOARD" in run_text
+        and "InMemoryRunMethodologyTruthDashboardService" in service_text
+        and "TruthDashboardBuilder" in service_text
+        and "validate_deliverable_no_free_facts" in service_text
+        and "RunScopedTruthDashboardRecord" in model_text
+        and "RunScopedTruthDashboardShell" in model_text
+        and "TruthDashboardBuilder" in deliverable_text
+        and "validate_truth_dashboard" in validator_text
+    )
+    return WiringItem(
+        key="methodology_truth_dashboard_run_integration",
+        label="Methodology Truth Dashboard run integration",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary=(
+            "in-memory run-scoped Truth Dashboard boundary exists; durable Truth "
+            "Dashboard persistence remains deferred."
+        ),
+        evidence=[
+            "FULL runs include METHODOLOGY_TRUTH_DASHBOARD after deterministic calculation "
+            "and before legacy EXTRACT.",
+            "Slice 10 reuses TruthDashboardBuilder, TruthDashboard/TruthRow deliverable "
+            "models, and deliverable No-Free-Facts validation where safe.",
+            "RunContext carries a methodology_truth_dashboard record or safe shell in memory.",
+            "Run-step summaries include safe IDs, verdict/grade/status counts, and reason "
+            "codes only.",
+            "API get_deal_truth_dashboard and UI/OpenAPI dashboard contracts are inventory "
+            "only, not Slice 10 runtime dependencies.",
+        ],
+        gaps=[
+            "durable Truth Dashboard persistence remains deferred.",
+            "API/UI/OpenAPI exposure remains deferred.",
+            "deliverables integration remains deferred.",
+            "Layer 1 Evidence Trust Court remains deferred.",
+            "Validated Evidence Package remains deferred.",
+            "enrichment/API checks remain deferred.",
+            "Layer 2 IC Debate remains deferred.",
+            "GO/CONDITIONAL/NO-GO package remains deferred.",
+            "real data-room E2E remains deferred.",
+        ],
+        phase_2_action="Phase 3.0 Slice 10",
     )
 
 

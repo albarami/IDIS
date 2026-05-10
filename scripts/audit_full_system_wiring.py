@@ -183,6 +183,9 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             "methodology_external_intelligence_conflict_check_plan_run_integration": (
                 _methodology_external_intelligence_conflict_check_plan_run_integration(root, files)
             ),
+            "methodology_layer2_readiness_package_run_integration": (
+                _methodology_layer2_readiness_package_run_integration(root, files)
+            ),
             "methodology_claim_materialization_sanad_integration": (
                 _methodology_claim_materialization_sanad_integration(files)
             ),
@@ -513,6 +516,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/models/evidence_trust_court_materialization.py",
         "src/idis/models/validated_evidence_package_materialization.py",
         "src/idis/models/external_intelligence_conflict_check_plan_materialization.py",
+        "src/idis/models/layer2_readiness_package_materialization.py",
         "src/idis/services/extraction/claim_materializer.py",
         "src/idis/services/runs/methodology_claim_materialization.py",
         "src/idis/services/runs/methodology_evidence_item_materialization.py",
@@ -525,6 +529,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/services/runs/methodology_evidence_trust_court_helpers.py",
         "src/idis/services/runs/methodology_validated_evidence_package.py",
         "src/idis/services/runs/methodology_external_intelligence_conflict_check_plan.py",
+        "src/idis/services/runs/methodology_layer2_readiness_package.py",
         "src/idis/services/extraction/claim_materialization_audit.py",
         "src/idis/models/sanad_coverage_boundary.py",
         "src/idis/services/methodology/sanad_coverage_boundary.py",
@@ -2078,6 +2083,81 @@ def _methodology_external_intelligence_conflict_check_plan_run_integration(
         ],
         phase_2_action="Phase 3.0 Slice 13",
         metadata={"live_calls_performed": False},
+    )
+
+
+def _methodology_layer2_readiness_package_run_integration(
+    root: Path,
+    files: dict[str, str],
+) -> WiringItem:
+    model_text = files.get("src/idis/models/layer2_readiness_package_materialization.py", "")
+    service_text = files.get(
+        "src/idis/services/runs/methodology_layer2_readiness_package.py",
+        "",
+    )
+    run_text = (
+        files.get("src/idis/models/run_step.py", "")
+        + files.get("src/idis/services/runs/orchestrator.py", "")
+        + files.get("src/idis/services/runs/steps.py", "")
+    )
+    forbidden_calls_absent = all(
+        forbidden not in service_text
+        for forbidden in (
+            "DebateOrchestrator",
+            "AnalysisEngine",
+            "ScoringEngine",
+            "DeliverablesGenerator",
+            "EnrichmentService",
+            ".enrich(",
+            ".fetch(",
+        )
+    )
+    integrated = (
+        _exists(root, "src/idis/models/layer2_readiness_package_materialization.py")
+        and _exists(root, "src/idis/services/runs/methodology_layer2_readiness_package.py")
+        and "METHODOLOGY_LAYER2_READINESS_PACKAGE" in run_text
+        and "RunScopedLayer2ReadinessPackageRecord" in model_text
+        and "RunScopedLayer2ReadinessPackageShell" in model_text
+        and "construction_status" in model_text
+        and "readiness_status" in model_text
+        and "InMemoryRunMethodologyLayer2ReadinessPackageService" in service_text
+        and forbidden_calls_absent
+    )
+    return WiringItem(
+        key="methodology_layer2_readiness_package_run_integration",
+        label="Methodology Layer 2 readiness package run integration",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary=(
+            "Layer 2 readiness package boundary exists; IC debate, scoring, routing "
+            "vocabulary changes, deliverables, APIs, persistence, and live provider "
+            "calls remain deferred."
+        ),
+        evidence=[
+            "FULL runs include METHODOLOGY_LAYER2_READINESS_PACKAGE after the Slice 13 "
+            "plan and before legacy EXTRACT.",
+            "Layer 2 readiness/input-boundary package consumes VEP and external "
+            "intelligence plan records or safe shells only.",
+            "Run-step summaries expose construction_status and readiness_status as "
+            "separate fields.",
+            "Current Slice 13 plan-only inputs are expected to produce deferred or "
+            "blocked readiness, not ready.",
+            "No Layer 2 engines or live provider calls are performed by the readiness boundary.",
+        ],
+        gaps=[
+            "IC debate remains deferred.",
+            "GO/CONDITIONAL/NO-GO remains deferred.",
+            "INVEST/HOLD/DECLINE mapping remains deferred.",
+            "scorecard execution remains deferred.",
+            "deliverables, API/UI/OpenAPI, and real E2E remain deferred.",
+            "live provider calls remain deferred.",
+            "PitchBook/Crunchbase connectors remain deferred.",
+            "durable Layer 2 readiness package persistence remains deferred.",
+        ],
+        phase_2_action="Phase 3.0 Slice 14",
+        metadata={
+            "layer2_execution_performed": False,
+            "ready_expected_for_current_slice13_inputs": False,
+        },
     )
 
 

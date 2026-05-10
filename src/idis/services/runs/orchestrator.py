@@ -73,6 +73,14 @@ from idis.models.extraction_execution import (
     MethodologyTaskExecutionStatus,
 )
 from idis.models.extraction_task import ExtractionTask, ExtractionTaskPlanningRunResult
+from idis.models.layer2_readiness_package_materialization import (
+    MethodologyLayer2ReadinessPackageConstructionStatus,
+    MethodologyLayer2ReadinessPackageRunResult,
+    MethodologyLayer2ReadinessStatus,
+    RunScopedLayer2ReadinessPackageRecord,
+    RunScopedLayer2ReadinessPackageShell,
+    RunScopedLayer2ReadinessPackageSummary,
+)
 from idis.models.methodology_coverage import (
     MethodologyCoverageInitializationResult,
     MethodologyCoverageRecord,
@@ -324,6 +332,19 @@ class RunContext:
         | RunScopedExternalIntelligenceConflictCheckPlanShell
         | None
     ) = None
+    methodology_layer2_readiness_package_fn: (
+        Callable[
+            ...,
+            tuple[
+                MethodologyLayer2ReadinessPackageRunResult,
+                list[RunScopedLayer2ReadinessPackageRecord],
+            ],
+        ]
+        | None
+    ) = None
+    methodology_layer2_readiness_package: (
+        RunScopedLayer2ReadinessPackageRecord | RunScopedLayer2ReadinessPackageShell | None
+    ) = None
     calc_fn: Callable[..., dict[str, Any]] | None = None
     calc_types: list[CalcType] | None = None
     enrich_fn: Callable[..., dict[str, Any]] | None = None
@@ -437,6 +458,11 @@ class RunOrchestrator:
                         ctx,
                         existing.result_summary,
                     )
+                if step_name == StepName.METHODOLOGY_LAYER2_READINESS_PACKAGE:
+                    self._rehydrate_methodology_layer2_readiness_package(
+                        ctx,
+                        existing.result_summary,
+                    )
                 continue
 
             step = self._start_step(ctx, step_name, existing)
@@ -512,6 +538,8 @@ class RunOrchestrator:
                 ctx,
                 accumulated,
             )
+        if step_name == StepName.METHODOLOGY_LAYER2_READINESS_PACKAGE:
+            return self._execute_methodology_layer2_readiness_package(ctx, accumulated)
         if step_name == StepName.EXTRACT:
             return self._execute_extract(ctx)
         if step_name == StepName.GRADE:
@@ -1159,6 +1187,76 @@ class RunOrchestrator:
             )
         return summary
 
+    def _execute_methodology_layer2_readiness_package(
+        self,
+        ctx: RunContext,
+        accumulated: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Build a safe Layer 2 readiness package from VEP and Slice 13 plan data."""
+        if ctx.methodology_validated_evidence_package is None:
+            if (
+                accumulated is not None
+                and _is_empty_external_intelligence_conflict_check_plan_summary(accumulated)
+            ):
+                return _empty_layer2_readiness_package_summary(
+                    tenant_id=ctx.tenant_id,
+                    deal_id=ctx.deal_id,
+                    run_id=ctx.run_id,
+                )
+            raise RunStepBlockedError(
+                "METHODOLOGY_VALIDATED_EVIDENCE_PACKAGE_MISSING",
+                "Layer 2 readiness package requires VEP context",
+            )
+        if ctx.methodology_external_intelligence_conflict_check_plan is None:
+            if (
+                accumulated is not None
+                and _is_empty_external_intelligence_conflict_check_plan_summary(accumulated)
+            ):
+                return _empty_layer2_readiness_package_summary(
+                    tenant_id=ctx.tenant_id,
+                    deal_id=ctx.deal_id,
+                    run_id=ctx.run_id,
+                )
+            raise RunStepBlockedError(
+                "METHODOLOGY_EXTERNAL_INTELLIGENCE_CONFLICT_CHECK_PLAN_MISSING",
+                "Layer 2 readiness package requires external intelligence plan context",
+            )
+
+        if ctx.methodology_layer2_readiness_package_fn is not None:
+            run_result, packages = ctx.methodology_layer2_readiness_package_fn(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                validated_evidence_packages=[ctx.methodology_validated_evidence_package],
+                external_intelligence_conflict_check_plans=[
+                    ctx.methodology_external_intelligence_conflict_check_plan
+                ],
+            )
+        else:
+            from idis.services.runs.methodology_layer2_readiness_package import (
+                InMemoryRunMethodologyLayer2ReadinessPackageService,
+            )
+
+            run_result, packages = InMemoryRunMethodologyLayer2ReadinessPackageService().run(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                validated_evidence_packages=[ctx.methodology_validated_evidence_package],
+                external_intelligence_conflict_check_plans=[
+                    ctx.methodology_external_intelligence_conflict_check_plan
+                ],
+            )
+
+        ctx.methodology_layer2_readiness_package = packages[0] if packages else None
+        summary = run_result.to_run_step_summary()
+        if run_result.construction_status.value == "failed":
+            raise RunStepBlockedError(
+                "METHODOLOGY_LAYER2_READINESS_PACKAGE_FAILED",
+                "Layer 2 readiness package failed closed",
+                result_summary=summary,
+            )
+        return summary
+
     def _rehydrate_methodology_extraction_execution(
         self,
         ctx: RunContext,
@@ -1391,6 +1489,23 @@ class RunOrchestrator:
         )
         if shell is not None:
             ctx.methodology_external_intelligence_conflict_check_plan = shell
+
+    def _rehydrate_methodology_layer2_readiness_package(
+        self,
+        ctx: RunContext,
+        result_summary: dict[str, Any],
+    ) -> None:
+        """Attach a safe Layer 2 readiness package shell when Slice 14 is skipped."""
+        if ctx.methodology_layer2_readiness_package is not None:
+            return
+        shell = _layer2_readiness_package_shell_from_summary(
+            tenant_id=ctx.tenant_id,
+            deal_id=ctx.deal_id,
+            run_id=ctx.run_id,
+            result_summary=result_summary,
+        )
+        if shell is not None:
+            ctx.methodology_layer2_readiness_package = shell
 
     def _execute_extract(self, ctx: RunContext) -> dict[str, Any]:
         """Run extraction pipeline via injected callable.
@@ -2250,6 +2365,51 @@ def _external_intelligence_conflict_check_plan_shell_from_summary(
         return None
 
 
+def _layer2_readiness_package_shell_from_summary(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+    result_summary: dict[str, Any],
+) -> RunScopedLayer2ReadinessPackageShell | None:
+    readiness_package_ids = _str_list(result_summary.get("readiness_package_ids"))
+    vep_package_ids = _str_list(result_summary.get("source_vep_package_ids"))
+    external_plan_ids = _str_list(result_summary.get("source_external_intelligence_plan_ids"))
+    if not readiness_package_ids or not vep_package_ids or not external_plan_ids:
+        return None
+    raw_summary = result_summary.get("summary")
+    summary: dict[str, Any] = raw_summary if isinstance(raw_summary, dict) else {}
+    try:
+        return RunScopedLayer2ReadinessPackageShell(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            run_id=run_id,
+            readiness_package_id=readiness_package_ids[0],
+            source_vep_package_id=vep_package_ids[0],
+            source_external_intelligence_plan_id=external_plan_ids[0],
+            claim_ids=_str_list(result_summary.get("claim_ids")),
+            calc_ids=_str_list(result_summary.get("calc_ids")),
+            provider_check_ids=_str_list(result_summary.get("provider_check_ids")),
+            executed_provider_check_ids=_str_list(
+                result_summary.get("executed_provider_check_ids")
+            ),
+            company_identity_ids=_str_list(result_summary.get("company_identity_ids")),
+            enrichment_fact_ids=_str_list(result_summary.get("enrichment_fact_ids")),
+            construction_status=MethodologyLayer2ReadinessPackageConstructionStatus(
+                str(result_summary.get("construction_status") or "completed")
+            ),
+            readiness_status=MethodologyLayer2ReadinessStatus(
+                str(result_summary.get("readiness_status") or "deferred")
+            ),
+            reason_codes=_str_list(result_summary.get("reason_codes")),
+            blocker_ids=_str_list(result_summary.get("blocker_ids")),
+            by_reason=_dict_from_summary(summary, "by_reason"),
+            by_blocker_severity=_dict_from_summary(summary, "by_blocker_severity"),
+        )
+    except ValueError:
+        return None
+
+
 def _empty_evidence_trust_court_summary(
     *,
     tenant_id: str,
@@ -2339,6 +2499,39 @@ def _empty_external_intelligence_conflict_check_plan_summary(
     ).to_run_step_summary()
 
 
+def _empty_layer2_readiness_package_summary(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+) -> dict[str, Any]:
+    summary = RunScopedLayer2ReadinessPackageSummary(
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        run_id=run_id,
+        package_count=0,
+        claim_count=0,
+        calc_count=0,
+        provider_check_count=0,
+        executed_provider_check_count=0,
+        blocker_count=0,
+        construction_status=MethodologyLayer2ReadinessPackageConstructionStatus.COMPLETED,
+        readiness_status=MethodologyLayer2ReadinessStatus.DEFERRED,
+        by_reason={},
+        by_blocker_severity={},
+    )
+    return MethodologyLayer2ReadinessPackageRunResult(
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        run_id=run_id,
+        construction_status=MethodologyLayer2ReadinessPackageConstructionStatus.COMPLETED,
+        readiness_status=MethodologyLayer2ReadinessStatus.DEFERRED,
+        package_shells=[],
+        rejections=[],
+        summary=summary,
+    ).to_run_step_summary()
+
+
 def _is_empty_evidence_trust_court_summary(result_summary: dict[str, Any]) -> bool:
     raw_summary = result_summary.get("summary")
     summary: dict[str, Any] = raw_summary if isinstance(raw_summary, dict) else {}
@@ -2356,6 +2549,18 @@ def _is_empty_validated_evidence_package_summary(result_summary: dict[str, Any])
         not _str_list(result_summary.get("package_ids"))
         and _int_from_summary(summary, "package_count", 0) == 0
         and _int_from_summary(summary, "packaged_claim_count", 0) == 0
+    )
+
+
+def _is_empty_external_intelligence_conflict_check_plan_summary(
+    result_summary: dict[str, Any],
+) -> bool:
+    raw_summary = result_summary.get("summary")
+    summary: dict[str, Any] = raw_summary if isinstance(raw_summary, dict) else {}
+    return (
+        not _str_list(result_summary.get("plan_ids"))
+        and _int_from_summary(summary, "plan_count", 0) == 0
+        and _int_from_summary(summary, "check_count", 0) == 0
     )
 
 

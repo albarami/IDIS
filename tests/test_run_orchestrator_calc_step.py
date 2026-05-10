@@ -165,8 +165,9 @@ class TestCalcStepMissingCalcFnFailsClosed:
         assert "calc_fn not provided" in (calc_step.error_message or "")
 
         completed_steps = [s for s in result.steps if s.status == StepStatus.COMPLETED]
-        assert len(completed_steps) == 5
+        assert len(completed_steps) == 6
         assert [s.step_name for s in completed_steps] == [
+            StepName.DATA_ROOM_INVENTORY_PACKAGE,
             StepName.INGEST_CHECK,
             StepName.DOCUMENT_PREFLIGHT,
             StepName.METHODOLOGY_COVERAGE_INIT,

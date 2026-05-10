@@ -31,9 +31,27 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Documents"])
 
-ALLOWED_URI_SCHEMES = frozenset({"idis://", "s3://", "file://"})
+ALLOWED_URI_SCHEMES = frozenset({"idis://", "s3://"})
 MAX_LIMIT = 200
 DEFAULT_LIMIT = 50
+FORBIDDEN_SUMMARY_METADATA_KEYS = frozenset(
+    {
+        "base64",
+        "bytes",
+        "content",
+        "content_b64",
+        "content_sha256",
+        "excerpt",
+        "parsed_text",
+        "raw_bytes",
+        "raw_content",
+        "raw_text",
+        "span",
+        "spans",
+        "text",
+        "text_excerpt",
+    }
+)
 
 
 class DocType(StrEnum):
@@ -80,9 +98,12 @@ class DocumentArtifactResponse(BaseModel):
     source_system: str
     version_id: str
     ingested_at: str
+    document_id: str | None = None
+    parse_status: str | None = None
     sha256: str | None = None
     uri: str | None = None
     metadata: dict[str, Any] | None = None
+    source_metadata: dict[str, Any] | None = None
 
 
 class PaginatedDocumentList(BaseModel):
@@ -97,6 +118,7 @@ class RunRef(BaseModel):
 
     run_id: str
     status: str
+    document_id: str | None = None
 
 
 class IngestDocumentRequest(BaseModel):
@@ -255,6 +277,10 @@ class _DocumentStore:
         """Map a route doc_id to the IngestionService's internal document_id."""
         key = f"{tenant_id}:{doc_id}"
         self._ingestion_doc_ids[key] = ingestion_document_id
+        artifact = self._artifacts.get(key)
+        if artifact is not None:
+            artifact["document_id"] = ingestion_document_id
+            artifact["parse_status"] = "PARSED"
 
     def get_ingestion_document_id(self, tenant_id: str, doc_id: str) -> str | None:
         """Get the IngestionService document_id for a route doc_id."""
@@ -289,11 +315,61 @@ def _decode_cursor(cursor: str | None) -> dict[str, str] | None:
         return None
 
 
+def _decode_offset_cursor(cursor: str | None) -> int:
+    """Decode an offset-style cursor used by durable repository listing."""
+    decoded = _decode_cursor(cursor)
+    if decoded is None:
+        return 0
+    try:
+        return max(0, int(decoded.get("offset", 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _encode_offset_cursor(offset: int) -> str:
+    """Encode an offset-style cursor."""
+    return base64.urlsafe_b64encode(json.dumps({"offset": offset}).encode()).decode()
+
+
 def _is_uri_scheme_allowed(uri: str) -> bool:
     """Check if URI scheme is in the allowlist (SSRF protection)."""
     if not uri:
         return False
     return any(uri.startswith(scheme) for scheme in ALLOWED_URI_SCHEMES)
+
+
+def _reject_unsafe_document_uri(uri: str | None) -> None:
+    """Reject public document URIs that imply local files or unsupported sources."""
+    if not uri:
+        return
+    if not _is_uri_scheme_allowed(uri):
+        raise IdisHttpError(
+            status_code=400,
+            code="BAD_REQUEST",
+            message="Unsupported URI scheme for document registration",
+            details={
+                "uri": uri,
+                "allowed_schemes": sorted(ALLOWED_URI_SCHEMES),
+            },
+        )
+    object_key = _strip_uri_scheme(uri)
+    normalized_key = object_key.replace("\\", "/")
+    path_parts = [part for part in normalized_key.split("/") if part]
+    first_part = path_parts[0] if path_parts else ""
+    is_path_like = (
+        object_key.startswith(("/", "\\"))
+        or normalized_key.startswith("../")
+        or "/../" in normalized_key
+        or normalized_key.endswith("/..")
+        or (len(first_part) == 2 and first_part[1] == ":")
+    )
+    if is_path_like:
+        raise IdisHttpError(
+            status_code=400,
+            code="BAD_REQUEST",
+            message="Document URI must be an object key, not a local filesystem path",
+            details={"uri": uri},
+        )
 
 
 def _strip_uri_scheme(uri: str) -> str:
@@ -421,6 +497,65 @@ def _emit_ingestion_audit(
     audit_sink.emit(event)
 
 
+def _safe_summary_metadata(value: Any) -> Any:
+    """Return JSON-like metadata with raw content/excerpt keys removed."""
+    if isinstance(value, dict):
+        safe: dict[str, Any] = {}
+        for key, nested_value in value.items():
+            normalized_key = str(key).lower()
+            if normalized_key in FORBIDDEN_SUMMARY_METADATA_KEYS:
+                continue
+            safe_value = _safe_summary_metadata(nested_value)
+            if safe_value is not None:
+                safe[str(key)] = safe_value
+        return safe
+    if isinstance(value, list):
+        safe_list = [
+            safe_item for item in value if (safe_item := _safe_summary_metadata(item)) is not None
+        ]
+        return safe_list
+    return value
+
+
+def _document_summary_from_durable_row(document: dict[str, Any]) -> DocumentArtifactResponse:
+    """Convert a durable document row to a safe public summary."""
+    source_metadata = document.get("source_metadata") or {}
+    return DocumentArtifactResponse(
+        doc_id=str(document["doc_id"]),
+        document_id=str(document["document_id"]),
+        deal_id=str(document["deal_id"]),
+        doc_type=str(document.get("artifact_doc_type") or document["doc_type"]),
+        title=str(document.get("document_name") or document["document_id"]),
+        source_system=str(source_metadata.get("source_system") or "ingestion"),
+        version_id=str(document.get("sha256") or document["doc_id"])[:12],
+        ingested_at=str(document.get("created_at") or document.get("updated_at") or ""),
+        parse_status=str(document.get("parse_status") or ""),
+        sha256=document.get("sha256"),
+        uri=document.get("uri"),
+        metadata=_safe_summary_metadata(document.get("metadata") or {}),
+        source_metadata=_safe_summary_metadata(source_metadata),
+    )
+
+
+def _document_summary_from_memory_artifact(artifact: dict[str, Any]) -> DocumentArtifactResponse:
+    """Convert an in-memory artifact to the legacy public summary shape."""
+    return DocumentArtifactResponse(
+        doc_id=artifact["doc_id"],
+        document_id=artifact.get("document_id"),
+        deal_id=artifact["deal_id"],
+        doc_type=artifact["doc_type"],
+        title=artifact["title"],
+        source_system=artifact["source_system"],
+        version_id=artifact["version_id"],
+        ingested_at=artifact["ingested_at"],
+        parse_status=artifact.get("parse_status"),
+        sha256=artifact.get("sha256"),
+        uri=artifact.get("uri"),
+        metadata=artifact.get("metadata"),
+        source_metadata=None,
+    )
+
+
 def _trigger_auto_ingest(
     *,
     request: Request,
@@ -517,6 +652,7 @@ def _trigger_auto_ingest(
 
 @router.get("/v1/deals/{deal_id}/documents", response_model=PaginatedDocumentList)
 def list_deal_documents(
+    request: Request,
     deal_id: str,
     tenant_ctx: RequireTenantContext,
     limit: int = DEFAULT_LIMIT,
@@ -537,6 +673,22 @@ def list_deal_documents(
         PaginatedDocumentList with items and optional next_cursor.
     """
     effective_limit = min(max(1, limit), MAX_LIMIT)
+    db_conn = getattr(request.state, "db_conn", None)
+    if db_conn is not None:
+        from idis.persistence.repositories.documents import PostgresDocumentsRepository
+
+        offset = _decode_offset_cursor(cursor)
+        documents = PostgresDocumentsRepository(
+            db_conn,
+            tenant_ctx.tenant_id,
+        ).list_documents_by_deal(deal_id, parsed_only=False)
+        page_documents = documents[offset : offset + effective_limit]
+        response_items = [
+            _document_summary_from_durable_row(document) for document in page_documents
+        ]
+        next_offset = offset + len(page_documents)
+        next_cursor = _encode_offset_cursor(next_offset) if next_offset < len(documents) else None
+        return PaginatedDocumentList(items=response_items, next_cursor=next_cursor)
 
     decoded_cursor = _decode_cursor(cursor)
 
@@ -547,23 +699,52 @@ def list_deal_documents(
         cursor=decoded_cursor,
     )
 
-    response_items = [
-        DocumentArtifactResponse(
-            doc_id=item["doc_id"],
-            deal_id=item["deal_id"],
-            doc_type=item["doc_type"],
-            title=item["title"],
-            source_system=item["source_system"],
-            version_id=item["version_id"],
-            ingested_at=item["ingested_at"],
-            sha256=item.get("sha256"),
-            uri=item.get("uri"),
-            metadata=item.get("metadata"),
-        )
-        for item in items
-    ]
+    response_items = [_document_summary_from_memory_artifact(item) for item in items]
 
     return PaginatedDocumentList(items=response_items, next_cursor=next_cursor)
+
+
+@router.get(
+    "/v1/deals/{deal_id}/documents/{document_id}",
+    response_model=DocumentArtifactResponse,
+    summary="Get durable document summary",
+    description="Retrieve a safe deal-scoped durable document summary for run-source use.",
+    responses={
+        200: {"description": "Document summary retrieved successfully"},
+        404: {"description": "Document not found"},
+    },
+)
+def get_deal_document_summary(
+    deal_id: str,
+    document_id: str,
+    request: Request,
+    tenant_ctx: RequireTenantContext,
+) -> DocumentArtifactResponse:
+    """Get a safe durable document summary for one deal/document."""
+    db_conn = getattr(request.state, "db_conn", None)
+    if db_conn is not None:
+        from idis.persistence.repositories.documents import PostgresDocumentsRepository
+
+        document = PostgresDocumentsRepository(db_conn, tenant_ctx.tenant_id).get_document(
+            document_id
+        )
+        if document is None or str(document.get("deal_id")) != deal_id:
+            raise IdisHttpError(
+                status_code=404,
+                code="NOT_FOUND",
+                message="Document not found",
+            )
+        return _document_summary_from_durable_row(document)
+
+    for artifact in _document_store._artifacts.values():
+        if artifact.get("tenant_id") != tenant_ctx.tenant_id:
+            continue
+        if artifact.get("deal_id") != deal_id:
+            continue
+        if artifact.get("document_id") == document_id or artifact.get("doc_id") == document_id:
+            return _document_summary_from_memory_artifact(artifact)
+
+    raise IdisHttpError(status_code=404, code="NOT_FOUND", message="Document not found")
 
 
 @router.post(
@@ -596,20 +777,7 @@ def create_deal_document(
     Raises:
         IdisHttpError: 400 if auto_ingest=true with unsupported URI scheme.
     """
-    if (
-        request_body.auto_ingest
-        and request_body.uri
-        and not _is_uri_scheme_allowed(request_body.uri)
-    ):
-        raise IdisHttpError(
-            status_code=400,
-            code="BAD_REQUEST",
-            message="Unsupported URI scheme for auto-ingestion",
-            details={
-                "uri": request_body.uri,
-                "allowed_schemes": list(ALLOWED_URI_SCHEMES),
-            },
-        )
+    _reject_unsafe_document_uri(request_body.uri)
 
     if request_body.auto_ingest:
         ingestion_service = getattr(request.app.state, "ingestion_service", None)
@@ -668,6 +836,8 @@ def create_deal_document(
         source_system=artifact["source_system"],
         version_id=artifact["version_id"],
         ingested_at=artifact["ingested_at"],
+        document_id=artifact.get("document_id"),
+        parse_status=artifact.get("parse_status"),
         sha256=artifact.get("sha256"),
         uri=artifact.get("uri"),
         metadata=artifact.get("metadata"),
@@ -851,7 +1021,13 @@ def ingest_document(
                     idempotency_key=idempotency_key,
                     error_message=None if result.success else "Ingestion failed",
                 )
-                return RunRef(run_id=run["run_id"], status=run["status"])
+                return RunRef(
+                    run_id=run["run_id"],
+                    status=run["status"],
+                    document_id=str(result.document_id)
+                    if result.success and result.document_id is not None
+                    else None,
+                )
 
             except IdisHttpError as e:
                 _COMPLIANCE_DENIAL_CODES = frozenset(

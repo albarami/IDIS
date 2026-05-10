@@ -10,6 +10,8 @@ E) Ingest failure cases: missing uri, unsupported scheme, sha256 mismatch
 
 import json
 import uuid
+from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,6 +22,9 @@ from idis.api.routes.deals import clear_deals_store
 from idis.api.routes.documents import clear_document_store
 from idis.audit.sink import InMemoryAuditSink
 from idis.idempotency.store import SqliteIdempotencyStore
+
+DOCUMENT_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+ARTIFACT_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 
 
 @pytest.fixture
@@ -147,6 +152,94 @@ def client_multi_tenant(
     return TestClient(app)
 
 
+def _client_with_fake_db(
+    *,
+    api_keys_config: dict[str, dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+    row: MagicMock | list[MagicMock],
+) -> TestClient:
+    """Create a test client with a request-scoped fake document DB row."""
+    clear_deals_store()
+    clear_document_store()
+    monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys_config))
+
+    app = create_app(
+        audit_sink=InMemoryAuditSink(),
+        idempotency_store=SqliteIdempotencyStore(in_memory=True),
+    )
+    fake_conn = _FakeDocumentDbConn(row)
+
+    @app.middleware("http")
+    async def _fake_db_conn_middleware(request: Any, call_next: Any) -> Any:
+        request.state.db_conn = fake_conn
+        return await call_next(request)
+
+    return TestClient(app)
+
+
+class _FakeDocumentDbConn:
+    """Minimal DB connection for PostgresDocumentsRepository document reads."""
+
+    def __init__(self, row: MagicMock | list[MagicMock]) -> None:
+        self._rows = row if isinstance(row, list) else [row]
+
+    def execute(self, statement: object, params: dict[str, Any] | None = None) -> MagicMock:
+        sql = str(statement)
+        result = MagicMock()
+        if "SET LOCAL idis.tenant_id" in sql:
+            return result
+        if "WHERE documents.document_id = :document_id" in sql:
+            matching_row = next(
+                (
+                    row
+                    for row in self._rows
+                    if row._mapping["document_id"] == (params or {}).get("document_id")
+                ),
+                None,
+            )
+            result.fetchone.return_value = matching_row
+            return result
+        if "WHERE documents.deal_id = :deal_id" in sql:
+            result.fetchall.return_value = [
+                row
+                for row in self._rows
+                if row._mapping["deal_id"] == (params or {}).get("deal_id")
+            ]
+            return result
+        raise AssertionError(f"Unexpected SQL: {sql}")
+
+
+def _document_row(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    document_id: str = DOCUMENT_ID,
+    artifact_id: str = ARTIFACT_ID,
+    metadata: dict[str, Any] | None = None,
+    source_metadata: dict[str, Any] | None = None,
+) -> MagicMock:
+    """Return a joined durable document row with parser metadata only."""
+    return MagicMock(
+        _mapping={
+            "document_id": document_id,
+            "tenant_id": tenant_id,
+            "deal_id": deal_id,
+            "doc_id": artifact_id,
+            "doc_type": "PDF",
+            "artifact_doc_type": "DATA_ROOM_FILE",
+            "parse_status": "PARSED",
+            "document_metadata": metadata
+            or {"name": "durable-source.pdf", "detected_format": "PDF"},
+            "artifact_metadata": source_metadata or {"source_system": "api"},
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "document_name": "durable-source.pdf",
+            "sha256": "a" * 64,
+            "uri": "deals/durable-source.pdf",
+        },
+    )
+
+
 class TestCreateDealDocument:
     """Test POST /v1/deals/{dealId}/documents endpoint."""
 
@@ -247,6 +340,62 @@ class TestCreateDealDocument:
         assert body["code"] == "BAD_REQUEST"
         assert "Unsupported URI scheme" in body["message"]
 
+    def test_create_document_rejects_file_uri_even_without_auto_ingest(
+        self, client_single_tenant: TestClient, api_key_a: str, deal_id: str
+    ) -> None:
+        """Public document registration must not accept server-local file URIs."""
+        response = client_single_tenant.post(
+            f"/v1/deals/{deal_id}/documents",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/json",
+            },
+            json={
+                "doc_type": "DATA_ROOM_FILE",
+                "title": "Local Path",
+                "uri": "file://C:/unsafe/data-room/model.xlsx",
+                "auto_ingest": False,
+            },
+        )
+
+        assert response.status_code == 400
+        assert response.json()["code"] == "BAD_REQUEST"
+
+    @pytest.mark.parametrize(
+        "uri",
+        [
+            "idis://C:/unsafe/data-room/model.xlsx",
+            "idis:///tmp/data-room/model.xlsx",
+            "idis://../secret/model.xlsx",
+            "idis://folder/../../secret/model.xlsx",
+            "idis://\\\\server\\share\\model.xlsx",
+        ],
+    )
+    def test_create_document_rejects_path_like_object_store_uri(
+        self,
+        client_single_tenant: TestClient,
+        api_key_a: str,
+        deal_id: str,
+        uri: str,
+    ) -> None:
+        """Accepted URI schemes still cannot smuggle server-local path semantics."""
+        response = client_single_tenant.post(
+            f"/v1/deals/{deal_id}/documents",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/json",
+            },
+            json={
+                "doc_type": "DATA_ROOM_FILE",
+                "title": "Path-Like Object Key",
+                "uri": uri,
+                "auto_ingest": False,
+            },
+        )
+
+        assert response.status_code == 400
+        assert response.json()["code"] == "BAD_REQUEST"
+
     def test_create_document_without_auth_returns_401(
         self, client_single_tenant: TestClient, deal_id: str
     ) -> None:
@@ -311,6 +460,154 @@ class TestListDealDocuments:
         assert response.status_code == 200
         body = response.json()
         assert len(body["items"]) == 2
+
+    def test_list_documents_uses_durable_repository_when_db_conn_exists(
+        self,
+        api_keys_config_single: dict[str, dict[str, str]],
+        api_key_a: str,
+        deal_id: str,
+        tenant_a_id: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Production listing should expose durable document_id safe summaries."""
+        client = _client_with_fake_db(
+            api_keys_config=api_keys_config_single,
+            monkeypatch=monkeypatch,
+            row=_document_row(tenant_id=tenant_a_id, deal_id=deal_id),
+        )
+
+        response = client.get(
+            f"/v1/deals/{deal_id}/documents",
+            headers={"X-IDIS-API-Key": api_key_a},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["items"][0]["document_id"] == DOCUMENT_ID
+        assert body["items"][0]["doc_id"] == ARTIFACT_ID
+        assert body["items"][0]["doc_type"] == "DATA_ROOM_FILE"
+        assert body["items"][0]["parse_status"] == "PARSED"
+        assert "content_b64" not in body["items"][0]
+        assert "text_excerpt" not in body["items"][0]
+        assert "spans" not in body["items"][0]
+
+    def test_list_documents_sanitizes_durable_metadata_and_preserves_pagination(
+        self,
+        api_keys_config_single: dict[str, dict[str, str]],
+        api_key_a: str,
+        deal_id: str,
+        tenant_a_id: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Durable list summaries redact raw-content metadata and keep cursors usable."""
+        first_row = _document_row(
+            tenant_id=tenant_a_id,
+            deal_id=deal_id,
+            document_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1",
+            artifact_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1",
+            metadata={
+                "name": "first.pdf",
+                "content_b64": "unsafe",
+                "nested": {"text_excerpt": "unsafe", "safe": "kept"},
+            },
+            source_metadata={
+                "source_system": "api",
+                "raw_text": "unsafe",
+                "nested": {"spans": ["unsafe"], "safe": "kept"},
+            },
+        )
+        second_row = _document_row(
+            tenant_id=tenant_a_id,
+            deal_id=deal_id,
+            document_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2",
+            artifact_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2",
+        )
+        client = _client_with_fake_db(
+            api_keys_config=api_keys_config_single,
+            monkeypatch=monkeypatch,
+            row=[first_row, second_row],
+        )
+
+        first_page = client.get(
+            f"/v1/deals/{deal_id}/documents",
+            headers={"X-IDIS-API-Key": api_key_a},
+            params={"limit": 1},
+        )
+        assert first_page.status_code == 200
+        first_body = first_page.json()
+        assert first_body["items"][0]["metadata"] == {
+            "name": "first.pdf",
+            "nested": {"safe": "kept"},
+        }
+        assert first_body["items"][0]["source_metadata"] == {
+            "source_system": "api",
+            "nested": {"safe": "kept"},
+        }
+        assert first_body["next_cursor"] is not None
+
+        second_page = client.get(
+            f"/v1/deals/{deal_id}/documents",
+            headers={"X-IDIS-API-Key": api_key_a},
+            params={"limit": 1, "cursor": first_body["next_cursor"]},
+        )
+        assert second_page.status_code == 200
+        assert second_page.json()["items"][0]["document_id"] == (
+            "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2"
+        )
+        assert second_page.json()["next_cursor"] is None
+
+    def test_get_deal_document_summary_is_durable_and_safe(
+        self,
+        api_keys_config_single: dict[str, dict[str, str]],
+        api_key_a: str,
+        deal_id: str,
+        tenant_a_id: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Deal-scoped durable get returns summary metadata without raw content."""
+        client = _client_with_fake_db(
+            api_keys_config=api_keys_config_single,
+            monkeypatch=monkeypatch,
+            row=_document_row(tenant_id=tenant_a_id, deal_id=deal_id),
+        )
+
+        response = client.get(
+            f"/v1/deals/{deal_id}/documents/{DOCUMENT_ID}",
+            headers={"X-IDIS-API-Key": api_key_a},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["document_id"] == DOCUMENT_ID
+        assert body["deal_id"] == deal_id
+        assert body["title"] == "durable-source.pdf"
+        assert "content_b64" not in body
+        assert "content_sha256" not in body
+        assert "text_excerpt" not in body
+        assert "spans" not in body
+
+    def test_get_deal_document_summary_rejects_cross_deal_access(
+        self,
+        api_keys_config_single: dict[str, dict[str, str]],
+        api_key_a: str,
+        deal_id: str,
+        tenant_a_id: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Durable document summaries must be deal-scoped, not just tenant-scoped."""
+        other_deal_id = str(uuid.uuid4())
+        client = _client_with_fake_db(
+            api_keys_config=api_keys_config_single,
+            monkeypatch=monkeypatch,
+            row=_document_row(tenant_id=tenant_a_id, deal_id=other_deal_id),
+        )
+
+        response = client.get(
+            f"/v1/deals/{deal_id}/documents/{DOCUMENT_ID}",
+            headers={"X-IDIS-API-Key": api_key_a},
+        )
+
+        assert response.status_code == 404
 
     def test_list_documents_respects_limit(
         self, client_single_tenant: TestClient, api_key_a: str, deal_id: str
@@ -570,7 +867,7 @@ class TestIngestDocument:
     def test_ingest_unsupported_uri_scheme_returns_failed_status(
         self, client_single_tenant: TestClient, api_key_a: str, deal_id: str
     ) -> None:
-        """Ingest with unsupported URI scheme returns 202 with FAILED status."""
+        """Unsupported URI schemes are rejected before ingestion can be queued."""
         create_response = client_single_tenant.post(
             f"/v1/deals/{deal_id}/documents",
             headers={
@@ -585,20 +882,8 @@ class TestIngestDocument:
             },
         )
 
-        doc_id = create_response.json()["doc_id"]
-
-        ingest_response = client_single_tenant.post(
-            f"/v1/documents/{doc_id}/ingest",
-            headers={
-                "X-IDIS-API-Key": api_key_a,
-                "Content-Type": "application/json",
-            },
-            json={},
-        )
-
-        assert ingest_response.status_code == 202
-        body = ingest_response.json()
-        assert body["status"] == "FAILED"
+        assert create_response.status_code == 400
+        assert create_response.json()["code"] == "BAD_REQUEST"
 
 
 class TestIdempotency:
@@ -1459,7 +1744,7 @@ class TestBYOKRevokeGetRealPath:
                 json={
                     "doc_type": "PITCH_DECK",
                     "title": "BYOK Revoke GET Test Doc",
-                    "uri": "documents/revoke-get-test.pdf",
+                    "uri": "idis://documents/revoke-get-test.pdf",
                     "auto_ingest": False,
                 },
             )
@@ -1559,7 +1844,7 @@ class TestBYOKRevokeGetRealPath:
                 json={
                     "doc_type": "PITCH_DECK",
                     "title": "BYOK Active GET Test Doc",
-                    "uri": "documents/active-get-test.pdf",
+                    "uri": "idis://documents/active-get-test.pdf",
                     "auto_ingest": False,
                 },
             )
@@ -1589,7 +1874,7 @@ class TestBYOKRevokeGetRealPath:
             body = get_resp.json()
             assert body["doc_id"] == doc_id
             assert body["title"] == "BYOK Active GET Test Doc"
-            assert body["uri"] == storage_key
+            assert body["uri"] == f"idis://{storage_key}"
 
             import base64
             import hashlib
@@ -1679,7 +1964,7 @@ class TestBYOKRevokeGetRealPath:
                 json={
                     "doc_type": "PITCH_DECK",
                     "title": "Missing Content Test Doc",
-                    "uri": storage_key,
+                    "uri": f"idis://{storage_key}",
                     "auto_ingest": False,
                 },
             )

@@ -346,6 +346,24 @@ def test_full_system_inventory_detects_slice_19_run_source_boundary() -> None:
     assert any("durable data-room package table remains deferred" in gap for gap in run_source.gaps)
 
 
+def test_full_system_inventory_detects_slice_20_document_api_parity_boundary() -> None:
+    """Slice 20 must report durable document API parity without raw content expansion."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+    document_api = inventory["durable_document_api_parity"]
+
+    assert document_api.status == "PARTIAL"
+    assert any("document_id" in item for item in document_api.evidence)
+    assert any("PostgresDocumentsRepository" in item for item in document_api.evidence)
+    assert document_api.metadata["safe_summary_exposes_content_b64"] is False
+    assert document_api.metadata["public_api_accepts_file_uri"] is False
+    assert document_api.metadata["durable_package_table_added"] is False
+    assert document_api.metadata["layer2_execution_performed"] is False
+    assert any("local filesystem path API remains deferred" in gap for gap in document_api.gaps)
+    assert any(
+        "raw content delivery remains outside safe summaries" in gap for gap in document_api.gaps
+    )
+
+
 def test_full_system_report_keeps_slice_12_deferred_boundaries_explicit() -> None:
     """Rendered audit wording must keep Slice 12 separate from downstream IC layers."""
     report = render_report(collect_wiring_inventory(REPO_ROOT))
@@ -355,6 +373,7 @@ def test_full_system_report_keeps_slice_12_deferred_boundaries_explicit() -> Non
     assert "local data-room FULL harness boundary exists" in report
     assert "durable data-room ingestion handoff boundary exists" in report
     assert "production run-source contract boundary exists" in report
+    assert "durable document API parity boundary exists" in report
     assert "in-memory run-scoped Layer 1 Validated Evidence Package boundary exists" in report
     assert "external intelligence conflict-check plan boundary exists" in report
     assert "company identity package boundary exists" in report

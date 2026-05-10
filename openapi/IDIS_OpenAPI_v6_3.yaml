@@ -281,6 +281,35 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
 
+  /v1/deals/{dealId}/documents/{documentId}:
+    get:
+      tags: [Documents]
+      summary: Get durable document summary
+      description: >
+        Retrieves a safe deal-scoped durable document summary. The returned
+        document_id is the value clients pass to RunSource.document_ids.
+        Raw bytes, parsed text, spans, and excerpts are not returned.
+      operationId: getDealDocumentSummary
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+        - name: documentId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Document summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentArtifact"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /v1/documents/{docId}/ingest:
     post:
       tags: [Documents]
@@ -312,6 +341,7 @@ paths:
               example:
                 run_id: "r1a2b3c4-d5e6-7890-abcd-ef1234567890"
                 status: "QUEUED"
+                document_id: "550e8400-e29b-41d4-a716-446655440000"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
@@ -1435,6 +1465,11 @@ components:
       required: [doc_id, deal_id, doc_type, title, source_system, version_id, ingested_at]
       properties:
         doc_id: { type: string, format: uuid }
+        document_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Durable parsed document ID accepted by RunSource.document_ids.
         deal_id: { type: string, format: uuid }
         doc_type:
           type: string
@@ -1443,9 +1478,13 @@ components:
         source_system: { type: string }
         version_id: { type: string }
         ingested_at: { type: string, format: date-time }
+        parse_status: { type: string, enum: [PARSED, FAILED], nullable: true }
         sha256: { type: string }
         uri: { type: string }
         metadata:
+          type: object
+          additionalProperties: true
+        source_metadata:
           type: object
           additionalProperties: true
 
@@ -1458,7 +1497,7 @@ components:
         source_system: { type: string, example: "DocSend" }
         uri:
           type: string
-          description: External link or object storage uri
+          description: Existing object storage URI. file:// and local filesystem paths are rejected.
         sha256: { type: string }
         metadata:
           type: object
@@ -1720,6 +1759,11 @@ components:
       properties:
         run_id: { type: string, format: uuid }
         status: { type: string, enum: [QUEUED, RUNNING, SUCCEEDED, FAILED] }
+        document_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Durable parsed document ID produced by document ingestion.
         steps:
           type: array
           items: { $ref: "#/components/schemas/RunStepResponse" }

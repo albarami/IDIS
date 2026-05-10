@@ -339,7 +339,7 @@ class TestIngestDocumentCallsIngestionService:
             json={
                 "doc_type": "PITCH_DECK",
                 "title": "ingest-service-test",
-                "uri": f"file://{storage_key}",
+                "uri": f"idis://{storage_key}",
                 "sha256": hashlib.sha256(pdf_data).hexdigest(),
                 "auto_ingest": False,
             },
@@ -385,7 +385,7 @@ class TestIngestDocumentReturns202WithRunRef:
             json={
                 "doc_type": "FINANCIAL_MODEL",
                 "title": "runref-test",
-                "uri": f"file://{storage_key}",
+                "uri": f"idis://{storage_key}",
                 "sha256": hashlib.sha256(pdf_data).hexdigest(),
                 "auto_ingest": False,
             },
@@ -430,7 +430,7 @@ class TestIngestDocumentEmitsAuditEvents:
             json={
                 "doc_type": "PITCH_DECK",
                 "title": "audit-events-test",
-                "uri": f"file://{storage_key}",
+                "uri": f"idis://{storage_key}",
                 "sha256": hashlib.sha256(pdf_data).hexdigest(),
                 "auto_ingest": False,
             },
@@ -481,7 +481,7 @@ class TestIngestDocumentFailClosedOnInvalidData:
             json={
                 "doc_type": "PITCH_DECK",
                 "title": "fail-closed-test",
-                "uri": f"file://{storage_key}",
+                "uri": f"idis://{storage_key}",
                 "sha256": wrong_sha256,
                 "auto_ingest": False,
             },
@@ -524,7 +524,7 @@ class TestGetDocumentReturnsArtifact:
             json={
                 "doc_type": "DATA_ROOM_FILE",
                 "title": "get-artifact-test",
-                "uri": f"file://{storage_key}",
+                "uri": f"idis://{storage_key}",
                 "auto_ingest": False,
             },
         )
@@ -599,7 +599,7 @@ class TestGetSpansAfterIngestion:
             json={
                 "doc_type": "PITCH_DECK",
                 "title": "spans-test",
-                "uri": f"file://{storage_key}",
+                "uri": f"idis://{storage_key}",
                 "sha256": hashlib.sha256(pdf_data).hexdigest(),
                 "auto_ingest": False,
             },
@@ -649,7 +649,7 @@ class TestGetSpansBeforeIngestionReturnsEmpty:
             json={
                 "doc_type": "PITCH_DECK",
                 "title": "no-ingest-yet",
-                "uri": "file://e2e/no-ingest.pdf",
+                "uri": "idis://e2e/no-ingest.pdf",
                 "auto_ingest": False,
             },
         )
@@ -729,7 +729,7 @@ class TestAutoIngestOnCreate:
             json={
                 "doc_type": "PITCH_DECK",
                 "title": "auto-ingest-e2e",
-                "uri": f"file://{storage_key}",
+                "uri": f"idis://{storage_key}",
                 "sha256": hashlib.sha256(pdf_data).hexdigest(),
                 "auto_ingest": True,
             },

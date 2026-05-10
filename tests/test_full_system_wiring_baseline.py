@@ -236,6 +236,27 @@ def test_full_system_inventory_detects_phase_3_0m_external_intelligence_plan_bou
     assert any("real provider calls" in gap for gap in plan.gaps)
 
 
+def test_full_system_inventory_detects_slice_14_layer2_readiness_boundary() -> None:
+    """Slice 14 must report readiness only, not execute downstream Layer 2."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+    readiness = inventory["methodology_layer2_readiness_package_run_integration"]
+
+    assert readiness.status == "PARTIAL"
+    assert any("METHODOLOGY_LAYER2_READINESS_PACKAGE" in item for item in readiness.evidence)
+    assert any("readiness/input-boundary" in item for item in readiness.evidence)
+    assert any("construction_status" in item for item in readiness.evidence)
+    assert any("readiness_status" in item for item in readiness.evidence)
+    assert not any("IC debate executed" in item for item in readiness.evidence)
+    assert readiness.metadata["layer2_execution_performed"] is False
+    assert readiness.metadata["ready_expected_for_current_slice13_inputs"] is False
+    assert any("IC debate remains deferred" in gap for gap in readiness.gaps)
+    assert any("GO/CONDITIONAL/NO-GO" in gap for gap in readiness.gaps)
+    assert any("INVEST/HOLD/DECLINE" in gap for gap in readiness.gaps)
+    assert any("scorecard execution remains deferred" in gap for gap in readiness.gaps)
+    assert any("deliverables, API/UI/OpenAPI" in gap for gap in readiness.gaps)
+    assert any("live provider calls remain deferred" in gap for gap in readiness.gaps)
+
+
 def test_full_system_report_keeps_slice_12_deferred_boundaries_explicit() -> None:
     """Rendered audit wording must keep Slice 12 separate from downstream IC layers."""
     report = render_report(collect_wiring_inventory(REPO_ROOT))
@@ -243,8 +264,10 @@ def test_full_system_report_keeps_slice_12_deferred_boundaries_explicit() -> Non
     assert "in-memory run-scoped Layer 1 Evidence Trust Court boundary exists" in report
     assert "in-memory run-scoped Layer 1 Validated Evidence Package boundary exists" in report
     assert "external intelligence conflict-check plan boundary exists" in report
+    assert "Layer 2 readiness package boundary exists" in report
     assert "Validated Evidence Package remains deferred to Slice 12" not in report
     assert "external conflict checks executed" not in report.lower()
+    assert "IC debate executed" not in report
     assert "enrichment/API check execution remains deferred" in report
     assert "Layer 2 IC debate" in report
     assert "GO/CONDITIONAL/NO-GO" in report

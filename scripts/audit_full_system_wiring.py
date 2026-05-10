@@ -197,6 +197,7 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             ),
             "production_run_source_contract": _production_run_source_contract(root, files),
             "durable_document_api_parity": _durable_document_api_parity(files),
+            "single_document_upload_intake": _single_document_upload_intake(files),
             "methodology_layer2_readiness_package_run_integration": (
                 _methodology_layer2_readiness_package_run_integration(root, files)
             ),
@@ -484,6 +485,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/api/routes/documents.py",
         "src/idis/api/routes/runs.py",
         "src/idis/api/main.py",
+        "src/idis/api/middleware/audit.py",
         "src/idis/api/policy.py",
         "src/idis/models/run_source.py",
         "src/idis/models/run_step.py",
@@ -2565,6 +2567,64 @@ def _durable_document_api_parity(files: dict[str, str]) -> WiringItem:
             "public_api_accepts_file_uri": '"file://"'
             in documents_text.split("ALLOWED_URI_SCHEMES", 1)[1].split("\n", 1)[0],
             "durable_package_table_added": False,
+            "layer2_execution_performed": False,
+        },
+    )
+
+
+def _single_document_upload_intake(files: dict[str, str]) -> WiringItem:
+    documents_text = files.get("src/idis/api/routes/documents.py", "")
+    service_text = files.get("src/idis/services/ingestion/service.py", "")
+    openapi_text = files.get("openapi/IDIS_OpenAPI_v6_3.yaml", "")
+    policy_text = files.get("src/idis/api/policy.py", "")
+    audit_text = files.get("src/idis/api/middleware/audit.py", "")
+    upload_parts = documents_text.split("async def upload_deal_document", 1)
+    upload_body = upload_parts[1].split("@router.post(", 1)[0] if len(upload_parts) > 1 else ""
+    integrated = (
+        '"/v1/deals/{deal_id}/documents/upload"' in documents_text
+        and "UPLOAD_CONTENT_TYPE" in documents_text
+        and "application/octet-stream" in documents_text
+        and "ingest_bytes(" in upload_body
+        and "IngestionContext" in documents_text
+        and "ComplianceEnforcedStore" in service_text
+        and "uploadDealDocument" in openapi_text
+        and "application/octet-stream" in openapi_text
+        and "uploadDealDocument" in policy_text
+        and "uploadDealDocument" in audit_text
+    )
+    return WiringItem(
+        key="single_document_upload_intake",
+        label="Single-document upload intake",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary=(
+            "single-document upload intake boundary exists; clients can upload one raw "
+            "supported document through existing compliance storage and ingestion while "
+            "folder upload, new storage backends, UI, OCR/media, and downstream layers "
+            "remain deferred."
+        ),
+        evidence=[
+            "Upload endpoint requires application/octet-stream.",
+            "Upload route validates filename, byte size, SHA256, content type, and deal scope.",
+            "Uploaded bytes flow through IngestionService.ingest_bytes and compliant storage.",
+            "Safe summaries expose durable document_id for RunSource.document_ids.",
+        ],
+        gaps=[
+            "data-room folder upload remains deferred.",
+            "durable data-room package table remains deferred.",
+            "UI remains deferred.",
+            "OCR/media/image/HTML/TXT parsing remains deferred.",
+            "new S3/Supabase storage implementation remains deferred.",
+            "RAG/Neo4j remains deferred.",
+            "Layer 2 remains deferred.",
+            "external enrichment expansion remains deferred.",
+            "deliverables expansion remains deferred.",
+        ],
+        phase_2_action="Phase 3.0 Slice 21",
+        metadata={
+            "public_api_accepts_folder_upload": "data_room_root_path" in upload_body,
+            "safe_response_exposes_content_b64": "content_b64" in upload_body,
+            "durable_package_table_added": False,
+            "new_s3_supabase_backend_added": False,
             "layer2_execution_performed": False,
         },
     )

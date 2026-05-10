@@ -364,6 +364,25 @@ def test_full_system_inventory_detects_slice_20_document_api_parity_boundary() -
     )
 
 
+def test_full_system_inventory_detects_slice_21_single_document_upload_boundary() -> None:
+    """Slice 21 must report single-document upload only, not folder/package expansion."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+    upload = inventory["single_document_upload_intake"]
+
+    assert upload.status == "PARTIAL"
+    assert any("application/octet-stream" in item for item in upload.evidence)
+    assert any("IngestionService.ingest_bytes" in item for item in upload.evidence)
+    assert upload.metadata["public_api_accepts_folder_upload"] is False
+    assert upload.metadata["safe_response_exposes_content_b64"] is False
+    assert upload.metadata["durable_package_table_added"] is False
+    assert upload.metadata["new_s3_supabase_backend_added"] is False
+    assert upload.metadata["layer2_execution_performed"] is False
+    assert any("data-room folder upload remains deferred" in gap for gap in upload.gaps)
+    assert any(
+        "new S3/Supabase storage implementation remains deferred" in gap for gap in upload.gaps
+    )
+
+
 def test_full_system_report_keeps_slice_12_deferred_boundaries_explicit() -> None:
     """Rendered audit wording must keep Slice 12 separate from downstream IC layers."""
     report = render_report(collect_wiring_inventory(REPO_ROOT))
@@ -374,6 +393,7 @@ def test_full_system_report_keeps_slice_12_deferred_boundaries_explicit() -> Non
     assert "durable data-room ingestion handoff boundary exists" in report
     assert "production run-source contract boundary exists" in report
     assert "durable document API parity boundary exists" in report
+    assert "single-document upload intake boundary exists" in report
     assert "in-memory run-scoped Layer 1 Validated Evidence Package boundary exists" in report
     assert "external intelligence conflict-check plan boundary exists" in report
     assert "company identity package boundary exists" in report

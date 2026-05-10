@@ -562,3 +562,127 @@ def test_api_ingestion_persists_corpus_and_api_run_loads_persisted_spans(
         assert captured_documents[0][0]["document_id"] == documents[0]["document_id"]
         assert captured_documents[0][0]["spans"][0]["span_id"] == spans[0]["span_id"]
         assert captured_preflight_corpus[0][0]["document_id"] == documents[0]["document_id"]
+
+
+def test_api_upload_returns_document_id_usable_as_run_source(
+    app_engine: Engine,
+    clean_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Raw upload should persist durable corpus rows and return run-source document_id."""
+    clear_deals_store()
+    clear_document_store()
+    monkeypatch.setenv(
+        IDIS_API_KEYS_ENV,
+        json.dumps(
+            {
+                API_KEY: {
+                    "tenant_id": str(TENANT_ID),
+                    "actor_id": ACTOR_ID,
+                    "name": "Tenant A",
+                    "timezone": "UTC",
+                    "data_region": "me-south-1",
+                    "roles": ["ANALYST", "ADMIN"],
+                }
+            }
+        ),
+    )
+
+    with tempfile.TemporaryDirectory(prefix="idis_api_upload_pg_") as tmpdir:
+        byok_registry = BYOKPolicyRegistry()
+        audit_sink = InMemoryAuditSink()
+        compliant_store = ComplianceEnforcedStore(
+            inner_store=FilesystemObjectStore(base_dir=Path(tmpdir)),
+            byok_registry=byok_registry,
+        )
+        ingestion_service = IngestionService(
+            compliant_store=compliant_store,
+            audit_sink=audit_sink,
+        )
+        app = create_app(
+            audit_sink=audit_sink,
+            idempotency_store=SqliteIdempotencyStore(in_memory=True),
+            ingestion_service=ingestion_service,
+        )
+        client = TestClient(app, raise_server_exceptions=False)
+
+        tenant_ctx = TenantContext(
+            tenant_id=str(TENANT_ID),
+            actor_id=ACTOR_ID,
+            name="Tenant A",
+            timezone="UTC",
+            data_region="me-south-1",
+        )
+        configure_key(tenant_ctx, "api-upload-pg-key", audit_sink, registry=byok_registry)
+        pdf_data = _pdf_bytes()
+
+        deal_resp = client.post(
+            "/v1/deals",
+            headers={"X-IDIS-API-Key": API_KEY},
+            json={"name": "API Uploaded Corpus Deal", "company_name": "Synthetic Co"},
+        )
+        assert deal_resp.status_code == 201
+        deal_id = deal_resp.json()["deal_id"]
+
+        upload_resp = client.post(
+            f"/v1/deals/{deal_id}/documents/upload",
+            headers={
+                "X-IDIS-API-Key": API_KEY,
+                "Content-Type": "application/octet-stream",
+            },
+            params={
+                "filename": "uploaded-corpus.pdf",
+                "doc_type": "DATA_ROOM_FILE",
+                "sha256": hashlib.sha256(pdf_data).hexdigest(),
+                "source_system": "api-upload",
+            },
+            content=pdf_data,
+        )
+        assert upload_resp.status_code == 201
+        upload_body = upload_resp.json()
+        durable_document_id = upload_body["document_id"]
+        assert durable_document_id
+        assert "content_b64" not in upload_body
+        assert "text_excerpt" not in upload_body
+
+        with app_engine.begin() as conn:
+            repo = PostgresDocumentsRepository(conn, str(TENANT_ID))
+            documents = repo.list_documents_by_deal(deal_id)
+            spans = repo.list_spans_by_document(
+                deal_id=deal_id,
+                document_id=durable_document_id,
+            )
+
+        assert [document["document_id"] for document in documents] == [durable_document_id]
+        assert len(spans) > 0
+
+        captured_preflight_corpus: list[list[dict[str, object]]] = []
+
+        class CapturingRunExecutionService:
+            def __init__(self, **kwargs: object) -> None:
+                self.audit_sink = kwargs["audit_sink"]
+
+            def execute(self, ctx: object) -> RunExecutionResult:
+                captured_preflight_corpus.append(ctx.preflight_corpus)  # type: ignore[attr-defined]
+                return RunExecutionResult(
+                    claimed=True,
+                    status="SUCCEEDED",
+                    finished_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                )
+
+        monkeypatch.setattr(runs_route, "RunExecutionService", CapturingRunExecutionService)
+
+        run_resp = client.post(
+            f"/v1/deals/{deal_id}/runs",
+            headers={"X-IDIS-API-Key": API_KEY},
+            json={
+                "mode": "SNAPSHOT",
+                "source": {
+                    "type": "deal_documents",
+                    "document_ids": [durable_document_id],
+                },
+            },
+        )
+
+        assert run_resp.status_code == 202
+        assert captured_preflight_corpus[0][0]["document_id"] == durable_document_id

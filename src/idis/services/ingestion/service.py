@@ -519,13 +519,15 @@ class IngestionService:
         timestamp: datetime,
     ) -> DocumentArtifact:
         """Create DocumentArtifact model."""
+        doc_type = self._artifact_doc_type(metadata)
+        source_system = metadata.get("source_system")
         return DocumentArtifact(
             doc_id=artifact_id,
             tenant_id=tenant_id,
             deal_id=deal_id,
-            doc_type=DocType.DATA_ROOM_FILE,
+            doc_type=doc_type,
             title=filename,
-            source_system="upload",
+            source_system=source_system if isinstance(source_system, str) else "upload",
             version_id=sha256[:12],
             ingested_at=timestamp,
             sha256=sha256,
@@ -534,6 +536,16 @@ class IngestionService:
             created_at=timestamp,
             updated_at=timestamp,
         )
+
+    def _artifact_doc_type(self, metadata: dict[str, Any]) -> DocType:
+        """Resolve public artifact classification from safe caller metadata."""
+        raw_doc_type = metadata.get("doc_type")
+        if isinstance(raw_doc_type, str):
+            try:
+                return DocType(raw_doc_type)
+            except ValueError:
+                return DocType.DATA_ROOM_FILE
+        return DocType.DATA_ROOM_FILE
 
     def _create_document(
         self,

@@ -115,6 +115,9 @@ POLICY_RULES: dict[str, PolicyRule] = {
     "getDealDocumentSummary": PolicyRule(
         allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=True
     ),
+    "uploadDealDocument": PolicyRule(
+        allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=True
+    ),
     "createDealDocument": PolicyRule(
         allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=True
     ),

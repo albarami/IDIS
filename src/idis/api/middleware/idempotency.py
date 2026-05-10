@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from collections.abc import Awaitable, Callable
+from urllib.parse import urlencode
 
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
@@ -75,6 +76,22 @@ def _compute_payload_sha256(body_bytes: bytes) -> str:
     if not body_bytes:
         return "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     return f"sha256:{hashlib.sha256(body_bytes).hexdigest()}"
+
+
+def _canonical_query_string(request: Request) -> str:
+    """Return query params in a deterministic representation for idempotency."""
+    query_pairs = sorted(
+        (str(key), str(value)) for key, value in request.query_params.multi_items()
+    )
+    return urlencode(query_pairs)
+
+
+def _compute_request_fingerprint(payload_sha256: str, canonical_query: str) -> str:
+    """Combine body and query metadata into the idempotency payload fingerprint."""
+    if not canonical_query:
+        return payload_sha256
+    fingerprint_input = f"body={payload_sha256}\nquery={canonical_query}".encode()
+    return f"sha256:{hashlib.sha256(fingerprint_input).hexdigest()}"
 
 
 class IdempotencyMiddleware(BaseHTTPMiddleware):
@@ -172,6 +189,10 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
                 payload_sha256 = _compute_payload_sha256(body_bytes)
             except Exception:
                 payload_sha256 = _compute_payload_sha256(b"")
+        payload_sha256 = _compute_request_fingerprint(
+            payload_sha256,
+            _canonical_query_string(request),
+        )
 
         scope_key = ScopeKey(
             tenant_id=tenant_ctx.tenant_id,

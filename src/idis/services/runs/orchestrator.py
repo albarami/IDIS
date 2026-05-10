@@ -55,6 +55,14 @@ from idis.models.evidence_trust_court_materialization import (
     RunScopedEvidenceTrustCourtShell,
     RunScopedEvidenceTrustCourtSummary,
 )
+from idis.models.external_intelligence_conflict_check_plan_materialization import (
+    ExternalIntelligencePlanCheckStatus,
+    MethodologyExternalIntelligenceConflictCheckPlanRunResult,
+    MethodologyExternalIntelligenceConflictCheckPlanStatus,
+    RunScopedExternalIntelligenceConflictCheckPlanRecord,
+    RunScopedExternalIntelligenceConflictCheckPlanShell,
+    RunScopedExternalIntelligenceConflictCheckPlanSummary,
+)
 from idis.models.extraction_execution import (
     MethodologyExtractionExecutionReason,
     MethodologyExtractionExecutionResult,
@@ -301,6 +309,21 @@ class RunContext:
     methodology_validated_evidence_package: (
         RunScopedValidatedEvidencePackageRecord | RunScopedValidatedEvidencePackageShell | None
     ) = None
+    methodology_external_intelligence_conflict_check_plan_fn: (
+        Callable[
+            ...,
+            tuple[
+                MethodologyExternalIntelligenceConflictCheckPlanRunResult,
+                list[RunScopedExternalIntelligenceConflictCheckPlanRecord],
+            ],
+        ]
+        | None
+    ) = None
+    methodology_external_intelligence_conflict_check_plan: (
+        RunScopedExternalIntelligenceConflictCheckPlanRecord
+        | RunScopedExternalIntelligenceConflictCheckPlanShell
+        | None
+    ) = None
     calc_fn: Callable[..., dict[str, Any]] | None = None
     calc_types: list[CalcType] | None = None
     enrich_fn: Callable[..., dict[str, Any]] | None = None
@@ -409,6 +432,11 @@ class RunOrchestrator:
                         ctx,
                         existing.result_summary,
                     )
+                if step_name == StepName.METHODOLOGY_EXTERNAL_INTELLIGENCE_CONFLICT_CHECK_PLAN:
+                    self._rehydrate_methodology_external_intelligence_conflict_check_plan(
+                        ctx,
+                        existing.result_summary,
+                    )
                 continue
 
             step = self._start_step(ctx, step_name, existing)
@@ -479,6 +507,11 @@ class RunOrchestrator:
             return self._execute_methodology_evidence_trust_court(ctx)
         if step_name == StepName.METHODOLOGY_VALIDATED_EVIDENCE_PACKAGE:
             return self._execute_methodology_validated_evidence_package(ctx, accumulated)
+        if step_name == StepName.METHODOLOGY_EXTERNAL_INTELLIGENCE_CONFLICT_CHECK_PLAN:
+            return self._execute_methodology_external_intelligence_conflict_check_plan(
+                ctx,
+                accumulated,
+            )
         if step_name == StepName.EXTRACT:
             return self._execute_extract(ctx)
         if step_name == StepName.GRADE:
@@ -1075,6 +1108,57 @@ class RunOrchestrator:
             )
         return summary
 
+    def _execute_methodology_external_intelligence_conflict_check_plan(
+        self,
+        ctx: RunContext,
+        accumulated: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Build a safe external intelligence conflict-check plan from VEP data."""
+        if ctx.methodology_validated_evidence_package is None:
+            if accumulated is not None and _is_empty_validated_evidence_package_summary(
+                accumulated
+            ):
+                return _empty_external_intelligence_conflict_check_plan_summary(
+                    tenant_id=ctx.tenant_id,
+                    deal_id=ctx.deal_id,
+                    run_id=ctx.run_id,
+                )
+            raise RunStepBlockedError(
+                "METHODOLOGY_VALIDATED_EVIDENCE_PACKAGE_MISSING",
+                "External intelligence conflict-check plan requires VEP context",
+            )
+
+        if ctx.methodology_external_intelligence_conflict_check_plan_fn is not None:
+            run_result, plans = ctx.methodology_external_intelligence_conflict_check_plan_fn(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                validated_evidence_packages=[ctx.methodology_validated_evidence_package],
+            )
+        else:
+            from idis.services.runs.methodology_external_intelligence_conflict_check_plan import (
+                InMemoryRunMethodologyExternalIntelligenceConflictCheckPlanService,
+            )
+
+            run_result, plans = (
+                InMemoryRunMethodologyExternalIntelligenceConflictCheckPlanService().run(
+                    tenant_id=ctx.tenant_id,
+                    deal_id=ctx.deal_id,
+                    run_id=ctx.run_id,
+                    validated_evidence_packages=[ctx.methodology_validated_evidence_package],
+                )
+            )
+
+        ctx.methodology_external_intelligence_conflict_check_plan = plans[0] if plans else None
+        summary = run_result.to_run_step_summary()
+        if run_result.status.value == "failed":
+            raise RunStepBlockedError(
+                "METHODOLOGY_EXTERNAL_INTELLIGENCE_CONFLICT_CHECK_PLAN_FAILED",
+                "External intelligence conflict-check plan failed closed",
+                result_summary=summary,
+            )
+        return summary
+
     def _rehydrate_methodology_extraction_execution(
         self,
         ctx: RunContext,
@@ -1290,6 +1374,23 @@ class RunOrchestrator:
         )
         if shell is not None:
             ctx.methodology_validated_evidence_package = shell
+
+    def _rehydrate_methodology_external_intelligence_conflict_check_plan(
+        self,
+        ctx: RunContext,
+        result_summary: dict[str, Any],
+    ) -> None:
+        """Attach a safe external intelligence plan shell when Slice 13 is skipped."""
+        if ctx.methodology_external_intelligence_conflict_check_plan is not None:
+            return
+        shell = _external_intelligence_conflict_check_plan_shell_from_summary(
+            tenant_id=ctx.tenant_id,
+            deal_id=ctx.deal_id,
+            run_id=ctx.run_id,
+            result_summary=result_summary,
+        )
+        if shell is not None:
+            ctx.methodology_external_intelligence_conflict_check_plan = shell
 
     def _execute_extract(self, ctx: RunContext) -> dict[str, Any]:
         """Run extraction pipeline via injected callable.
@@ -2113,6 +2214,42 @@ def _validated_evidence_package_shell_from_summary(
         return None
 
 
+def _external_intelligence_conflict_check_plan_shell_from_summary(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+    result_summary: dict[str, Any],
+) -> RunScopedExternalIntelligenceConflictCheckPlanShell | None:
+    plan_ids = _str_list(result_summary.get("plan_ids"))
+    package_ids = _str_list(result_summary.get("package_ids"))
+    if not plan_ids or not package_ids:
+        return None
+    raw_summary = result_summary.get("summary")
+    summary: dict[str, Any] = raw_summary if isinstance(raw_summary, dict) else {}
+    try:
+        return RunScopedExternalIntelligenceConflictCheckPlanShell(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            run_id=run_id,
+            plan_id=plan_ids[0],
+            package_id=package_ids[0],
+            provider_check_ids=_str_list(result_summary.get("provider_check_ids")),
+            provider_ids=_str_list(result_summary.get("provider_ids")),
+            check_statuses=_str_list(result_summary.get("check_statuses")),
+            reason_codes=_str_list(result_summary.get("reason_codes")),
+            by_status=_dict_from_summary(summary, "by_status"),
+            by_provider=_dict_from_summary(summary, "by_provider"),
+            by_rights_class=_dict_from_summary(summary, "by_rights_class"),
+            by_reason=_dict_from_summary(summary, "by_reason"),
+            status=MethodologyExternalIntelligenceConflictCheckPlanStatus(
+                str(result_summary.get("status") or "completed")
+            ),
+        )
+    except ValueError:
+        return None
+
+
 def _empty_evidence_trust_court_summary(
     *,
     tenant_id: str,
@@ -2174,6 +2311,34 @@ def _empty_validated_evidence_package_summary(
     ).to_run_step_summary()
 
 
+def _empty_external_intelligence_conflict_check_plan_summary(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+) -> dict[str, Any]:
+    summary = RunScopedExternalIntelligenceConflictCheckPlanSummary(
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        run_id=run_id,
+        plan_count=0,
+        check_count=0,
+        by_status={ExternalIntelligencePlanCheckStatus.NO_OP.value: 1},
+        by_provider={},
+        by_rights_class={},
+        by_reason={},
+    )
+    return MethodologyExternalIntelligenceConflictCheckPlanRunResult(
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        run_id=run_id,
+        status=MethodologyExternalIntelligenceConflictCheckPlanStatus.COMPLETED,
+        plan_shells=[],
+        rejections=[],
+        summary=summary,
+    ).to_run_step_summary()
+
+
 def _is_empty_evidence_trust_court_summary(result_summary: dict[str, Any]) -> bool:
     raw_summary = result_summary.get("summary")
     summary: dict[str, Any] = raw_summary if isinstance(raw_summary, dict) else {}
@@ -2181,6 +2346,16 @@ def _is_empty_evidence_trust_court_summary(result_summary: dict[str, Any]) -> bo
         not _str_list(result_summary.get("court_ids"))
         and _int_from_summary(summary, "total_claims", 0) == 0
         and _int_from_summary(summary, "assessed_claim_count", 0) == 0
+    )
+
+
+def _is_empty_validated_evidence_package_summary(result_summary: dict[str, Any]) -> bool:
+    raw_summary = result_summary.get("summary")
+    summary: dict[str, Any] = raw_summary if isinstance(raw_summary, dict) else {}
+    return (
+        not _str_list(result_summary.get("package_ids"))
+        and _int_from_summary(summary, "package_count", 0) == 0
+        and _int_from_summary(summary, "packaged_claim_count", 0) == 0
     )
 
 

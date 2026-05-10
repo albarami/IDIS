@@ -218,14 +218,34 @@ def test_full_system_inventory_detects_phase_3_0l_validated_evidence_package_bou
     assert any("real E2E" in gap for gap in vep.gaps)
 
 
+def test_full_system_inventory_detects_phase_3_0m_external_intelligence_plan_boundary() -> None:
+    """Slice 13 must be a plan boundary, not executed external conflict checks."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+    plan = inventory["methodology_external_intelligence_conflict_check_plan_run_integration"]
+
+    assert plan.status == "PARTIAL"
+    assert any(
+        "METHODOLOGY_EXTERNAL_INTELLIGENCE_CONFLICT_CHECK_PLAN" in item for item in plan.evidence
+    )
+    assert any("plan boundary" in item for item in plan.evidence)
+    assert not any("external conflict checks executed" in item.lower() for item in plan.evidence)
+    assert plan.metadata["live_calls_performed"] is False
+    assert any("Layer 2 IC debate" in gap for gap in plan.gaps)
+    assert any("GO/CONDITIONAL/NO-GO" in gap for gap in plan.gaps)
+    assert any("deliverables, API/UI/OpenAPI" in gap for gap in plan.gaps)
+    assert any("real provider calls" in gap for gap in plan.gaps)
+
+
 def test_full_system_report_keeps_slice_12_deferred_boundaries_explicit() -> None:
     """Rendered audit wording must keep Slice 12 separate from downstream IC layers."""
     report = render_report(collect_wiring_inventory(REPO_ROOT))
 
     assert "in-memory run-scoped Layer 1 Evidence Trust Court boundary exists" in report
     assert "in-memory run-scoped Layer 1 Validated Evidence Package boundary exists" in report
+    assert "external intelligence conflict-check plan boundary exists" in report
     assert "Validated Evidence Package remains deferred to Slice 12" not in report
-    assert "enrichment/API checks" in report
+    assert "external conflict checks executed" not in report.lower()
+    assert "enrichment/API check execution remains deferred" in report
     assert "Layer 2 IC debate" in report
     assert "GO/CONDITIONAL/NO-GO" in report
     assert "deliverables, API/UI/OpenAPI, and real E2E remain deferred" in report

@@ -180,6 +180,9 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             "methodology_validated_evidence_package_run_integration": (
                 _methodology_validated_evidence_package_run_integration(root, files)
             ),
+            "methodology_external_intelligence_conflict_check_plan_run_integration": (
+                _methodology_external_intelligence_conflict_check_plan_run_integration(root, files)
+            ),
             "methodology_claim_materialization_sanad_integration": (
                 _methodology_claim_materialization_sanad_integration(files)
             ),
@@ -509,6 +512,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/models/truth_dashboard_materialization.py",
         "src/idis/models/evidence_trust_court_materialization.py",
         "src/idis/models/validated_evidence_package_materialization.py",
+        "src/idis/models/external_intelligence_conflict_check_plan_materialization.py",
         "src/idis/services/extraction/claim_materializer.py",
         "src/idis/services/runs/methodology_claim_materialization.py",
         "src/idis/services/runs/methodology_evidence_item_materialization.py",
@@ -520,6 +524,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/services/runs/methodology_evidence_trust_court.py",
         "src/idis/services/runs/methodology_evidence_trust_court_helpers.py",
         "src/idis/services/runs/methodology_validated_evidence_package.py",
+        "src/idis/services/runs/methodology_external_intelligence_conflict_check_plan.py",
         "src/idis/services/extraction/claim_materialization_audit.py",
         "src/idis/models/sanad_coverage_boundary.py",
         "src/idis/services/methodology/sanad_coverage_boundary.py",
@@ -1985,7 +1990,7 @@ def _methodology_validated_evidence_package_run_integration(
         ),
         evidence=[
             "FULL runs include METHODOLOGY_VALIDATED_EVIDENCE_PACKAGE after Evidence Trust Court "
-            "and before legacy EXTRACT.",
+            "and before the external intelligence conflict-check plan boundary.",
             "Layer 1 Validated Evidence Package boundary exists for safe claim-disposition, "
             "evidence, source span, Sanad, defect, calc, finding, and reason-code packaging.",
             "VEP construction requires a full RunScopedEvidenceTrustCourtRecord and fails closed "
@@ -1996,7 +2001,8 @@ def _methodology_validated_evidence_package_run_integration(
             "reason codes, and aggregate counts only.",
         ],
         gaps=[
-            "enrichment/API checks remain deferred.",
+            "enrichment/API checks planning boundary exists; enrichment/API check execution "
+            "remains deferred.",
             "Layer 2 IC debate remains deferred.",
             "GO/CONDITIONAL/NO-GO remains deferred.",
             "deliverables, API/UI/OpenAPI, and real E2E remain deferred.",
@@ -2004,6 +2010,74 @@ def _methodology_validated_evidence_package_run_integration(
             "durable Validated Evidence Package persistence remains deferred.",
         ],
         phase_2_action="Phase 3.0 Slice 12",
+    )
+
+
+def _methodology_external_intelligence_conflict_check_plan_run_integration(
+    root: Path,
+    files: dict[str, str],
+) -> WiringItem:
+    model_text = files.get(
+        "src/idis/models/external_intelligence_conflict_check_plan_materialization.py",
+        "",
+    )
+    service_text = files.get(
+        "src/idis/services/runs/methodology_external_intelligence_conflict_check_plan.py",
+        "",
+    )
+    run_text = (
+        files.get("src/idis/models/run_step.py", "")
+        + files.get("src/idis/services/runs/orchestrator.py", "")
+        + files.get("src/idis/services/runs/steps.py", "")
+    )
+    integrated = (
+        _exists(
+            root,
+            "src/idis/models/external_intelligence_conflict_check_plan_materialization.py",
+        )
+        and _exists(
+            root,
+            "src/idis/services/runs/methodology_external_intelligence_conflict_check_plan.py",
+        )
+        and "METHODOLOGY_EXTERNAL_INTELLIGENCE_CONFLICT_CHECK_PLAN" in run_text
+        and "RunScopedExternalIntelligenceConflictCheckPlanRecord" in model_text
+        and "RunScopedExternalIntelligenceConflictCheckPlanShell" in model_text
+        and "InMemoryRunMethodologyExternalIntelligenceConflictCheckPlanService" in service_text
+        and "EnrichmentProviderRegistry" in service_text
+        and "EnrichmentService.enrich" not in service_text
+        and ".fetch(" not in service_text
+    )
+    return WiringItem(
+        key="methodology_external_intelligence_conflict_check_plan_run_integration",
+        label="Methodology external intelligence conflict-check plan run integration",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary=(
+            "in-memory run-scoped external intelligence conflict-check plan boundary exists; "
+            "actual external conflict-check execution, provider calls, APIs, UI, and persistence "
+            "remain deferred."
+        ),
+        evidence=[
+            "FULL runs include METHODOLOGY_EXTERNAL_INTELLIGENCE_CONFLICT_CHECK_PLAN after VEP "
+            "and before legacy EXTRACT.",
+            "external intelligence conflict-check plan boundary exists for safe provider/check "
+            "planning metadata only.",
+            "Plan construction consumes VEP record or safe shell IDs/counts/reason codes and "
+            "static EnrichmentProviderRegistry metadata.",
+            "Run-step summaries include plan IDs, package IDs, provider IDs, check statuses, "
+            "reason codes, and aggregate counts only.",
+            "No live provider calls are performed by the plan boundary.",
+        ],
+        gaps=[
+            "enrichment/API check execution remains deferred.",
+            "real provider calls remain deferred.",
+            "PitchBook/Crunchbase connectors remain deferred.",
+            "Layer 2 IC debate remains deferred.",
+            "GO/CONDITIONAL/NO-GO remains deferred.",
+            "deliverables, API/UI/OpenAPI, and real E2E remain deferred.",
+            "durable external intelligence conflict-check plan persistence remains deferred.",
+        ],
+        phase_2_action="Phase 3.0 Slice 13",
+        metadata={"live_calls_performed": False},
     )
 
 

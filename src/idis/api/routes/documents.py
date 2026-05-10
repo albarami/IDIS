@@ -20,18 +20,22 @@ from enum import StrEnum
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Header, Request
+from fastapi import APIRouter, Header, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from idis.api.auth import RequireTenantContext
 from idis.api.errors import IdisHttpError
 from idis.audit.sink import AuditSinkError
+from idis.parsers.registry import detect_format
+from idis.services.ingestion import IngestionContext
+from idis.services.ingestion.service import DEFAULT_MAX_BYTES
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Documents"])
 
 ALLOWED_URI_SCHEMES = frozenset({"idis://", "s3://"})
+UPLOAD_CONTENT_TYPE = "application/octet-stream"
 MAX_LIMIT = 200
 DEFAULT_LIMIT = 50
 FORBIDDEN_SUMMARY_METADATA_KEYS = frozenset(
@@ -370,6 +374,135 @@ def _reject_unsafe_document_uri(uri: str | None) -> None:
             message="Document URI must be an object key, not a local filesystem path",
             details={"uri": uri},
         )
+
+
+def _reject_unsafe_upload_filename(filename: str) -> None:
+    """Reject upload filenames that imply a client-controlled filesystem path."""
+    normalized = filename.strip().replace("\\", "/")
+    parts = [part for part in normalized.split("/") if part]
+    first_part = parts[0] if parts else ""
+    is_path_like = (
+        not normalized
+        or "/" in normalized
+        or normalized in {".", ".."}
+        or normalized.startswith("../")
+        or "/../" in normalized
+        or normalized.endswith("/..")
+        or normalized.startswith("~")
+        or (len(first_part) == 2 and first_part[1] == ":")
+    )
+    if is_path_like:
+        raise IdisHttpError(
+            status_code=400,
+            code="BAD_REQUEST",
+            message="Upload filename must be a filename, not a local filesystem path",
+            details={"filename": filename},
+        )
+
+
+def _max_upload_bytes(request: Request) -> int:
+    """Return the active ingestion byte limit for route-level fail-fast checks."""
+    ingestion_service = getattr(request.app.state, "ingestion_service", None)
+    if ingestion_service is None:
+        return DEFAULT_MAX_BYTES
+    max_bytes = getattr(ingestion_service, "_max_bytes", DEFAULT_MAX_BYTES)
+    return int(max_bytes)
+
+
+def _reject_invalid_upload_content_type(request: Request) -> None:
+    """Require raw octet-stream uploads for this narrow intake boundary."""
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type != UPLOAD_CONTENT_TYPE:
+        raise IdisHttpError(
+            status_code=415,
+            code="UNSUPPORTED_MEDIA_TYPE",
+            message="Document upload requires application/octet-stream",
+            details={"content_type": content_type or None},
+        )
+
+
+def _reject_oversized_content_length(request: Request, max_bytes: int) -> None:
+    """Reject oversized uploads before reading the body when Content-Length is present."""
+    content_length = request.headers.get("content-length")
+    if content_length is None:
+        return
+    try:
+        size_bytes = int(content_length)
+    except ValueError:
+        return
+    if size_bytes > max_bytes:
+        raise IdisHttpError(
+            status_code=413,
+            code="FILE_TOO_LARGE",
+            message=f"File exceeds maximum size of {max_bytes} bytes",
+            details={"size_bytes": size_bytes, "max_bytes": max_bytes},
+        )
+
+
+def _reject_invalid_upload_body(data: bytes, max_bytes: int) -> None:
+    """Reject empty or oversized upload bodies before ingestion."""
+    if not data:
+        raise IdisHttpError(
+            status_code=400,
+            code="EMPTY_FILE",
+            message="Upload body must not be empty",
+        )
+    if len(data) > max_bytes:
+        raise IdisHttpError(
+            status_code=413,
+            code="FILE_TOO_LARGE",
+            message=f"File exceeds maximum size of {max_bytes} bytes",
+            details={"size_bytes": len(data), "max_bytes": max_bytes},
+        )
+
+
+def _reject_sha256_mismatch(data: bytes, expected_sha256: str | None) -> str:
+    """Validate optional caller-supplied SHA256 and return the actual digest."""
+    actual_sha256 = hashlib.sha256(data).hexdigest()
+    if expected_sha256 is None:
+        return actual_sha256
+    if actual_sha256 != expected_sha256.lower():
+        raise IdisHttpError(
+            status_code=400,
+            code="SHA256_MISMATCH",
+            message="Uploaded bytes do not match the supplied SHA256",
+            details={"expected_sha256": expected_sha256, "actual_sha256": actual_sha256},
+        )
+    return actual_sha256
+
+
+def _reject_unsupported_upload_format(data: bytes, filename: str) -> None:
+    """Reject unsupported magic bytes before ingestion persists storage or corpus rows."""
+    detected_format = detect_format(data)
+    if detected_format is not None:
+        return
+    raise IdisHttpError(
+        status_code=400,
+        code="UNSUPPORTED_FORMAT",
+        message="Uploaded document format is not supported",
+        details={"filename": filename},
+    )
+
+
+def _safe_ingestion_error_details(errors: list[Any]) -> list[dict[str, str]]:
+    """Return ingestion error details without parser internals or byte-derived fields."""
+    safe_errors: list[dict[str, str]] = []
+    for error in errors:
+        code = getattr(getattr(error, "code", None), "value", str(getattr(error, "code", "")))
+        message = str(getattr(error, "message", "Ingestion failed"))
+        safe_errors.append({"code": code, "message": message})
+    return safe_errors
+
+
+def _validate_durable_deal_scope(request: Request, tenant_id: str, deal_id: str) -> None:
+    """Validate deal existence through durable repositories when a DB connection exists."""
+    db_conn = getattr(request.state, "db_conn", None)
+    if db_conn is None:
+        return
+    from idis.persistence.repositories.deals import get_deals_repository
+
+    if get_deals_repository(db_conn, tenant_id).get(deal_id) is None:
+        raise IdisHttpError(status_code=404, code="NOT_FOUND", message="Deal not found")
 
 
 def _strip_uri_scheme(uri: str) -> str:
@@ -745,6 +878,105 @@ def get_deal_document_summary(
             return _document_summary_from_memory_artifact(artifact)
 
     raise IdisHttpError(status_code=404, code="NOT_FOUND", message="Document not found")
+
+
+@router.post(
+    "/v1/deals/{deal_id}/documents/upload",
+    response_model=DocumentArtifactResponse,
+    status_code=201,
+    summary="Upload and ingest one document",
+    description=(
+        "Upload raw bytes for a single supported document and ingest them through the "
+        "compliance-enforced storage and ingestion pipeline."
+    ),
+)
+async def upload_deal_document(
+    deal_id: str,
+    request: Request,
+    tenant_ctx: RequireTenantContext,
+    filename: Annotated[str, Query(min_length=1, max_length=128)],
+    doc_type: Annotated[DocType, Query()],
+    sha256: Annotated[str | None, Query(min_length=64, max_length=64)] = None,
+    source_system: Annotated[str, Query(min_length=1, max_length=64)] = "api-upload",
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> DocumentArtifactResponse:
+    """Upload raw bytes for one deal document and return a safe durable summary."""
+    ingestion_service = getattr(request.app.state, "ingestion_service", None)
+    if ingestion_service is None:
+        raise IdisHttpError(
+            status_code=400,
+            code="SERVICE_UNAVAILABLE",
+            message="Cannot upload document: ingestion service unavailable",
+        )
+
+    _validate_durable_deal_scope(request, tenant_ctx.tenant_id, deal_id)
+    _reject_invalid_upload_content_type(request)
+    _reject_unsafe_upload_filename(filename)
+
+    max_bytes = _max_upload_bytes(request)
+    _reject_oversized_content_length(request, max_bytes)
+    data = await request.body()
+    _reject_invalid_upload_body(data, max_bytes)
+    actual_sha256 = _reject_sha256_mismatch(data, sha256)
+    _reject_unsupported_upload_format(data, filename)
+
+    metadata = {
+        "doc_type": doc_type.value,
+        "source_system": source_system,
+        "upload_filename": filename,
+        "upload_intake": "single_document_raw_bytes",
+    }
+    ctx = IngestionContext(
+        tenant_id=UUID(tenant_ctx.tenant_id),
+        actor_id=tenant_ctx.actor_id,
+        request_id=getattr(request.state, "request_id", str(uuid.uuid4())),
+        idempotency_key=idempotency_key,
+    )
+    result = ingestion_service.ingest_bytes(
+        ctx=ctx,
+        deal_id=UUID(deal_id),
+        filename=filename,
+        media_type=UPLOAD_CONTENT_TYPE,
+        data=data,
+        metadata=metadata,
+        db_conn=getattr(request.state, "db_conn", None),
+    )
+    if result.artifact_id is None or result.document_id is None:
+        raise IdisHttpError(
+            status_code=400,
+            code="DOCUMENT_UPLOAD_FAILED",
+            message="Document upload ingestion failed",
+            details={"errors": _safe_ingestion_error_details(result.errors)},
+        )
+
+    request.state.audit_resource_id = str(result.artifact_id)
+    db_conn = getattr(request.state, "db_conn", None)
+    if db_conn is not None:
+        from idis.persistence.repositories.documents import PostgresDocumentsRepository
+
+        document = PostgresDocumentsRepository(db_conn, tenant_ctx.tenant_id).get_document(
+            str(result.document_id)
+        )
+        if document is not None and str(document.get("deal_id")) == deal_id:
+            return _document_summary_from_durable_row(document)
+
+    now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    artifact = _document_store.create_artifact(
+        tenant_id=tenant_ctx.tenant_id,
+        deal_id=deal_id,
+        doc_id=str(result.artifact_id),
+        doc_type=doc_type.value,
+        title=filename,
+        source_system=source_system,
+        version_id=actual_sha256[:12],
+        ingested_at=now,
+        sha256=actual_sha256,
+        uri=result.storage_uri,
+        metadata=metadata,
+    )
+    artifact["parse_status"] = result.parse_status.value if result.parse_status else None
+    artifact["document_id"] = str(result.document_id)
+    return _document_summary_from_memory_artifact(artifact)
 
 
 @router.post(

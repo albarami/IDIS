@@ -281,6 +281,70 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
 
+  /v1/deals/{dealId}/documents/upload:
+    post:
+      tags: [Documents]
+      summary: Upload and ingest one document
+      description: >
+        Uploads raw bytes for a single supported document and ingests them through
+        the existing compliance-enforced object store and ingestion service.
+        This endpoint does not accept local filesystem paths, folder uploads, raw
+        text, spans, excerpts, or pre-existing object keys.
+      operationId: uploadDealDocument
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - name: filename
+          in: query
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 128 }
+          description: File name only; path-like values are rejected.
+        - name: doc_type
+          in: query
+          required: true
+          schema: { $ref: "#/components/schemas/DocumentArtifact/properties/doc_type" }
+        - name: sha256
+          in: query
+          required: false
+          schema: { type: string, minLength: 64, maxLength: 64 }
+          description: Optional SHA-256 digest to verify the uploaded bytes.
+        - name: source_system
+          in: query
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 64, default: "api-upload" }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "201":
+          description: Document uploaded and ingested
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentArtifact"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          description: Uploaded document is too large
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "415":
+          description: Unsupported media type
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   /v1/deals/{dealId}/documents/{documentId}:
     get:
       tags: [Documents]

@@ -314,6 +314,217 @@ class TestCreateDocumentReturns201:
         assert body["doc_type"] == "PITCH_DECK"
 
 
+class TestUploadDocumentBytes:
+    """Proves raw single-document upload intake works without pre-existing object keys."""
+
+    def test_upload_octet_stream_returns_safe_durable_summary(
+        self,
+        _wired_app_context: dict[str, Any],
+        api_key_a: str,
+        deal_id: str,
+    ) -> None:
+        """POST /documents/upload ingests bytes and returns durable document_id safely."""
+        client = _wired_app_context["client"]
+        pdf_data = _create_minimal_pdf()
+
+        response = client.post(
+            f"/v1/deals/{deal_id}/documents/upload",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/octet-stream",
+            },
+            params={
+                "filename": "uploaded.pdf",
+                "doc_type": "DATA_ROOM_FILE",
+                "sha256": hashlib.sha256(pdf_data).hexdigest(),
+                "source_system": "api-upload",
+            },
+            content=pdf_data,
+        )
+
+        assert response.status_code == 201
+        body = response.json()
+        assert body["document_id"]
+        assert body["doc_id"]
+        assert body["deal_id"] == deal_id
+        assert body["doc_type"] == "DATA_ROOM_FILE"
+        assert body["source_system"] == "api-upload"
+        assert body["parse_status"] == "PARSED"
+        assert body["sha256"] == hashlib.sha256(pdf_data).hexdigest()
+        assert "content_b64" not in body
+        assert "content_sha256" not in body
+        assert "text_excerpt" not in body
+        assert "spans" not in body
+
+        ingestion_svc = _wired_app_context["ingestion_service"]
+        assert body["document_id"] in {
+            str(document.document_id) for document in ingestion_svc._documents.values()
+        }
+
+    @pytest.mark.parametrize(
+        ("headers", "params", "content", "expected_status"),
+        [
+            (
+                {"Content-Type": "application/json"},
+                {"filename": "uploaded.pdf", "doc_type": "DATA_ROOM_FILE"},
+                b"{}",
+                415,
+            ),
+            (
+                {"Content-Type": "application/octet-stream"},
+                {"filename": "uploaded.pdf", "doc_type": "DATA_ROOM_FILE"},
+                b"",
+                400,
+            ),
+            (
+                {"Content-Type": "application/octet-stream"},
+                {"filename": "../uploaded.pdf", "doc_type": "DATA_ROOM_FILE"},
+                _create_minimal_pdf(),
+                400,
+            ),
+            (
+                {"Content-Type": "application/octet-stream"},
+                {
+                    "filename": "uploaded.pdf",
+                    "doc_type": "DATA_ROOM_FILE",
+                    "sha256": "f" * 64,
+                },
+                _create_minimal_pdf(),
+                400,
+            ),
+        ],
+    )
+    def test_upload_rejects_invalid_inputs_without_raw_content(
+        self,
+        _wired_app_context: dict[str, Any],
+        api_key_a: str,
+        deal_id: str,
+        headers: dict[str, str],
+        params: dict[str, str],
+        content: bytes,
+        expected_status: int,
+    ) -> None:
+        """Invalid upload requests fail closed without raw content leakage."""
+        response = _wired_app_context["client"].post(
+            f"/v1/deals/{deal_id}/documents/upload",
+            headers={"X-IDIS-API-Key": api_key_a, **headers},
+            params=params,
+            content=content,
+        )
+
+        assert response.status_code == expected_status
+        body = response.json()
+        assert "content_b64" not in body
+        assert "raw_text" not in json.dumps(body)
+        assert "text_excerpt" not in json.dumps(body)
+
+    def test_upload_rejects_unsupported_magic_without_persisting_or_leaking_header(
+        self,
+        _wired_app_context: dict[str, Any],
+        api_key_a: str,
+        deal_id: str,
+    ) -> None:
+        """Unsupported bytes are rejected before ingestion side effects."""
+        client = _wired_app_context["client"]
+        ingestion_svc = _wired_app_context["ingestion_service"]
+
+        response = client.post(
+            f"/v1/deals/{deal_id}/documents/upload",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/octet-stream",
+            },
+            params={"filename": "unsupported.bin", "doc_type": "DATA_ROOM_FILE"},
+            content=b"secret customer bytes",
+        )
+
+        assert response.status_code == 400
+        body_text = json.dumps(response.json())
+        assert "header_bytes" not in body_text
+        assert "secret customer bytes" not in body_text
+        assert ingestion_svc._artifacts == {}
+        assert ingestion_svc._documents == {}
+
+    def test_upload_corrupt_supported_file_returns_safe_failed_summary(
+        self,
+        _wired_app_context: dict[str, Any],
+        api_key_a: str,
+        deal_id: str,
+    ) -> None:
+        """Post-ingestion parser failures return the durable failed summary safely."""
+        response = _wired_app_context["client"].post(
+            f"/v1/deals/{deal_id}/documents/upload",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/octet-stream",
+            },
+            params={"filename": "corrupt.pdf", "doc_type": "DATA_ROOM_FILE"},
+            content=b"%PDF-private corrupt bytes that must not be echoed",
+        )
+
+        assert response.status_code == 201
+        body = response.json()
+        assert body["document_id"]
+        assert body["parse_status"] == "FAILED"
+        body_text = json.dumps(body)
+        assert "private corrupt bytes" not in body_text
+        assert "spans" not in body
+
+    def test_upload_idempotency_replays_same_bytes_and_rejects_collision(
+        self,
+        _wired_app_context: dict[str, Any],
+        api_key_a: str,
+        deal_id: str,
+    ) -> None:
+        """Upload idempotency is based on the raw byte payload."""
+        client = _wired_app_context["client"]
+        pdf_data = _create_minimal_pdf()
+        headers = {
+            "X-IDIS-API-Key": api_key_a,
+            "Content-Type": "application/octet-stream",
+            "Idempotency-Key": f"upload-{uuid.uuid4().hex}",
+        }
+        params = {
+            "filename": "idempotent-upload.pdf",
+            "doc_type": "DATA_ROOM_FILE",
+        }
+
+        first = client.post(
+            f"/v1/deals/{deal_id}/documents/upload",
+            headers=headers,
+            params=params,
+            content=pdf_data,
+        )
+        second = client.post(
+            f"/v1/deals/{deal_id}/documents/upload",
+            headers=headers,
+            params=params,
+            content=pdf_data,
+        )
+        metadata_collision = client.post(
+            f"/v1/deals/{deal_id}/documents/upload",
+            headers=headers,
+            params={
+                "filename": "different-name.pdf",
+                "doc_type": "PITCH_DECK",
+            },
+            content=pdf_data,
+        )
+        collision = client.post(
+            f"/v1/deals/{deal_id}/documents/upload",
+            headers=headers,
+            params=params,
+            content=_create_minimal_xlsx(),
+        )
+
+        assert first.status_code == 201
+        assert second.status_code == 201
+        assert second.headers["X-IDIS-Idempotency-Replay"] == "true"
+        assert second.json() == first.json()
+        assert metadata_collision.status_code == 409
+        assert collision.status_code == 409
+
+
 class TestIngestDocumentCallsIngestionService:
     """Proves POST /ingest invokes IngestionService.ingest_bytes()."""
 

@@ -192,6 +192,9 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             "data_room_full_harness_run_handoff": (
                 _data_room_full_harness_run_handoff(root, files)
             ),
+            "data_room_ingestion_handoff_run_integration": (
+                _data_room_ingestion_handoff_run_integration(root, files)
+            ),
             "methodology_layer2_readiness_package_run_integration": (
                 _methodology_layer2_readiness_package_run_integration(root, files)
             ),
@@ -542,6 +545,8 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/services/runs/methodology_external_intelligence_conflict_check_plan.py",
         "src/idis/services/runs/methodology_company_identity_package.py",
         "src/idis/services/runs/data_room_inventory_package.py",
+        "src/idis/models/data_room_ingestion_handoff.py",
+        "src/idis/services/runs/data_room_ingestion_handoff.py",
         "src/idis/services/runs/methodology_layer2_readiness_package.py",
         "src/idis/evaluation/data_room_harness.py",
         "scripts/run_data_room_full_harness.py",
@@ -2361,6 +2366,83 @@ def _data_room_full_harness_run_handoff(
             "api_or_ui_changed": "data_room_root_path" in api_text,
             "persistent_data_room_package": False,
             "live_enrichment_expanded": "create_default_enrichment_service" in harness_text,
+            "layer2_execution_performed": False,
+        },
+    )
+
+
+def _data_room_ingestion_handoff_run_integration(
+    root: Path,
+    files: dict[str, str],
+) -> WiringItem:
+    model_text = files.get("src/idis/models/data_room_ingestion_handoff.py", "")
+    service_text = files.get("src/idis/services/runs/data_room_ingestion_handoff.py", "")
+    run_text = files.get("src/idis/models/run_step.py", "") + files.get(
+        "src/idis/services/runs/orchestrator.py", ""
+    )
+    api_text = files.get("src/idis/api/routes/runs.py", "")
+    forbidden_calls_absent = all(
+        forbidden not in service_text
+        for forbidden in (
+            "S3",
+            "supabase",
+            "OCR",
+            "transcription",
+            "Neo4j",
+            "RAG",
+            "EnrichmentService",
+            "DebateOrchestrator",
+            "DeliverablesGenerator",
+        )
+    )
+    integrated = (
+        _exists(root, "src/idis/models/data_room_ingestion_handoff.py")
+        and _exists(root, "src/idis/services/runs/data_room_ingestion_handoff.py")
+        and "DATA_ROOM_INGESTION_HANDOFF" in run_text
+        and "InMemoryRunDataRoomIngestionHandoffService" in service_text
+        and "ingest_bytes_fn" in service_text
+        and "existing_document_lookup_fn" in service_text
+        and "DataRoomIngestionHandoffStatus" in model_text
+        and "durable_ingested" in model_text
+        and "durable_reused" in model_text
+        and "in_memory_fallback" in model_text
+        and forbidden_calls_absent
+    )
+    return WiringItem(
+        key="data_room_ingestion_handoff_run_integration",
+        label="Data-room ingestion handoff run integration",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary=(
+            "durable data-room ingestion handoff boundary exists; API/OpenAPI/UI, "
+            "S3/Supabase, OCR/media/image/HTML/TXT parsing, Layer 2, RAG/Neo4j, "
+            "live enrichment, and deliverables remain deferred."
+        ),
+        evidence=[
+            "DATA_ROOM_INGESTION_HANDOFF runs after inventory and before INGEST_CHECK.",
+            "Supported inventory files can be handed to an IngestionService adapter.",
+            "Handoff summaries classify deferred, durable_ingested, durable_reused, "
+            "and in_memory_fallback outcomes.",
+            "Unsupported/deferred/blocked files remain safe summary rows only.",
+        ],
+        gaps=[
+            "API/OpenAPI/UI remains deferred.",
+            "S3/Supabase storage remains deferred.",
+            "unsupported/deferred files remain summaries only.",
+            "OCR/media/image/HTML/TXT parsing remains deferred.",
+            "Layer 2 remains deferred.",
+            "RAG/Neo4j remains deferred.",
+            "live enrichment execution remains deferred.",
+            "deliverables expansion remains deferred.",
+        ],
+        phase_2_action="Phase 3.0 Slice 18",
+        metadata={
+            "api_or_ui_changed": "DATA_ROOM_INGESTION_HANDOFF" in api_text,
+            "s3_or_supabase_storage_added": any(
+                token in service_text.lower() for token in ("s3", "supabase")
+            ),
+            "unsupported_files_create_documents": False,
+            "ocr_performed": False,
+            "media_transcription_performed": False,
             "layer2_execution_performed": False,
         },
     )

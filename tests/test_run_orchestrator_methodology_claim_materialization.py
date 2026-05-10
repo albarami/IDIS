@@ -193,6 +193,11 @@ def _ctx(run_id: str) -> RunContext:
         deal_id=DEAL_ID,
         mode="FULL",
         documents=_documents(),
+        deal_metadata={
+            "tenant_id": TENANT_ID,
+            "deal_id": DEAL_ID,
+            "company_name": "Acme Corp",
+        },
         extract_fn=_stub_extract,
         grade_fn=_stub_grade,
         calc_fn=_stub_calc,

@@ -180,6 +180,7 @@ async def start_run(
         deal_id=deal_id,
         mode=request_body.mode,
         documents=documents,
+        deal_metadata=_load_deal_metadata_for_run(request, tenant_ctx.tenant_id, deal_id),
         preflight_corpus=preflight_corpus,
         audit_sink=audit_sink,
     )
@@ -384,6 +385,23 @@ def _gather_preflight_corpus(
         return deal_documents[deal_id]
 
     return _gather_snapshot_documents(request, tenant_id, deal_id)
+
+
+def _load_deal_metadata_for_run(
+    request: Request,
+    tenant_id: str,
+    deal_id: str,
+) -> dict[str, Any] | None:
+    """Load explicit deal metadata for safe identity-boundary steps."""
+    from idis.persistence.repositories.deals import DealsRepository, InMemoryDealsRepository
+
+    db_conn = getattr(request.state, "db_conn", None)
+    repo = (
+        DealsRepository(db_conn, tenant_id)
+        if db_conn is not None
+        else InMemoryDealsRepository(tenant_id)
+    )
+    return repo.get(deal_id)
 
 
 def _extraction_ready_documents_from_preflight_corpus(

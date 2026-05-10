@@ -40,6 +40,13 @@ from idis.models.claim_materialization import (
     RunScopedMaterializedClaim,
     RunScopedMaterializedClaimShell,
 )
+from idis.models.company_identity_package_materialization import (
+    MethodologyCompanyIdentityPackageConstructionStatus,
+    MethodologyCompanyIdentityPackageRunResult,
+    MethodologyCompanyIdentityStatus,
+    RunScopedCompanyIdentityPackageRecord,
+    RunScopedCompanyIdentityPackageShell,
+)
 from idis.models.defect import CureProtocol, DefectSeverity, DefectStatus, DefectType
 from idis.models.deterministic_calculation import CalcType
 from idis.models.document_preflight import DocumentPreflightResult
@@ -186,6 +193,7 @@ class RunContext:
     documents: list[dict[str, Any]]
     extract_fn: Callable[..., dict[str, Any]]
     grade_fn: Callable[..., dict[str, Any]]
+    deal_metadata: dict[str, Any] | None = None
     preflight_corpus: list[dict[str, Any]] = field(default_factory=list)
     document_preflight_fn: (
         Callable[..., tuple[DocumentPreflightResult, list[dict[str, Any]]]] | None
@@ -332,6 +340,19 @@ class RunContext:
         | RunScopedExternalIntelligenceConflictCheckPlanShell
         | None
     ) = None
+    methodology_company_identity_package_fn: (
+        Callable[
+            ...,
+            tuple[
+                MethodologyCompanyIdentityPackageRunResult,
+                list[RunScopedCompanyIdentityPackageRecord],
+            ],
+        ]
+        | None
+    ) = None
+    methodology_company_identity_package: (
+        RunScopedCompanyIdentityPackageRecord | RunScopedCompanyIdentityPackageShell | None
+    ) = None
     methodology_layer2_readiness_package_fn: (
         Callable[
             ...,
@@ -458,6 +479,11 @@ class RunOrchestrator:
                         ctx,
                         existing.result_summary,
                     )
+                if step_name == StepName.METHODOLOGY_COMPANY_IDENTITY_PACKAGE:
+                    self._rehydrate_methodology_company_identity_package(
+                        ctx,
+                        existing.result_summary,
+                    )
                 if step_name == StepName.METHODOLOGY_LAYER2_READINESS_PACKAGE:
                     self._rehydrate_methodology_layer2_readiness_package(
                         ctx,
@@ -538,6 +564,8 @@ class RunOrchestrator:
                 ctx,
                 accumulated,
             )
+        if step_name == StepName.METHODOLOGY_COMPANY_IDENTITY_PACKAGE:
+            return self._execute_methodology_company_identity_package(ctx)
         if step_name == StepName.METHODOLOGY_LAYER2_READINESS_PACKAGE:
             return self._execute_methodology_layer2_readiness_package(ctx, accumulated)
         if step_name == StepName.EXTRACT:
@@ -1187,6 +1215,40 @@ class RunOrchestrator:
             )
         return summary
 
+    def _execute_methodology_company_identity_package(
+        self,
+        ctx: RunContext,
+    ) -> dict[str, Any]:
+        """Build a safe company identity package from explicit deal metadata."""
+        if ctx.methodology_company_identity_package_fn is not None:
+            run_result, packages = ctx.methodology_company_identity_package_fn(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                deal_metadata=ctx.deal_metadata,
+            )
+        else:
+            from idis.services.runs.methodology_company_identity_package import (
+                InMemoryRunMethodologyCompanyIdentityPackageService,
+            )
+
+            run_result, packages = InMemoryRunMethodologyCompanyIdentityPackageService().run(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                deal_metadata=ctx.deal_metadata,
+            )
+
+        ctx.methodology_company_identity_package = packages[0] if packages else None
+        summary = run_result.to_run_step_summary()
+        if run_result.construction_status.value == "failed":
+            raise RunStepBlockedError(
+                "METHODOLOGY_COMPANY_IDENTITY_PACKAGE_FAILED",
+                "Company identity package failed closed",
+                result_summary=summary,
+            )
+        return summary
+
     def _execute_methodology_layer2_readiness_package(
         self,
         ctx: RunContext,
@@ -1231,6 +1293,9 @@ class RunOrchestrator:
                 external_intelligence_conflict_check_plans=[
                     ctx.methodology_external_intelligence_conflict_check_plan
                 ],
+                company_identity_ids=_company_identity_ids(
+                    ctx.methodology_company_identity_package
+                ),
             )
         else:
             from idis.services.runs.methodology_layer2_readiness_package import (
@@ -1245,6 +1310,9 @@ class RunOrchestrator:
                 external_intelligence_conflict_check_plans=[
                     ctx.methodology_external_intelligence_conflict_check_plan
                 ],
+                company_identity_ids=_company_identity_ids(
+                    ctx.methodology_company_identity_package
+                ),
             )
 
         ctx.methodology_layer2_readiness_package = packages[0] if packages else None
@@ -1506,6 +1574,23 @@ class RunOrchestrator:
         )
         if shell is not None:
             ctx.methodology_layer2_readiness_package = shell
+
+    def _rehydrate_methodology_company_identity_package(
+        self,
+        ctx: RunContext,
+        result_summary: dict[str, Any],
+    ) -> None:
+        """Attach a safe company identity package shell when Slice 15 is skipped."""
+        if ctx.methodology_company_identity_package is not None:
+            return
+        shell = _company_identity_package_shell_from_summary(
+            tenant_id=ctx.tenant_id,
+            deal_id=ctx.deal_id,
+            run_id=ctx.run_id,
+            result_summary=result_summary,
+        )
+        if shell is not None:
+            ctx.methodology_company_identity_package = shell
 
     def _execute_extract(self, ctx: RunContext) -> dict[str, Any]:
         """Run extraction pipeline via injected callable.
@@ -2408,6 +2493,52 @@ def _layer2_readiness_package_shell_from_summary(
         )
     except ValueError:
         return None
+
+
+def _company_identity_package_shell_from_summary(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+    result_summary: dict[str, Any],
+) -> RunScopedCompanyIdentityPackageShell | None:
+    identity_package_ids = _str_list(result_summary.get("identity_package_ids"))
+    source_deal_ids = _str_list(result_summary.get("source_deal_ids"))
+    if not identity_package_ids or not source_deal_ids:
+        return None
+    raw_summary = result_summary.get("summary")
+    summary: dict[str, Any] = raw_summary if isinstance(raw_summary, dict) else {}
+    try:
+        return RunScopedCompanyIdentityPackageShell(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            run_id=run_id,
+            identity_package_id=identity_package_ids[0],
+            source_deal_id=source_deal_ids[0],
+            company_identity_ids=_str_list(result_summary.get("company_identity_ids")),
+            construction_status=MethodologyCompanyIdentityPackageConstructionStatus(
+                str(result_summary.get("construction_status") or "completed")
+            ),
+            identity_status=MethodologyCompanyIdentityStatus(
+                str(result_summary.get("identity_status") or "mapped")
+            ),
+            reason_codes=_str_list(result_summary.get("reason_codes")),
+            blocker_ids=_str_list(result_summary.get("blocker_ids")),
+            source_fields_present=_str_list(result_summary.get("source_fields_present")),
+            identifier_types_present=_str_list(result_summary.get("identifier_types_present")),
+            by_reason=_dict_from_summary(summary, "by_reason"),
+            by_blocker_severity=_dict_from_summary(summary, "by_blocker_severity"),
+        )
+    except ValueError:
+        return None
+
+
+def _company_identity_ids(
+    package: RunScopedCompanyIdentityPackageRecord | RunScopedCompanyIdentityPackageShell | None,
+) -> list[str]:
+    if package is None:
+        return []
+    return list(package.company_identity_ids)
 
 
 def _empty_evidence_trust_court_summary(

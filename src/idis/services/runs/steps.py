@@ -76,6 +76,7 @@ def build_run_context(
     deal_id: str,
     mode: str,
     documents: list[dict[str, Any]],
+    deal_metadata: dict[str, Any] | None = None,
     preflight_corpus: list[dict[str, Any]] | None = None,
     audit_sink: AuditSink,
     methodology_registry: MethodologyRegistry | None = None,
@@ -111,6 +112,7 @@ def build_run_context(
         deal_id=deal_id,
         mode=mode,
         documents=documents,
+        deal_metadata=deal_metadata,
         preflight_corpus=preflight_corpus or documents,
         methodology_registry=methodology_registry,
         methodology_registry_loader_fn=methodology_registry_loader_fn

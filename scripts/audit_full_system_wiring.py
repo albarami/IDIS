@@ -183,6 +183,9 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             "methodology_external_intelligence_conflict_check_plan_run_integration": (
                 _methodology_external_intelligence_conflict_check_plan_run_integration(root, files)
             ),
+            "methodology_company_identity_package_run_integration": (
+                _methodology_company_identity_package_run_integration(root, files)
+            ),
             "methodology_layer2_readiness_package_run_integration": (
                 _methodology_layer2_readiness_package_run_integration(root, files)
             ),
@@ -516,6 +519,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/models/evidence_trust_court_materialization.py",
         "src/idis/models/validated_evidence_package_materialization.py",
         "src/idis/models/external_intelligence_conflict_check_plan_materialization.py",
+        "src/idis/models/company_identity_package_materialization.py",
         "src/idis/models/layer2_readiness_package_materialization.py",
         "src/idis/services/extraction/claim_materializer.py",
         "src/idis/services/runs/methodology_claim_materialization.py",
@@ -529,6 +533,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/services/runs/methodology_evidence_trust_court_helpers.py",
         "src/idis/services/runs/methodology_validated_evidence_package.py",
         "src/idis/services/runs/methodology_external_intelligence_conflict_check_plan.py",
+        "src/idis/services/runs/methodology_company_identity_package.py",
         "src/idis/services/runs/methodology_layer2_readiness_package.py",
         "src/idis/services/extraction/claim_materialization_audit.py",
         "src/idis/models/sanad_coverage_boundary.py",
@@ -2157,6 +2162,76 @@ def _methodology_layer2_readiness_package_run_integration(
         metadata={
             "layer2_execution_performed": False,
             "ready_expected_for_current_slice13_inputs": False,
+        },
+    )
+
+
+def _methodology_company_identity_package_run_integration(
+    root: Path,
+    files: dict[str, str],
+) -> WiringItem:
+    model_text = files.get("src/idis/models/company_identity_package_materialization.py", "")
+    service_text = files.get(
+        "src/idis/services/runs/methodology_company_identity_package.py",
+        "",
+    )
+    run_text = (
+        files.get("src/idis/models/run_step.py", "")
+        + files.get("src/idis/services/runs/orchestrator.py", "")
+        + files.get("src/idis/services/runs/steps.py", "")
+    )
+    forbidden_calls_absent = all(
+        forbidden not in service_text
+        for forbidden in (
+            "EnrichmentService",
+            ".enrich(",
+            ".fetch(",
+            "_run_full_enrichment",
+            "DebateOrchestrator",
+            "AnalysisEngine",
+            "ScoringEngine",
+            "DeliverablesGenerator",
+        )
+    )
+    integrated = (
+        _exists(root, "src/idis/models/company_identity_package_materialization.py")
+        and _exists(root, "src/idis/services/runs/methodology_company_identity_package.py")
+        and "METHODOLOGY_COMPANY_IDENTITY_PACKAGE" in run_text
+        and "RunScopedCompanyIdentityPackageRecord" in model_text
+        and "RunScopedCompanyIdentityPackageShell" in model_text
+        and "InMemoryRunMethodologyCompanyIdentityPackageService" in service_text
+        and forbidden_calls_absent
+    )
+    return WiringItem(
+        key="methodology_company_identity_package_run_integration",
+        label="Methodology company identity package run integration",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary=(
+            "company identity package boundary exists; enrichment execution, facts, "
+            "executed provider checks, BYOL automation, APIs, persistence, and Layer 2 "
+            "execution remain deferred."
+        ),
+        evidence=[
+            "FULL runs include METHODOLOGY_COMPANY_IDENTITY_PACKAGE after the Slice 13 "
+            "plan and before METHODOLOGY_LAYER2_READINESS_PACKAGE.",
+            "company identity input boundary consumes explicit deal metadata only.",
+            "Run-step summaries expose deterministic identity IDs and aggregate counts only.",
+            "No enrichment, connector, legacy enrichment helper, or Layer 2 execution calls "
+            "are performed by the identity boundary.",
+        ],
+        gaps=[
+            "enrichment execution remains deferred.",
+            "connector fetch remains deferred.",
+            "facts remain deferred.",
+            "executed provider checks remain deferred.",
+            "BYOL automation remains deferred.",
+            "API/UI/OpenAPI and durable persistence remain deferred.",
+            "Layer 2 execution remains deferred.",
+        ],
+        phase_2_action="Phase 3.0 Slice 15",
+        metadata={
+            "enrichment_execution_performed": False,
+            "layer2_execution_performed": False,
         },
     )
 

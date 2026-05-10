@@ -539,6 +539,7 @@ class TestSnapshotStepErrorsPersistedAndReturned:
             deal_id="deal-preflight",
             mode="FULL",
             documents=[],
+            deal_metadata={"tenant_id": TENANT_A, "company_name": "Acme Corp"},
             preflight_corpus=[_make_preflight_document(document_id="doc-usable")],
             extract_fn=_stub_extract,
             grade_fn=_stub_grade,
@@ -566,6 +567,7 @@ class TestSnapshotStepErrorsPersistedAndReturned:
             deal_id="deal-preflight",
             mode="FULL",
             documents=[],
+            deal_metadata={"tenant_id": TENANT_A, "company_name": "Acme Corp"},
             preflight_corpus=[_make_preflight_document(document_id="doc-usable")],
             methodology_extraction_task_planning_fn=forbidden_planning_fn,
             extract_fn=_stub_extract,
@@ -608,6 +610,7 @@ class TestSnapshotStepErrorsPersistedAndReturned:
             deal_id="deal-preflight",
             mode="FULL",
             documents=[],
+            deal_metadata={"tenant_id": TENANT_A, "company_name": "Acme Corp"},
             preflight_corpus=[_make_preflight_document(document_id="doc-usable")],
             methodology_extraction_task_planning_fn=empty_planning_fn,
             extract_fn=_stub_extract,
@@ -717,8 +720,8 @@ def _stub_deliverables(
 class TestFullCompletesAllSteps:
     """test_full_completes_all_nine_steps."""
 
-    def test_full_completes_all_twenty_two_steps(self) -> None:
-        """FULL run completes all 22 steps in canonical order."""
+    def test_full_completes_all_twenty_three_steps(self) -> None:
+        """FULL run completes all 23 steps in canonical order."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -729,6 +732,7 @@ class TestFullCompletesAllSteps:
             deal_id=str(uuid.uuid4()),
             mode="FULL",
             documents=_make_documents(),
+            deal_metadata={"tenant_id": TENANT_A, "company_name": "Acme Corp"},
             extract_fn=_stub_extract,
             grade_fn=_stub_grade,
             calc_fn=_stub_calc,
@@ -745,7 +749,7 @@ class TestFullCompletesAllSteps:
         assert result.block_reason is None
 
         completed = [s for s in result.steps if s.status == StepStatus.COMPLETED]
-        assert len(completed) == 22
+        assert len(completed) == 23
         assert [s.step_name for s in completed] == [
             StepName.INGEST_CHECK,
             StepName.DOCUMENT_PREFLIGHT,
@@ -760,6 +764,7 @@ class TestFullCompletesAllSteps:
             StepName.METHODOLOGY_EVIDENCE_TRUST_COURT,
             StepName.METHODOLOGY_VALIDATED_EVIDENCE_PACKAGE,
             StepName.METHODOLOGY_EXTERNAL_INTELLIGENCE_CONFLICT_CHECK_PLAN,
+            StepName.METHODOLOGY_COMPANY_IDENTITY_PACKAGE,
             StepName.METHODOLOGY_LAYER2_READINESS_PACKAGE,
             StepName.EXTRACT,
             StepName.GRADE,

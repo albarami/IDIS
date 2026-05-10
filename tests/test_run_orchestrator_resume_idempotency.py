@@ -406,6 +406,7 @@ class TestRetryDebateStepIdempotentNoDuplicateDebate:
             deal_id=str(uuid.uuid4()),
             mode="FULL",
             documents=_make_documents(),
+            deal_metadata={"tenant_id": TENANT_A, "company_name": "Acme Corp"},
             extract_fn=stub_extract,
             grade_fn=stub_grade,
             calc_fn=_stub_calc,

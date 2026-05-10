@@ -187,8 +187,8 @@ def _clear_stores() -> None:
 class TestDebateStepHappyPath:
     """DEBATE step completes when debate_fn is provided and returns valid output."""
 
-    def test_full_run_with_debate_fn_completes_all_twenty_two_steps(self) -> None:
-        """FULL run completes all 22 steps including DEBATE."""
+    def test_full_run_with_debate_fn_completes_all_twenty_three_steps(self) -> None:
+        """FULL run completes all 23 steps including DEBATE."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -199,6 +199,7 @@ class TestDebateStepHappyPath:
             deal_id=str(uuid.uuid4()),
             mode="FULL",
             documents=_make_documents(),
+            deal_metadata={"tenant_id": TENANT_A, "company_name": "Acme Corp"},
             extract_fn=_stub_extract,
             grade_fn=_stub_grade,
             calc_fn=_stub_calc,
@@ -212,7 +213,7 @@ class TestDebateStepHappyPath:
         result = orchestrator.execute(ctx)
 
         assert result.status == "SUCCEEDED"
-        assert len(result.steps) == 22
+        assert len(result.steps) == 23
 
         expected_names = [
             StepName.INGEST_CHECK,
@@ -228,6 +229,7 @@ class TestDebateStepHappyPath:
             StepName.METHODOLOGY_EVIDENCE_TRUST_COURT,
             StepName.METHODOLOGY_VALIDATED_EVIDENCE_PACKAGE,
             StepName.METHODOLOGY_EXTERNAL_INTELLIGENCE_CONFLICT_CHECK_PLAN,
+            StepName.METHODOLOGY_COMPANY_IDENTITY_PACKAGE,
             StepName.METHODOLOGY_LAYER2_READINESS_PACKAGE,
             StepName.EXTRACT,
             StepName.GRADE,
@@ -257,6 +259,7 @@ class TestDebateStepHappyPath:
             deal_id=str(uuid.uuid4()),
             mode="FULL",
             documents=_make_documents(),
+            deal_metadata={"tenant_id": TENANT_A, "company_name": "Acme Corp"},
             extract_fn=_stub_extract,
             grade_fn=_stub_grade,
             calc_fn=_stub_calc,
@@ -310,6 +313,7 @@ class TestDebateStepHappyPath:
             deal_id=str(uuid.uuid4()),
             mode="FULL",
             documents=_make_documents(),
+            deal_metadata={"tenant_id": TENANT_A, "company_name": "Acme Corp"},
             extract_fn=_stub_extract,
             grade_fn=_stub_grade,
             calc_fn=_stub_calc,
@@ -341,6 +345,7 @@ class TestDebateStepFailClosed:
             deal_id=str(uuid.uuid4()),
             mode="FULL",
             documents=_make_documents(),
+            deal_metadata={"tenant_id": TENANT_A, "company_name": "Acme Corp"},
             extract_fn=_stub_extract,
             grade_fn=_stub_grade,
             calc_fn=_stub_calc,
@@ -355,7 +360,7 @@ class TestDebateStepFailClosed:
         assert "debate_fn not provided" in (result.error_message or "")
 
         completed = [s for s in result.steps if s.status == StepStatus.COMPLETED]
-        assert len(completed) == 18
+        assert len(completed) == 19
         assert [s.step_name for s in completed] == [
             StepName.INGEST_CHECK,
             StepName.DOCUMENT_PREFLIGHT,
@@ -370,6 +375,7 @@ class TestDebateStepFailClosed:
             StepName.METHODOLOGY_EVIDENCE_TRUST_COURT,
             StepName.METHODOLOGY_VALIDATED_EVIDENCE_PACKAGE,
             StepName.METHODOLOGY_EXTERNAL_INTELLIGENCE_CONFLICT_CHECK_PLAN,
+            StepName.METHODOLOGY_COMPANY_IDENTITY_PACKAGE,
             StepName.METHODOLOGY_LAYER2_READINESS_PACKAGE,
             StepName.EXTRACT,
             StepName.GRADE,

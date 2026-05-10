@@ -195,6 +195,10 @@ def _make_full_ctx(**overrides: Any) -> RunContext:
         "deal_id": str(uuid.uuid4()),
         "mode": "FULL",
         "documents": _make_documents(),
+        "deal_metadata": {
+            "tenant_id": TENANT_A,
+            "company_name": "Acme Corp",
+        },
         "extract_fn": _stub_extract,
         "grade_fn": _stub_grade,
         "calc_fn": _stub_calc,
@@ -239,6 +243,7 @@ class TestStepOrderingConstants:
             StepName.METHODOLOGY_EVIDENCE_TRUST_COURT,
             StepName.METHODOLOGY_VALIDATED_EVIDENCE_PACKAGE,
             StepName.METHODOLOGY_EXTERNAL_INTELLIGENCE_CONFLICT_CHECK_PLAN,
+            StepName.METHODOLOGY_COMPANY_IDENTITY_PACKAGE,
             StepName.METHODOLOGY_LAYER2_READINESS_PACKAGE,
             StepName.EXTRACT,
             StepName.GRADE,
@@ -308,8 +313,8 @@ class TestFullVsSnapshotEnforcement:
         for full_only in FULL_ONLY_STEPS:
             assert full_only not in step_names
 
-    def test_full_has_twenty_two_steps(self) -> None:
-        """FULL mode completes with all 22 steps."""
+    def test_full_has_twenty_three_steps(self) -> None:
+        """FULL mode completes with all 23 steps."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -318,7 +323,7 @@ class TestFullVsSnapshotEnforcement:
         result = orchestrator.execute(ctx)
 
         assert result.status == "SUCCEEDED"
-        assert len(result.steps) == 22
+        assert len(result.steps) == 23
         step_names = [step.step_name for step in result.steps]
         assert step_names.index(StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING) < (
             step_names.index(StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION)
@@ -348,6 +353,9 @@ class TestFullVsSnapshotEnforcement:
             step_names.index(StepName.METHODOLOGY_EXTERNAL_INTELLIGENCE_CONFLICT_CHECK_PLAN)
         )
         assert step_names.index(StepName.METHODOLOGY_EXTERNAL_INTELLIGENCE_CONFLICT_CHECK_PLAN) < (
+            step_names.index(StepName.METHODOLOGY_COMPANY_IDENTITY_PACKAGE)
+        )
+        assert step_names.index(StepName.METHODOLOGY_COMPANY_IDENTITY_PACKAGE) < (
             step_names.index(StepName.METHODOLOGY_LAYER2_READINESS_PACKAGE)
         )
         assert step_names.index(StepName.METHODOLOGY_LAYER2_READINESS_PACKAGE) < (
@@ -438,7 +446,7 @@ class TestResumeSkipsCompletedSteps:
 
         result1 = orchestrator.execute(ctx)
         assert result1.status == "SUCCEEDED"
-        assert len(result1.steps) == 22
+        assert len(result1.steps) == 23
 
         call_count = {"enrichment": 0}
         original_enrich = _stub_enrichment

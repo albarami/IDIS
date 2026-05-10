@@ -94,7 +94,7 @@ def test_harness_reports_blocked_steps_without_forcing_success(tmp_path: Path) -
 
 
 def test_real_example_acceptance_when_fixture_is_available() -> None:
-    """The real fixture path should be accepted without hardcoded folder-shape assertions."""
+    """The real fixture path should be accepted without fixed folder-shape assertions."""
     fixture_root = _real_example_root()
     if fixture_root is None:
         pytest.skip("real_example fixture is not available in this checkout")
@@ -141,13 +141,13 @@ def _write_mixed_data_room(root: Path) -> None:
 
 
 def _real_example_root() -> Path | None:
-    candidates = [
-        Path.cwd() / "real_example",
-        Path.cwd().parent / "real_example",
-        Path("C:/Projects/IDIS/IDIS/real_example"),
-        Path("C:/Projects/IDIS/real_example"),
-    ]
-    for candidate in candidates:
+    search_roots = [Path.cwd(), *Path.cwd().parents, Path(__file__).resolve().parents[1]]
+    seen: set[Path] = set()
+    for root in search_roots:
+        candidate = root / "real_example"
+        if candidate in seen:
+            continue
+        seen.add(candidate)
         if candidate.exists() and candidate.is_dir():
             return candidate
     return None

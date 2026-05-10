@@ -947,6 +947,124 @@ class TestStartRunPreflightCorpusBehavior:
             "CALC",
         ]
 
+    def test_api_rejects_unknown_and_path_like_run_source_fields(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Public runs API must not accept local path or unrecognized source fields."""
+        monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(_make_api_keys()))
+        app = create_app(audit_sink=InMemoryAuditSink(), service_region="me-south-1")
+        app.state.deal_documents = {}
+        client = TestClient(app)
+
+        create_resp = client.post(
+            "/v1/deals",
+            json={"name": "Strict Source Deal", "company_name": "TestCo"},
+            headers={"X-IDIS-API-Key": API_KEY_A},
+        )
+        assert create_resp.status_code == 201
+        deal_id = create_resp.json()["deal_id"]
+        app.state.deal_documents[deal_id] = [_make_preflight_document(document_id="doc-1")]
+
+        unknown_resp = client.post(
+            f"/v1/deals/{deal_id}/runs",
+            json={"mode": "SNAPSHOT", "surprise": True},
+            headers={"X-IDIS-API-Key": API_KEY_A},
+        )
+        path_resp = client.post(
+            f"/v1/deals/{deal_id}/runs",
+            json={
+                "mode": "SNAPSHOT",
+                "source": {
+                    "type": "deal_documents",
+                    "document_ids": ["doc-1"],
+                    "data_room_root_path": "C:/unsafe/data-room",
+                },
+            },
+            headers={"X-IDIS-API-Key": API_KEY_A},
+        )
+
+        assert unknown_resp.status_code == 400
+        assert unknown_resp.json()["code"] == "INVALID_REQUEST"
+        assert path_resp.status_code == 400
+        assert path_resp.json()["code"] == "INVALID_REQUEST"
+
+    def test_api_source_selects_only_requested_durable_documents(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Selected document refs should narrow the corpus before extraction."""
+        monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(_make_api_keys()))
+        captured_documents: list[dict[str, Any]] = []
+
+        def capture_extract(**kwargs: Any) -> dict[str, Any]:
+            captured_documents.extend(kwargs["documents"])
+            return _stub_extract(**kwargs)
+
+        monkeypatch.setattr("idis.api.routes.runs._run_snapshot_extraction", capture_extract)
+        app = create_app(audit_sink=InMemoryAuditSink(), service_region="me-south-1")
+        app.state.deal_documents = {}
+        client = TestClient(app)
+
+        create_resp = client.post(
+            "/v1/deals",
+            json={"name": "Selected Corpus Deal", "company_name": "TestCo"},
+            headers={"X-IDIS-API-Key": API_KEY_A},
+        )
+        assert create_resp.status_code == 201
+        deal_id = create_resp.json()["deal_id"]
+        doc_1 = _make_preflight_document(document_id="doc-1")
+        doc_2 = _make_preflight_document(document_id="doc-2")
+        for doc in (doc_1, doc_2):
+            doc["deal_id"] = deal_id
+            doc["spans"][0]["deal_id"] = deal_id
+        app.state.deal_documents[deal_id] = [doc_1, doc_2]
+
+        run_resp = client.post(
+            f"/v1/deals/{deal_id}/runs",
+            json={
+                "mode": "SNAPSHOT",
+                "source": {"type": "deal_documents", "document_ids": ["doc-2"]},
+            },
+            headers={"X-IDIS-API-Key": API_KEY_A},
+        )
+
+        assert run_resp.status_code == 202
+        assert [doc["document_id"] for doc in captured_documents] == ["doc-2"]
+
+    def test_api_source_rejects_missing_or_cross_deal_documents(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Selected document IDs must exist in the target deal corpus before run creation."""
+        monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(_make_api_keys()))
+        app = create_app(audit_sink=InMemoryAuditSink(), service_region="me-south-1")
+        app.state.deal_documents = {}
+        client = TestClient(app)
+
+        create_resp = client.post(
+            "/v1/deals",
+            json={"name": "Missing Source Deal", "company_name": "TestCo"},
+            headers={"X-IDIS-API-Key": API_KEY_A},
+        )
+        assert create_resp.status_code == 201
+        deal_id = create_resp.json()["deal_id"]
+        app.state.deal_documents[deal_id] = [_make_preflight_document(document_id="doc-present")]
+
+        run_resp = client.post(
+            f"/v1/deals/{deal_id}/runs",
+            json={
+                "mode": "SNAPSHOT",
+                "source": {"type": "deal_documents", "document_ids": ["doc-missing"]},
+            },
+            headers={"X-IDIS-API-Key": API_KEY_A},
+        )
+
+        assert run_resp.status_code == 400
+        body = run_resp.json()
+        assert body["code"] == "INVALID_RUN_SOURCE"
+        assert "run_id" not in body
+
 
 class TestAuditFailureAbortsRunFailClosed:
     """test_audit_failure_aborts_run_fail_closed."""

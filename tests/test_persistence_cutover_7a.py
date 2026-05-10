@@ -89,6 +89,26 @@ class TestInMemoryRunsRepository:
         assert fetched is not None
         assert fetched["run_id"] == run_id
 
+    def test_create_get_and_claim_preserve_run_source(self) -> None:
+        """Run source metadata survives queueing and worker claims."""
+        repo = InMemoryRunsRepository(TENANT_A)
+        run_id = str(uuid.uuid4())
+        source = {"type": "deal_documents", "document_ids": ["doc-2", "doc-1"]}
+
+        created = repo.create(
+            run_id=run_id,
+            deal_id=str(uuid.uuid4()),
+            mode="SNAPSHOT",
+            source=source,
+        )
+        fetched = repo.get(run_id)
+        claimed = repo.claim_queued_runs(limit=10)
+
+        assert created["source"] == source
+        assert fetched is not None
+        assert fetched["source"] == source
+        assert claimed[0]["source"] == source
+
     def test_update_status(self) -> None:
         """Update run status and finished_at."""
         repo = InMemoryRunsRepository(TENANT_A)

@@ -187,8 +187,8 @@ def _clear_stores() -> None:
 class TestDebateStepHappyPath:
     """DEBATE step completes when debate_fn is provided and returns valid output."""
 
-    def test_full_run_with_debate_fn_completes_all_twenty_four_steps(self) -> None:
-        """FULL run completes all 24 steps including DEBATE."""
+    def test_full_run_with_debate_fn_completes_all_twenty_five_steps(self) -> None:
+        """FULL run completes all 25 steps including DEBATE."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -213,10 +213,11 @@ class TestDebateStepHappyPath:
         result = orchestrator.execute(ctx)
 
         assert result.status == "SUCCEEDED"
-        assert len(result.steps) == 24
+        assert len(result.steps) == 25
 
         expected_names = [
             StepName.DATA_ROOM_INVENTORY_PACKAGE,
+            StepName.DATA_ROOM_INGESTION_HANDOFF,
             StepName.INGEST_CHECK,
             StepName.DOCUMENT_PREFLIGHT,
             StepName.METHODOLOGY_COVERAGE_INIT,
@@ -361,9 +362,10 @@ class TestDebateStepFailClosed:
         assert "debate_fn not provided" in (result.error_message or "")
 
         completed = [s for s in result.steps if s.status == StepStatus.COMPLETED]
-        assert len(completed) == 20
+        assert len(completed) == 21
         assert [s.step_name for s in completed] == [
             StepName.DATA_ROOM_INVENTORY_PACKAGE,
+            StepName.DATA_ROOM_INGESTION_HANDOFF,
             StepName.INGEST_CHECK,
             StepName.DOCUMENT_PREFLIGHT,
             StepName.METHODOLOGY_COVERAGE_INIT,
@@ -410,5 +412,5 @@ class TestDebateStepFailClosed:
         result = orchestrator.execute(ctx)
 
         assert result.status == "SUCCEEDED"
-        assert len(result.steps) == 7
+        assert len(result.steps) == 8
         assert all(s.status == StepStatus.COMPLETED for s in result.steps)

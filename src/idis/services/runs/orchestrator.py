@@ -48,6 +48,7 @@ from idis.models.company_identity_package_materialization import (
     RunScopedCompanyIdentityPackageRecord,
     RunScopedCompanyIdentityPackageShell,
 )
+from idis.models.data_room_ingestion_handoff import DataRoomIngestionHandoffRunResult
 from idis.models.data_room_inventory_package_materialization import (
     DataRoomInventoryPackageConstructionStatus,
     DataRoomInventoryPackageRunResult,
@@ -216,6 +217,9 @@ class RunContext:
     ) = None
     data_room_inventory_package: (
         RunScopedDataRoomInventoryPackageRecord | RunScopedDataRoomInventoryPackageShell | None
+    ) = None
+    data_room_ingestion_handoff_fn: (
+        Callable[..., tuple[DataRoomIngestionHandoffRunResult, list[dict[str, Any]]]] | None
     ) = None
     document_preflight_fn: (
         Callable[..., tuple[DocumentPreflightResult, list[dict[str, Any]]]] | None
@@ -561,6 +565,8 @@ class RunOrchestrator:
         """
         if step_name == StepName.DATA_ROOM_INVENTORY_PACKAGE:
             return self._execute_data_room_inventory_package(ctx)
+        if step_name == StepName.DATA_ROOM_INGESTION_HANDOFF:
+            return self._execute_data_room_ingestion_handoff(ctx)
         if step_name == StepName.INGEST_CHECK:
             return self._execute_ingest_check(ctx)
         if step_name == StepName.DOCUMENT_PREFLIGHT:
@@ -645,6 +651,35 @@ class RunOrchestrator:
                 result_summary=summary,
             )
         return summary
+
+    def _execute_data_room_ingestion_handoff(self, ctx: RunContext) -> dict[str, Any]:
+        """Optionally hand supported inventory files into durable ingestion."""
+        if ctx.data_room_ingestion_handoff_fn is not None:
+            run_result, corpus = ctx.data_room_ingestion_handoff_fn(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                root_path=ctx.data_room_root_path,
+                inventory_package=ctx.data_room_inventory_package,
+                inventory_corpus=ctx.preflight_corpus,
+            )
+        else:
+            from idis.services.runs.data_room_ingestion_handoff import (
+                InMemoryRunDataRoomIngestionHandoffService,
+            )
+
+            run_result, corpus = InMemoryRunDataRoomIngestionHandoffService().run(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                root_path=ctx.data_room_root_path,
+                inventory_package=ctx.data_room_inventory_package,
+                inventory_corpus=ctx.preflight_corpus,
+            )
+        if corpus:
+            ctx.preflight_corpus = corpus
+            ctx.documents = list(corpus)
+        return run_result.to_run_step_summary()
 
     def _execute_ingest_check(self, ctx: RunContext) -> dict[str, Any]:
         """Verify at least one ingested document exists for the deal.

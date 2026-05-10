@@ -310,6 +310,26 @@ def test_full_system_inventory_detects_slice_17_local_data_room_harness_boundary
     assert any("Layer 2 remains deferred" in gap for gap in harness.gaps)
 
 
+def test_full_system_inventory_detects_slice_18_durable_handoff_boundary() -> None:
+    """Slice 18 must report durable ingestion handoff only, not API/UI/media/Layer 2."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+    handoff = inventory["data_room_ingestion_handoff_run_integration"]
+
+    assert handoff.status == "PARTIAL"
+    assert any("DATA_ROOM_INGESTION_HANDOFF" in item for item in handoff.evidence)
+    assert any("IngestionService" in item for item in handoff.evidence)
+    assert handoff.metadata["api_or_ui_changed"] is False
+    assert handoff.metadata["s3_or_supabase_storage_added"] is False
+    assert handoff.metadata["unsupported_files_create_documents"] is False
+    assert handoff.metadata["ocr_performed"] is False
+    assert handoff.metadata["media_transcription_performed"] is False
+    assert handoff.metadata["layer2_execution_performed"] is False
+    assert any("API/OpenAPI/UI remains deferred" in gap for gap in handoff.gaps)
+    assert any("S3/Supabase storage remains deferred" in gap for gap in handoff.gaps)
+    assert any("unsupported/deferred files remain summaries only" in gap for gap in handoff.gaps)
+    assert any("Layer 2 remains deferred" in gap for gap in handoff.gaps)
+
+
 def test_full_system_report_keeps_slice_12_deferred_boundaries_explicit() -> None:
     """Rendered audit wording must keep Slice 12 separate from downstream IC layers."""
     report = render_report(collect_wiring_inventory(REPO_ROOT))
@@ -317,6 +337,7 @@ def test_full_system_report_keeps_slice_12_deferred_boundaries_explicit() -> Non
     assert "in-memory run-scoped Layer 1 Evidence Trust Court boundary exists" in report
     assert "data-room inventory package boundary exists" in report
     assert "local data-room FULL harness boundary exists" in report
+    assert "durable data-room ingestion handoff boundary exists" in report
     assert "in-memory run-scoped Layer 1 Validated Evidence Package boundary exists" in report
     assert "external intelligence conflict-check plan boundary exists" in report
     assert "company identity package boundary exists" in report

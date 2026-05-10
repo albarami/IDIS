@@ -26,10 +26,20 @@ from idis.api.routes.documents import clear_document_store
 from idis.audit.sink import InMemoryAuditSink
 from idis.compliance.byok import BYOKPolicyRegistry, configure_key
 from idis.idempotency.store import SqliteIdempotencyStore
+from idis.models.data_room_inventory_package_materialization import (
+    RunScopedDataRoomInventoryFileRecord,
+)
 from idis.persistence.db import set_tenant_local
 from idis.persistence.repositories.documents import PostgresDocumentsRepository
 from idis.services.ingestion import IngestionContext, IngestionService
+from idis.services.runs.data_room_ingestion_handoff import (
+    InMemoryRunDataRoomIngestionHandoffService,
+)
+from idis.services.runs.data_room_inventory_package import (
+    InMemoryRunDataRoomInventoryPackageService,
+)
 from idis.services.runs.execution import RunExecutionResult
+from idis.services.runs.steps import load_document_preflight_corpus_for_deal
 from idis.storage.compliant_store import ComplianceEnforcedStore
 from idis.storage.filesystem_store import FilesystemObjectStore
 
@@ -232,6 +242,91 @@ def test_ingestion_persists_successful_parse_to_postgres_documents_and_spans(
     assert len(spans) > 0
     assert all(span["deal_id"] == str(DEAL_ID) for span in spans)
     assert all(span["content_hash"] for span in spans)
+
+
+def test_data_room_handoff_persists_supported_inventory_files_to_postgres(
+    app_engine: Engine,
+    clean_tables: None,
+    compliant_store: ComplianceEnforcedStore,
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "Finance").mkdir()
+    (tmp_path / "Finance" / "Model.xlsx").write_bytes(_xlsx_bytes())
+    (tmp_path / "Media").mkdir()
+    (tmp_path / "Media" / "Demo.mp4").write_bytes(b"\x00\x00\x00\x18ftypmp42")
+    _inventory_result, packages, inventory_corpus = (
+        InMemoryRunDataRoomInventoryPackageService().run(
+            tenant_id=str(TENANT_ID),
+            deal_id=str(DEAL_ID),
+            run_id="slice-18-pg-run",
+            root_path=tmp_path,
+        )
+    )
+    package = packages[0]
+
+    with app_engine.begin() as conn:
+        _create_deal(conn)
+        ingestion_service = IngestionService(
+            compliant_store=compliant_store,
+            audit_sink=InMemoryAuditSink(),
+            db_conn=conn,
+        )
+
+        def existing_document_lookup(
+            file_record: RunScopedDataRoomInventoryFileRecord,
+        ) -> dict[str, object] | None:
+            return PostgresDocumentsRepository(
+                conn, str(TENANT_ID)
+            ).get_document_by_inventory_file_id(
+                deal_id=str(DEAL_ID),
+                inventory_file_id=file_record.file_id,
+            )
+
+        def ingest_bytes(**kwargs: object) -> dict[str, object]:
+            file_record = kwargs["file_record"]
+            assert isinstance(file_record, RunScopedDataRoomInventoryFileRecord)
+            result = ingestion_service.ingest_bytes(
+                ctx=IngestionContext(
+                    tenant_id=TENANT_ID,
+                    actor_id="slice-18-handoff",
+                    request_id="slice-18-handoff-request",
+                    idempotency_key=f"data-room:{file_record.file_id}",
+                ),
+                deal_id=DEAL_ID,
+                filename=str(file_record.relative_path),
+                media_type=None,
+                data=kwargs["data"],
+                metadata=kwargs["metadata"],
+                db_conn=conn,
+            )
+            return result.to_dict()
+
+        result, _corpus = InMemoryRunDataRoomIngestionHandoffService().run(
+            tenant_id=str(TENANT_ID),
+            deal_id=str(DEAL_ID),
+            run_id="slice-18-pg-run",
+            root_path=tmp_path,
+            inventory_package=package,
+            inventory_corpus=inventory_corpus,
+            ingest_bytes_fn=ingest_bytes,
+            existing_document_lookup_fn=existing_document_lookup,
+        )
+        documents = PostgresDocumentsRepository(conn, str(TENANT_ID)).list_documents_by_deal(
+            str(DEAL_ID),
+            parsed_only=False,
+        )
+        preflight_corpus = load_document_preflight_corpus_for_deal(
+            db_conn=conn,
+            deal_id=str(DEAL_ID),
+            tenant_id=str(TENANT_ID),
+        )
+
+    summary = result.to_run_step_summary()
+    assert summary["handoff_status"] == "durable_ingested"
+    assert summary["durable_ingested_file_count"] == 1
+    assert documents[0]["source_metadata"]["inventory_file_id"] == package.files[0].file_id
+    assert documents[0]["source_metadata"]["source_system"] == "data_room_inventory"
+    assert len(preflight_corpus) == 1
 
 
 def test_ingestion_persists_failed_parse_without_extraction_ready_spans(

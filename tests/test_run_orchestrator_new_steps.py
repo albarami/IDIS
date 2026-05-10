@@ -231,6 +231,7 @@ class TestStepOrderingConstants:
         """FULL_STEPS matches the v6.3 canonical order exactly."""
         assert FULL_STEPS == [
             StepName.DATA_ROOM_INVENTORY_PACKAGE,
+            StepName.DATA_ROOM_INGESTION_HANDOFF,
             StepName.INGEST_CHECK,
             StepName.DOCUMENT_PREFLIGHT,
             StepName.METHODOLOGY_COVERAGE_INIT,
@@ -290,8 +291,8 @@ class TestStepOrderingConstants:
 class TestFullVsSnapshotEnforcement:
     """FULL-only steps must not execute in SNAPSHOT mode."""
 
-    def test_snapshot_has_only_seven_steps(self) -> None:
-        """SNAPSHOT mode completes with 7 steps (no FULL-only steps)."""
+    def test_snapshot_has_only_eight_steps(self) -> None:
+        """SNAPSHOT mode completes with 8 steps (no FULL-only steps)."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -310,13 +311,13 @@ class TestFullVsSnapshotEnforcement:
         result = orchestrator.execute(ctx)
 
         assert result.status == "SUCCEEDED"
-        assert len(result.steps) == 7
+        assert len(result.steps) == 8
         step_names = {s.step_name for s in result.steps}
         for full_only in FULL_ONLY_STEPS:
             assert full_only not in step_names
 
-    def test_full_has_twenty_four_steps(self) -> None:
-        """FULL mode completes with all 24 steps."""
+    def test_full_has_twenty_five_steps(self) -> None:
+        """FULL mode completes with all 25 steps."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -325,7 +326,7 @@ class TestFullVsSnapshotEnforcement:
         result = orchestrator.execute(ctx)
 
         assert result.status == "SUCCEEDED"
-        assert len(result.steps) == 24
+        assert len(result.steps) == 25
         step_names = [step.step_name for step in result.steps]
         assert step_names.index(StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING) < (
             step_names.index(StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION)
@@ -448,7 +449,7 @@ class TestResumeSkipsCompletedSteps:
 
         result1 = orchestrator.execute(ctx)
         assert result1.status == "SUCCEEDED"
-        assert len(result1.steps) == 24
+        assert len(result1.steps) == 25
 
         call_count = {"enrichment": 0}
         original_enrich = _stub_enrichment

@@ -266,6 +266,8 @@ def _document_for_preflight(
         "sha256": document.get("sha256"),
         "uri": document.get("uri"),
         "metadata": dict(document.get("metadata") or {}),
-        "source_metadata": dict(document.get("artifact_metadata") or {}),
+        "source_metadata": dict(
+            document.get("source_metadata") or document.get("artifact_metadata") or {}
+        ),
         "spans": [_span_for_preflight(span) for span in spans],
     }

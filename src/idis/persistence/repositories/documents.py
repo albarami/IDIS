@@ -236,6 +236,35 @@ class PostgresDocumentsRepository:
         ).fetchone()
         return None if result is None else self._document_row_to_dict(result)
 
+    def get_document_by_inventory_file_id(
+        self,
+        *,
+        deal_id: str,
+        inventory_file_id: str,
+    ) -> dict[str, Any] | None:
+        """Get a parsed document by data-room inventory provenance."""
+        result = self._conn.execute(
+            text(
+                """
+                SELECT documents.document_id, documents.tenant_id, documents.deal_id,
+                       documents.doc_id, documents.doc_type, documents.parse_status,
+                       documents.metadata AS document_metadata,
+                       documents.created_at, documents.updated_at,
+                       document_artifacts.title AS document_name,
+                       document_artifacts.sha256, document_artifacts.uri,
+                       document_artifacts.metadata AS artifact_metadata
+                FROM documents
+                JOIN document_artifacts ON document_artifacts.doc_id = documents.doc_id
+                WHERE documents.deal_id = :deal_id
+                  AND document_artifacts.metadata ->> 'inventory_file_id' = :inventory_file_id
+                ORDER BY documents.created_at ASC
+                LIMIT 1
+                """
+            ),
+            {"deal_id": deal_id, "inventory_file_id": inventory_file_id},
+        ).fetchone()
+        return None if result is None else self._document_row_to_dict(result)
+
     def list_spans_by_document(self, *, deal_id: str, document_id: str) -> list[dict[str, Any]]:
         """List spans for one deal/document in deterministic order."""
         result = self._conn.execute(

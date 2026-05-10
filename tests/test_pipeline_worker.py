@@ -146,6 +146,9 @@ def test_worker_empty_persisted_corpus_preserves_no_ingested_documents_code() ->
         result = MagicMock()
         if "SET LOCAL idis.tenant_id" in sql:
             return result
+        if "FROM deals" in sql:
+            result.fetchone.return_value = _deal_row()
+            return result
         if "FROM documents" in sql:
             result.fetchall.return_value = []
             return result
@@ -189,6 +192,9 @@ def test_worker_no_usable_persisted_corpus_preserves_no_usable_documents_code() 
         sql = str(statement)
         result = MagicMock()
         if "SET LOCAL idis.tenant_id" in sql:
+            return result
+        if "FROM deals" in sql:
+            result.fetchone.return_value = _deal_row()
             return result
         if "FROM documents" in sql:
             result.fetchall.return_value = [
@@ -259,6 +265,9 @@ def test_default_worker_context_factory_hydrates_persisted_documents() -> None:
         sql = str(statement)
         result = MagicMock()
         if "SET LOCAL idis.tenant_id" in sql:
+            return result
+        if "FROM deals" in sql:
+            result.fetchone.return_value = _deal_row()
             return result
         if "FROM documents" in sql:
             result.fetchall.return_value = [
@@ -332,3 +341,98 @@ def test_default_worker_context_factory_hydrates_persisted_documents() -> None:
     assert ctx.methodology_extraction_tasks == []
     assert ctx.methodology_extraction_task_execution_fn is None
     assert ctx.methodology_extraction_execution_result is None
+
+
+def test_default_worker_context_factory_applies_run_source_and_deal_metadata() -> None:
+    """Worker context must match API source filtering and deal metadata behavior."""
+    conn = MagicMock()
+
+    def execute(statement: object, params: dict[str, str] | None = None) -> MagicMock:
+        sql = str(statement)
+        result = MagicMock()
+        if "SET LOCAL idis.tenant_id" in sql:
+            return result
+        if "FROM deals" in sql:
+            result.fetchone.return_value = _deal_row(company_name="WorkerCo")
+            return result
+        if "FROM documents" in sql:
+            result.fetchall.return_value = [
+                _document_row("doc-1", "artifact-1", "source-1.pdf"),
+                _document_row("doc-2", "artifact-2", "source-2.pdf"),
+            ]
+            return result
+        if "FROM document_spans" in sql:
+            document_id = (params or {}).get("document_id")
+            result.fetchall.return_value = [_span_row(str(document_id))]
+            return result
+        raise AssertionError(f"Unexpected SQL: {sql}")
+
+    conn.execute.side_effect = execute
+
+    ctx = _default_run_context_factory(
+        db_conn=conn,
+        tenant_id=TENANT_ID,
+        run_data={
+            "run_id": "run-1",
+            "deal_id": "deal-1",
+            "mode": "SNAPSHOT",
+            "source": {"type": "deal_documents", "document_ids": ["doc-2"]},
+        },
+        audit_sink=InMemoryAuditSink(),
+    )
+
+    assert [doc["document_id"] for doc in ctx.preflight_corpus] == ["doc-2"]
+    assert [doc["document_id"] for doc in ctx.documents] == ["doc-2"]
+    assert ctx.deal_metadata is not None
+    assert ctx.deal_metadata["company_name"] == "WorkerCo"
+
+
+def _document_row(document_id: str, artifact_id: str, name: str) -> MagicMock:
+    return MagicMock(
+        _mapping={
+            "document_id": document_id,
+            "tenant_id": TENANT_ID,
+            "deal_id": "deal-1",
+            "doc_id": artifact_id,
+            "doc_type": "PDF",
+            "parse_status": "PARSED",
+            "document_metadata": {"name": name},
+            "artifact_metadata": {},
+            "document_name": name,
+            "sha256": "a" * 64,
+            "uri": f"deals/{name}",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        },
+    )
+
+
+def _deal_row(company_name: str = "WorkerCo") -> MagicMock:
+    return MagicMock(
+        deal_id="deal-1",
+        tenant_id=TENANT_ID,
+        name="Worker Source Deal",
+        company_name=company_name,
+        status="ACTIVE",
+        stage="DILIGENCE",
+        tags=[],
+        created_at="2026-01-01T00:00:00Z",
+        updated_at=None,
+    )
+
+
+def _span_row(document_id: str) -> MagicMock:
+    return MagicMock(
+        _mapping={
+            "span_id": f"span-{document_id}",
+            "tenant_id": TENANT_ID,
+            "deal_id": "deal-1",
+            "document_id": document_id,
+            "span_type": "PAGE_TEXT",
+            "locator": {"page": 1},
+            "text_excerpt": f"Revenue from {document_id}.",
+            "content_hash": "b" * 64,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        },
+    )

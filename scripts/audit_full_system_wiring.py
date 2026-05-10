@@ -195,6 +195,7 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             "data_room_ingestion_handoff_run_integration": (
                 _data_room_ingestion_handoff_run_integration(root, files)
             ),
+            "production_run_source_contract": _production_run_source_contract(root, files),
             "methodology_layer2_readiness_package_run_integration": (
                 _methodology_layer2_readiness_package_run_integration(root, files)
             ),
@@ -480,7 +481,10 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "scripts/db/init.sql",
         "src/idis/api/routes/runs.py",
         "src/idis/api/main.py",
+        "src/idis/models/run_source.py",
         "src/idis/models/run_step.py",
+        "src/idis/persistence/repositories/runs.py",
+        "src/idis/persistence/migrations/versions/0013_runs_source_contract.py",
         "src/idis/services/runs/execution.py",
         "src/idis/services/runs/orchestrator.py",
         "src/idis/services/runs/steps.py",
@@ -2363,7 +2367,9 @@ def _data_room_full_harness_run_handoff(
         ],
         phase_2_action="Phase 3.0 Slice 17",
         metadata={
-            "api_or_ui_changed": "data_room_root_path" in api_text,
+            "api_or_ui_changed": (
+                "data_room_root_path" in api_text and "PATH_LIKE_RUN_FIELDS" not in api_text
+            ),
             "persistent_data_room_package": False,
             "live_enrichment_expanded": "create_default_enrichment_service" in harness_text,
             "layer2_execution_performed": False,
@@ -2443,6 +2449,62 @@ def _data_room_ingestion_handoff_run_integration(
             "unsupported_files_create_documents": False,
             "ocr_performed": False,
             "media_transcription_performed": False,
+            "layer2_execution_performed": False,
+        },
+    )
+
+
+def _production_run_source_contract(root: Path, files: dict[str, str]) -> WiringItem:
+    runs_text = files.get("src/idis/api/routes/runs.py", "")
+    source_text = files.get("src/idis/models/run_source.py", "")
+    worker_text = files.get("src/idis/pipeline/worker.py", "")
+    repo_text = files.get("src/idis/persistence/repositories/runs.py", "")
+    migration_text = files.get(
+        "src/idis/persistence/migrations/versions/0013_runs_source_contract.py",
+        "",
+    )
+    integrated = (
+        _exists(root, "src/idis/models/run_source.py")
+        and "RunSourceType" in source_text
+        and "deal_documents" in source_text
+        and 'extra="forbid"' in source_text
+        and "PATH_LIKE_RUN_FIELDS" in runs_text
+        and "INVALID_RUN_SOURCE" in runs_text
+        and "source:" in repo_text
+        and "filter_preflight_corpus_by_run_source" in worker_text
+        and "deal_metadata" in worker_text
+        and "ADD COLUMN IF NOT EXISTS source JSONB" in migration_text
+    )
+    return WiringItem(
+        key="production_run_source_contract",
+        label="Production run-source contract",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary=(
+            "production run-source contract boundary exists; runs can start from durable "
+            "deal document refs while local folders remain harness-only."
+        ),
+        evidence=[
+            "Public runs API accepts strict mode plus deal_documents source only.",
+            "Run source is persisted so worker and API hydrate the same selected corpus.",
+            "Worker applies persisted source filtering and loads deal metadata.",
+            "Local folder paths remain harness-only and are rejected by run creation.",
+        ],
+        gaps=[
+            "local folder paths remain harness-only.",
+            "durable data-room package table remains deferred.",
+            "UI remains deferred.",
+            "OCR/media/image/HTML/TXT parsing remains deferred.",
+            "S3/Supabase storage expansion remains deferred.",
+            "RAG/Neo4j remains deferred.",
+            "Layer 2 remains deferred.",
+            "external enrichment expansion remains deferred.",
+            "deliverables expansion remains deferred.",
+        ],
+        phase_2_action="Phase 3.0 Slice 19",
+        metadata={
+            "public_api_accepts_filesystem_paths": False,
+            "durable_package_table_added": False,
+            "ui_changed": False,
             "layer2_execution_performed": False,
         },
     )

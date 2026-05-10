@@ -330,6 +330,22 @@ def test_full_system_inventory_detects_slice_18_durable_handoff_boundary() -> No
     assert any("Layer 2 remains deferred" in gap for gap in handoff.gaps)
 
 
+def test_full_system_inventory_detects_slice_19_run_source_boundary() -> None:
+    """Slice 19 must report durable run-source refs only, not filesystem paths."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+    run_source = inventory["production_run_source_contract"]
+
+    assert run_source.status == "PARTIAL"
+    assert any("deal_documents" in item for item in run_source.evidence)
+    assert any("worker" in item.lower() for item in run_source.evidence)
+    assert run_source.metadata["public_api_accepts_filesystem_paths"] is False
+    assert run_source.metadata["durable_package_table_added"] is False
+    assert run_source.metadata["ui_changed"] is False
+    assert run_source.metadata["layer2_execution_performed"] is False
+    assert any("local folder paths remain harness-only" in gap for gap in run_source.gaps)
+    assert any("durable data-room package table remains deferred" in gap for gap in run_source.gaps)
+
+
 def test_full_system_report_keeps_slice_12_deferred_boundaries_explicit() -> None:
     """Rendered audit wording must keep Slice 12 separate from downstream IC layers."""
     report = render_report(collect_wiring_inventory(REPO_ROOT))
@@ -338,6 +354,7 @@ def test_full_system_report_keeps_slice_12_deferred_boundaries_explicit() -> Non
     assert "data-room inventory package boundary exists" in report
     assert "local data-room FULL harness boundary exists" in report
     assert "durable data-room ingestion handoff boundary exists" in report
+    assert "production run-source contract boundary exists" in report
     assert "in-memory run-scoped Layer 1 Validated Evidence Package boundary exists" in report
     assert "external intelligence conflict-check plan boundary exists" in report
     assert "company identity package boundary exists" in report

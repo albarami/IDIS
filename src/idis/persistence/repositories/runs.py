@@ -6,6 +6,7 @@ Extracted from inline SQL in api/routes/runs.py for Phase 7.A persistence cutove
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -48,6 +49,7 @@ class PostgresRunsRepository:
         deal_id: str,
         mode: str,
         idempotency_key: str | None = None,
+        source: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create a new run record.
 
@@ -66,10 +68,10 @@ class PostgresRunsRepository:
                 """
                 INSERT INTO runs
                     (run_id, tenant_id, deal_id, mode, status, started_at,
-                     idempotency_key, created_at)
+                     idempotency_key, source, created_at)
                 VALUES
                     (:run_id, :tenant_id, :deal_id, :mode, 'QUEUED', :started_at,
-                     :idempotency_key, :created_at)
+                     :idempotency_key, CAST(:source AS JSONB), :created_at)
                 """
             ),
             {
@@ -79,6 +81,7 @@ class PostgresRunsRepository:
                 "mode": mode,
                 "started_at": now,
                 "idempotency_key": idempotency_key,
+                "source": json.dumps(source) if source is not None else None,
                 "created_at": now,
             },
         )
@@ -90,6 +93,7 @@ class PostgresRunsRepository:
             "status": "QUEUED",
             "started_at": now.isoformat().replace("+00:00", "Z"),
             "finished_at": None,
+            "source": source,
             "created_at": now.isoformat().replace("+00:00", "Z"),
         }
 
@@ -108,7 +112,7 @@ class PostgresRunsRepository:
             text(
                 """
                 SELECT run_id, tenant_id, deal_id, mode, status,
-                       started_at, finished_at, created_at
+                       started_at, finished_at, source, created_at
                 FROM runs
                 WHERE run_id = :run_id
                 """
@@ -196,7 +200,7 @@ class PostgresRunsRepository:
             text(
                 """
                 SELECT run_id, tenant_id, deal_id, mode, status,
-                       started_at, finished_at, created_at
+                       started_at, finished_at, source, created_at
                 FROM runs
                 WHERE status = 'QUEUED'
                 ORDER BY created_at ASC
@@ -237,6 +241,8 @@ class PostgresRunsRepository:
         if hasattr(created_at, "isoformat"):
             created_at = created_at.isoformat().replace("+00:00", "Z")
 
+        source = _row_value(row, "source")
+
         return {
             "run_id": str(row.run_id),
             "tenant_id": str(row.tenant_id),
@@ -245,6 +251,7 @@ class PostgresRunsRepository:
             "status": row.status,
             "started_at": started_at,
             "finished_at": finished_at,
+            "source": _json_value(source),
             "created_at": created_at,
         }
 
@@ -278,6 +285,7 @@ class InMemoryRunsRepository:
         deal_id: str,
         mode: str,
         idempotency_key: str | None = None,
+        source: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create a new run record in memory.
 
@@ -299,6 +307,7 @@ class InMemoryRunsRepository:
             "status": "QUEUED",
             "started_at": now,
             "finished_at": None,
+            "source": dict(source) if source is not None else None,
             "created_at": now,
         }
         _in_memory_runs_store[run_id] = run
@@ -392,6 +401,23 @@ class InMemoryRunsRepository:
 def clear_in_memory_runs_store() -> None:
     """Clear the in-memory runs store. For testing only."""
     _in_memory_runs_store.clear()
+
+
+def _json_value(value: Any) -> Any:
+    """Return JSON/JSONB values as native Python data."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return json.loads(value)
+    return value
+
+
+def _row_value(row: Any, key: str) -> Any:
+    """Read optional row values without triggering MagicMock attribute creation."""
+    mapping = getattr(row, "_mapping", None)
+    if mapping is not None and key in mapping:
+        return mapping[key]
+    return getattr(row, key, None)
 
 
 def get_runs_repository(

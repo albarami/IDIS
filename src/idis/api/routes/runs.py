@@ -19,11 +19,12 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from idis.api.auth import RequireTenantContext
 from idis.api.errors import IdisHttpError
 from idis.audit.sink import AuditSink, AuditSinkError
+from idis.models.run_source import RunSource
 from idis.persistence.repositories.run_steps import get_run_steps_repository
 from idis.persistence.repositories.runs import get_runs_repository
 from idis.services.runs.execution import RunExecutionService
@@ -37,7 +38,26 @@ router = APIRouter(prefix="/v1", tags=["Runs"])
 class StartRunRequest(BaseModel):
     """Request body for POST /v1/deals/{dealId}/runs."""
 
+    model_config = ConfigDict(extra="forbid")
+
     mode: str
+    source: RunSource | None = None
+
+
+PATH_LIKE_RUN_FIELDS = frozenset(
+    {
+        "data_room_root_path",
+        "root_path",
+        "file_path",
+        "folder_path",
+        "local_folder",
+        "local_path",
+        "uri",
+        "uris",
+        "paths",
+        "files",
+    }
+)
 
 
 class StepErrorResponse(BaseModel):
@@ -100,7 +120,34 @@ def _validate_start_run_body(body: dict[str, Any] | None) -> StartRunRequest:
             code="INVALID_REQUEST",
             message="Invalid mode; must be SNAPSHOT or FULL",
         )
-    return StartRunRequest(mode=mode)
+    rejected_fields = _path_like_fields(body)
+    if rejected_fields:
+        raise IdisHttpError(
+            status_code=400,
+            code="INVALID_REQUEST",
+            message="Run creation does not accept filesystem paths or raw URI/path lists",
+            details={"rejected_fields": rejected_fields},
+        )
+    try:
+        return StartRunRequest.model_validate(body)
+    except ValidationError as exc:
+        raise IdisHttpError(
+            status_code=400,
+            code="INVALID_REQUEST",
+            message="Invalid run request body",
+            details={"errors": exc.errors()},
+        ) from exc
+
+
+def _path_like_fields(body: dict[str, Any]) -> list[str]:
+    """Return forbidden path-like fields from a potentially nested run request."""
+    rejected: set[str] = set()
+    for key, value in body.items():
+        if key in PATH_LIKE_RUN_FIELDS:
+            rejected.add(key)
+        if isinstance(value, dict):
+            rejected.update(field for field in value if field in PATH_LIKE_RUN_FIELDS)
+    return sorted(rejected)
 
 
 @router.post("/deals/{deal_id}/runs", response_model=RunRef, status_code=202)
@@ -138,6 +185,10 @@ async def start_run(
         raise IdisHttpError(status_code=404, code="NOT_FOUND", message="Deal not found")
 
     preflight_corpus = _gather_preflight_corpus(request, tenant_ctx.tenant_id, deal_id)
+    preflight_corpus = _apply_run_source_to_preflight_corpus(
+        preflight_corpus=preflight_corpus,
+        source=request_body.source,
+    )
     if not preflight_corpus:
         raise IdisHttpError(
             status_code=400,
@@ -153,6 +204,7 @@ async def start_run(
         deal_id=deal_id,
         mode=request_body.mode,
         idempotency_key=idempotency_key,
+        source=request_body.source.to_storage_dict() if request_body.source is not None else None,
     )
 
     request.state.audit_resource_id = run_id
@@ -385,6 +437,31 @@ def _gather_preflight_corpus(
         return deal_documents[deal_id]
 
     return _gather_snapshot_documents(request, tenant_id, deal_id)
+
+
+def _apply_run_source_to_preflight_corpus(
+    *,
+    preflight_corpus: list[dict[str, Any]],
+    source: RunSource | None,
+) -> list[dict[str, Any]]:
+    """Validate and apply a durable deal-documents run source."""
+    if source is None:
+        return preflight_corpus
+
+    from idis.services.runs.steps import (
+        filter_preflight_corpus_by_run_source,
+        missing_document_ids_for_run_source,
+    )
+
+    missing_ids = missing_document_ids_for_run_source(preflight_corpus, source)
+    if missing_ids:
+        raise IdisHttpError(
+            status_code=400,
+            code="INVALID_RUN_SOURCE",
+            message="Selected run-source documents are not present in this deal corpus",
+            details={"missing_document_ids": missing_ids},
+        )
+    return filter_preflight_corpus_by_run_source(preflight_corpus, source)
 
 
 def _load_deal_metadata_for_run(

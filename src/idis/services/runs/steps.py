@@ -25,6 +25,7 @@ from idis.models.methodology_coverage import (
     MethodologyCoverageInitializationResult,
     MethodologyCoverageRecord,
 )
+from idis.models.run_source import RunSource
 from idis.models.sanad_materialization import (
     MethodologySanadMaterializationRunResult,
     RunScopedSanadDefectRecord,
@@ -200,6 +201,27 @@ def extraction_ready_documents_from_preflight_corpus(
             continue
         documents.append(_document_for_run(document, spans))
     return documents
+
+
+def filter_preflight_corpus_by_run_source(
+    corpus: list[dict[str, Any]],
+    source: dict[str, Any] | RunSource | None,
+) -> list[dict[str, Any]]:
+    """Apply a persisted run-source contract to a deal preflight corpus."""
+    if source is None:
+        return list(corpus)
+    run_source = source if isinstance(source, RunSource) else RunSource.model_validate(source)
+    requested_ids = set(run_source.document_ids)
+    return [document for document in corpus if str(document.get("document_id")) in requested_ids]
+
+
+def missing_document_ids_for_run_source(
+    corpus: list[dict[str, Any]],
+    source: RunSource,
+) -> list[str]:
+    """Return selected document IDs absent from the loaded deal corpus."""
+    present_ids = {str(document.get("document_id")) for document in corpus}
+    return [document_id for document_id in source.document_ids if document_id not in present_ids]
 
 
 def _span_for_run(span: Any) -> dict[str, Any]:

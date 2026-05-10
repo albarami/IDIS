@@ -211,6 +211,7 @@ def _default_run_context_factory(
     from idis.services.runs.steps import (
         build_run_context,
         extraction_ready_documents_from_preflight_corpus,
+        filter_preflight_corpus_by_run_source,
         load_document_preflight_corpus_for_deal,
     )
 
@@ -220,6 +221,10 @@ def _default_run_context_factory(
         deal_id=deal_id,
         tenant_id=tenant_id,
     )
+    preflight_corpus = filter_preflight_corpus_by_run_source(
+        preflight_corpus,
+        run_data.get("source"),
+    )
 
     return build_run_context(
         db_conn=db_conn,
@@ -228,9 +233,26 @@ def _default_run_context_factory(
         deal_id=deal_id,
         mode=str(run_data["mode"]),
         documents=extraction_ready_documents_from_preflight_corpus(preflight_corpus),
+        deal_metadata=_load_worker_deal_metadata(
+            db_conn=db_conn,
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+        ),
         preflight_corpus=preflight_corpus,
         audit_sink=audit_sink,
     )
+
+
+def _load_worker_deal_metadata(
+    *,
+    db_conn: Any,
+    tenant_id: str,
+    deal_id: str,
+) -> dict[str, Any] | None:
+    """Load deal metadata for worker parity with API-started runs."""
+    from idis.persistence.repositories.deals import DealsRepository
+
+    return DealsRepository(db_conn, tenant_id).get(deal_id)
 
 
 # Global worker instance

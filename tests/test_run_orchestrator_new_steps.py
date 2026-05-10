@@ -230,6 +230,7 @@ class TestStepOrderingConstants:
     def test_full_steps_canonical_order(self) -> None:
         """FULL_STEPS matches the v6.3 canonical order exactly."""
         assert FULL_STEPS == [
+            StepName.DATA_ROOM_INVENTORY_PACKAGE,
             StepName.INGEST_CHECK,
             StepName.DOCUMENT_PREFLIGHT,
             StepName.METHODOLOGY_COVERAGE_INIT,
@@ -263,6 +264,7 @@ class TestStepOrderingConstants:
     def test_new_steps_in_implemented(self) -> None:
         """All new steps are in IMPLEMENTED_STEPS."""
         for step in [
+            StepName.DATA_ROOM_INVENTORY_PACKAGE,
             StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION,
             StepName.METHODOLOGY_CLAIM_MATERIALIZATION,
             StepName.METHODOLOGY_EVIDENCE_ITEM_MATERIALIZATION,
@@ -288,8 +290,8 @@ class TestStepOrderingConstants:
 class TestFullVsSnapshotEnforcement:
     """FULL-only steps must not execute in SNAPSHOT mode."""
 
-    def test_snapshot_has_only_six_steps(self) -> None:
-        """SNAPSHOT mode completes with 6 steps (no FULL-only steps)."""
+    def test_snapshot_has_only_seven_steps(self) -> None:
+        """SNAPSHOT mode completes with 7 steps (no FULL-only steps)."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -308,13 +310,13 @@ class TestFullVsSnapshotEnforcement:
         result = orchestrator.execute(ctx)
 
         assert result.status == "SUCCEEDED"
-        assert len(result.steps) == 6
+        assert len(result.steps) == 7
         step_names = {s.step_name for s in result.steps}
         for full_only in FULL_ONLY_STEPS:
             assert full_only not in step_names
 
-    def test_full_has_twenty_three_steps(self) -> None:
-        """FULL mode completes with all 23 steps."""
+    def test_full_has_twenty_four_steps(self) -> None:
+        """FULL mode completes with all 24 steps."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -323,7 +325,7 @@ class TestFullVsSnapshotEnforcement:
         result = orchestrator.execute(ctx)
 
         assert result.status == "SUCCEEDED"
-        assert len(result.steps) == 23
+        assert len(result.steps) == 24
         step_names = [step.step_name for step in result.steps]
         assert step_names.index(StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING) < (
             step_names.index(StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION)
@@ -446,7 +448,7 @@ class TestResumeSkipsCompletedSteps:
 
         result1 = orchestrator.execute(ctx)
         assert result1.status == "SUCCEEDED"
-        assert len(result1.steps) == 23
+        assert len(result1.steps) == 24
 
         call_count = {"enrichment": 0}
         original_enrich = _stub_enrichment

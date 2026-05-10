@@ -176,9 +176,9 @@ def test_worker_empty_persisted_corpus_preserves_no_ingested_documents_code() ->
 
     steps = run_steps_repo.get_by_run_id("run-1")
     assert processed == 1
-    assert len(steps) == 1
-    assert steps[0].error_code == "NO_INGESTED_DOCUMENTS"
-    assert steps[0].error_code != "VALUEERROR"
+    assert len(steps) == 2
+    assert [step.error_code for step in steps] == [None, "NO_INGESTED_DOCUMENTS"]
+    assert steps[-1].error_code != "VALUEERROR"
 
 
 def test_worker_no_usable_persisted_corpus_preserves_no_usable_documents_code() -> None:
@@ -247,7 +247,7 @@ def test_worker_no_usable_persisted_corpus_preserves_no_usable_documents_code() 
 
     steps = run_steps_repo.get_by_run_id("run-1")
     assert processed == 1
-    assert [step.error_code for step in steps] == [None, "NO_USABLE_DOCUMENTS"]
+    assert [step.error_code for step in steps] == [None, None, "NO_USABLE_DOCUMENTS"]
     assert steps[-1].error_code != "RUNTIMEERROR"
 
 

@@ -186,6 +186,9 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             "methodology_company_identity_package_run_integration": (
                 _methodology_company_identity_package_run_integration(root, files)
             ),
+            "data_room_inventory_package_run_integration": (
+                _data_room_inventory_package_run_integration(root, files)
+            ),
             "methodology_layer2_readiness_package_run_integration": (
                 _methodology_layer2_readiness_package_run_integration(root, files)
             ),
@@ -520,6 +523,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/models/validated_evidence_package_materialization.py",
         "src/idis/models/external_intelligence_conflict_check_plan_materialization.py",
         "src/idis/models/company_identity_package_materialization.py",
+        "src/idis/models/data_room_inventory_package_materialization.py",
         "src/idis/models/layer2_readiness_package_materialization.py",
         "src/idis/services/extraction/claim_materializer.py",
         "src/idis/services/runs/methodology_claim_materialization.py",
@@ -534,6 +538,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/services/runs/methodology_validated_evidence_package.py",
         "src/idis/services/runs/methodology_external_intelligence_conflict_check_plan.py",
         "src/idis/services/runs/methodology_company_identity_package.py",
+        "src/idis/services/runs/data_room_inventory_package.py",
         "src/idis/services/runs/methodology_layer2_readiness_package.py",
         "src/idis/services/extraction/claim_materialization_audit.py",
         "src/idis/models/sanad_coverage_boundary.py",
@@ -2231,6 +2236,76 @@ def _methodology_company_identity_package_run_integration(
         phase_2_action="Phase 3.0 Slice 15",
         metadata={
             "enrichment_execution_performed": False,
+            "layer2_execution_performed": False,
+        },
+    )
+
+
+def _data_room_inventory_package_run_integration(
+    root: Path,
+    files: dict[str, str],
+) -> WiringItem:
+    model_text = files.get("src/idis/models/data_room_inventory_package_materialization.py", "")
+    service_text = files.get("src/idis/services/runs/data_room_inventory_package.py", "")
+    run_text = (
+        files.get("src/idis/models/run_step.py", "")
+        + files.get("src/idis/services/runs/orchestrator.py", "")
+        + files.get("src/idis/services/runs/steps.py", "")
+    )
+    api_text = files.get("src/idis/api/routes/runs.py", "")
+    forbidden_calls_absent = all(
+        forbidden not in service_text
+        for forbidden in (
+            "EnrichmentService",
+            ".enrich(",
+            ".fetch(",
+            "DebateOrchestrator",
+            "AnalysisEngine",
+            "ScoringEngine",
+            "DeliverablesGenerator",
+            "OpenAI",
+            "Anthropic",
+        )
+    )
+    integrated = (
+        _exists(root, "src/idis/models/data_room_inventory_package_materialization.py")
+        and _exists(root, "src/idis/services/runs/data_room_inventory_package.py")
+        and "DATA_ROOM_INVENTORY_PACKAGE" in run_text
+        and "RunScopedDataRoomInventoryPackageRecord" in model_text
+        and "RunScopedDataRoomInventoryPackageShell" in model_text
+        and "InMemoryRunDataRoomInventoryPackageService" in service_text
+        and ".rglob(" in service_text
+        and "parse_bytes(" in service_text
+        and forbidden_calls_absent
+    )
+    return WiringItem(
+        key="data_room_inventory_package_run_integration",
+        label="Data-room inventory package run integration",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary=(
+            "data-room inventory package boundary exists; OCR, video/audio transcription, "
+            "API/OpenAPI/UI, persistence, enrichment execution, and Layer 2 remain deferred."
+        ),
+        evidence=[
+            "DATA_ROOM_INVENTORY_PACKAGE runs before INGEST_CHECK as an inventory/intake boundary.",
+            "Recursive folder scan records safe relative paths, hashes, extensions, "
+            "sizes, and IDs.",
+            "Supported parser outputs can hand parsed document IDs into DOCUMENT_PREFLIGHT.",
+            "Deferred MP4/image/HTML/TXT cases use stable reason codes without OCR or media work.",
+        ],
+        gaps=[
+            "OCR remains deferred.",
+            "video/audio transcription remains deferred.",
+            "image OCR remains deferred.",
+            "API/OpenAPI/UI remains deferred.",
+            "durable persistence remains deferred.",
+            "Layer 2 execution remains deferred.",
+        ],
+        phase_2_action="Phase 3.0 Slice 16",
+        metadata={
+            "ocr_performed": False,
+            "media_transcription_performed": False,
+            "api_or_ui_changed": "DATA_ROOM_INVENTORY_PACKAGE" in api_text,
             "layer2_execution_performed": False,
         },
     )

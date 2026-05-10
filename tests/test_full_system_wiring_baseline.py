@@ -274,11 +274,31 @@ def test_full_system_inventory_detects_slice_15_company_identity_boundary() -> N
     assert any("executed provider checks remain deferred" in gap for gap in identity.gaps)
 
 
+def test_full_system_inventory_detects_slice_16_data_room_inventory_boundary() -> None:
+    """Slice 16 must report inventory intake only, not OCR/media/API/Layer 2 execution."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+    data_room = inventory["data_room_inventory_package_run_integration"]
+
+    assert data_room.status == "PARTIAL"
+    assert any("DATA_ROOM_INVENTORY_PACKAGE" in item for item in data_room.evidence)
+    assert any("recursive" in item.lower() for item in data_room.evidence)
+    assert any("inventory/intake boundary" in item for item in data_room.evidence)
+    assert data_room.metadata["ocr_performed"] is False
+    assert data_room.metadata["media_transcription_performed"] is False
+    assert data_room.metadata["api_or_ui_changed"] is False
+    assert data_room.metadata["layer2_execution_performed"] is False
+    assert any("OCR remains deferred" in gap for gap in data_room.gaps)
+    assert any("video/audio transcription remains deferred" in gap for gap in data_room.gaps)
+    assert any("API/OpenAPI/UI remains deferred" in gap for gap in data_room.gaps)
+    assert any("Layer 2 execution remains deferred" in gap for gap in data_room.gaps)
+
+
 def test_full_system_report_keeps_slice_12_deferred_boundaries_explicit() -> None:
     """Rendered audit wording must keep Slice 12 separate from downstream IC layers."""
     report = render_report(collect_wiring_inventory(REPO_ROOT))
 
     assert "in-memory run-scoped Layer 1 Evidence Trust Court boundary exists" in report
+    assert "data-room inventory package boundary exists" in report
     assert "in-memory run-scoped Layer 1 Validated Evidence Package boundary exists" in report
     assert "external intelligence conflict-check plan boundary exists" in report
     assert "company identity package boundary exists" in report
@@ -286,6 +306,7 @@ def test_full_system_report_keeps_slice_12_deferred_boundaries_explicit() -> Non
     assert "Validated Evidence Package remains deferred to Slice 12" not in report
     assert "external conflict checks executed" not in report.lower()
     assert "enrichment execution performed" not in report.lower()
+    assert "media transcription performed" not in report.lower()
     assert "IC debate executed" not in report
     assert "enrichment/API check execution remains deferred" in report
     assert "Layer 2 IC debate" in report

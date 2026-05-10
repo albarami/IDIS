@@ -20,6 +20,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
@@ -46,6 +47,12 @@ from idis.models.company_identity_package_materialization import (
     MethodologyCompanyIdentityStatus,
     RunScopedCompanyIdentityPackageRecord,
     RunScopedCompanyIdentityPackageShell,
+)
+from idis.models.data_room_inventory_package_materialization import (
+    DataRoomInventoryPackageConstructionStatus,
+    DataRoomInventoryPackageRunResult,
+    RunScopedDataRoomInventoryPackageRecord,
+    RunScopedDataRoomInventoryPackageShell,
 )
 from idis.models.defect import CureProtocol, DefectSeverity, DefectStatus, DefectType
 from idis.models.deterministic_calculation import CalcType
@@ -194,7 +201,22 @@ class RunContext:
     extract_fn: Callable[..., dict[str, Any]]
     grade_fn: Callable[..., dict[str, Any]]
     deal_metadata: dict[str, Any] | None = None
+    data_room_root_path: str | Path | None = None
     preflight_corpus: list[dict[str, Any]] = field(default_factory=list)
+    data_room_inventory_fn: (
+        Callable[
+            ...,
+            tuple[
+                DataRoomInventoryPackageRunResult,
+                list[RunScopedDataRoomInventoryPackageRecord],
+                list[dict[str, Any]],
+            ],
+        ]
+        | None
+    ) = None
+    data_room_inventory_package: (
+        RunScopedDataRoomInventoryPackageRecord | RunScopedDataRoomInventoryPackageShell | None
+    ) = None
     document_preflight_fn: (
         Callable[..., tuple[DocumentPreflightResult, list[dict[str, Any]]]] | None
     ) = None
@@ -448,6 +470,8 @@ class RunOrchestrator:
             existing = self._steps_repo.get_step(ctx.run_id, step_name)
             if existing is not None and existing.status == StepStatus.COMPLETED:
                 accumulated.update(existing.result_summary)
+                if step_name == StepName.DATA_ROOM_INVENTORY_PACKAGE:
+                    self._rehydrate_data_room_inventory_package(ctx, existing.result_summary)
                 if step_name == StepName.METHODOLOGY_COVERAGE_INIT:
                     self._rehydrate_methodology_coverage_records(ctx)
                 if step_name == StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING:
@@ -535,6 +559,8 @@ class RunOrchestrator:
         Raises:
             ValueError: If step_name has no handler.
         """
+        if step_name == StepName.DATA_ROOM_INVENTORY_PACKAGE:
+            return self._execute_data_room_inventory_package(ctx)
         if step_name == StepName.INGEST_CHECK:
             return self._execute_ingest_check(ctx)
         if step_name == StepName.DOCUMENT_PREFLIGHT:
@@ -585,6 +611,40 @@ class RunOrchestrator:
         if step_name == StepName.DELIVERABLES:
             return self._execute_deliverables(ctx, accumulated)
         raise ValueError(f"No handler for step: {step_name.value}")
+
+    def _execute_data_room_inventory_package(self, ctx: RunContext) -> dict[str, Any]:
+        """Inventory an optional local data-room folder before ingest checks."""
+        if ctx.data_room_inventory_fn is not None:
+            run_result, packages, corpus = ctx.data_room_inventory_fn(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                root_path=ctx.data_room_root_path,
+            )
+        else:
+            from idis.services.runs.data_room_inventory_package import (
+                InMemoryRunDataRoomInventoryPackageService,
+            )
+
+            run_result, packages, corpus = InMemoryRunDataRoomInventoryPackageService().run(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                root_path=ctx.data_room_root_path,
+            )
+
+        ctx.data_room_inventory_package = packages[0] if packages else None
+        if corpus:
+            ctx.preflight_corpus = corpus
+            ctx.documents = list(corpus)
+        summary = run_result.to_run_step_summary()
+        if run_result.construction_status == DataRoomInventoryPackageConstructionStatus.FAILED:
+            raise RunStepBlockedError(
+                "DATA_ROOM_INVENTORY_PACKAGE_FAILED",
+                "Data-room inventory package failed closed",
+                result_summary=summary,
+            )
+        return summary
 
     def _execute_ingest_check(self, ctx: RunContext) -> dict[str, Any]:
         """Verify at least one ingested document exists for the deal.
@@ -1558,6 +1618,23 @@ class RunOrchestrator:
         if shell is not None:
             ctx.methodology_external_intelligence_conflict_check_plan = shell
 
+    def _rehydrate_data_room_inventory_package(
+        self,
+        ctx: RunContext,
+        result_summary: dict[str, Any],
+    ) -> None:
+        """Attach a safe data-room inventory package shell when Slice 16 is skipped."""
+        if ctx.data_room_inventory_package is not None:
+            return
+        shell = _data_room_inventory_package_shell_from_summary(
+            tenant_id=ctx.tenant_id,
+            deal_id=ctx.deal_id,
+            run_id=ctx.run_id,
+            result_summary=result_summary,
+        )
+        if shell is not None:
+            ctx.data_room_inventory_package = shell
+
     def _rehydrate_methodology_layer2_readiness_package(
         self,
         ctx: RunContext,
@@ -2445,6 +2522,41 @@ def _external_intelligence_conflict_check_plan_shell_from_summary(
             status=MethodologyExternalIntelligenceConflictCheckPlanStatus(
                 str(result_summary.get("status") or "completed")
             ),
+        )
+    except ValueError:
+        return None
+
+
+def _data_room_inventory_package_shell_from_summary(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+    result_summary: dict[str, Any],
+) -> RunScopedDataRoomInventoryPackageShell | None:
+    inventory_package_ids = _str_list(result_summary.get("inventory_package_ids"))
+    if not inventory_package_ids:
+        return None
+    raw_summary = result_summary.get("summary")
+    summary: dict[str, Any] = raw_summary if isinstance(raw_summary, dict) else {}
+    try:
+        return RunScopedDataRoomInventoryPackageShell(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            run_id=run_id,
+            inventory_package_id=inventory_package_ids[0],
+            root_path_hash=str(result_summary.get("root_path_hash") or "unknown-root-path"),
+            construction_status=DataRoomInventoryPackageConstructionStatus(
+                str(result_summary.get("construction_status") or "completed")
+            ),
+            file_ids=_str_list(result_summary.get("file_ids")),
+            supported_document_ids=_str_list(result_summary.get("supported_document_ids")),
+            deferred_file_ids=_str_list(result_summary.get("deferred_file_ids")),
+            blocked_file_ids=_str_list(result_summary.get("blocked_file_ids")),
+            reason_codes=_str_list(result_summary.get("reason_codes")),
+            by_extension=_dict_from_summary(summary, "by_extension"),
+            by_file_status=_dict_from_summary(summary, "by_file_status"),
+            by_reason=_dict_from_summary(summary, "by_reason"),
         )
     except ValueError:
         return None

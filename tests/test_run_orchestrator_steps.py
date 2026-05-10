@@ -1,8 +1,9 @@
 """Tests for RunOrchestrator step ledger — Phase 5 orchestration.
 
 Covers:
-- SNAPSHOT records six steps in order
-  (INGEST_CHECK → DOCUMENT_PREFLIGHT → METHODOLOGY_COVERAGE_INIT → EXTRACT → GRADE → CALC)
+- SNAPSHOT records seven steps in order
+  (DATA_ROOM_INVENTORY_PACKAGE → INGEST_CHECK → DOCUMENT_PREFLIGHT
+  → METHODOLOGY_COVERAGE_INIT → EXTRACT → GRADE → CALC)
 - Step errors persisted and returned
 - FULL completes all 12 steps in correct order
 - Cross-tenant run step read returns 404 (no existence leak)
@@ -217,9 +218,10 @@ class TestSnapshotRecordsSixStepsInOrder:
         result = orchestrator.execute(ctx)
 
         assert result.status == "SUCCEEDED"
-        assert len(result.steps) == 6
+        assert len(result.steps) == 7
 
         expected_names = [
+            StepName.DATA_ROOM_INVENTORY_PACKAGE,
             StepName.INGEST_CHECK,
             StepName.DOCUMENT_PREFLIGHT,
             StepName.METHODOLOGY_COVERAGE_INIT,
@@ -270,10 +272,11 @@ class TestSnapshotStepErrorsPersistedAndReturned:
         assert failed.finished_at is not None
 
         completed_steps = [s for s in result.steps if s.status == StepStatus.COMPLETED]
-        assert len(completed_steps) == 3
-        assert completed_steps[0].step_name == StepName.INGEST_CHECK
-        assert completed_steps[1].step_name == StepName.DOCUMENT_PREFLIGHT
-        assert completed_steps[2].step_name == StepName.METHODOLOGY_COVERAGE_INIT
+        assert len(completed_steps) == 4
+        assert completed_steps[0].step_name == StepName.DATA_ROOM_INVENTORY_PACKAGE
+        assert completed_steps[1].step_name == StepName.INGEST_CHECK
+        assert completed_steps[2].step_name == StepName.DOCUMENT_PREFLIGHT
+        assert completed_steps[3].step_name == StepName.METHODOLOGY_COVERAGE_INIT
 
     def test_empty_documents_sets_no_ingested_documents_block_reason(self) -> None:
         """Empty corpus is an intentional blocked condition, not a generic runtime error."""
@@ -327,6 +330,7 @@ class TestSnapshotStepErrorsPersistedAndReturned:
         assert result.block_reason == "NO_USABLE_DOCUMENTS"
         assert result.error_code == "NO_USABLE_DOCUMENTS"
         assert [step.step_name for step in result.steps] == [
+            StepName.DATA_ROOM_INVENTORY_PACKAGE,
             StepName.INGEST_CHECK,
             StepName.DOCUMENT_PREFLIGHT,
         ]
@@ -720,8 +724,8 @@ def _stub_deliverables(
 class TestFullCompletesAllSteps:
     """test_full_completes_all_nine_steps."""
 
-    def test_full_completes_all_twenty_three_steps(self) -> None:
-        """FULL run completes all 23 steps in canonical order."""
+    def test_full_completes_all_twenty_four_steps(self) -> None:
+        """FULL run completes all 24 steps in canonical order."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -749,8 +753,9 @@ class TestFullCompletesAllSteps:
         assert result.block_reason is None
 
         completed = [s for s in result.steps if s.status == StepStatus.COMPLETED]
-        assert len(completed) == 23
+        assert len(completed) == 24
         assert [s.step_name for s in completed] == [
+            StepName.DATA_ROOM_INVENTORY_PACKAGE,
             StepName.INGEST_CHECK,
             StepName.DOCUMENT_PREFLIGHT,
             StepName.METHODOLOGY_COVERAGE_INIT,
@@ -886,6 +891,7 @@ class TestStartRunPreflightCorpusBehavior:
         assert body["status"] == "FAILED"
         assert body["block_reason"] == "NO_USABLE_DOCUMENTS"
         assert [step["step_name"] for step in body["steps"]] == [
+            "DATA_ROOM_INVENTORY_PACKAGE",
             "INGEST_CHECK",
             "DOCUMENT_PREFLIGHT",
         ]
@@ -926,6 +932,7 @@ class TestStartRunPreflightCorpusBehavior:
         assert body["status"] == "SUCCEEDED"
         assert body["block_reason"] is None
         assert [step["step_name"] for step in body["steps"]] == [
+            "DATA_ROOM_INVENTORY_PACKAGE",
             "INGEST_CHECK",
             "DOCUMENT_PREFLIGHT",
             "METHODOLOGY_COVERAGE_INIT",

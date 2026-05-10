@@ -293,12 +293,30 @@ def test_full_system_inventory_detects_slice_16_data_room_inventory_boundary() -
     assert any("Layer 2 execution remains deferred" in gap for gap in data_room.gaps)
 
 
+def test_full_system_inventory_detects_slice_17_local_data_room_harness_boundary() -> None:
+    """Slice 17 must report local harness handoff only, not API/persistence/Layer 2."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+    harness = inventory["data_room_full_harness_run_handoff"]
+
+    assert harness.status == "PARTIAL"
+    assert any("local data-room FULL harness" in item for item in harness.evidence)
+    assert any("RunContext" in item for item in harness.evidence)
+    assert harness.metadata["api_or_ui_changed"] is False
+    assert harness.metadata["persistent_data_room_package"] is False
+    assert harness.metadata["live_enrichment_expanded"] is False
+    assert harness.metadata["layer2_execution_performed"] is False
+    assert any("API/OpenAPI/UI remains deferred" in gap for gap in harness.gaps)
+    assert any("persistence/S3 remains deferred" in gap for gap in harness.gaps)
+    assert any("Layer 2 remains deferred" in gap for gap in harness.gaps)
+
+
 def test_full_system_report_keeps_slice_12_deferred_boundaries_explicit() -> None:
     """Rendered audit wording must keep Slice 12 separate from downstream IC layers."""
     report = render_report(collect_wiring_inventory(REPO_ROOT))
 
     assert "in-memory run-scoped Layer 1 Evidence Trust Court boundary exists" in report
     assert "data-room inventory package boundary exists" in report
+    assert "local data-room FULL harness boundary exists" in report
     assert "in-memory run-scoped Layer 1 Validated Evidence Package boundary exists" in report
     assert "external intelligence conflict-check plan boundary exists" in report
     assert "company identity package boundary exists" in report

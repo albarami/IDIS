@@ -189,6 +189,9 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             "data_room_inventory_package_run_integration": (
                 _data_room_inventory_package_run_integration(root, files)
             ),
+            "data_room_full_harness_run_handoff": (
+                _data_room_full_harness_run_handoff(root, files)
+            ),
             "methodology_layer2_readiness_package_run_integration": (
                 _methodology_layer2_readiness_package_run_integration(root, files)
             ),
@@ -540,6 +543,8 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/services/runs/methodology_company_identity_package.py",
         "src/idis/services/runs/data_room_inventory_package.py",
         "src/idis/services/runs/methodology_layer2_readiness_package.py",
+        "src/idis/evaluation/data_room_harness.py",
+        "scripts/run_data_room_full_harness.py",
         "src/idis/services/extraction/claim_materialization_audit.py",
         "src/idis/models/sanad_coverage_boundary.py",
         "src/idis/services/methodology/sanad_coverage_boundary.py",
@@ -2306,6 +2311,56 @@ def _data_room_inventory_package_run_integration(
             "ocr_performed": False,
             "media_transcription_performed": False,
             "api_or_ui_changed": "DATA_ROOM_INVENTORY_PACKAGE" in api_text,
+            "layer2_execution_performed": False,
+        },
+    )
+
+
+def _data_room_full_harness_run_handoff(
+    root: Path,
+    files: dict[str, str],
+) -> WiringItem:
+    harness_text = files.get("src/idis/evaluation/data_room_harness.py", "")
+    script_text = files.get("scripts/run_data_room_full_harness.py", "")
+    api_text = files.get("src/idis/api/routes/runs.py", "")
+    integrated = (
+        _exists(root, "src/idis/evaluation/data_room_harness.py")
+        and _exists(root, "scripts/run_data_room_full_harness.py")
+        and "run_data_room_harness" in harness_text
+        and "data_room_root_path" in harness_text
+        and "RunContext" in harness_text
+        and "InMemoryRunStepsRepository" in harness_text
+        and "local data-room harness deferral" in harness_text
+        and "main" in script_text
+    )
+    return WiringItem(
+        key="data_room_full_harness_run_handoff",
+        label="Data-room full harness run handoff",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary=(
+            "local data-room FULL harness boundary exists; API/OpenAPI/UI, "
+            "persistence/S3, OCR/media, live enrichment expansion, and Layer 2 remain deferred."
+        ),
+        evidence=[
+            "local data-room FULL harness accepts an arbitrary root path and emits a safe summary.",
+            "RunContext is built with data_room_root_path, empty input corpus, "
+            "and explicit deal metadata.",
+            "Harness summarizes completed, blocked, deferred, and not-started steps "
+            "without raw text.",
+            "Legacy enrichment, debate, analysis, scoring, and deliverables are local deferrals.",
+        ],
+        gaps=[
+            "API/OpenAPI/UI remains deferred.",
+            "persistence/S3 remains deferred.",
+            "OCR/media/image/HTML/TXT parsing remains deferred.",
+            "Layer 2 remains deferred.",
+            "live enrichment execution remains deferred.",
+        ],
+        phase_2_action="Phase 3.0 Slice 17",
+        metadata={
+            "api_or_ui_changed": "data_room_root_path" in api_text,
+            "persistent_data_room_package": False,
+            "live_enrichment_expanded": "create_default_enrichment_service" in harness_text,
             "layer2_execution_performed": False,
         },
     )

@@ -198,6 +198,7 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             "production_run_source_contract": _production_run_source_contract(root, files),
             "durable_document_api_parity": _durable_document_api_parity(files),
             "single_document_upload_intake": _single_document_upload_intake(files),
+            "api_upload_to_selected_run_smoke": _api_upload_to_selected_run_smoke(files),
             "methodology_layer2_readiness_package_run_integration": (
                 _methodology_layer2_readiness_package_run_integration(root, files)
             ),
@@ -593,6 +594,8 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/services/extraction/extractors/anthropic_client.py",
         "src/idis/rate_limit/limiter.py",
         "src/idis/services/enrichment/cache_policy.py",
+        "tests/test_api_upload_to_run_smoke_postgres.py",
+        "tests/test_run_document_loader.py",
         "pyproject.toml",
     ]
     return {path: _read(root / path) for path in relative_paths}
@@ -2625,6 +2628,81 @@ def _single_document_upload_intake(files: dict[str, str]) -> WiringItem:
             "safe_response_exposes_content_b64": "content_b64" in upload_body,
             "durable_package_table_added": False,
             "new_s3_supabase_backend_added": False,
+            "layer2_execution_performed": False,
+        },
+    )
+
+
+def _api_upload_to_selected_run_smoke(files: dict[str, str]) -> WiringItem:
+    documents_text = files.get("src/idis/api/routes/documents.py", "")
+    runs_text = files.get("src/idis/api/routes/runs.py", "")
+    run_source_text = files.get("src/idis/models/run_source.py", "")
+    worker_text = files.get("src/idis/pipeline/worker.py", "")
+    smoke_test_text = files.get("tests/test_api_upload_to_run_smoke_postgres.py", "")
+    worker_test_text = files.get("tests/test_run_document_loader.py", "")
+    response_model_body = documents_text.split("class DocumentArtifactResponse", 1)[-1].split(
+        "class PaginatedDocumentList", 1
+    )[0]
+    public_response_exposes_raw_content = any(
+        token in response_model_body
+        for token in [
+            "content_b64",
+            "raw_bytes",
+            "raw_text",
+            "parsed_text",
+            "text_excerpt",
+            "spans",
+        ]
+    )
+    integrated = (
+        '"/v1/deals/{deal_id}/documents/upload"' in documents_text
+        and '"document_ids"' in run_source_text
+        and "filter_preflight_corpus_by_run_source" in runs_text
+        and "filter_preflight_corpus_by_run_source" in worker_text
+        and "test_api_upload_list_get_selected_run_smoke_consumes_only_selected_document"
+        in smoke_test_text
+        and "test_api_selected_run_rejects_cross_deal_document_without_creating_run"
+        in smoke_test_text
+        and "test_worker_claimed_persisted_run_source_filters_selected_document_context"
+        in smoke_test_text
+        and "test_worker_context_factory_applies_persisted_run_source_filter" in worker_test_text
+    )
+    worker_filters_persisted_source = (
+        "filter_preflight_corpus_by_run_source" in worker_text
+        and 'run_data.get("source")' in worker_text
+    )
+    return WiringItem(
+        key="api_upload_to_selected_run_smoke",
+        label="API upload-to-selected-run smoke",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary=(
+            "API upload-to-selected-run smoke boundary exists; tests prove uploaded "
+            "durable document summaries can start a selected run while adding no "
+            "new product surface."
+        ),
+        evidence=[
+            "Smoke test uploads two supported documents through the existing upload endpoint.",
+            "Smoke test verifies durable list/get summaries before run creation.",
+            "Selected run uses existing RunSource source.document_ids filtering.",
+            "Worker parity test proves persisted runs.source filters queued context.",
+        ],
+        gaps=[
+            "smoke boundary only; no new endpoint or production behavior is added.",
+            "folder/data-room upload remains deferred.",
+            "durable data-room package table remains deferred.",
+            "UI remains deferred.",
+            "OCR/media/image/HTML/TXT parsing remains deferred.",
+            "new S3/Supabase storage implementation remains deferred.",
+            "RAG/Neo4j remains deferred.",
+            "Layer 2 remains deferred.",
+            "external enrichment expansion remains deferred.",
+            "deliverables expansion remains deferred.",
+        ],
+        phase_2_action="Phase 3.0 Slice 22",
+        metadata={
+            "new_endpoint_added": False,
+            "public_response_exposes_raw_content": public_response_exposes_raw_content,
+            "worker_filters_persisted_source": worker_filters_persisted_source,
             "layer2_execution_performed": False,
         },
     )

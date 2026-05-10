@@ -7,7 +7,10 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
+
 from idis.api.routes.runs import _gather_preflight_corpus, _gather_snapshot_documents
+from idis.pipeline.worker import _default_run_context_factory
 from idis.services.runs.steps import (
     load_document_preflight_corpus_for_deal,
     load_documents_for_deal,
@@ -153,6 +156,75 @@ class MixedPreflightCorpusConnection(ParsedCorpusConnection):
                         }
                     )
                 ]
+            return result
+        raise AssertionError(f"Unexpected SQL: {sql}")
+
+
+class MultiParsedCorpusConnection(ParsedCorpusConnection):
+    """SQLAlchemy-like test double with two parsed persisted documents."""
+
+    def execute(self, statement: object, params: dict[str, str] | None = None) -> MagicMock:
+        sql = str(statement)
+        self.executed_sql.append(sql)
+        result = MagicMock()
+        if "SET LOCAL idis.tenant_id" in sql:
+            return result
+        if "FROM documents" in sql:
+            result.fetchall.return_value = [
+                MagicMock(
+                    _mapping={
+                        "document_id": "doc-1",
+                        "tenant_id": TENANT_ID,
+                        "deal_id": DEAL_ID,
+                        "doc_id": "artifact-1",
+                        "doc_type": "PDF",
+                        "parse_status": "PARSED",
+                        "document_metadata": {"name": "first.pdf"},
+                        "artifact_metadata": {"source": "synthetic"},
+                        "document_name": "first.pdf",
+                        "sha256": "a" * 64,
+                        "uri": "deals/first.pdf",
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "updated_at": "2026-01-01T00:00:00Z",
+                    }
+                ),
+                MagicMock(
+                    _mapping={
+                        "document_id": "doc-2",
+                        "tenant_id": TENANT_ID,
+                        "deal_id": DEAL_ID,
+                        "doc_id": "artifact-2",
+                        "doc_type": "XLSX",
+                        "parse_status": "PARSED",
+                        "document_metadata": {"name": "second.xlsx"},
+                        "artifact_metadata": {"source": "synthetic"},
+                        "document_name": "second.xlsx",
+                        "sha256": "c" * 64,
+                        "uri": "deals/second.xlsx",
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "updated_at": "2026-01-01T00:00:00Z",
+                    }
+                ),
+            ]
+            return result
+        if "FROM document_spans" in sql:
+            document_id = (params or {}).get("document_id")
+            result.fetchall.return_value = [
+                MagicMock(
+                    _mapping={
+                        "span_id": f"span-{document_id}",
+                        "tenant_id": TENANT_ID,
+                        "deal_id": DEAL_ID,
+                        "document_id": document_id,
+                        "span_type": "PAGE_TEXT",
+                        "locator": {"page": 1},
+                        "text_excerpt": f"Excerpt for {document_id}.",
+                        "content_hash": "b" * 64,
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "updated_at": "2026-01-01T00:00:00Z",
+                    }
+                )
+            ]
             return result
         raise AssertionError(f"Unexpected SQL: {sql}")
 
@@ -305,3 +377,32 @@ def test_api_preflight_corpus_uses_full_persisted_corpus_not_parsed_only() -> No
     )
 
     assert [doc["document_id"] for doc in corpus] == ["doc-1", "doc-failed"]
+
+
+def test_worker_context_factory_applies_persisted_run_source_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Queued worker runs must hydrate and filter the same selected document corpus."""
+    conn = MultiParsedCorpusConnection()
+    run_data = {
+        "tenant_id": TENANT_ID,
+        "deal_id": DEAL_ID,
+        "run_id": "run-source-worker-smoke",
+        "mode": "SNAPSHOT",
+        "source": {"type": "deal_documents", "document_ids": ["doc-2"]},
+    }
+    monkeypatch.setattr(
+        "idis.pipeline.worker._load_worker_deal_metadata",
+        lambda **_: {"company_name": "Synthetic Co"},
+    )
+
+    ctx = _default_run_context_factory(
+        db_conn=conn,
+        tenant_id=TENANT_ID,
+        run_data=run_data,
+        audit_sink=MagicMock(),
+    )
+
+    assert [doc["document_id"] for doc in ctx.documents] == ["doc-2"]
+    assert [doc["document_id"] for doc in ctx.preflight_corpus] == ["doc-2"]
+    assert ctx.deal_metadata["company_name"] == "Synthetic Co"

@@ -383,6 +383,22 @@ def test_full_system_inventory_detects_slice_21_single_document_upload_boundary(
     )
 
 
+def test_full_system_inventory_detects_slice_22_api_upload_to_selected_run_smoke() -> None:
+    """Slice 22 must report API upload-to-selected-run smoke without new surfaces."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+    smoke = inventory["api_upload_to_selected_run_smoke"]
+
+    assert smoke.status == "PARTIAL"
+    assert any("upload" in item.lower() for item in smoke.evidence)
+    assert any("source.document_ids" in item for item in smoke.evidence)
+    assert smoke.metadata["new_endpoint_added"] is False
+    assert smoke.metadata["public_response_exposes_raw_content"] is False
+    assert smoke.metadata["worker_filters_persisted_source"] is True
+    assert smoke.metadata["layer2_execution_performed"] is False
+    assert any("smoke boundary only" in gap for gap in smoke.gaps)
+    assert any("folder/data-room upload remains deferred" in gap for gap in smoke.gaps)
+
+
 def test_full_system_report_keeps_slice_12_deferred_boundaries_explicit() -> None:
     """Rendered audit wording must keep Slice 12 separate from downstream IC layers."""
     report = render_report(collect_wiring_inventory(REPO_ROOT))
@@ -394,6 +410,7 @@ def test_full_system_report_keeps_slice_12_deferred_boundaries_explicit() -> Non
     assert "production run-source contract boundary exists" in report
     assert "durable document API parity boundary exists" in report
     assert "single-document upload intake boundary exists" in report
+    assert "API upload-to-selected-run smoke boundary exists" in report
     assert "in-memory run-scoped Layer 1 Validated Evidence Package boundary exists" in report
     assert "external intelligence conflict-check plan boundary exists" in report
     assert "company identity package boundary exists" in report

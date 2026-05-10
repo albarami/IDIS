@@ -196,6 +196,7 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
                 _data_room_ingestion_handoff_run_integration(root, files)
             ),
             "production_run_source_contract": _production_run_source_contract(root, files),
+            "durable_document_api_parity": _durable_document_api_parity(files),
             "methodology_layer2_readiness_package_run_integration": (
                 _methodology_layer2_readiness_package_run_integration(root, files)
             ),
@@ -479,8 +480,11 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "docker-compose.yml",
         "scripts/pg_init.sql",
         "scripts/db/init.sql",
+        "openapi/IDIS_OpenAPI_v6_3.yaml",
+        "src/idis/api/routes/documents.py",
         "src/idis/api/routes/runs.py",
         "src/idis/api/main.py",
+        "src/idis/api/policy.py",
         "src/idis/models/run_source.py",
         "src/idis/models/run_step.py",
         "src/idis/persistence/repositories/runs.py",
@@ -2505,6 +2509,62 @@ def _production_run_source_contract(root: Path, files: dict[str, str]) -> Wiring
             "public_api_accepts_filesystem_paths": False,
             "durable_package_table_added": False,
             "ui_changed": False,
+            "layer2_execution_performed": False,
+        },
+    )
+
+
+def _durable_document_api_parity(files: dict[str, str]) -> WiringItem:
+    documents_text = files.get("src/idis/api/routes/documents.py", "")
+    repository_text = files.get("src/idis/persistence/repositories/documents.py", "")
+    openapi_text = files.get("openapi/IDIS_OpenAPI_v6_3.yaml", "")
+    policy_text = files.get("src/idis/api/policy.py", "")
+    durable_summary_body = documents_text.split("def _document_summary_from_durable_row", 1)[
+        1
+    ].split("def _document_summary_from_memory_artifact", 1)[0]
+    integrated = (
+        "PostgresDocumentsRepository" in documents_text
+        and "list_documents_by_deal" in documents_text
+        and "get_deal_document_summary" in documents_text
+        and "document_id" in openapi_text
+        and "RunSource.document_ids" in openapi_text
+        and "file://" not in documents_text.partition("ALLOWED_URI_SCHEMES")[2].split("\n", 1)[0]
+        and "list_spans_by_document" in repository_text
+        and "getDealDocumentSummary" in policy_text
+    )
+    return WiringItem(
+        key="durable_document_api_parity",
+        label="Durable document API parity",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary=(
+            "durable document API parity boundary exists; safe document summaries expose "
+            "run-source document IDs while raw content, local paths, UI, and downstream "
+            "execution remain deferred."
+        ),
+        evidence=[
+            "Document list uses PostgresDocumentsRepository when db_conn exists.",
+            "Safe summaries expose durable document_id for RunSource.document_ids.",
+            "Deal-scoped durable document summary route is policy-protected.",
+            "file:// and raw local filesystem URI registration are rejected.",
+        ],
+        gaps=[
+            "local filesystem path API remains deferred.",
+            "raw content delivery remains outside safe summaries.",
+            "durable data-room package table remains deferred.",
+            "UI remains deferred.",
+            "OCR/media/image/HTML/TXT parsing remains deferred.",
+            "S3/Supabase storage expansion remains deferred.",
+            "RAG/Neo4j remains deferred.",
+            "Layer 2 remains deferred.",
+            "external enrichment expansion remains deferred.",
+            "deliverables expansion remains deferred.",
+        ],
+        phase_2_action="Phase 3.0 Slice 20",
+        metadata={
+            "safe_summary_exposes_content_b64": "content_b64=" in durable_summary_body,
+            "public_api_accepts_file_uri": '"file://"'
+            in documents_text.split("ALLOWED_URI_SCHEMES", 1)[1].split("\n", 1)[0],
+            "durable_package_table_added": False,
             "layer2_execution_performed": False,
         },
     )

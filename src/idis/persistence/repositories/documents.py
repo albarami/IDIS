@@ -201,6 +201,7 @@ class PostgresDocumentsRepository:
                        documents.doc_id, documents.doc_type, documents.parse_status,
                        documents.metadata AS document_metadata,
                        documents.created_at, documents.updated_at,
+                       document_artifacts.doc_type AS artifact_doc_type,
                        document_artifacts.title AS document_name,
                        document_artifacts.sha256, document_artifacts.uri,
                        document_artifacts.metadata AS artifact_metadata
@@ -224,6 +225,7 @@ class PostgresDocumentsRepository:
                        documents.doc_id, documents.doc_type, documents.parse_status,
                        documents.metadata AS document_metadata,
                        documents.created_at, documents.updated_at,
+                       document_artifacts.doc_type AS artifact_doc_type,
                        document_artifacts.title AS document_name,
                        document_artifacts.sha256, document_artifacts.uri,
                        document_artifacts.metadata AS artifact_metadata
@@ -298,6 +300,7 @@ class PostgresDocumentsRepository:
             "deal_id": str(mapping["deal_id"]),
             "doc_id": str(mapping["doc_id"]),
             "doc_type": str(mapping["doc_type"]),
+            "artifact_doc_type": str(mapping.get("artifact_doc_type", mapping["doc_type"])),
             "parse_status": str(mapping["parse_status"]),
             "metadata": metadata,
             "source_metadata": artifact_metadata,

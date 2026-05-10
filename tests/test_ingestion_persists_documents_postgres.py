@@ -476,7 +476,7 @@ def test_api_ingestion_persists_corpus_and_api_run_loads_persisted_spans(
             json={
                 "doc_type": "DATA_ROOM_FILE",
                 "title": "api-ingestion.pdf",
-                "uri": f"file://{storage_key}",
+                "uri": f"idis://{storage_key}",
                 "sha256": hashlib.sha256(pdf_data).hexdigest(),
                 "auto_ingest": False,
             },
@@ -491,6 +491,7 @@ def test_api_ingestion_persists_corpus_and_api_run_loads_persisted_spans(
         )
         assert ingest_resp.status_code == 202
         assert ingest_resp.json()["status"] == "SUCCEEDED"
+        durable_document_id = ingest_resp.json()["document_id"]
 
         with app_engine.begin() as conn:
             repo = PostgresDocumentsRepository(conn, str(TENANT_ID))
@@ -501,7 +502,30 @@ def test_api_ingestion_persists_corpus_and_api_run_loads_persisted_spans(
             )
 
         assert len(documents) == 1
+        assert documents[0]["document_id"] == durable_document_id
         assert len(spans) > 0
+
+        list_resp = client.get(
+            f"/v1/deals/{deal_id}/documents",
+            headers={"X-IDIS-API-Key": API_KEY},
+        )
+        assert list_resp.status_code == 200
+        listed_doc = list_resp.json()["items"][0]
+        assert listed_doc["document_id"] == durable_document_id
+        assert "content_b64" not in listed_doc
+        assert "text_excerpt" not in listed_doc
+
+        summary_resp = client.get(
+            f"/v1/deals/{deal_id}/documents/{durable_document_id}",
+            headers={"X-IDIS-API-Key": API_KEY},
+        )
+        assert summary_resp.status_code == 200
+        summary = summary_resp.json()
+        assert summary["document_id"] == durable_document_id
+        assert "content_b64" not in summary
+        assert "content_sha256" not in summary
+        assert "text_excerpt" not in summary
+        assert "spans" not in summary
 
         captured_documents: list[list[dict[str, object]]] = []
         captured_preflight_corpus: list[list[dict[str, object]]] = []
@@ -524,7 +548,13 @@ def test_api_ingestion_persists_corpus_and_api_run_loads_persisted_spans(
         run_resp = client.post(
             f"/v1/deals/{deal_id}/runs",
             headers={"X-IDIS-API-Key": API_KEY},
-            json={"mode": "SNAPSHOT"},
+            json={
+                "mode": "SNAPSHOT",
+                "source": {
+                    "type": "deal_documents",
+                    "document_ids": [durable_document_id],
+                },
+            },
         )
 
         assert run_resp.status_code == 202

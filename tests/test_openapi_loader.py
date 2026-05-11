@@ -207,3 +207,32 @@ class TestGetRouteInventory:
 
         methods = {method for method, _ in inventory}
         assert methods == {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE"}
+
+
+class TestRunObservabilityOpenAPI:
+    """OpenAPI contract tests for public run observability."""
+
+    def test_run_status_schema_exposes_safe_observability_contract(self) -> None:
+        spec = load_openapi_spec()
+        schemas = spec["components"]["schemas"]
+        run_status = schemas["RunStatus"]
+        run_step = schemas["RunStepResponse"]
+
+        assert {"run_id", "status", "mode", "started_at"}.issubset(set(run_status["required"]))
+        assert "source" in run_status["properties"]
+        assert run_status["properties"]["source"]["$ref"] == "#/components/schemas/RunSource"
+        assert run_status["properties"]["source"]["nullable"] is True
+        assert "summary" in run_step["properties"]
+        assert "enum" not in run_step["properties"]["step_name"]
+        run_ref = schemas["RunRef"]
+        assert (
+            run_ref["properties"]["steps"]["items"]["$ref"]
+            == "#/components/schemas/RunRefStepResponse"
+        )
+        assert "summary" not in schemas["RunRefStepResponse"]["properties"]
+
+    def test_postgres_integration_ci_runs_slice_23_observability_tests(self) -> None:
+        workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+
+        assert 'IDIS_REQUIRE_POSTGRES: "1"' in workflow
+        assert "tests/test_api_run_observability_postgres.py" in workflow

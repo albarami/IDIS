@@ -199,6 +199,7 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             "durable_document_api_parity": _durable_document_api_parity(files),
             "single_document_upload_intake": _single_document_upload_intake(files),
             "api_upload_to_selected_run_smoke": _api_upload_to_selected_run_smoke(files),
+            "default_upload_ingestion_wiring": _default_upload_ingestion_wiring(files),
             "methodology_layer2_readiness_package_run_integration": (
                 _methodology_layer2_readiness_package_run_integration(root, files)
             ),
@@ -478,6 +479,7 @@ INFRASTRUCTURE_KEYS: Final = {
 def _load_relevant_files(root: Path) -> dict[str, str]:
     """Load files used by static checks."""
     relative_paths = [
+        ".github/workflows/ci.yml",
         ".env.example",
         "docker-compose.yml",
         "scripts/pg_init.sql",
@@ -488,6 +490,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/api/main.py",
         "src/idis/api/middleware/audit.py",
         "src/idis/api/policy.py",
+        "src/idis/services/ingestion/defaults.py",
         "src/idis/models/run_source.py",
         "src/idis/models/run_step.py",
         "src/idis/persistence/repositories/runs.py",
@@ -595,6 +598,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/rate_limit/limiter.py",
         "src/idis/services/enrichment/cache_policy.py",
         "tests/test_api_upload_to_run_smoke_postgres.py",
+        "tests/test_api_default_upload_ingestion_postgres.py",
         "tests/test_run_document_loader.py",
         "pyproject.toml",
     ]
@@ -724,20 +728,36 @@ def _full_steps(files: dict[str, str]) -> WiringItem:
         gaps=[
             "`_run_full_deliverables` uses local `InMemoryAuditSink`.",
             "RAG/graph inputs are not fed into analysis/debate context.",
+            (
+                "Next blocker: METHODOLOGY_EXTERNAL_INTELLIGENCE_CONFLICT_CHECK_PLAN exceeds "
+                "run_steps.step_name varchar(50) for durable FULL run-step persistence."
+            ),
         ],
     )
 
 
 def _ingestion_service(files: dict[str, str]) -> WiringItem:
+    main_text = files.get("src/idis/api/main.py", "")
+    defaults_text = files.get("src/idis/services/ingestion/defaults.py", "")
+    default_wired = (
+        "build_default_ingestion_service" in main_text
+        and "ComplianceEnforcedStore" in defaults_text
+        and "FilesystemObjectStore" in defaults_text
+    )
     return WiringItem(
         key="ingestion_service",
         label="Ingestion service",
-        status="PARTIAL",
+        status="WIRED" if default_wired else "PARTIAL",
         summary=(
-            "Ingestion service exists and is route-accessible, but default app wiring is optional."
+            "Ingestion service exists and default app wiring provides the compliance-enforced "
+            "upload path."
         ),
-        evidence=["`IngestionService.ingest_bytes` stores, parses, and spans raw bytes."],
-        gaps=["Default `create_app()` leaves `ingestion_service` optional."],
+        evidence=[
+            "`IngestionService.ingest_bytes` stores, parses, and spans raw bytes.",
+            "`create_app()` builds a default ingestion service when no test override is supplied.",
+            "`ComplianceEnforcedStore` wraps the existing filesystem object-store backend.",
+        ],
+        gaps=["No new S3/Supabase backend is added; filesystem object-store config remains used."],
     )
 
 
@@ -2703,6 +2723,65 @@ def _api_upload_to_selected_run_smoke(files: dict[str, str]) -> WiringItem:
             "new_endpoint_added": False,
             "public_response_exposes_raw_content": public_response_exposes_raw_content,
             "worker_filters_persisted_source": worker_filters_persisted_source,
+            "layer2_execution_performed": False,
+        },
+    )
+
+
+def _default_upload_ingestion_wiring(files: dict[str, str]) -> WiringItem:
+    main_text = files.get("src/idis/api/main.py", "")
+    defaults_text = files.get("src/idis/services/ingestion/defaults.py", "")
+    postgres_test_text = files.get("tests/test_api_default_upload_ingestion_postgres.py", "")
+    ci_text = files.get(".github/workflows/ci.yml", "")
+    uses_compliance_store = "ComplianceEnforcedStore" in defaults_text
+    uses_existing_store = "FilesystemObjectStore" in defaults_text
+    test_added = (
+        "test_create_app_default_upload_persists_parsed_document_without_ingestion_shim"
+        in postgres_test_text
+    )
+    ci_added = "tests/test_api_default_upload_ingestion_postgres.py" in ci_text
+    integrated = (
+        "build_default_ingestion_service" in main_text
+        and uses_compliance_store
+        and uses_existing_store
+        and test_added
+        and ci_added
+    )
+    return WiringItem(
+        key="default_upload_ingestion_wiring",
+        label="Default upload ingestion wiring",
+        status="PARTIAL" if integrated else "DEFERRED",
+        summary=(
+            "default upload ingestion wiring boundary exists; production-style create_app() "
+            "can upload supported document bytes into the durable parsed Postgres corpus."
+        ),
+        evidence=[
+            "`create_app()` builds a default ingestion service without a test shim.",
+            "`build_default_ingestion_service` uses ComplianceEnforcedStore.",
+            "The default store uses existing filesystem object-store configuration only.",
+            (
+                "Postgres test proves upload, durable document_id, PARSED row, "
+                "spans, and safe list/get."
+            ),
+        ],
+        gaps=[
+            "durable evidence persistence remains deferred.",
+            "claim/evidence retrieval expansion remains deferred.",
+            (
+                "Layer 2, enrichment, deliverables, folder upload, OCR/media/HTML/TXT, "
+                "and RAG/Neo4j remain deferred."
+            ),
+            "No new S3/Supabase storage backend is added.",
+            (
+                "Next blocker: METHODOLOGY_EXTERNAL_INTELLIGENCE_CONFLICT_CHECK_PLAN exceeds "
+                "run_steps.step_name varchar(50); likely Slice 25."
+            ),
+        ],
+        phase_2_action="Phase 3.0 Slice 24",
+        metadata={
+            "uses_compliance_enforced_store": uses_compliance_store,
+            "new_storage_backend_added": False,
+            "postgres_ci_test_added": ci_added,
             "layer2_execution_performed": False,
         },
     )

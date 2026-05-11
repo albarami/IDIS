@@ -399,6 +399,23 @@ def test_full_system_inventory_detects_slice_22_api_upload_to_selected_run_smoke
     assert any("folder/data-room upload remains deferred" in gap for gap in smoke.gaps)
 
 
+def test_full_system_inventory_detects_slice_24_default_upload_ingestion_wiring() -> None:
+    """Slice 24 must report default upload ingestion wiring and the next FULL blocker."""
+    inventory = collect_wiring_inventory(REPO_ROOT)
+    wiring = inventory["default_upload_ingestion_wiring"]
+
+    assert wiring.status == "PARTIAL"
+    assert any("build_default_ingestion_service" in item for item in wiring.evidence)
+    assert wiring.metadata["uses_compliance_enforced_store"] is True
+    assert wiring.metadata["new_storage_backend_added"] is False
+    assert wiring.metadata["postgres_ci_test_added"] is True
+    assert wiring.metadata["layer2_execution_performed"] is False
+    assert any("durable evidence persistence remains deferred" in gap for gap in wiring.gaps)
+    assert any(
+        "METHODOLOGY_EXTERNAL_INTELLIGENCE_CONFLICT_CHECK_PLAN" in gap for gap in wiring.gaps
+    )
+
+
 def test_full_system_report_keeps_slice_12_deferred_boundaries_explicit() -> None:
     """Rendered audit wording must keep Slice 12 separate from downstream IC layers."""
     report = render_report(collect_wiring_inventory(REPO_ROOT))
@@ -411,6 +428,7 @@ def test_full_system_report_keeps_slice_12_deferred_boundaries_explicit() -> Non
     assert "durable document API parity boundary exists" in report
     assert "single-document upload intake boundary exists" in report
     assert "API upload-to-selected-run smoke boundary exists" in report
+    assert "default upload ingestion wiring boundary exists" in report
     assert "in-memory run-scoped Layer 1 Validated Evidence Package boundary exists" in report
     assert "external intelligence conflict-check plan boundary exists" in report
     assert "company identity package boundary exists" in report

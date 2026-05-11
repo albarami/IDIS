@@ -45,6 +45,7 @@ from idis.idempotency.store import SqliteIdempotencyStore
 from idis.observability.tracing import configure_tracing, instrument_fastapi, instrument_httpx
 from idis.pipeline.worker import start_worker, stop_worker
 from idis.rate_limit.limiter import TenantRateLimiter
+from idis.services.ingestion.defaults import build_default_ingestion_service
 
 try:
     from idis.audit.postgres_sink import PostgresAuditSink
@@ -116,7 +117,9 @@ def create_app(
     )
 
     app.state.audit_sink = audit_sink
-    app.state.ingestion_service = ingestion_service
+    app.state.ingestion_service = ingestion_service or build_default_ingestion_service(
+        audit_sink=audit_sink
+    )
 
     validate_api_key_registry_config()
 

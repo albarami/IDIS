@@ -1267,6 +1267,7 @@ class TestFailClosedIngestion:
         audit_sink = InMemoryAuditSink()
         idem_store = SqliteIdempotencyStore(in_memory=True)
         app = create_app(audit_sink=audit_sink, idempotency_store=idem_store)
+        app.state.ingestion_service = None
         client = TestClient(app)
 
         response = client.post(

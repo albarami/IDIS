@@ -725,7 +725,7 @@ class IngestionService:
                 "resource_id": str(document.document_id),
                 "deal_id": str(document.deal_id),
             },
-            "summary": f"Document ingestion completed: {span_count} spans extracted",
+            "summary": "Document ingestion completed",
             "payload": {
                 "sha256": sha256,
                 "doc_type": document.doc_type.value,

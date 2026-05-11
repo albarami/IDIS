@@ -924,7 +924,7 @@ async def upload_deal_document(
         "doc_type": doc_type.value,
         "source_system": source_system,
         "upload_filename": filename,
-        "upload_intake": "single_document_raw_bytes",
+        "upload_intake": "single_document_upload",
     }
     ctx = IngestionContext(
         tenant_id=UUID(tenant_ctx.tenant_id),

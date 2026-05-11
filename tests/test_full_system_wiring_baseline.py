@@ -409,11 +409,12 @@ def test_full_system_inventory_detects_slice_24_default_upload_ingestion_wiring(
     assert wiring.metadata["uses_compliance_enforced_store"] is True
     assert wiring.metadata["new_storage_backend_added"] is False
     assert wiring.metadata["postgres_ci_test_added"] is True
+    assert wiring.metadata["run_step_name_width_migrated"] is True
+    assert wiring.metadata["full_run_step_name_postgres_test_added"] is True
+    assert wiring.metadata["full_run_step_name_postgres_ci_test_added"] is True
     assert wiring.metadata["layer2_execution_performed"] is False
     assert any("durable evidence persistence remains deferred" in gap for gap in wiring.gaps)
-    assert any(
-        "METHODOLOGY_EXTERNAL_INTELLIGENCE_CONFLICT_CHECK_PLAN" in gap for gap in wiring.gaps
-    )
+    assert not any("step_name varchar(50)" in gap for gap in wiring.gaps)
 
 
 def test_full_system_report_keeps_slice_12_deferred_boundaries_explicit() -> None:

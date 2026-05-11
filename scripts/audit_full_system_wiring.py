@@ -495,6 +495,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/models/run_step.py",
         "src/idis/persistence/repositories/runs.py",
         "src/idis/persistence/migrations/versions/0013_runs_source_contract.py",
+        "src/idis/persistence/migrations/versions/0014_run_step_name_width.py",
         "src/idis/services/runs/execution.py",
         "src/idis/services/runs/orchestrator.py",
         "src/idis/services/runs/steps.py",
@@ -599,6 +600,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/services/enrichment/cache_policy.py",
         "tests/test_api_upload_to_run_smoke_postgres.py",
         "tests/test_api_default_upload_ingestion_postgres.py",
+        "tests/test_api_full_run_step_name_postgres.py",
         "tests/test_run_document_loader.py",
         "pyproject.toml",
     ]
@@ -728,10 +730,6 @@ def _full_steps(files: dict[str, str]) -> WiringItem:
         gaps=[
             "`_run_full_deliverables` uses local `InMemoryAuditSink`.",
             "RAG/graph inputs are not fed into analysis/debate context.",
-            (
-                "Next blocker: METHODOLOGY_EXTERNAL_INTELLIGENCE_CONFLICT_CHECK_PLAN exceeds "
-                "run_steps.step_name varchar(50) for durable FULL run-step persistence."
-            ),
         ],
     )
 
@@ -2732,6 +2730,11 @@ def _default_upload_ingestion_wiring(files: dict[str, str]) -> WiringItem:
     main_text = files.get("src/idis/api/main.py", "")
     defaults_text = files.get("src/idis/services/ingestion/defaults.py", "")
     postgres_test_text = files.get("tests/test_api_default_upload_ingestion_postgres.py", "")
+    full_run_step_name_test_text = files.get("tests/test_api_full_run_step_name_postgres.py", "")
+    step_name_width_migration_text = files.get(
+        "src/idis/persistence/migrations/versions/0014_run_step_name_width.py",
+        "",
+    )
     ci_text = files.get(".github/workflows/ci.yml", "")
     uses_compliance_store = "ComplianceEnforcedStore" in defaults_text
     uses_existing_store = "FilesystemObjectStore" in defaults_text
@@ -2740,6 +2743,18 @@ def _default_upload_ingestion_wiring(files: dict[str, str]) -> WiringItem:
         in postgres_test_text
     )
     ci_added = "tests/test_api_default_upload_ingestion_postgres.py" in ci_text
+    step_name_width_migrated = (
+        "ALTER COLUMN step_name TYPE VARCHAR(100)" in step_name_width_migration_text
+        and "length(step_name) > 50" in step_name_width_migration_text
+    )
+    full_run_step_name_test_added = (
+        "test_default_upload_selected_full_run_persists_long_step_name_without_sql_truncation"
+        in full_run_step_name_test_text
+        and "documents/upload" in full_run_step_name_test_text
+        and '"mode": "FULL"' in full_run_step_name_test_text
+        and '"document_ids": [document_id]' in full_run_step_name_test_text
+    )
+    full_run_step_name_ci_added = "tests/test_api_full_run_step_name_postgres.py" in ci_text
     integrated = (
         "build_default_ingestion_service" in main_text
         and uses_compliance_store
@@ -2763,6 +2778,11 @@ def _default_upload_ingestion_wiring(files: dict[str, str]) -> WiringItem:
                 "Postgres test proves upload, durable document_id, PARSED row, "
                 "spans, and safe list/get."
             ),
+            (
+                "Slice 25 Postgres test proves selected-document FULL run-step persistence "
+                "for METHODOLOGY_EXTERNAL_INTELLIGENCE_CONFLICT_CHECK_PLAN."
+            ),
+            "Migration widens run_steps.step_name to VARCHAR(100) with guarded downgrade.",
         ],
         gaps=[
             "durable evidence persistence remains deferred.",
@@ -2772,16 +2792,15 @@ def _default_upload_ingestion_wiring(files: dict[str, str]) -> WiringItem:
                 "and RAG/Neo4j remain deferred."
             ),
             "No new S3/Supabase storage backend is added.",
-            (
-                "Next blocker: METHODOLOGY_EXTERNAL_INTELLIGENCE_CONFLICT_CHECK_PLAN exceeds "
-                "run_steps.step_name varchar(50); likely Slice 25."
-            ),
         ],
-        phase_2_action="Phase 3.0 Slice 24",
+        phase_2_action="Phase 3.0 Slices 24-25",
         metadata={
             "uses_compliance_enforced_store": uses_compliance_store,
             "new_storage_backend_added": False,
             "postgres_ci_test_added": ci_added,
+            "run_step_name_width_migrated": step_name_width_migrated,
+            "full_run_step_name_postgres_test_added": full_run_step_name_test_added,
+            "full_run_step_name_postgres_ci_test_added": full_run_step_name_ci_added,
             "layer2_execution_performed": False,
         },
     )

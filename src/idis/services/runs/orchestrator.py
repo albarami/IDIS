@@ -140,6 +140,22 @@ BLOCK_REASON_NO_INGESTED_DOCUMENTS = "NO_INGESTED_DOCUMENTS"
 BLOCK_REASON_NO_USABLE_DOCUMENTS = "NO_USABLE_DOCUMENTS"
 BLOCK_REASON_NO_ELIGIBLE_EXTRACTION_TASKS = "NO_ELIGIBLE_EXTRACTION_TASKS"
 BLOCK_REASON_NO_PLANNED_EXTRACTION_TASKS = "NO_PLANNED_EXTRACTION_TASKS"
+SAFE_STEP_ERROR_MESSAGE = "Run step failed; see error code for details."
+SENSITIVE_AUDIT_RESULT_KEY_PARTS = frozenset(
+    {
+        "base64",
+        "bytes",
+        "excerpt",
+        "file_content",
+        "header",
+        "path",
+        "raw",
+        "span",
+        "text",
+        "transcript",
+        "uri",
+    }
+)
 
 
 class RunStepBlockedError(ValueError):
@@ -2033,7 +2049,7 @@ class RunOrchestrator:
                 "run_id": step.run_id,
                 "step_id": step.step_id,
                 "step_name": step.step_name.value,
-                "result_keys": list(result.keys()),
+                "result_keys": self._safe_audit_result_keys(result),
             },
         )
 
@@ -2062,7 +2078,7 @@ class RunOrchestrator:
                 "step_id": step.step_id,
                 "step_name": step.step_name.value,
                 "error_code": step.error_code,
-                "error_message": step.error_message,
+                "error_message": SAFE_STEP_ERROR_MESSAGE,
             },
         )
 
@@ -2115,6 +2131,17 @@ class RunOrchestrator:
             "details": details,
         }
         self._audit.emit(event)
+
+    @staticmethod
+    def _safe_audit_result_keys(result: dict[str, Any]) -> list[str]:
+        """Return non-sensitive summary keys for audit metadata."""
+        safe_keys: list[str] = []
+        for key in result:
+            normalized = str(key).lower()
+            if any(part in normalized for part in SENSITIVE_AUDIT_RESULT_KEY_PARTS):
+                continue
+            safe_keys.append(str(key))
+        return safe_keys
 
     @staticmethod
     def _compute_final_status(steps: list[RunStep]) -> str:

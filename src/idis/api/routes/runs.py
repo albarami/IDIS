@@ -74,6 +74,18 @@ class RunStepResponse(BaseModel):
     status: str
     started_at: str | None = None
     finished_at: str | None = None
+    summary: dict[str, Any] = Field(default_factory=dict)
+    error: StepErrorResponse | None = None
+    retry_count: int = 0
+
+
+class RunRefStepResponse(BaseModel):
+    """Single step in the start-run response without observability summaries."""
+
+    step_name: str
+    status: str
+    started_at: str | None = None
+    finished_at: str | None = None
     error: StepErrorResponse | None = None
     retry_count: int = 0
 
@@ -83,7 +95,7 @@ class RunRef(BaseModel):
 
     run_id: str
     status: str
-    steps: list[RunStepResponse] = Field(default_factory=list)
+    steps: list[RunRefStepResponse] = Field(default_factory=list)
     block_reason: str | None = None
 
 
@@ -92,8 +104,10 @@ class RunStatus(BaseModel):
 
     run_id: str
     status: str
+    mode: str
     started_at: str
     finished_at: str | None = None
+    source: RunSource | None = None
     steps: list[RunStepResponse] = Field(default_factory=list)
     block_reason: str | None = None
 
@@ -271,7 +285,7 @@ async def start_run(
             message="Run completed but audit event emission failed",
         ) from exc
 
-    step_responses = _build_step_responses(execution_result.steps)
+    step_responses = _build_run_ref_step_responses(execution_result.steps)
 
     return RunRef(
         run_id=run_data["run_id"],
@@ -315,10 +329,12 @@ def get_run(
     return RunStatus(
         run_id=run_data["run_id"],
         status=run_data["status"],
+        mode=run_data["mode"],
         started_at=run_data["started_at"],
         finished_at=run_data.get("finished_at"),
+        source=_run_source_from_storage(run_data.get("source")),
         steps=step_responses,
-        block_reason=run_data.get("block_reason"),
+        block_reason=run_data.get("block_reason") or _derive_block_reason(steps),
     )
 
 
@@ -507,6 +523,46 @@ def _get_audit_sink(request: Request) -> AuditSink:
     return sink
 
 
+SAFE_PUBLIC_STEP_ERROR_MESSAGE = "Run step failed; see error code for details."
+SENSITIVE_SUMMARY_KEY_PARTS = frozenset(
+    {
+        "base64",
+        "bytes",
+        "content_b64",
+        "artifact",
+        "excerpt",
+        "file",
+        "file_content",
+        "filename",
+        "hash",
+        "header",
+        "html",
+        "local_path",
+        "path",
+        "raw",
+        "sha",
+        "span",
+        "text",
+        "transcript",
+        "uri",
+    }
+)
+SENSITIVE_SUMMARY_VALUE_PARTS = frozenset(
+    {
+        "content_b64",
+        "raw bytes",
+        "raw_bytes",
+        "raw text",
+        "raw_text",
+        "parsed text",
+        "parsed_text",
+        "text_excerpt",
+        "revenue was 10m",
+        "ebitda was 2m",
+    }
+)
+
+
 def _build_step_responses(steps: list[Any]) -> list[RunStepResponse]:
     """Convert RunStep models to API response format.
 
@@ -524,10 +580,36 @@ def _build_step_responses(steps: list[Any]) -> list[RunStepResponse]:
         if step.status in (StepStatus.FAILED, StepStatus.BLOCKED) and step.error_code:
             error = StepErrorResponse(
                 code=step.error_code,
-                message=step.error_message or "",
+                message=SAFE_PUBLIC_STEP_ERROR_MESSAGE,
             )
         responses.append(
             RunStepResponse(
+                step_name=step.step_name.value
+                if hasattr(step.step_name, "value")
+                else step.step_name,
+                status=step.status.value if hasattr(step.status, "value") else step.status,
+                started_at=step.started_at,
+                finished_at=step.finished_at,
+                summary=_safe_public_run_summary_dict(step.result_summary),
+                error=error,
+                retry_count=step.retry_count,
+            )
+        )
+    return responses
+
+
+def _build_run_ref_step_responses(steps: list[Any]) -> list[RunRefStepResponse]:
+    """Convert RunStep models to the start-run response without summaries."""
+    responses: list[RunRefStepResponse] = []
+    for step in steps:
+        error = None
+        if step.status in ("FAILED", "BLOCKED") and step.error_code:
+            error = StepErrorResponse(
+                code=step.error_code,
+                message=SAFE_PUBLIC_STEP_ERROR_MESSAGE,
+            )
+        responses.append(
+            RunRefStepResponse(
                 step_name=step.step_name.value
                 if hasattr(step.step_name, "value")
                 else step.step_name,
@@ -539,6 +621,103 @@ def _build_step_responses(steps: list[Any]) -> list[RunStepResponse]:
             )
         )
     return responses
+
+
+def _derive_block_reason(steps: list[Any]) -> str | None:
+    """Derive a stable run-level block reason from the durable step ledger."""
+    from idis.models.run_step import StepStatus
+
+    for step in steps:
+        if step.status in (StepStatus.FAILED, StepStatus.BLOCKED) and step.error_code:
+            return str(step.error_code)
+    return None
+
+
+def _run_source_from_storage(source: object) -> RunSource | None:
+    """Return only the public persisted run-source contract."""
+    if source is None:
+        return None
+    if isinstance(source, RunSource):
+        return source
+    if isinstance(source, dict):
+        public_source = {
+            "type": source.get("type"),
+            "document_ids": source.get("document_ids"),
+        }
+        try:
+            return RunSource.model_validate(public_source)
+        except ValidationError:
+            return None
+    return None
+
+
+def _safe_public_run_summary_dict(value: dict[str, Any]) -> dict[str, Any]:
+    """Return a sanitized public summary object."""
+    safe = _safe_public_run_summary(value)
+    return safe if isinstance(safe, dict) else {}
+
+
+def _safe_public_run_summary(value: object) -> object:
+    """Sanitize persisted step summaries before exposing them publicly."""
+    if isinstance(value, dict):
+        sanitized: dict[str, object] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            if _is_sensitive_summary_key(key_text):
+                continue
+            safe_item = _safe_public_run_summary(item)
+            if safe_item is not None:
+                sanitized[key_text] = safe_item
+        return sanitized
+    if isinstance(value, list):
+        return [
+            safe_item for item in value if (safe_item := _safe_public_run_summary(item)) is not None
+        ]
+    if isinstance(value, str):
+        return value if _is_safe_public_summary_string(value) else None
+    if isinstance(value, int | float | bool) or value is None:
+        return value
+    return str(value)
+
+
+def _is_sensitive_summary_key(key: str) -> bool:
+    normalized = key.lower()
+    return any(part in normalized for part in SENSITIVE_SUMMARY_KEY_PARTS)
+
+
+def _is_safe_public_summary_string(value: str) -> bool:
+    normalized = value.lower()
+    if any(part in normalized for part in SENSITIVE_SUMMARY_VALUE_PARTS):
+        return False
+    if _looks_like_base64_blob(value):
+        return False
+    if "://" in value or "\\" in value or "/" in value:
+        return False
+    if len(value) > 512:
+        return False
+    if (
+        "error:" in normalized
+        or "exception:" in normalized
+        or normalized.startswith(("valueerror", "runtimeerror", "traceback"))
+    ):
+        return False
+    return not (len(value) > 1 and value[1] == ":")
+
+
+def _looks_like_base64_blob(value: str) -> bool:
+    """Return True for likely opaque base64 payloads."""
+    import base64
+    import binascii
+
+    stripped = value.strip()
+    if len(stripped) < 16 or len(stripped) % 4 != 0:
+        return False
+    try:
+        base64.b64decode(stripped, validate=True)
+    except (binascii.Error, ValueError):
+        return False
+    allowed = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
+    return all(char in allowed for char in stripped)
 
 
 def _emit_run_completed_audit(

@@ -1810,7 +1810,21 @@ components:
       type: object
       required: [step_name, status]
       properties:
-        step_name: { type: string, enum: [INGEST_CHECK, EXTRACT, GRADE, DEBATE] }
+        step_name: { type: string }
+        status: { type: string, enum: [PENDING, RUNNING, COMPLETED, FAILED, BLOCKED] }
+        started_at: { type: string, format: date-time, nullable: true }
+        finished_at: { type: string, format: date-time, nullable: true }
+        summary:
+          type: object
+          additionalProperties: true
+        error: { $ref: "#/components/schemas/StepError" }
+        retry_count: { type: integer, default: 0 }
+
+    RunRefStepResponse:
+      type: object
+      required: [step_name, status]
+      properties:
+        step_name: { type: string }
         status: { type: string, enum: [PENDING, RUNNING, COMPLETED, FAILED, BLOCKED] }
         started_at: { type: string, format: date-time, nullable: true }
         finished_at: { type: string, format: date-time, nullable: true }
@@ -1830,7 +1844,7 @@ components:
           description: Durable parsed document ID produced by document ingestion.
         steps:
           type: array
-          items: { $ref: "#/components/schemas/RunStepResponse" }
+          items: { $ref: "#/components/schemas/RunRefStepResponse" }
         block_reason: { type: string, nullable: true }
 
     StartRunRequest:
@@ -1855,12 +1869,16 @@ components:
 
     RunStatus:
       type: object
-      required: [run_id, status, started_at]
+      required: [run_id, status, mode, started_at]
       properties:
         run_id: { type: string, format: uuid }
         status: { type: string, enum: [QUEUED, RUNNING, SUCCEEDED, FAILED] }
+        mode: { type: string, enum: [SNAPSHOT, FULL] }
         started_at: { type: string, format: date-time }
         finished_at: { type: string, format: date-time, nullable: true }
+        source:
+          $ref: "#/components/schemas/RunSource"
+          nullable: true
         steps:
           type: array
           items: { $ref: "#/components/schemas/RunStepResponse" }

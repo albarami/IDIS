@@ -15,7 +15,7 @@ from idis.api.routes.deals import clear_deals_store
 from idis.api.routes.documents import clear_document_store
 from idis.audit.sink import InMemoryAuditSink
 from idis.idempotency.store import SqliteIdempotencyStore
-from idis.models.run_step import STEP_ORDER, StepName, StepStatus
+from idis.models.run_step import FULL_STEPS, STEP_ORDER, StepName, StepStatus
 from tests import test_ingestion_persists_documents_postgres as pg_helpers
 from tests.test_api_default_upload_ingestion_postgres import _configure_api_key
 from tests.test_docx_parser import create_test_docx
@@ -120,6 +120,18 @@ def test_slice27_selected_multidocument_full_acceptance_is_durable_and_safe(
             room_root=room_root,
         )
 
+    with app_engine.begin() as conn:
+        conn.execute(
+            text("SET LOCAL idis.tenant_id = :tenant_id"),
+            {"tenant_id": str(pg_helpers.TENANT_ID)},
+        )
+        unsupported_artifact_count = _count_unsupported_upload_side_effects(
+            conn,
+            deal_id=deal_id,
+        )
+
+    assert unsupported_artifact_count == 0
+
     run_response = client.post(
         f"/v1/deals/{deal_id}/runs",
         headers={"X-IDIS-API-Key": pg_helpers.API_KEY},
@@ -135,6 +147,7 @@ def test_slice27_selected_multidocument_full_acceptance_is_durable_and_safe(
     run_body = run_response.json()
     _assert_safe_payload(run_body, storage_base_dir=storage_base_dir, room_root=room_root)
     _assert_clean_known_blocker_if_present(run_body)
+    _assert_expected_terminal_state(run_body)
 
     run_id = str(run_body["run_id"])
     status_response = client.get(
@@ -150,8 +163,6 @@ def test_slice27_selected_multidocument_full_acceptance_is_durable_and_safe(
     }
     _assert_safe_payload(status_body, storage_base_dir=storage_base_dir, room_root=room_root)
     _assert_safe_payload(audit_sink.events, storage_base_dir=storage_base_dir, room_root=room_root)
-    _assert_clean_known_blocker_if_present(status_body)
-
     with app_engine.begin() as conn:
         conn.execute(
             text("SET LOCAL idis.tenant_id = :tenant_id"),
@@ -163,20 +174,14 @@ def test_slice27_selected_multidocument_full_acceptance_is_durable_and_safe(
     assert durable["document_ids"] == set(document_ids)
     assert durable["artifact_count"] == len(document_ids)
     assert durable["span_document_ids"] == set(document_ids)
-    assert durable["claim_count"] > 0
-    assert durable["evidence_count"] > 0
+    assert durable["claim_count"] >= len(document_ids)
+    assert durable["evidence_count"] >= len(document_ids)
+    assert durable["claim_primary_document_ids"] == set(document_ids)
+    assert durable["evidence_source_document_ids"] == set(document_ids)
     assert durable["orphan_evidence_count"] == 0
 
     _assert_persisted_steps_are_ordered_and_untruncated(persisted_steps, status_body["steps"])
-    step_by_name = {step["step_name"]: step for step in status_body["steps"]}
-    assert step_by_name[StepName.EXTRACT.value]["status"] == StepStatus.COMPLETED.value
-
-    grade_step = step_by_name.get(StepName.GRADE.value)
-    if status_body.get("block_reason") == KNOWN_SANAD_BLOCKER:
-        assert status_body["status"] == "FAILED"
-        assert grade_step is not None
-        assert grade_step["status"] in {StepStatus.FAILED.value, StepStatus.BLOCKED.value}
-        assert grade_step["error"]["code"] == KNOWN_SANAD_BLOCKER
+    _assert_slice27_terminal_contract(status_body, persisted_steps)
 
 
 def _write_supported_data_room_like_fixture(root: Path) -> list[Path]:
@@ -195,12 +200,20 @@ def _write_supported_data_room_like_fixture(root: Path) -> list[Path]:
         legal / "slice27_customer_contract.docx",
         product / "slice27_market_update.pptx",
     ]
-    files[0].write_bytes(create_test_pdf([SUPPORTED_CONTENT_TOKENS[0]]))
-    files[1].write_bytes(
-        create_test_xlsx({"Pipeline": [["Metric", "Value"], [SUPPORTED_CONTENT_TOKENS[1], 1000]]})
+    files[0].write_bytes(
+        create_test_pdf([f"{SUPPORTED_CONTENT_TOKENS[0]} states revenue was 11.1 million."])
     )
-    files[2].write_bytes(create_test_docx([SUPPORTED_CONTENT_TOKENS[2]]))
-    files[3].write_bytes(create_test_pptx([[SUPPORTED_CONTENT_TOKENS[3]]]))
+    files[1].write_bytes(
+        create_test_xlsx(
+            {"Pipeline": [["Metric", "Value"], [f"{SUPPORTED_CONTENT_TOKENS[1]} ARR", 1000]]}
+        )
+    )
+    files[2].write_bytes(
+        create_test_docx([f"{SUPPORTED_CONTENT_TOKENS[2]} confirms a signed renewal clause."])
+    )
+    files[3].write_bytes(
+        create_test_pptx([[f"{SUPPORTED_CONTENT_TOKENS[3]} shows qualified pipeline growth."]])
+    )
     return files
 
 
@@ -243,6 +256,42 @@ def _unsupported_upload_examples() -> list[dict[str, Any]]:
             "data": UNSUPPORTED_CONTENT_TOKENS[3].encode(),
         },
     ]
+
+
+def _count_unsupported_upload_side_effects(conn: Any, *, deal_id: str) -> int:
+    return int(
+        conn.execute(
+            text(
+                """
+                SELECT
+                    (
+                        SELECT COUNT(*)
+                        FROM document_artifacts
+                        WHERE deal_id = :deal_id
+                          AND source_system = 'slice27-unsupported'
+                    )
+                    +
+                    (
+                        SELECT COUNT(*)
+                        FROM documents
+                        JOIN document_artifacts USING (doc_id)
+                        WHERE documents.deal_id = :deal_id
+                          AND document_artifacts.source_system = 'slice27-unsupported'
+                    )
+                    +
+                    (
+                        SELECT COUNT(*)
+                        FROM document_spans
+                        JOIN documents USING (document_id)
+                        JOIN document_artifacts USING (doc_id)
+                        WHERE document_spans.deal_id = :deal_id
+                          AND document_artifacts.source_system = 'slice27-unsupported'
+                    )
+                """
+            ),
+            {"deal_id": deal_id},
+        ).scalar_one()
+    )
 
 
 def _load_durable_slice27_counts(
@@ -296,6 +345,28 @@ def _load_durable_slice27_counts(
         text("SELECT COUNT(*) FROM evidence_items WHERE deal_id = :deal_id"),
         {"deal_id": deal_id},
     ).scalar_one()
+    claim_primary_document_ids = conn.execute(
+        text(
+            """
+            SELECT DISTINCT spans.document_id
+            FROM claims claim
+            JOIN document_spans spans ON spans.span_id = claim.primary_span_id
+            WHERE claim.deal_id = :deal_id
+            """
+        ),
+        {"deal_id": deal_id},
+    ).scalars()
+    evidence_source_document_ids = conn.execute(
+        text(
+            """
+            SELECT DISTINCT spans.document_id
+            FROM evidence_items evidence
+            JOIN document_spans spans ON spans.span_id = evidence.source_span_id
+            WHERE evidence.deal_id = :deal_id
+            """
+        ),
+        {"deal_id": deal_id},
+    ).scalars()
     orphan_evidence_count = conn.execute(
         text(
             """
@@ -315,6 +386,12 @@ def _load_durable_slice27_counts(
         "span_document_ids": {str(document_id) for document_id in span_document_ids},
         "claim_count": claim_count,
         "evidence_count": evidence_count,
+        "claim_primary_document_ids": {
+            str(document_id) for document_id in claim_primary_document_ids
+        },
+        "evidence_source_document_ids": {
+            str(document_id) for document_id in evidence_source_document_ids
+        },
         "orphan_evidence_count": orphan_evidence_count,
     }
 
@@ -352,6 +429,64 @@ def _assert_persisted_steps_are_ordered_and_untruncated(
     assert StepName.METHODOLOGY_EXTERNAL_INTELLIGENCE_CONFLICT_CHECK_PLAN.value in persisted_names
 
 
+def _assert_slice27_terminal_contract(
+    status_body: dict[str, Any],
+    persisted_steps: list[dict[str, Any]],
+) -> None:
+    _assert_clean_known_blocker_if_present(status_body)
+    _assert_expected_terminal_state(status_body)
+    if status_body.get("block_reason") == KNOWN_SANAD_BLOCKER:
+        _assert_known_sanad_blocker_contract(status_body, persisted_steps)
+        return
+
+    _assert_successful_full_contract(status_body, persisted_steps)
+
+
+def _assert_known_sanad_blocker_contract(
+    status_body: dict[str, Any],
+    persisted_steps: list[dict[str, Any]],
+) -> None:
+    step_by_name = {step["step_name"]: step for step in status_body["steps"]}
+    persisted_by_name = {str(step["step_name"]): step for step in persisted_steps}
+    assert status_body["status"] == "FAILED"
+    assert status_body["block_reason"] == KNOWN_SANAD_BLOCKER
+    assert step_by_name[StepName.EXTRACT.value]["status"] == StepStatus.COMPLETED.value
+
+    grade_step = step_by_name[StepName.GRADE.value]
+    assert grade_step["status"] in {StepStatus.FAILED.value, StepStatus.BLOCKED.value}
+    assert grade_step["error"]["code"] == KNOWN_SANAD_BLOCKER
+    assert persisted_by_name[StepName.GRADE.value]["error_code"] == KNOWN_SANAD_BLOCKER
+
+    grade_order = STEP_ORDER[StepName.GRADE]
+    for step in status_body["steps"]:
+        if STEP_ORDER[StepName(step["step_name"])] > grade_order:
+            assert step["status"] != StepStatus.COMPLETED.value
+    for step in persisted_steps:
+        if STEP_ORDER[StepName(str(step["step_name"]))] > grade_order:
+            assert step["status"] != StepStatus.COMPLETED.value
+
+
+def _assert_successful_full_contract(
+    status_body: dict[str, Any],
+    persisted_steps: list[dict[str, Any]],
+) -> None:
+    canonical_full_step_names = [step.value for step in FULL_STEPS]
+    response_step_names = [step["step_name"] for step in status_body["steps"]]
+    persisted_step_names = [str(step["step_name"]) for step in persisted_steps]
+    assert response_step_names == canonical_full_step_names
+    assert persisted_step_names == canonical_full_step_names
+    assert status_body["status"] == "SUCCEEDED"
+    assert status_body.get("block_reason") is None
+    assert all(
+        step["status"] not in {StepStatus.FAILED.value, StepStatus.BLOCKED.value}
+        for step in status_body["steps"]
+    )
+    assert all(
+        step["status"] not in {StepStatus.FAILED.value, StepStatus.BLOCKED.value}
+        for step in persisted_steps
+    )
+
+
 def _assert_clean_known_blocker_if_present(payload: dict[str, Any]) -> None:
     if payload.get("block_reason") != KNOWN_SANAD_BLOCKER:
         return
@@ -360,6 +495,14 @@ def _assert_clean_known_blocker_if_present(payload: dict[str, Any]) -> None:
     encoded = json.dumps(payload, default=str)
     assert "traceback" not in encoded.lower()
     assert "sqlalchemy" not in encoded.lower()
+
+
+def _assert_expected_terminal_state(payload: dict[str, Any]) -> None:
+    if payload.get("block_reason") == KNOWN_SANAD_BLOCKER:
+        return
+
+    assert payload["status"] == "SUCCEEDED"
+    assert payload.get("block_reason") is None
 
 
 def _assert_safe_payload(payload: object, *, storage_base_dir: str, room_root: Path) -> None:

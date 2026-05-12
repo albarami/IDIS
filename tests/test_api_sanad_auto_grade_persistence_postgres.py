@@ -13,7 +13,7 @@ from idis.api.routes.deals import clear_deals_store
 from idis.api.routes.documents import clear_document_store
 from idis.audit.sink import InMemoryAuditSink
 from idis.idempotency.store import SqliteIdempotencyStore
-from idis.models.run_step import StepName, StepStatus
+from idis.models.run_step import FULL_STEPS, STEP_ORDER, StepName, StepStatus
 from tests import test_ingestion_persists_documents_postgres as pg_helpers
 from tests.test_api_default_upload_ingestion_postgres import _configure_api_key
 from tests.test_api_selected_multidocument_full_acceptance_postgres import (
@@ -115,6 +115,7 @@ def test_slice28_selected_full_run_persists_sanad_grades_without_known_blocker(
     assert durable["sanad_primary_evidence_count"] == durable["claim_count"]
     assert durable["evidence_source_document_ids"] == set(document_ids)
     assert KNOWN_SANAD_BLOCKER not in durable["step_error_codes"]
+    _assert_terminal_state_contract(status_body, durable["persisted_steps"])
 
 
 def _assert_no_known_sanad_blocker(payload: dict[str, Any]) -> None:
@@ -123,6 +124,74 @@ def _assert_no_known_sanad_blocker(payload: dict[str, Any]) -> None:
         error = step.get("error")
         if isinstance(error, dict):
             assert error.get("code") != KNOWN_SANAD_BLOCKER
+
+
+def _assert_terminal_state_contract(
+    status_body: dict[str, Any],
+    persisted_steps: list[dict[str, Any]],
+) -> None:
+    if status_body["status"] == "SUCCEEDED":
+        _assert_clean_full_success(status_body, persisted_steps)
+        return
+
+    _assert_specific_downstream_blocker(status_body, persisted_steps)
+
+
+def _assert_clean_full_success(
+    status_body: dict[str, Any],
+    persisted_steps: list[dict[str, Any]],
+) -> None:
+    canonical_full_step_names = [step.value for step in FULL_STEPS]
+    response_step_names = [step["step_name"] for step in status_body["steps"]]
+    persisted_step_names = [str(step["step_name"]) for step in persisted_steps]
+
+    assert status_body["block_reason"] is None
+    assert response_step_names == canonical_full_step_names
+    assert persisted_step_names == canonical_full_step_names
+    assert all(
+        step["status"] not in {StepStatus.FAILED.value, StepStatus.BLOCKED.value}
+        for step in status_body["steps"]
+    )
+    assert all(
+        step["status"] not in {StepStatus.FAILED.value, StepStatus.BLOCKED.value}
+        and step["error_code"] is None
+        for step in persisted_steps
+    )
+
+
+def _assert_specific_downstream_blocker(
+    status_body: dict[str, Any],
+    persisted_steps: list[dict[str, Any]],
+) -> None:
+    assert status_body["status"] == "FAILED"
+    block_reason = status_body.get("block_reason")
+    assert isinstance(block_reason, str)
+    assert block_reason
+    assert block_reason != KNOWN_SANAD_BLOCKER
+
+    failed_or_blocked_steps = [
+        step
+        for step in persisted_steps
+        if step["status"] in {StepStatus.FAILED.value, StepStatus.BLOCKED.value}
+    ]
+    assert failed_or_blocked_steps
+    assert any(step["error_code"] == block_reason for step in failed_or_blocked_steps)
+
+    grade_order = STEP_ORDER[StepName.GRADE]
+    assert all(
+        STEP_ORDER[StepName(str(step["step_name"]))] > grade_order
+        for step in failed_or_blocked_steps
+    )
+
+    response_failed_or_blocked = [
+        step
+        for step in status_body["steps"]
+        if step["status"] in {StepStatus.FAILED.value, StepStatus.BLOCKED.value}
+    ]
+    assert any(
+        isinstance(step.get("error"), dict) and step["error"].get("code") == block_reason
+        for step in response_failed_or_blocked
+    )
 
 
 def _load_durable_sanad_grade_state(
@@ -205,6 +274,17 @@ def _load_durable_sanad_grade_state(
         ),
         {"run_id": run_id},
     ).scalars()
+    persisted_steps = conn.execute(
+        text(
+            """
+            SELECT step_name, step_order, status, error_code
+            FROM run_steps
+            WHERE run_id = :run_id
+            ORDER BY step_order
+            """
+        ),
+        {"run_id": run_id},
+    ).mappings()
 
     return {
         "claim_count": claim_count,
@@ -217,4 +297,5 @@ def _load_durable_sanad_grade_state(
             str(document_id) for document_id in evidence_source_document_ids
         },
         "step_error_codes": {str(error_code) for error_code in step_error_codes},
+        "persisted_steps": [dict(row) for row in persisted_steps],
     }

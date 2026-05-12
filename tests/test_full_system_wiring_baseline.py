@@ -399,21 +399,27 @@ def test_full_system_inventory_detects_slice_22_api_upload_to_selected_run_smoke
     assert any("folder/data-room upload remains deferred" in gap for gap in smoke.gaps)
 
 
-def test_full_system_inventory_detects_slice_24_default_upload_ingestion_wiring() -> None:
-    """Slice 24 must report default upload ingestion wiring and the next FULL blocker."""
+def test_full_system_inventory_detects_slice_24_to_26_upload_full_run_wiring() -> None:
+    """Slices 24-26 must report upload, FULL run, and durable evidence wiring."""
     inventory = collect_wiring_inventory(REPO_ROOT)
     wiring = inventory["default_upload_ingestion_wiring"]
 
     assert wiring.status == "PARTIAL"
     assert any("build_default_ingestion_service" in item for item in wiring.evidence)
+    assert any("durable claims and evidence_items" in item for item in wiring.evidence)
     assert wiring.metadata["uses_compliance_enforced_store"] is True
     assert wiring.metadata["new_storage_backend_added"] is False
     assert wiring.metadata["postgres_ci_test_added"] is True
     assert wiring.metadata["run_step_name_width_migrated"] is True
     assert wiring.metadata["full_run_step_name_postgres_test_added"] is True
     assert wiring.metadata["full_run_step_name_postgres_ci_test_added"] is True
+    assert wiring.metadata["evidence_repo_wired_to_postgres"] is True
+    assert wiring.metadata["full_run_durable_evidence_postgres_test_added"] is True
+    assert wiring.metadata["full_run_durable_evidence_postgres_ci_test_added"] is True
+    assert wiring.metadata["next_blocker"] == "SANAD_AUTO_GRADE_PERSISTENCE_BLOCKED"
     assert wiring.metadata["layer2_execution_performed"] is False
-    assert any("durable evidence persistence remains deferred" in gap for gap in wiring.gaps)
+    assert not any("durable evidence persistence remains deferred" in gap for gap in wiring.gaps)
+    assert any("defects schema" in gap for gap in wiring.gaps)
     assert not any("step_name varchar(50)" in gap for gap in wiring.gaps)
 
 

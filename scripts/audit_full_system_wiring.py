@@ -489,6 +489,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/api/routes/runs.py",
         "src/idis/api/main.py",
         "src/idis/api/middleware/audit.py",
+        "src/idis/persistence/repositories/evidence.py",
         "src/idis/api/policy.py",
         "src/idis/services/ingestion/defaults.py",
         "src/idis/models/run_source.py",
@@ -601,6 +602,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "tests/test_api_upload_to_run_smoke_postgres.py",
         "tests/test_api_default_upload_ingestion_postgres.py",
         "tests/test_api_full_run_step_name_postgres.py",
+        "tests/test_api_full_run_durable_evidence_postgres.py",
         "tests/test_run_document_loader.py",
         "pyproject.toml",
     ]
@@ -2727,10 +2729,16 @@ def _api_upload_to_selected_run_smoke(files: dict[str, str]) -> WiringItem:
 
 
 def _default_upload_ingestion_wiring(files: dict[str, str]) -> WiringItem:
+    runs_text = files.get("src/idis/api/routes/runs.py", "")
     main_text = files.get("src/idis/api/main.py", "")
     defaults_text = files.get("src/idis/services/ingestion/defaults.py", "")
+    evidence_repo_text = files.get("src/idis/persistence/repositories/evidence.py", "")
     postgres_test_text = files.get("tests/test_api_default_upload_ingestion_postgres.py", "")
     full_run_step_name_test_text = files.get("tests/test_api_full_run_step_name_postgres.py", "")
+    full_run_durable_evidence_test_text = files.get(
+        "tests/test_api_full_run_durable_evidence_postgres.py",
+        "",
+    )
     step_name_width_migration_text = files.get(
         "src/idis/persistence/migrations/versions/0014_run_step_name_width.py",
         "",
@@ -2755,6 +2763,19 @@ def _default_upload_ingestion_wiring(files: dict[str, str]) -> WiringItem:
         and '"document_ids": [document_id]' in full_run_step_name_test_text
     )
     full_run_step_name_ci_added = "tests/test_api_full_run_step_name_postgres.py" in ci_text
+    evidence_repo_wired = (
+        "get_evidence_repository(db_conn, tenant_id)" in runs_text
+        and "evidence_repo=evidence_repo" in runs_text
+        and "PostgresEvidenceRepository" in evidence_repo_text
+    )
+    durable_evidence_test_added = (
+        "test_selected_full_run_persists_durable_claims_and_evidence_for_uploaded_room"
+        in full_run_durable_evidence_test_text
+        and "documents/upload" in full_run_durable_evidence_test_text
+        and '"mode": "FULL"' in full_run_durable_evidence_test_text
+        and "evidence_items" in full_run_durable_evidence_test_text
+    )
+    durable_evidence_ci_added = "tests/test_api_full_run_durable_evidence_postgres.py" in ci_text
     integrated = (
         "build_default_ingestion_service" in main_text
         and uses_compliance_store
@@ -2783,17 +2804,26 @@ def _default_upload_ingestion_wiring(files: dict[str, str]) -> WiringItem:
                 "for METHODOLOGY_EXTERNAL_INTELLIGENCE_CONFLICT_CHECK_PLAN."
             ),
             "Migration widens run_steps.step_name to VARCHAR(100) with guarded downgrade.",
+            (
+                "Slice 26 Postgres test proves selected FULL runs over uploaded "
+                "PDF/XLSX/DOCX/PPTX files persist durable claims and evidence_items."
+            ),
+            "`_run_snapshot_extraction` passes `get_evidence_repository(db_conn, tenant_id)` "
+            "into `ExtractionPipeline`.",
         ],
         gaps=[
-            "durable evidence persistence remains deferred.",
             "claim/evidence retrieval expansion remains deferred.",
+            (
+                "Next proven blocker: Sanad auto-grade reaches a downstream defects schema "
+                "query mismatch and is now fail-closed as SANAD_AUTO_GRADE_PERSISTENCE_BLOCKED."
+            ),
             (
                 "Layer 2, enrichment, deliverables, folder upload, OCR/media/HTML/TXT, "
                 "and RAG/Neo4j remain deferred."
             ),
             "No new S3/Supabase storage backend is added.",
         ],
-        phase_2_action="Phase 3.0 Slices 24-25",
+        phase_2_action="Phase 3.0 Slices 24-26",
         metadata={
             "uses_compliance_enforced_store": uses_compliance_store,
             "new_storage_backend_added": False,
@@ -2801,6 +2831,10 @@ def _default_upload_ingestion_wiring(files: dict[str, str]) -> WiringItem:
             "run_step_name_width_migrated": step_name_width_migrated,
             "full_run_step_name_postgres_test_added": full_run_step_name_test_added,
             "full_run_step_name_postgres_ci_test_added": full_run_step_name_ci_added,
+            "evidence_repo_wired_to_postgres": evidence_repo_wired,
+            "full_run_durable_evidence_postgres_test_added": durable_evidence_test_added,
+            "full_run_durable_evidence_postgres_ci_test_added": durable_evidence_ci_added,
+            "next_blocker": "SANAD_AUTO_GRADE_PERSISTENCE_BLOCKED",
             "layer2_execution_performed": False,
         },
     )

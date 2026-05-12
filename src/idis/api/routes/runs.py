@@ -1316,6 +1316,9 @@ def _run_snapshot_auto_grade(
     Returns:
         Dict with grading summary stats.
     """
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from idis.services.runs.orchestrator import RunStepBlockedError
     from idis.services.sanad.auto_grade import auto_grade_claims_for_run
 
     if not created_claim_ids:
@@ -1326,14 +1329,39 @@ def _run_snapshot_auto_grade(
             "all_failed": False,
         }
 
-    grade_result = auto_grade_claims_for_run(
-        run_id=run_id,
-        tenant_id=tenant_id,
-        deal_id=deal_id,
-        created_claim_ids=created_claim_ids,
-        audit_sink=audit_sink,
-        db_conn=db_conn,
-    )
+    try:
+        if db_conn is not None:
+            with db_conn.begin_nested():
+                grade_result = auto_grade_claims_for_run(
+                    run_id=run_id,
+                    tenant_id=tenant_id,
+                    deal_id=deal_id,
+                    created_claim_ids=created_claim_ids,
+                    audit_sink=audit_sink,
+                    db_conn=db_conn,
+                )
+        else:
+            grade_result = auto_grade_claims_for_run(
+                run_id=run_id,
+                tenant_id=tenant_id,
+                deal_id=deal_id,
+                created_claim_ids=created_claim_ids,
+                audit_sink=audit_sink,
+                db_conn=db_conn,
+            )
+    except SQLAlchemyError as exc:
+        logger.warning("Sanad auto-grade blocked by persistence error", exc_info=True)
+        raise RunStepBlockedError(
+            "SANAD_AUTO_GRADE_PERSISTENCE_BLOCKED",
+            "Sanad auto-grade is blocked by downstream persistence schema",
+            result_summary={
+                "graded_count": 0,
+                "failed_count": len(created_claim_ids),
+                "total_defects": 0,
+                "all_failed": True,
+                "blocker": "defects_schema_query",
+            },
+        ) from exc
 
     return {
         "graded_count": grade_result.graded_count,
@@ -1364,6 +1392,7 @@ def _run_snapshot_extraction(
         Dict with pipeline result status and stats.
     """
     from idis.audit.sink import InMemoryAuditSink
+    from idis.persistence.repositories.evidence import get_evidence_repository
     from idis.services.claims.service import ClaimService
     from idis.services.extraction.chunking.service import ChunkingService
     from idis.services.extraction.confidence.scorer import ConfidenceScorer
@@ -1390,6 +1419,7 @@ def _run_snapshot_extraction(
         db_conn=db_conn,
         audit_sink=audit_sink,
     )
+    evidence_repo = get_evidence_repository(db_conn, tenant_id)
 
     pipeline = ExtractionPipeline(
         chunking_service=ChunkingService(),
@@ -1397,6 +1427,7 @@ def _run_snapshot_extraction(
         deduplicator=Deduplicator(),
         conflict_detector=ConflictDetector(),
         claim_service=claim_service,
+        evidence_repo=evidence_repo,
         audit_sink=audit_sink,
     )
 

@@ -28,7 +28,7 @@ from idis.persistence.repositories.claims import (
 from idis.persistence.repositories.evidence import EvidenceRepo, get_evidence_repository
 from idis.services.defects.service import CreateDefectInput, DefectService
 from idis.services.sanad.chain_builder import ChainBuildError, build_sanad_chain
-from idis.services.sanad.grader import grade_sanad_v2
+from idis.services.sanad.grader import SanadGradeResult, grade_sanad_v2
 from idis.services.sanad.service import CreateSanadInput, SanadService
 
 if TYPE_CHECKING:
@@ -287,6 +287,7 @@ def _grade_single_claim(
         transmission_chain=chain_data["transmission_chain"],
         extraction_confidence=extraction_confidence,
         dhabt_score=dhabt_score,
+        computed=_computed_from_grade_result(grade_result),
     )
     sanad_data = sanad_service.create(sanad_input)
     sanad_id = sanad_data["sanad_id"]
@@ -419,6 +420,7 @@ def _grade_single_claim_prebuilt(
         transmission_chain=[],
         extraction_confidence=sanad_data.get("extraction_confidence", 0.9),
         dhabt_score=sanad_data.get("dhabt_score", 0.9),
+        computed=_computed_from_grade_result(grade_result, final_grade=final_grade),
     )
     persisted = sanad_service.create(sanad_input)
     sanad_id = persisted["sanad_id"]
@@ -488,6 +490,22 @@ def _update_claim_grade(
         sanad_id: Persisted sanad UUID.
     """
     claims_repo.update_grade(claim_id, claim_grade=grade, sanad_id=sanad_id)
+
+
+def _computed_from_grade_result(
+    grade_result: SanadGradeResult,
+    *,
+    final_grade: str | None = None,
+) -> dict[str, Any]:
+    """Convert v2 grader output into the durable Sanad computed payload."""
+    durable_grade = final_grade or grade_result.grade
+    return {
+        "grade": durable_grade,
+        "grade_rationale": grade_result.explanation.summary,
+        "corroboration_level": grade_result.tawatur.status.value,
+        "independent_chain_count": grade_result.tawatur.independent_count,
+        "grader": grade_result.to_dict(),
+    }
 
 
 def _claim_gate_scores(claim: dict[str, Any] | None) -> tuple[float, float]:

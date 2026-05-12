@@ -497,6 +497,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/persistence/repositories/runs.py",
         "src/idis/persistence/migrations/versions/0013_runs_source_contract.py",
         "src/idis/persistence/migrations/versions/0014_run_step_name_width.py",
+        "src/idis/persistence/migrations/versions/0015_defects_workflow_columns.py",
         "src/idis/services/runs/execution.py",
         "src/idis/services/runs/orchestrator.py",
         "src/idis/services/runs/steps.py",
@@ -603,6 +604,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "tests/test_api_default_upload_ingestion_postgres.py",
         "tests/test_api_full_run_step_name_postgres.py",
         "tests/test_api_full_run_durable_evidence_postgres.py",
+        "tests/test_api_sanad_auto_grade_persistence_postgres.py",
         "tests/test_run_document_loader.py",
         "pyproject.toml",
     ]
@@ -2739,8 +2741,16 @@ def _default_upload_ingestion_wiring(files: dict[str, str]) -> WiringItem:
         "tests/test_api_full_run_durable_evidence_postgres.py",
         "",
     )
+    sanad_auto_grade_test_text = files.get(
+        "tests/test_api_sanad_auto_grade_persistence_postgres.py",
+        "",
+    )
     step_name_width_migration_text = files.get(
         "src/idis/persistence/migrations/versions/0014_run_step_name_width.py",
+        "",
+    )
+    defects_workflow_migration_text = files.get(
+        "src/idis/persistence/migrations/versions/0015_defects_workflow_columns.py",
         "",
     )
     ci_text = files.get(".github/workflows/ci.yml", "")
@@ -2776,6 +2786,24 @@ def _default_upload_ingestion_wiring(files: dict[str, str]) -> WiringItem:
         and "evidence_items" in full_run_durable_evidence_test_text
     )
     durable_evidence_ci_added = "tests/test_api_full_run_durable_evidence_postgres.py" in ci_text
+    sanad_auto_grade_persistence_test_added = (
+        "test_slice28_selected_full_run_persists_sanad_grades_without_known_blocker"
+        in sanad_auto_grade_test_text
+        and "KNOWN_SANAD_BLOCKER" in sanad_auto_grade_test_text
+        and "sanads" in sanad_auto_grade_test_text
+        and "computed->>'grade'" in sanad_auto_grade_test_text
+    )
+    sanad_auto_grade_persistence_ci_added = (
+        "tests/test_api_sanad_auto_grade_persistence_postgres.py" in ci_text
+    )
+    defects_workflow_columns_migrated = (
+        "ALTER TABLE defects ADD COLUMN IF NOT EXISTS deal_id UUID"
+        in defects_workflow_migration_text
+        and "ALTER TABLE defects ADD COLUMN IF NOT EXISTS status TEXT"
+        in defects_workflow_migration_text
+        and "ALTER TABLE defects ADD COLUMN IF NOT EXISTS cured_at TIMESTAMPTZ"
+        in defects_workflow_migration_text
+    )
     integrated = (
         "build_default_ingestion_service" in main_text
         and uses_compliance_store
@@ -2808,14 +2836,20 @@ def _default_upload_ingestion_wiring(files: dict[str, str]) -> WiringItem:
                 "Slice 26 Postgres test proves selected FULL runs over uploaded "
                 "PDF/XLSX/DOCX/PPTX files persist durable claims and evidence_items."
             ),
+            (
+                "Slice 28 Postgres test proves selected FULL runs execute GRADE "
+                "without SANAD_AUTO_GRADE_PERSISTENCE_BLOCKED and persist linked "
+                "claim Sanad grades."
+            ),
+            "Migration aligns defects workflow columns with the Postgres repository contract.",
             "`_run_snapshot_extraction` passes `get_evidence_repository(db_conn, tenant_id)` "
             "into `ExtractionPipeline`.",
         ],
         gaps=[
             "claim/evidence retrieval expansion remains deferred.",
             (
-                "Next proven blocker: Sanad auto-grade reaches a downstream defects schema "
-                "query mismatch and is now fail-closed as SANAD_AUTO_GRADE_PERSISTENCE_BLOCKED."
+                "Sanad auto-grade Postgres persistence is covered by Slice 28; "
+                "no replacement runtime blocker has been proven by this audit."
             ),
             (
                 "Layer 2, enrichment, deliverables, folder upload, OCR/media/HTML/TXT, "
@@ -2834,7 +2868,10 @@ def _default_upload_ingestion_wiring(files: dict[str, str]) -> WiringItem:
             "evidence_repo_wired_to_postgres": evidence_repo_wired,
             "full_run_durable_evidence_postgres_test_added": durable_evidence_test_added,
             "full_run_durable_evidence_postgres_ci_test_added": durable_evidence_ci_added,
-            "next_blocker": "SANAD_AUTO_GRADE_PERSISTENCE_BLOCKED",
+            "sanad_auto_grade_persistence_test_added": sanad_auto_grade_persistence_test_added,
+            "sanad_auto_grade_persistence_ci_test_added": sanad_auto_grade_persistence_ci_added,
+            "defects_workflow_columns_migrated": defects_workflow_columns_migrated,
+            "next_blocker": None,
             "layer2_execution_performed": False,
         },
     )

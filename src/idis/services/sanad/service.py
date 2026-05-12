@@ -94,6 +94,10 @@ class CreateSanadInput(BaseModel):
         default=0.9, ge=0.0, le=1.0, description="Extraction confidence"
     )
     dhabt_score: float = Field(default=0.9, ge=0.0, le=1.0, description="Dhabt score")
+    computed: dict[str, Any] | None = Field(
+        default=None,
+        description="Precomputed grade output to persist as the Sanad grade of record",
+    )
     request_id: str | None = Field(default=None, description="Request correlation ID")
 
 
@@ -297,6 +301,8 @@ class SanadService:
             defects=defects,
             corroborating_count=len(input_data.corroborating_evidence_ids),
         )
+        if input_data.computed is not None:
+            computed.update(input_data.computed)
         computed["extraction_confidence"] = input_data.extraction_confidence
         computed["dhabt_score"] = input_data.dhabt_score
 

@@ -34,6 +34,7 @@ from idis.services.documents.parser_capabilities import capability_for_document
 DEFAULT_REAL_EXAMPLE_ROOT = Path("real_example")
 DEFAULT_LEDGER_PATH = Path(".local_reports") / "real_example_gate_ledger.json"
 DEFAULT_PER_FILE_TIMEOUT_SECONDS = 30.0
+HASH_CHUNK_SIZE_BYTES = 1024 * 1024
 SUPPORTED_PARSE_EXTENSIONS = frozenset({".pdf", ".xlsx", ".docx", ".pptx"})
 SUPPORTED_PARSER_NAMES = frozenset({"pdf", "xlsx", "docx", "pptx"})
 
@@ -296,13 +297,13 @@ def _inventory_files(root: Path) -> list[_InventoryFile]:
     for path in sorted((item for item in root.rglob("*") if item.is_file()), key=_sort_key(root)):
         extension = path.suffix.lower() or ".unknown"
         try:
-            data = path.read_bytes()
+            sha256, size_bytes = _hash_file_streaming(path)
             records.append(
                 _InventoryFile(
                     path=path,
                     extension=extension,
-                    size_bytes=len(data),
-                    sha256=hashlib.sha256(data).hexdigest(),
+                    size_bytes=size_bytes,
+                    sha256=sha256,
                 )
             )
         except OSError:
@@ -316,6 +317,16 @@ def _inventory_files(root: Path) -> list[_InventoryFile]:
                 )
             )
     return records
+
+
+def _hash_file_streaming(path: Path) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    size_bytes = 0
+    with path.open("rb") as file:
+        while chunk := file.read(HASH_CHUNK_SIZE_BYTES):
+            size_bytes += len(chunk)
+            digest.update(chunk)
+    return digest.hexdigest(), size_bytes
 
 
 def _sort_key(root: Path) -> Callable[[Path], str]:

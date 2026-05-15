@@ -41,6 +41,33 @@ def test_inventory_only_is_deterministic_and_safe(tmp_path: Path) -> None:
     _assert_ledger_is_private(ledger_path)
 
 
+def test_inventory_hashing_streams_without_path_read_bytes(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    root = tmp_path / "real_example"
+    root.mkdir()
+    confidential = root / "confidential large model.xlsx"
+    confidential.write_bytes(b"streamed bytes only")
+
+    def fail_read_bytes(_: Path) -> bytes:
+        raise AssertionError("inventory must not load whole files with Path.read_bytes")
+
+    monkeypatch.setattr(Path, "read_bytes", fail_read_bytes)
+
+    summary = run_real_example_gate(
+        root=root,
+        ledger_path=tmp_path / "ledger.json",
+        mode=GateMode.INVENTORY_ONLY,
+        emit_progress=False,
+    )
+
+    assert summary["total_files"] == 1
+    assert summary["counts_by_extension"] == {".xlsx": 1}
+    assert summary["counts_by_status"] == {"inventoried": 1}
+    _assert_safe_json(summary, forbidden=[str(root), "confidential"])
+
+
 def test_parse_supported_attempts_only_supported_extensions_and_records_reasons(
     tmp_path: Path,
     capsys: Any,

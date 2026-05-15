@@ -11,6 +11,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty
+from typing import Any, cast
 
 from idis.parsers.registry import parse_bytes
 from idis.services.documents.parser_capabilities import triage_document
@@ -192,8 +193,11 @@ def _current_windows_memory_mb() -> float:
 
         counters = ProcessMemoryCounters()
         counters.cb = ctypes.sizeof(ProcessMemoryCounters)
-        handle = ctypes.windll.kernel32.GetCurrentProcess()
-        ctypes.windll.psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb)
+        windll = cast(Any, getattr(ctypes, "windll", None))
+        if windll is None:
+            return 0.0
+        handle = windll.kernel32.GetCurrentProcess()
+        windll.psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb)
         return float(counters.WorkingSetSize) / (1024.0 * 1024.0)
     except (AttributeError, OSError, ValueError):
         return 0.0

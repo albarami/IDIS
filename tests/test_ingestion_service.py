@@ -133,6 +133,30 @@ startxref
     return pdf_content
 
 
+def _create_image_only_pdf() -> bytes:
+    """Create a valid PDF with no extractable text."""
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.pdfgen import canvas
+    except ImportError:
+        pytest.skip("reportlab not installed")
+
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=letter)
+    c.rect(72, 650, 144, 72, stroke=1, fill=0)
+    c.save()
+    return buffer.getvalue()
+
+
+def _create_empty_docx() -> bytes:
+    """Create a valid DOCX with no extractable text."""
+    from docx import Document
+
+    buffer = io.BytesIO()
+    Document().save(buffer)
+    return buffer.getvalue()
+
+
 def _create_minimal_xlsx() -> bytes:
     """Create a minimal valid XLSX file for testing."""
     import zipfile
@@ -482,6 +506,65 @@ class TestFailClosedEmptyBytes:
 
         error_str = str(result.errors[0].to_dict())
         assert str(tenant_b) not in error_str
+
+
+class TestScannedPdfReadiness:
+    """Tests for OCR-required PDF classification during ingestion."""
+
+    def test_image_only_pdf_persists_ocr_required_metadata(
+        self,
+        ingestion_service: Any,
+        ingestion_context: Any,
+        deal_id: UUID,
+        tenant_a: UUID,
+    ) -> None:
+        """Image-only PDFs persist deterministic OCR-required parser metadata."""
+        from idis.models.document import ParseStatus
+        from idis.parsers.base import ParseErrorCode
+
+        result = ingestion_service.ingest_bytes(
+            ctx=ingestion_context,
+            deal_id=deal_id,
+            filename="scanned.pdf",
+            media_type="application/pdf",
+            data=_create_image_only_pdf(),
+        )
+
+        document = ingestion_service.get_document(tenant_a, result.document_id)
+
+        assert result.success is False
+        assert result.parse_status == ParseStatus.FAILED
+        assert document is not None
+        assert document.metadata["parse_error_codes"] == [ParseErrorCode.NO_TEXT_EXTRACTED.value]
+        assert document.metadata["parser_support_status"] == "scanned_or_image_only"
+        assert document.metadata["parser_triage_status"] == "ocr_required"
+        assert document.metadata["parser_requires_ocr"] is True
+        assert document.metadata["parser_reason_codes"] == ["ocr_required"]
+
+    def test_empty_docx_does_not_persist_ocr_required_metadata(
+        self,
+        ingestion_service: Any,
+        ingestion_context: Any,
+        deal_id: UUID,
+        tenant_a: UUID,
+    ) -> None:
+        """Non-PDF no-text failures remain non-OCR parser failures."""
+        result = ingestion_service.ingest_bytes(
+            ctx=ingestion_context,
+            deal_id=deal_id,
+            filename="empty.docx",
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            data=_create_empty_docx(),
+        )
+
+        document = ingestion_service.get_document(tenant_a, result.document_id)
+
+        assert result.success is False
+        assert document is not None
+        assert document.metadata["parser_support_status"] == "unknown"
+        assert document.metadata["parser_triage_status"] == "blocked"
+        assert document.metadata["parser_requires_ocr"] is False
+        assert document.metadata["parser_reason_codes"] == ["no_text_extracted"]
 
 
 class TestFailClosedCorruptedOfficeZip:

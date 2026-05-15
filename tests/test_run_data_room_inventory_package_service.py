@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
 import pytest
@@ -116,6 +117,30 @@ def test_no_root_is_explicit_noop_for_existing_document_flow() -> None:
     ]
 
 
+def test_no_text_pdf_is_ocr_required_but_empty_docx_is_not(tmp_path: Path) -> None:
+    (tmp_path / "Scans").mkdir()
+    (tmp_path / "Scans" / "scanned.pdf").write_bytes(_create_image_only_pdf())
+    (tmp_path / "Office").mkdir()
+    (tmp_path / "Office" / "empty.docx").write_bytes(_create_empty_docx())
+
+    _result, packages, corpus = InMemoryRunDataRoomInventoryPackageService().run(
+        tenant_id=TENANT_ID,
+        deal_id=DEAL_ID,
+        run_id=RUN_ID,
+        root_path=tmp_path,
+    )
+
+    by_path = {file.relative_path: file for file in packages[0].files}
+
+    assert corpus == []
+    assert by_path["Scans/scanned.pdf"].file_status == DataRoomInventoryFileStatus.DEFERRED
+    assert by_path["Scans/scanned.pdf"].reason_codes == [DataRoomInventoryReason.OCR_REQUIRED.value]
+    assert by_path["Office/empty.docx"].file_status == DataRoomInventoryFileStatus.BLOCKED
+    assert by_path["Office/empty.docx"].reason_codes == [
+        DataRoomInventoryReason.PARSER_FAILED.value
+    ]
+
+
 def test_real_example_fixture_inventory_has_mixed_formats_and_nested_paths() -> None:
     fixture_root = _real_example_root()
     if fixture_root is None:
@@ -155,6 +180,28 @@ def _write_fixture_tree(root: Path) -> None:
     (root / "Notes" / "overview.html").write_text("<html>secret</html>", encoding="utf-8")
     (root / "Broken").mkdir()
     (root / "Broken" / "corrupt.pdf").write_bytes(b"%PDF-corrupt")
+
+
+def _create_image_only_pdf() -> bytes:
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.pdfgen import canvas
+    except ImportError:
+        pytest.skip("reportlab not installed")
+
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=letter)
+    c.rect(72, 650, 144, 72, stroke=1, fill=0)
+    c.save()
+    return buffer.getvalue()
+
+
+def _create_empty_docx() -> bytes:
+    from docx import Document
+
+    buffer = io.BytesIO()
+    Document().save(buffer)
+    return buffer.getvalue()
 
 
 def _real_example_root() -> Path | None:

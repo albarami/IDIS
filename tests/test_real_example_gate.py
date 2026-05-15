@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import time
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from idis.evaluation.real_example_gate import GateMode, ParseAttempt, run_real_example_gate
 
@@ -120,6 +123,98 @@ def test_parse_supported_attempts_only_supported_extensions_and_records_reasons(
     assert "confidential parser diagnostic" not in captured.out
     assert "confidential parser diagnostic" not in captured.err
     _assert_safe_json(summary, forbidden=[str(root), "confidential", "management", "scanned"])
+
+
+def test_parse_supported_reports_no_text_pdf_as_ocr_required_without_leaks(
+    tmp_path: Path,
+    capsys: Any,
+) -> None:
+    root = tmp_path / "real_example"
+    confidential_dir = root / "Confidential Scanned Data Room"
+    confidential_dir.mkdir(parents=True)
+    (confidential_dir / "confidential scanned appendix.pdf").write_bytes(_create_image_only_pdf())
+
+    summary = run_real_example_gate(
+        root=root,
+        ledger_path=tmp_path / "ledger.json",
+        mode=GateMode.PARSE_SUPPORTED,
+        safe_summary=True,
+        emit_progress=False,
+    )
+
+    assert summary["counts_by_status"] == {"deferred": 1}
+    assert summary["counts_by_parser_outcome"] == {"ocr_required": 1}
+    assert summary["counts_by_reason_code"] == {"ocr_required": 1}
+    captured = capsys.readouterr()
+    assert "confidential scanned appendix" not in captured.out
+    assert "confidential scanned appendix" not in captured.err
+    _assert_safe_json(summary, forbidden=[str(root), "Confidential", "confidential", "scanned"])
+
+
+def test_parse_supported_keeps_no_text_docx_as_non_ocr_failure(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "real_example"
+    confidential_dir = root / "Confidential Empty Office Files"
+    confidential_dir.mkdir(parents=True)
+    (confidential_dir / "confidential empty notes.docx").write_bytes(_create_empty_docx())
+
+    summary = run_real_example_gate(
+        root=root,
+        ledger_path=tmp_path / "ledger.json",
+        mode=GateMode.PARSE_SUPPORTED,
+        safe_summary=True,
+        emit_progress=False,
+    )
+
+    assert summary["counts_by_status"] == {"failed": 1}
+    assert summary["counts_by_parser_outcome"] == {"error": 1}
+    assert summary["counts_by_reason_code"] == {"no_text_extracted": 1}
+    _assert_safe_json(summary, forbidden=[str(root), "Confidential", "confidential", "empty"])
+
+
+def test_parse_supported_retries_stale_non_pdf_ocr_required_ledger_entry(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "real_example"
+    root.mkdir()
+    docx_bytes = _create_empty_docx()
+    (root / "confidential empty notes.docx").write_bytes(docx_bytes)
+    sha256 = hashlib.sha256(docx_bytes).hexdigest()
+    ledger_path = tmp_path / "ledger.json"
+    ledger_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "entries": {
+                    sha256: {
+                        "by_extension": {
+                            ".docx": {
+                                "extension": ".docx",
+                                "size_bytes": len(docx_bytes),
+                                "status": "deferred",
+                                "parser_outcome": "ocr_required",
+                                "reason_code": "ocr_required",
+                            }
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = run_real_example_gate(
+        root=root,
+        ledger_path=ledger_path,
+        mode=GateMode.PARSE_SUPPORTED,
+        safe_summary=True,
+        emit_progress=False,
+    )
+
+    assert summary["counts_by_parser_outcome"] == {"error": 1}
+    assert summary["counts_by_reason_code"] == {"no_text_extracted": 1}
+    _assert_ledger_is_private(ledger_path)
 
 
 def test_retryable_timeout_does_not_permanently_skip_hash(
@@ -385,3 +480,25 @@ def _assert_ledger_is_private(ledger_path: Path) -> None:
     assert '"root_path"' not in encoded
     assert '"local_path"' not in encoded
     assert '"relative_path"' not in encoded
+
+
+def _create_image_only_pdf() -> bytes:
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.pdfgen import canvas
+    except ImportError:
+        pytest.skip("reportlab not installed")
+
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=letter)
+    c.rect(72, 650, 144, 72, stroke=1, fill=0)
+    c.save()
+    return buffer.getvalue()
+
+
+def _create_empty_docx() -> bytes:
+    from docx import Document
+
+    buffer = io.BytesIO()
+    Document().save(buffer)
+    return buffer.getvalue()

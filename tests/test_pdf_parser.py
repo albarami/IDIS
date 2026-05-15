@@ -73,6 +73,18 @@ def create_encrypted_test_pdf(
     return buffer.getvalue()
 
 
+def create_image_only_test_pdf() -> bytes:
+    """Create a valid PDF page with vector content but no extractable text."""
+    if not REPORTLAB_AVAILABLE:
+        pytest.skip("reportlab not installed")
+
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=letter)
+    c.rect(72, 650, 144, 72, stroke=1, fill=0)
+    c.save()
+    return buffer.getvalue()
+
+
 class TestPDFParserSuccess:
     """Test successful PDF parsing scenarios."""
 
@@ -244,6 +256,16 @@ class TestPDFParserFailClosed:
 
         assert result.success is False
         assert [error.code for error in result.errors] == [ParseErrorCode.ENCRYPTED_PDF]
+
+    def test_image_only_pdf_reports_no_text_extracted(self) -> None:
+        """No-text PDFs are detected deterministically for OCR triage."""
+        pdf_bytes = create_image_only_test_pdf()
+
+        result = parse_pdf(pdf_bytes)
+
+        assert result.success is False
+        assert [error.code for error in result.errors] == [ParseErrorCode.NO_TEXT_EXTRACTED]
+        assert result.errors[0].details == {"pages": 1}
 
 
 class TestPDFParserLimits:

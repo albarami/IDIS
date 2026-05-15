@@ -48,6 +48,11 @@ class ParseAttempt:
         return cls(status="deferred", parser_outcome="not_attempted", reason_code=reason_code)
 
     @classmethod
+    def ocr_required(cls) -> ParseAttempt:
+        """Return a deferred parse attempt for OCR-required documents."""
+        return cls(status="deferred", parser_outcome="ocr_required", reason_code="ocr_required")
+
+    @classmethod
     def unsupported(cls, *, reason_code: str) -> ParseAttempt:
         """Return an unsupported parse attempt."""
         return cls(status="unsupported", parser_outcome="not_attempted", reason_code=reason_code)
@@ -124,8 +129,11 @@ def _parse_file_worker(
             attempt = ParseAttempt.parsed()
         else:
             capability = triage_document(filename="file", parse_result=result)
-            reason_code = _first_reason_code(capability.reason_codes, default="parser_failed")
-            attempt = ParseAttempt.failed(reason_code=reason_code)
+            if capability.requires_ocr:
+                attempt = ParseAttempt.ocr_required()
+            else:
+                reason_code = _first_reason_code(capability.reason_codes, default="parser_failed")
+                attempt = ParseAttempt.failed(reason_code=reason_code)
         _put_attempt(queue, attempt)
     except Exception as exc:
         logger.warning("Private real_example parse worker failed safely: %s", type(exc).__name__)

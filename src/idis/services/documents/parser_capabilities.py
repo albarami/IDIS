@@ -191,13 +191,24 @@ def triage_document(
             usable_without_conversion=False,
         )
 
-    if error_codes & {ParseErrorCode.NO_TEXT_EXTRACTED, ParseErrorCode.SCANNED_PDF_UNSUPPORTED}:
+    if ParseErrorCode.SCANNED_PDF_UNSUPPORTED in error_codes or (
+        ParseErrorCode.NO_TEXT_EXTRACTED in error_codes and file_type == "PDF"
+    ):
         return ParserCapability(
             file_type=file_type,
             support_status=DocumentSupportStatus.SCANNED_OR_IMAGE_ONLY,
             triage_status=DocumentTriageStatus.OCR_REQUIRED,
-            reason_codes=["no_text_extracted"],
+            reason_codes=["ocr_required"],
             requires_ocr=True,
+            usable_without_conversion=False,
+        )
+
+    if ParseErrorCode.NO_TEXT_EXTRACTED in error_codes:
+        return ParserCapability(
+            file_type=file_type,
+            support_status=DocumentSupportStatus.UNKNOWN,
+            triage_status=DocumentTriageStatus.BLOCKED,
+            reason_codes=["no_text_extracted"],
             usable_without_conversion=False,
         )
 

@@ -499,12 +499,20 @@ class IngestionService:
 
     def _parse_metadata_for_persistence(self, parse_result: ParseResult) -> dict[str, Any]:
         """Return safe parser metadata needed for persisted preflight triage."""
+        from idis.services.documents.parser_capabilities import triage_document
+
+        capability = triage_document(parse_result=parse_result)
         return {
             **parse_result.metadata,
             "parse_error_codes": [error.code.value for error in parse_result.errors],
             "parse_warning_codes": [str(warning) for warning in parse_result.warnings],
             "detected_format": parse_result.doc_type,
             "parser_doc_type": parse_result.doc_type,
+            "parser_support_status": capability.support_status.value,
+            "parser_triage_status": capability.triage_status.value,
+            "parser_reason_codes": capability.reason_codes,
+            "parser_requires_ocr": capability.requires_ocr,
+            "parser_requires_conversion": capability.requires_conversion,
         }
 
     def _create_artifact(

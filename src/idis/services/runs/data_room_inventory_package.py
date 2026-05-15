@@ -284,12 +284,15 @@ def _status_and_reasons(
             return DataRoomInventoryFileStatus.BLOCKED, [
                 DataRoomInventoryReason.PARSER_FAILED.value
             ]
-        if error_codes & {
-            ParseErrorCode.NO_TEXT_EXTRACTED,
-            ParseErrorCode.SCANNED_PDF_UNSUPPORTED,
-        }:
+        if ParseErrorCode.SCANNED_PDF_UNSUPPORTED in error_codes or (
+            ParseErrorCode.NO_TEXT_EXTRACTED in error_codes and parse_result.doc_type == "PDF"
+        ):
             return DataRoomInventoryFileStatus.DEFERRED, [
                 DataRoomInventoryReason.OCR_REQUIRED.value
+            ]
+        if ParseErrorCode.NO_TEXT_EXTRACTED in error_codes:
+            return DataRoomInventoryFileStatus.BLOCKED, [
+                DataRoomInventoryReason.PARSER_FAILED.value
             ]
         if error_codes & {
             ParseErrorCode.MAX_SIZE_EXCEEDED,

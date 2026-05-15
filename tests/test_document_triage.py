@@ -48,6 +48,20 @@ def test_no_text_pdf_triages_as_scanned_or_image_only() -> None:
 
     assert result.support_status == DocumentSupportStatus.SCANNED_OR_IMAGE_ONLY
     assert result.triage_status == DocumentTriageStatus.OCR_REQUIRED
+    assert result.requires_ocr is True
+    assert result.reason_codes == ["ocr_required"]
+
+
+def test_no_text_docx_does_not_claim_ocr_required() -> None:
+    result = triage_document(
+        _descriptor("synthetic_empty.docx"),
+        parse_result=_failed_parse(ParseErrorCode.NO_TEXT_EXTRACTED, doc_type="DOCX"),
+    )
+
+    assert result.support_status == DocumentSupportStatus.UNKNOWN
+    assert result.triage_status == DocumentTriageStatus.BLOCKED
+    assert result.requires_ocr is False
+    assert result.reason_codes == ["no_text_extracted"]
 
 
 def test_corrupted_openxml_triages_as_corrupted() -> None:

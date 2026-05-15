@@ -16,6 +16,7 @@ RETRYABLE_REASON_CODES = frozenset(
         "parser_failed",
     }
 )
+NON_PDF_PARSE_EXTENSIONS = frozenset({".docx", ".pptx", ".xlsx"})
 
 
 def load_ledger(path: Path) -> dict[str, Any]:
@@ -59,6 +60,8 @@ def terminal_ledger_entry(
         return None
     reason_code = entry.get("reason_code")
     if not isinstance(reason_code, str) or reason_code in RETRYABLE_REASON_CODES:
+        return None
+    if reason_code == "ocr_required" and extension in NON_PDF_PARSE_EXTENSIONS:
         return None
     if entry.get("status") == "failed":
         return None

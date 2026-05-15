@@ -26,6 +26,9 @@ class ParseErrorCode(StrEnum):
     MAX_SHEETS_EXCEEDED = "max_sheets_exceeded"
     MAX_CELLS_EXCEEDED = "max_cells_exceeded"
     MAX_SIZE_EXCEEDED = "max_size_exceeded"
+    OCR_FAILED = "ocr_failed"
+    OCR_TIMEOUT = "ocr_timeout"
+    OCR_UNAVAILABLE = "ocr_unavailable"
     INVALID_XLSX = "invalid_xlsx"
     INTERNAL_ERROR = "internal_error"
 

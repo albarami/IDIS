@@ -87,6 +87,11 @@ _LIMIT_ERROR_CODES = {
     ParseErrorCode.MAX_SHEETS_EXCEEDED,
     ParseErrorCode.MAX_CELLS_EXCEEDED,
 }
+_OCR_ERROR_REASON_CODES = {
+    ParseErrorCode.OCR_FAILED: "ocr_failed",
+    ParseErrorCode.OCR_TIMEOUT: "ocr_timeout",
+    ParseErrorCode.OCR_UNAVAILABLE: "ocr_unavailable",
+}
 
 
 def capability_for_document(
@@ -199,6 +204,20 @@ def triage_document(
             support_status=DocumentSupportStatus.SCANNED_OR_IMAGE_ONLY,
             triage_status=DocumentTriageStatus.OCR_REQUIRED,
             reason_codes=["ocr_required"],
+            requires_ocr=True,
+            usable_without_conversion=False,
+        )
+
+    if error_codes & set(_OCR_ERROR_REASON_CODES):
+        return ParserCapability(
+            file_type=file_type,
+            support_status=DocumentSupportStatus.SCANNED_OR_IMAGE_ONLY,
+            triage_status=DocumentTriageStatus.OCR_REQUIRED,
+            reason_codes=[
+                _OCR_ERROR_REASON_CODES[error_code]
+                for error_code in _OCR_ERROR_REASON_CODES
+                if error_code in error_codes
+            ],
             requires_ocr=True,
             usable_without_conversion=False,
         )

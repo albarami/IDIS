@@ -34,6 +34,7 @@ from idis.models.document import Document, DocumentType, ParseStatus
 from idis.models.document_artifact import DocType, DocumentArtifact
 from idis.models.document_span import DocumentSpan
 from idis.parsers.base import ParseError, ParseLimits, ParseResult
+from idis.parsers.ocr import OcrConfig
 from idis.parsers.registry import parse_bytes
 from idis.services.ingestion.span_generator import SpanGenerator
 from idis.storage.compliant_store import ComplianceEnforcedStore
@@ -160,6 +161,7 @@ class IngestionService:
         db_conn: Connection | None = None,
         max_bytes: int = DEFAULT_MAX_BYTES,
         parse_limits: ParseLimits | None = None,
+        ocr_config: OcrConfig | None = None,
     ) -> None:
         """Initialize the ingestion service.
 
@@ -171,6 +173,7 @@ class IngestionService:
             db_conn: Optional Postgres connection for durable corpus persistence.
             max_bytes: Maximum file size in bytes.
             parse_limits: Parser limits configuration.
+            ocr_config: Explicit OCR execution config. Disabled by default.
         """
         self._compliant_store = compliant_store
         self._audit_sink = audit_sink or InMemoryAuditSink()
@@ -178,6 +181,7 @@ class IngestionService:
         self._db_conn = db_conn
         self._max_bytes = max_bytes
         self._parse_limits = parse_limits or ParseLimits()
+        self._ocr_config = ocr_config
 
         self._artifacts: dict[str, DocumentArtifact] = {}
         self._documents: dict[str, Document] = {}
@@ -484,6 +488,7 @@ class IngestionService:
             filename=filename,
             mime_type=mime_type,
             limits=self._parse_limits,
+            ocr_config=self._ocr_config,
         )
 
     def _map_doc_type(self, parser_doc_type: str) -> DocumentType:

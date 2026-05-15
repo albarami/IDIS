@@ -21,6 +21,7 @@ from idis.parsers.base import (
     ParseResult,
 )
 from idis.parsers.docx import parse_docx
+from idis.parsers.ocr import OcrConfig
 from idis.parsers.pdf import parse_pdf
 from idis.parsers.pptx import parse_pptx
 from idis.parsers.xlsx import parse_xlsx
@@ -96,6 +97,7 @@ def parse_bytes(
     filename: str | None = None,
     mime_type: str | None = None,
     limits: ParseLimits | None = None,
+    ocr_config: OcrConfig | None = None,
 ) -> ParseResult:
     """Parse document bytes by detecting format and dispatching to parser.
 
@@ -104,6 +106,7 @@ def parse_bytes(
         filename: Optional filename (used for error context, not detection).
         mime_type: Optional MIME type (used for error context, not detection).
         limits: Optional parsing limits (defaults to ParseLimits()).
+        ocr_config: Optional explicit OCR execution config for PDF parsing.
 
     Returns:
         ParseResult from the appropriate parser, or error result for
@@ -134,7 +137,7 @@ def parse_bytes(
     detected_format = detect_format(data)
 
     if detected_format == "PDF":
-        return parse_pdf(data, limits=limits)
+        return parse_pdf(data, limits=limits, ocr_config=ocr_config)
 
     if detected_format == "XLSX":
         return parse_xlsx(data, limits=limits)

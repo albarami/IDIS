@@ -22,6 +22,7 @@ from idis.parsers.base import (
     ParseResult,
     SpanDraft,
 )
+from idis.parsers.ocr import OcrConfig, OcrError, OcrPageText, OcrTimeoutError
 
 if TYPE_CHECKING:
     pass
@@ -38,12 +39,14 @@ def _compute_content_hash(text: str) -> str:
 def parse_pdf(
     data: bytes,
     limits: ParseLimits | None = None,
+    ocr_config: OcrConfig | None = None,
 ) -> ParseResult:
     """Parse PDF bytes and extract text spans with page/line locators.
 
     Args:
         data: Raw PDF file bytes.
         limits: Optional parsing limits (defaults to ParseLimits()).
+        ocr_config: Optional explicit OCR execution config.
 
     Returns:
         ParseResult with success=True and spans if extraction succeeded,
@@ -162,6 +165,12 @@ def parse_pdf(
             )
 
     if total_text_length == 0:
+        if ocr_config is not None and ocr_config.enabled:
+            return _parse_pdf_with_ocr(
+                data=data,
+                page_count=total_pages,
+                ocr_config=ocr_config,
+            )
         return ParseResult(
             doc_type="PDF",
             success=False,
@@ -193,3 +202,112 @@ def _decrypt_with_empty_password(reader: PdfReader) -> bool:
         return bool(reader.decrypt(""))
     except (PdfReadError, PdfStreamError, KeyError, TypeError, ValueError):
         return False
+
+
+def _parse_pdf_with_ocr(
+    *,
+    data: bytes,
+    page_count: int,
+    ocr_config: OcrConfig,
+) -> ParseResult:
+    if ocr_config.max_pages < 1:
+        return _ocr_error(ParseErrorCode.OCR_FAILED, "OCR page limit must be positive")
+    if ocr_config.adapter is None:
+        return ParseResult(
+            doc_type="PDF",
+            success=False,
+            errors=[
+                ParseError(
+                    code=ParseErrorCode.OCR_UNAVAILABLE,
+                    message="OCR is enabled but no OCR adapter is configured",
+                    details={},
+                )
+            ],
+        )
+    try:
+        pages = ocr_config.adapter.extract_pdf_text(
+            data,
+            max_pages=ocr_config.max_pages,
+            timeout_seconds=ocr_config.timeout_seconds,
+        )
+        return _parse_ocr_pages(
+            page_count=page_count,
+            max_pages=ocr_config.max_pages,
+            pages=pages,
+        )
+    except OcrTimeoutError:
+        return _ocr_error(ParseErrorCode.OCR_TIMEOUT, "OCR timed out")
+    except OcrError:
+        return _ocr_error(ParseErrorCode.OCR_FAILED, "OCR failed")
+    except Exception:
+        return _ocr_error(ParseErrorCode.OCR_FAILED, "OCR failed")
+
+
+def _ocr_error(code: ParseErrorCode, message: str) -> ParseResult:
+    return ParseResult(
+        doc_type="PDF",
+        success=False,
+        errors=[ParseError(code=code, message=message, details={})],
+    )
+
+
+def _parse_ocr_pages(
+    *,
+    page_count: int,
+    max_pages: int,
+    pages: list[OcrPageText],
+) -> ParseResult:
+    page_window = min(page_count, max_pages)
+    if len(pages) > page_window:
+        return _ocr_error(ParseErrorCode.OCR_FAILED, "OCR returned invalid page results")
+
+    spans: list[SpanDraft] = []
+    total_text_length = 0
+    seen_pages: set[int] = set()
+    for page in pages:
+        if not isinstance(page.page_number, int) or not 1 <= page.page_number <= page_window:
+            return _ocr_error(ParseErrorCode.OCR_FAILED, "OCR returned invalid page results")
+        if page.page_number in seen_pages:
+            return _ocr_error(ParseErrorCode.OCR_FAILED, "OCR returned invalid page results")
+        if not isinstance(page.text, str):
+            return _ocr_error(ParseErrorCode.OCR_FAILED, "OCR returned invalid page results")
+        seen_pages.add(page.page_number)
+        total_text_length += len(page.text)
+        for line_idx, line_text in enumerate(page.text.split("\n"), start=1):
+            stripped = line_text.strip()
+            if not stripped:
+                continue
+            spans.append(
+                SpanDraft(
+                    span_type="PAGE_TEXT",
+                    locator={"page": page.page_number, "line": line_idx, "source": "ocr"},
+                    text_excerpt=stripped,
+                    content_hash=_compute_content_hash(stripped),
+                )
+            )
+
+    if not spans:
+        return ParseResult(
+            doc_type="PDF",
+            success=False,
+            errors=[
+                ParseError(
+                    code=ParseErrorCode.NO_TEXT_EXTRACTED,
+                    message="OCR completed but no extractable text was found",
+                    details={"pages": page_count},
+                )
+            ],
+        )
+
+    return ParseResult(
+        doc_type="PDF",
+        success=True,
+        spans=spans,
+        metadata={
+            "page_count": page_count,
+            "span_count": len(spans),
+            "total_text_length": total_text_length,
+            "ocr_performed": True,
+            "ocr_page_count": len(pages),
+        },
+    )

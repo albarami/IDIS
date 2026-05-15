@@ -5,7 +5,7 @@ and produces SpanDraft objects with stable locators.
 
 Requirements:
 - Deterministic: same bytes in → same ordered spans out
-- Fail-closed: malformed/encrypted PDFs return structured errors
+- Fail-closed: malformed/password-locked PDFs return structured errors
 - No OCR: scanned PDFs with no extractable text fail with explicit error
 """
 
@@ -53,7 +53,8 @@ def parse_pdf(
         - Pages are processed in document order (1-indexed).
         - Text is split into lines deterministically.
         - Each line becomes a SpanDraft with locator {page, line}.
-        - Encrypted PDFs fail with ENCRYPTED_PDF error.
+        - Empty-password-openable encrypted PDFs parse.
+        - Password-locked encrypted PDFs fail with ENCRYPTED_PDF error.
         - PDFs with no extractable text fail with NO_TEXT_EXTRACTED.
         - Malformed PDFs fail with CORRUPTED_FILE error.
     """
@@ -100,7 +101,7 @@ def parse_pdf(
             ],
         )
 
-    if reader.is_encrypted:
+    if reader.is_encrypted and not _decrypt_with_empty_password(reader):
         return ParseResult(
             doc_type="PDF",
             success=False,
@@ -184,3 +185,11 @@ def parse_pdf(
         },
         warnings=warnings,
     )
+
+
+def _decrypt_with_empty_password(reader: PdfReader) -> bool:
+    """Open PDFs that are encrypted but allow an empty user password."""
+    try:
+        return bool(reader.decrypt(""))
+    except (PdfReadError, PdfStreamError, KeyError, TypeError, ValueError):
+        return False

@@ -18,6 +18,7 @@ from idis.parsers.base import ParseErrorCode, ParseLimits
 from idis.parsers.pdf import parse_pdf
 
 try:
+    from pypdf import PdfReader, PdfWriter
     from reportlab.lib.pagesizes import letter
     from reportlab.pdfgen import canvas
 
@@ -51,6 +52,24 @@ def create_test_pdf(text_lines: list[str], num_pages: int = 1) -> bytes:
             c.showPage()
 
     c.save()
+    return buffer.getvalue()
+
+
+def create_encrypted_test_pdf(
+    text_lines: list[str],
+    *,
+    user_password: str,
+    owner_password: str = "slice30-owner",
+) -> bytes:
+    """Create an encrypted PDF for parser tests."""
+    plain_pdf = create_test_pdf(text_lines)
+    reader = PdfReader(io.BytesIO(plain_pdf))
+    writer = PdfWriter()
+    for page in reader.pages:
+        writer.add_page(page)
+    writer.encrypt(user_password=user_password, owner_password=owner_password)
+    buffer = io.BytesIO()
+    writer.write(buffer)
     return buffer.getvalue()
 
 
@@ -201,6 +220,30 @@ class TestPDFParserFailClosed:
 
         assert result.success is False
         assert len(result.errors) > 0
+
+    def test_empty_password_encrypted_pdf_is_parsed(self) -> None:
+        """Encrypted PDFs that allow empty-password open are parsed."""
+        marker = "SLICE30_EMPTY_PASSWORD_ENCRYPTED_REVENUE_MARKER"
+        pdf_bytes = create_encrypted_test_pdf([marker], user_password="")
+
+        result = parse_pdf(pdf_bytes)
+
+        assert result.success is True
+        assert result.errors == []
+        assert marker in " ".join(span.text_excerpt for span in result.spans)
+
+    def test_user_password_encrypted_pdf_remains_blocked(self) -> None:
+        """Password-protected PDFs remain fail-closed without a password."""
+        locked_value = "locked-fixture-value"
+        pdf_bytes = create_encrypted_test_pdf(
+            ["SLICE30_PASSWORD_PROTECTED_MARKER"],
+            user_password=locked_value,
+        )
+
+        result = parse_pdf(pdf_bytes)
+
+        assert result.success is False
+        assert [error.code for error in result.errors] == [ParseErrorCode.ENCRYPTED_PDF]
 
 
 class TestPDFParserLimits:

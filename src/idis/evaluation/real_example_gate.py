@@ -3,43 +3,39 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import hashlib
 import json
-import logging
-import multiprocessing as mp
-import os
 import sys
 import time
 from collections import Counter
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from queue import Empty
 from typing import Any
 
+from idis.evaluation.real_example_gate_ledger import (
+    ledger_entry_count,
+    load_ledger,
+    record_ledger_entry,
+    save_ledger,
+    terminal_ledger_entry,
+)
+from idis.evaluation.real_example_gate_runtime import (
+    ParseAttempt,
+    ParseAttemptFn,
+    memory_exceeded,
+    run_injected_parse_with_timeout,
+    run_parse_subprocess,
+)
 from idis.models.document_classification import DocumentSupportStatus, DocumentTriageStatus
-from idis.parsers.registry import parse_bytes
-from idis.services.documents.parser_capabilities import capability_for_document, triage_document
-
-logger = logging.getLogger(__name__)
+from idis.services.documents.parser_capabilities import capability_for_document
 
 DEFAULT_REAL_EXAMPLE_ROOT = Path("real_example")
 DEFAULT_LEDGER_PATH = Path(".local_reports") / "real_example_gate_ledger.json"
 DEFAULT_PER_FILE_TIMEOUT_SECONDS = 30.0
-LEDGER_VERSION = 1
 SUPPORTED_PARSE_EXTENSIONS = frozenset({".pdf", ".xlsx", ".docx", ".pptx"})
 SUPPORTED_PARSER_NAMES = frozenset({"pdf", "xlsx", "docx", "pptx"})
-RETRYABLE_REASON_CODES = frozenset(
-    {
-        "internal_error",
-        "max_memory_exceeded",
-        "max_runtime_exceeded",
-        "parse_timeout",
-        "parser_failed",
-    }
-)
 
 
 class GateMode(StrEnum):
@@ -47,50 +43,6 @@ class GateMode(StrEnum):
 
     INVENTORY_ONLY = "inventory_only"
     PARSE_SUPPORTED = "parse_supported"
-
-
-@dataclass(frozen=True, slots=True)
-class ParseAttempt:
-    """Safe parse attempt outcome for one file."""
-
-    status: str
-    parser_outcome: str
-    reason_code: str
-
-    @classmethod
-    def parsed(cls) -> ParseAttempt:
-        """Return a successful parse attempt."""
-        return cls(status="parsed", parser_outcome="success", reason_code="parsed")
-
-    @classmethod
-    def failed(cls, *, reason_code: str) -> ParseAttempt:
-        """Return a failed parse attempt."""
-        return cls(status="failed", parser_outcome="error", reason_code=reason_code)
-
-    @classmethod
-    def timed_out(cls) -> ParseAttempt:
-        """Return a timed-out parse attempt."""
-        return cls(status="timed_out", parser_outcome="timeout", reason_code="parse_timeout")
-
-    @classmethod
-    def deferred(cls, *, reason_code: str) -> ParseAttempt:
-        """Return a deferred parse attempt."""
-        return cls(status="deferred", parser_outcome="not_attempted", reason_code=reason_code)
-
-    @classmethod
-    def unsupported(cls, *, reason_code: str) -> ParseAttempt:
-        """Return an unsupported parse attempt."""
-        return cls(status="unsupported", parser_outcome="not_attempted", reason_code=reason_code)
-
-    def to_ledger_entry(self, *, extension: str, size_bytes: int) -> dict[str, object]:
-        """Serialize without paths, filenames, text, or excerpts."""
-        return {
-            "extension": extension,
-            "size_bytes": size_bytes,
-            "status": self.status,
-            "parser_outcome": self.parser_outcome,
-            "reason_code": self.reason_code,
-        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +54,6 @@ class _InventoryFile:
     read_error_reason: str | None = None
 
 
-ParseAttemptFn = Callable[[Path], ParseAttempt]
 ProgressFn = Callable[[dict[str, object]], None]
 
 
@@ -149,7 +100,7 @@ def run_real_example_gate(
     _validate_root(root_path)
     files = _inventory_files(root_path)
     ledger_file = Path(ledger_path)
-    ledger = _load_ledger(ledger_file)
+    ledger = load_ledger(ledger_file)
     resume_entries = dict(ledger["entries"])
     progress = progress_fn or _emit_progress
     started_at = time.monotonic()
@@ -180,7 +131,7 @@ def run_real_example_gate(
             attempt=attempt,
             mode=resolved_mode,
         )
-        _save_ledger(ledger_file, ledger)
+        save_ledger(ledger_file, ledger)
         if emit_progress:
             progress(
                 {
@@ -192,7 +143,7 @@ def run_real_example_gate(
                 }
             )
 
-    _save_ledger(ledger_file, ledger)
+    save_ledger(ledger_file, ledger)
     return _safe_summary(mode=resolved_mode, records=records, ledger=ledger)
 
 
@@ -282,7 +233,7 @@ def _attempt_for_file(
             reason_code=file.read_error_reason,
         )
 
-    existing = _terminal_ledger_entry(
+    existing = terminal_ledger_entry(
         entries=resume_entries,
         sha256=file.sha256,
         extension=file.extension,
@@ -324,16 +275,16 @@ def _attempt_for_file(
 
     if _runtime_exceeded(started_at, max_runtime_seconds):
         return ParseAttempt.deferred(reason_code="max_runtime_exceeded")
-    if _memory_exceeded(max_memory_mb):
+    if memory_exceeded(max_memory_mb):
         return ParseAttempt.deferred(reason_code="max_memory_exceeded")
 
     if parse_attempt_fn is not None:
-        return _run_injected_parse_with_timeout(
+        return run_injected_parse_with_timeout(
             file.path,
             parse_attempt_fn=parse_attempt_fn,
             timeout_seconds=per_file_timeout_seconds,
         )
-    return _run_parse_subprocess(
+    return run_parse_subprocess(
         file.path,
         timeout_seconds=per_file_timeout_seconds,
         max_memory_mb=max_memory_mb,
@@ -374,96 +325,6 @@ def _sort_key(root: Path) -> Callable[[Path], str]:
     return key
 
 
-def _run_injected_parse_with_timeout(
-    path: Path,
-    *,
-    parse_attempt_fn: ParseAttemptFn,
-    timeout_seconds: float,
-) -> ParseAttempt:
-    deadline = time.monotonic() + timeout_seconds
-    with _suppress_parser_output():
-        attempt = parse_attempt_fn(path)
-    if time.monotonic() > deadline:
-        return ParseAttempt.timed_out()
-    return attempt
-
-
-def _run_parse_subprocess(
-    path: Path,
-    *,
-    timeout_seconds: float,
-    max_memory_mb: int | None,
-) -> ParseAttempt:
-    queue: mp.Queue[dict[str, str]] = mp.Queue(maxsize=1)
-    process = mp.Process(target=_parse_file_worker, args=(str(path), max_memory_mb, queue))
-    process.start()
-    process.join(timeout_seconds)
-    if process.is_alive():
-        process.terminate()
-        process.join()
-        return ParseAttempt.timed_out()
-
-    try:
-        payload = queue.get_nowait()
-    except Empty:
-        return ParseAttempt.failed(reason_code="parser_failed")
-    return ParseAttempt(
-        status=payload["status"],
-        parser_outcome=payload["parser_outcome"],
-        reason_code=payload["reason_code"],
-    )
-
-
-def _parse_file_worker(
-    path: str,
-    max_memory_mb: int | None,
-    queue: mp.Queue[dict[str, str]],
-) -> None:
-    try:
-        if _memory_exceeded(max_memory_mb):
-            _put_attempt(queue, ParseAttempt.deferred(reason_code="max_memory_exceeded"))
-            return
-        with _suppress_parser_output():
-            data = Path(path).read_bytes()
-            result = parse_bytes(data, filename=None)
-        if _memory_exceeded(max_memory_mb):
-            _put_attempt(queue, ParseAttempt.deferred(reason_code="max_memory_exceeded"))
-            return
-        if result.success:
-            attempt = ParseAttempt.parsed()
-        else:
-            capability = triage_document(filename="file", parse_result=result)
-            reason_code = _first_reason_code(capability.reason_codes, default="parser_failed")
-            attempt = ParseAttempt.failed(reason_code=reason_code)
-        _put_attempt(queue, attempt)
-    except Exception as exc:
-        logger.warning("Private real_example parse worker failed safely: %s", type(exc).__name__)
-        _put_attempt(queue, ParseAttempt.failed(reason_code="internal_error"))
-
-
-def _put_attempt(queue: mp.Queue[dict[str, str]], attempt: ParseAttempt) -> None:
-    queue.put(
-        {
-            "status": attempt.status,
-            "parser_outcome": attempt.parser_outcome,
-            "reason_code": attempt.reason_code,
-        }
-    )
-
-
-def _suppress_parser_output() -> contextlib.AbstractContextManager[None]:
-    @contextlib.contextmanager
-    def suppress() -> Iterator[None]:
-        with (
-            open(os.devnull, "w", encoding="utf-8") as devnull,
-            contextlib.redirect_stdout(devnull),
-            contextlib.redirect_stderr(devnull),
-        ):
-            yield
-
-    return suppress()
-
-
 def _should_parse(support_status: DocumentSupportStatus, parser_name: str | None) -> bool:
     return (
         support_status
@@ -502,113 +363,6 @@ def _runtime_exceeded(started_at: float, max_runtime_seconds: float | None) -> b
     return max_runtime_seconds is not None and time.monotonic() - started_at >= max_runtime_seconds
 
 
-def _memory_exceeded(max_memory_mb: int | None) -> bool:
-    if max_memory_mb is None:
-        return False
-    return _current_memory_mb() >= max_memory_mb
-
-
-def _current_memory_mb() -> float:
-    if os.name == "nt":
-        return _current_windows_memory_mb()
-    try:
-        resource_module = __import__("resource")
-        usage = resource_module.getrusage(resource_module.RUSAGE_SELF)
-    except (ImportError, OSError):
-        return 0.0
-    return float(usage.ru_maxrss) / 1024.0
-
-
-def _current_windows_memory_mb() -> float:
-    try:
-        import ctypes
-        from ctypes import wintypes
-
-        class ProcessMemoryCounters(ctypes.Structure):
-            _fields_ = [
-                ("cb", wintypes.DWORD),
-                ("PageFaultCount", wintypes.DWORD),
-                ("PeakWorkingSetSize", ctypes.c_size_t),
-                ("WorkingSetSize", ctypes.c_size_t),
-                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
-                ("QuotaPagedPoolUsage", ctypes.c_size_t),
-                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
-                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
-                ("PagefileUsage", ctypes.c_size_t),
-                ("PeakPagefileUsage", ctypes.c_size_t),
-            ]
-
-        counters = ProcessMemoryCounters()
-        counters.cb = ctypes.sizeof(ProcessMemoryCounters)
-        handle = ctypes.windll.kernel32.GetCurrentProcess()
-        ctypes.windll.psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb)
-        return float(counters.WorkingSetSize) / (1024.0 * 1024.0)
-    except (AttributeError, OSError, ValueError):
-        return 0.0
-
-
-def _load_ledger(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {"version": LEDGER_VERSION, "entries": {}}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"version": LEDGER_VERSION, "entries": {}}
-    if not isinstance(payload, dict) or payload.get("version") != LEDGER_VERSION:
-        return {"version": LEDGER_VERSION, "entries": {}}
-    entries = payload.get("entries")
-    if not isinstance(entries, dict):
-        return {"version": LEDGER_VERSION, "entries": {}}
-    return {"version": LEDGER_VERSION, "entries": entries}
-
-
-def _save_ledger(path: Path, ledger: dict[str, Any]) -> None:
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = path.with_name(f"{path.name}.tmp")
-        temp_path.write_text(json.dumps(ledger, sort_keys=True, indent=2), encoding="utf-8")
-        temp_path.replace(path)
-    except OSError:
-        raise RuntimeError("real_example gate ledger write failed") from None
-
-
-def _terminal_ledger_entry(
-    *,
-    entries: dict[str, object],
-    sha256: str,
-    extension: str,
-) -> dict[str, object] | None:
-    entry = _ledger_entry_for_extension(entries=entries, sha256=sha256, extension=extension)
-    if not isinstance(entry, dict):
-        return None
-    if entry.get("status") == "inventoried":
-        return None
-    reason_code = entry.get("reason_code")
-    if not isinstance(reason_code, str) or reason_code in RETRYABLE_REASON_CODES:
-        return None
-    if entry.get("status") == "failed":
-        return None
-    return entry
-
-
-def _ledger_entry_for_extension(
-    *,
-    entries: dict[str, object],
-    sha256: str,
-    extension: str,
-) -> dict[str, object] | None:
-    bucket = entries.get(sha256)
-    if not isinstance(bucket, dict):
-        return None
-    by_extension = bucket.get("by_extension")
-    if isinstance(by_extension, dict):
-        entry = by_extension.get(extension)
-        return entry if isinstance(entry, dict) else None
-    if bucket.get("extension") == extension:
-        return bucket
-    return None
-
-
 def _record_ledger_entry(
     *,
     ledger: dict[str, Any],
@@ -618,21 +372,14 @@ def _record_ledger_entry(
 ) -> None:
     if mode == GateMode.PARSE_SUPPORTED and attempt.parser_outcome == "resumed":
         return
-    entries = ledger["entries"]
-    bucket = entries.get(file.sha256)
-    if isinstance(bucket, dict) and isinstance(bucket.get("by_extension"), dict):
-        by_extension = bucket["by_extension"]
-    else:
-        by_extension = {}
-        if isinstance(bucket, dict):
-            legacy_extension = bucket.get("extension")
-            if isinstance(legacy_extension, str):
-                by_extension[legacy_extension] = bucket
-        bucket = {"by_extension": by_extension}
-        entries[file.sha256] = bucket
-    by_extension[file.extension] = attempt.to_ledger_entry(
+    record_ledger_entry(
+        ledger=ledger,
+        sha256=file.sha256,
         extension=file.extension,
         size_bytes=file.size_bytes,
+        status=attempt.status,
+        parser_outcome=attempt.parser_outcome,
+        reason_code=attempt.reason_code,
     )
 
 
@@ -648,7 +395,7 @@ def _safe_summary(
         "mode": mode.value,
         "total_files": len(records),
         "processed_files": len(records),
-        "ledger_entry_count": _ledger_entry_count(ledger),
+        "ledger_entry_count": ledger_entry_count(ledger),
         "counts_by_extension": _count(records, "extension"),
         "counts_by_status": _count(records, "status"),
         "counts_by_parser_outcome": _count(records, "parser_outcome"),
@@ -658,16 +405,6 @@ def _safe_summary(
 
 def _count(records: list[dict[str, object]], key: str) -> dict[str, int]:
     return dict(sorted(Counter(str(record[key]) for record in records).items()))
-
-
-def _ledger_entry_count(ledger: dict[str, Any]) -> int:
-    count = 0
-    for bucket in ledger["entries"].values():
-        if isinstance(bucket, dict) and isinstance(bucket.get("by_extension"), dict):
-            count += len(bucket["by_extension"])
-        elif isinstance(bucket, dict):
-            count += 1
-    return count
 
 
 def _validate_root(root: Path) -> None:

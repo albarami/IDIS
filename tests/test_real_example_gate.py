@@ -373,6 +373,114 @@ def test_parse_supported_retries_stale_non_pdf_ocr_required_ledger_entry(
     _assert_ledger_is_private(ledger_path)
 
 
+def test_parse_supported_retries_stale_pdf_ocr_result_when_policy_changes(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "real_example"
+    root.mkdir()
+    pdf_bytes = b"%PDF-1.4\npolicy-sensitive"
+    (root / "confidential scanned appendix.pdf").write_bytes(pdf_bytes)
+    sha256 = hashlib.sha256(pdf_bytes).hexdigest()
+    ledger_path = tmp_path / "ledger.json"
+    ledger_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "entries": {
+                    sha256: {
+                        "by_extension": {
+                            ".pdf": {
+                                "extension": ".pdf",
+                                "size_bytes": len(pdf_bytes),
+                                "status": "deferred",
+                                "parser_outcome": "ocr_no_text_extracted",
+                                "reason_code": "ocr_no_text_extracted",
+                                "ocr_policy_key": "pdf-ocr:v1:max_pages=1:timeout=20.0:dpi=200",
+                            }
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    attempts: list[str] = []
+
+    summary = run_real_example_gate(
+        root=root,
+        ledger_path=ledger_path,
+        mode=GateMode.PARSE_SUPPORTED,
+        safe_summary=True,
+        emit_progress=False,
+        ocr_enabled=True,
+        ocr_max_pages=2,
+        ocr_timeout_seconds=20,
+        ocr_dpi=200,
+        parse_attempt_fn=lambda path: attempts.append(path.suffix.lower()) or ParseAttempt.parsed(),
+    )
+
+    assert attempts == [".pdf"]
+    assert summary["counts_by_status"] == {"parsed": 1}
+    assert summary["counts_by_reason_code"] == {"parsed": 1}
+    _assert_ledger_is_private(ledger_path)
+    _assert_safe_json(summary, forbidden=[str(root), "confidential", "policy-sensitive"])
+
+
+def test_parse_supported_resumes_pdf_ocr_result_when_policy_is_unchanged(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "real_example"
+    root.mkdir()
+    pdf_bytes = b"%PDF-1.4\nunchanged-policy"
+    (root / "confidential scanned appendix.pdf").write_bytes(pdf_bytes)
+    sha256 = hashlib.sha256(pdf_bytes).hexdigest()
+    policy_key = "pdf-ocr:v1:max_pages=2:timeout=20.0:dpi=200"
+    ledger_path = tmp_path / "ledger.json"
+    ledger_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "entries": {
+                    sha256: {
+                        "by_extension": {
+                            ".pdf": {
+                                "extension": ".pdf",
+                                "size_bytes": len(pdf_bytes),
+                                "status": "deferred",
+                                "parser_outcome": "ocr_no_text_extracted",
+                                "reason_code": "ocr_no_text_extracted",
+                                "ocr_policy_key": policy_key,
+                            }
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = run_real_example_gate(
+        root=root,
+        ledger_path=ledger_path,
+        mode=GateMode.PARSE_SUPPORTED,
+        safe_summary=True,
+        emit_progress=False,
+        ocr_enabled=True,
+        ocr_max_pages=2,
+        ocr_timeout_seconds=20,
+        ocr_dpi=200,
+        parse_attempt_fn=lambda path: (_ for _ in ()).throw(
+            AssertionError(f"unchanged OCR policy should resume {path}")
+        ),
+    )
+
+    assert summary["counts_by_status"] == {"deferred": 1}
+    assert summary["counts_by_parser_outcome"] == {"resumed": 1}
+    assert summary["counts_by_reason_code"] == {"ocr_no_text_extracted": 1}
+    _assert_ledger_is_private(ledger_path)
+    _assert_safe_json(summary, forbidden=[str(root), "confidential", "unchanged-policy"])
+
+
 def test_retryable_timeout_does_not_permanently_skip_hash(
     tmp_path: Path,
 ) -> None:

@@ -58,6 +58,15 @@ class ParseAttempt:
         return cls(status="deferred", parser_outcome="ocr_required", reason_code="ocr_required")
 
     @classmethod
+    def ocr_no_text_extracted(cls) -> ParseAttempt:
+        """Return a deferred parse attempt for OCR that completed without text."""
+        return cls(
+            status="deferred",
+            parser_outcome="ocr_no_text_extracted",
+            reason_code="ocr_no_text_extracted",
+        )
+
+    @classmethod
     def unsupported(cls, *, reason_code: str) -> ParseAttempt:
         """Return an unsupported parse attempt."""
         return cls(status="unsupported", parser_outcome="not_attempted", reason_code=reason_code)
@@ -178,6 +187,8 @@ def _parse_file_worker(
                     "ocr_unavailable",
                 }:
                     attempt = ParseAttempt.failed(reason_code=reason_code)
+                elif ocr_enabled and reason_code == "ocr_no_text_extracted":
+                    attempt = ParseAttempt.ocr_no_text_extracted()
                 else:
                     attempt = ParseAttempt.ocr_required()
             else:

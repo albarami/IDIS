@@ -91,6 +91,7 @@ _OCR_ERROR_REASON_CODES = {
     ParseErrorCode.OCR_FAILED: "ocr_failed",
     ParseErrorCode.OCR_TIMEOUT: "ocr_timeout",
     ParseErrorCode.OCR_UNAVAILABLE: "ocr_unavailable",
+    ParseErrorCode.OCR_NO_TEXT_EXTRACTED: "ocr_no_text_extracted",
 }
 
 

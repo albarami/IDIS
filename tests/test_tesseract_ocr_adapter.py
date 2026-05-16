@@ -108,6 +108,55 @@ def test_tesseract_adapter_success_creates_deterministic_spans() -> None:
     assert "OCR" in " ".join(span.text_excerpt for span in first.spans)
 
 
+def test_tesseract_adapter_no_text_after_ocr_is_precise_and_safe() -> None:
+    adapter = TesseractOcrAdapter(worker_target=_blank_ocr_worker)
+
+    result = parse_pdf(
+        _create_image_text_pdf("SLICE36 OCR NO TEXT"),
+        ocr_config=OcrConfig(enabled=True, adapter=adapter, max_pages=1, timeout_seconds=10),
+    )
+
+    encoded = str(result.to_dict())
+    assert result.success is False
+    assert result.spans == []
+    assert [error.code for error in result.errors] == [ParseErrorCode.OCR_NO_TEXT_EXTRACTED]
+    assert "SLICE36 OCR NO TEXT" not in encoded
+
+
+def test_bounded_pdf_ocr_succeeds_only_inside_configured_page_window() -> None:
+    adapter = TesseractOcrAdapter(worker_target=_second_page_text_when_allowed_worker)
+    pdf_bytes = _create_image_text_pdf("SLICE36 PAGE WINDOW", pages=2)
+
+    first_page_only = parse_pdf(
+        pdf_bytes,
+        ocr_config=OcrConfig(enabled=True, adapter=adapter, max_pages=1, timeout_seconds=10),
+    )
+    two_page_window = parse_pdf(
+        pdf_bytes,
+        ocr_config=OcrConfig(enabled=True, adapter=adapter, max_pages=2, timeout_seconds=10),
+    )
+
+    assert first_page_only.success is False
+    assert first_page_only.spans == []
+    assert [error.code for error in first_page_only.errors] == [
+        ParseErrorCode.OCR_NO_TEXT_EXTRACTED
+    ]
+    assert two_page_window.success is True
+    assert [span.locator for span in two_page_window.spans] == [
+        {"page": 2, "line": 1, "source": "ocr"}
+    ]
+
+
+def test_default_pdf_parser_still_requires_explicit_ocr_config() -> None:
+    result = parse_pdf(_create_image_text_pdf("SLICE36 DEFAULT OCR DISABLED"))
+
+    encoded = str(result.to_dict())
+    assert result.success is False
+    assert result.spans == []
+    assert [error.code for error in result.errors] == [ParseErrorCode.NO_TEXT_EXTRACTED]
+    assert "SLICE36 DEFAULT OCR DISABLED" not in encoded
+
+
 def test_tesseract_adapter_success_parses_image_bytes_when_explicitly_enabled() -> None:
     adapter = TesseractOcrAdapter(dpi=220)
     image_bytes = _create_image_text_png("SLICE34 IMAGE OCR 123")
@@ -326,6 +375,33 @@ def _failed_ocr_worker(
 ) -> None:
     del data, max_pages, dpi, language, timeout_seconds
     queue.put({"status": "failed"})
+
+
+def _blank_ocr_worker(
+    data: bytes,
+    max_pages: int,
+    dpi: int,
+    language: str,
+    timeout_seconds: float,
+    queue: Queue,
+) -> None:
+    del data, max_pages, dpi, language, timeout_seconds
+    queue.put({"status": "success", "pages": [{"page_number": 1, "text": "   \n"}]})
+
+
+def _second_page_text_when_allowed_worker(
+    data: bytes,
+    max_pages: int,
+    dpi: int,
+    language: str,
+    timeout_seconds: float,
+    queue: Queue,
+) -> None:
+    del data, dpi, language, timeout_seconds
+    pages: list[dict[str, object]] = [{"page_number": 1, "text": ""}]
+    if max_pages >= 2:
+        pages.append({"page_number": 2, "text": "Second page OCR text"})
+    queue.put({"status": "success", "pages": pages})
 
 
 def _out_of_window_ocr_worker(

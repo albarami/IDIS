@@ -22,7 +22,13 @@ from idis.parsers.base import (
     ParseResult,
     SpanDraft,
 )
-from idis.parsers.ocr import OcrConfig, OcrError, OcrPageText, OcrTimeoutError
+from idis.parsers.ocr import (
+    OcrConfig,
+    OcrError,
+    OcrPageText,
+    OcrTimeoutError,
+    OcrUnavailableError,
+)
 
 if TYPE_CHECKING:
     pass
@@ -237,6 +243,8 @@ def _parse_pdf_with_ocr(
         )
     except OcrTimeoutError:
         return _ocr_error(ParseErrorCode.OCR_TIMEOUT, "OCR timed out")
+    except OcrUnavailableError:
+        return _ocr_error(ParseErrorCode.OCR_UNAVAILABLE, "OCR unavailable")
     except OcrError:
         return _ocr_error(ParseErrorCode.OCR_FAILED, "OCR failed")
     except Exception:

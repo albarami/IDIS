@@ -35,6 +35,10 @@ DEFAULT_REAL_EXAMPLE_ROOT = Path("real_example")
 DEFAULT_LEDGER_PATH = Path(".local_reports") / "real_example_gate_ledger.json"
 DEFAULT_PER_FILE_TIMEOUT_SECONDS = 30.0
 HASH_CHUNK_SIZE_BYTES = 1024 * 1024
+MAX_OCR_PAGES = 10
+MAX_OCR_TIMEOUT_SECONDS = 120.0
+MIN_OCR_DPI = 72
+MAX_OCR_DPI = 300
 SUPPORTED_PARSE_EXTENSIONS = frozenset({".pdf", ".xlsx", ".docx", ".pptx"})
 SUPPORTED_PARSER_NAMES = frozenset({"pdf", "xlsx", "docx", "pptx"})
 
@@ -70,6 +74,10 @@ def run_real_example_gate(
     emit_progress: bool = True,
     parse_attempt_fn: ParseAttemptFn | None = None,
     progress_fn: ProgressFn | None = None,
+    ocr_enabled: bool = False,
+    ocr_max_pages: int = 10,
+    ocr_timeout_seconds: float = 30.0,
+    ocr_dpi: int = 200,
 ) -> dict[str, object]:
     """Run the local private real_example gate and return a safe aggregate summary.
 
@@ -84,6 +92,10 @@ def run_real_example_gate(
         emit_progress: Whether to emit safe per-file progress to stderr.
         parse_attempt_fn: Optional test seam for parse attempts.
         progress_fn: Optional test seam for progress emission.
+        ocr_enabled: Whether to run the opt-in OCR adapter for OCR-required PDFs.
+        ocr_max_pages: Maximum leading PDF pages the OCR adapter may process.
+        ocr_timeout_seconds: Maximum OCR runtime inside the parser subprocess.
+        ocr_dpi: PDF rasterization DPI for OCR.
 
     Returns:
         Aggregate counts by extension, status, parser outcome, and reason code only.
@@ -96,6 +108,12 @@ def run_real_example_gate(
     resolved_mode = GateMode(mode)
     if resolved_mode == GateMode.PARSE_SUPPORTED and not safe_summary:
         raise ValueError("--parse-supported requires --safe-summary")
+    _validate_ocr_options(
+        ocr_enabled=ocr_enabled,
+        ocr_max_pages=ocr_max_pages,
+        ocr_timeout_seconds=ocr_timeout_seconds,
+        ocr_dpi=ocr_dpi,
+    )
 
     root_path = Path(root)
     _validate_root(root_path)
@@ -117,6 +135,10 @@ def run_real_example_gate(
             max_memory_mb=max_memory_mb,
             per_file_timeout_seconds=per_file_timeout_seconds,
             parse_attempt_fn=parse_attempt_fn,
+            ocr_enabled=ocr_enabled,
+            ocr_max_pages=ocr_max_pages,
+            ocr_timeout_seconds=ocr_timeout_seconds,
+            ocr_dpi=ocr_dpi,
         )
         records.append(
             {
@@ -174,6 +196,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--max-runtime-seconds", type=float)
     parser.add_argument("--max-memory-mb", type=int)
+    parser.add_argument("--ocr-enabled", action="store_true")
+    parser.add_argument("--ocr-max-pages", type=int, default=MAX_OCR_PAGES)
+    parser.add_argument("--ocr-timeout-seconds", type=float, default=30.0)
+    parser.add_argument("--ocr-dpi", type=int, default=200)
     parser.add_argument("--no-progress", action="store_true")
     args = parser.parse_args(argv)
 
@@ -191,6 +217,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_runtime_seconds=args.max_runtime_seconds,
             max_memory_mb=args.max_memory_mb,
             emit_progress=not args.no_progress,
+            ocr_enabled=args.ocr_enabled,
+            ocr_max_pages=args.ocr_max_pages,
+            ocr_timeout_seconds=args.ocr_timeout_seconds,
+            ocr_dpi=args.ocr_dpi,
         )
     except (FileNotFoundError, NotADirectoryError, RuntimeError, ValueError) as exc:
         print(
@@ -220,6 +250,10 @@ def _attempt_for_file(
     max_memory_mb: int | None,
     per_file_timeout_seconds: float,
     parse_attempt_fn: ParseAttemptFn | None,
+    ocr_enabled: bool,
+    ocr_max_pages: int,
+    ocr_timeout_seconds: float,
+    ocr_dpi: int,
 ) -> ParseAttempt:
     if mode == GateMode.INVENTORY_ONLY:
         return ParseAttempt(
@@ -238,6 +272,7 @@ def _attempt_for_file(
         entries=resume_entries,
         sha256=file.sha256,
         extension=file.extension,
+        ocr_enabled=ocr_enabled,
     )
     if existing is not None:
         return ParseAttempt(
@@ -289,6 +324,10 @@ def _attempt_for_file(
         file.path,
         timeout_seconds=per_file_timeout_seconds,
         max_memory_mb=max_memory_mb,
+        ocr_enabled=ocr_enabled,
+        ocr_max_pages=ocr_max_pages,
+        ocr_timeout_seconds=ocr_timeout_seconds,
+        ocr_dpi=ocr_dpi,
     )
 
 
@@ -317,6 +356,23 @@ def _inventory_files(root: Path) -> list[_InventoryFile]:
                 )
             )
     return records
+
+
+def _validate_ocr_options(
+    *,
+    ocr_enabled: bool,
+    ocr_max_pages: int,
+    ocr_timeout_seconds: float,
+    ocr_dpi: int,
+) -> None:
+    if not ocr_enabled:
+        return
+    if not 1 <= ocr_max_pages <= MAX_OCR_PAGES:
+        raise ValueError("OCR max pages is outside the allowed range")
+    if not 0 < ocr_timeout_seconds <= MAX_OCR_TIMEOUT_SECONDS:
+        raise ValueError("OCR timeout is outside the allowed range")
+    if not MIN_OCR_DPI <= ocr_dpi <= MAX_OCR_DPI:
+        raise ValueError("OCR DPI is outside the allowed range")
 
 
 def _hash_file_streaming(path: Path) -> tuple[str, int]:

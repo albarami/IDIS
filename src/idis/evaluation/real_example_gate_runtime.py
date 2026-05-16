@@ -13,6 +13,7 @@ from pathlib import Path
 from queue import Empty
 from typing import Any, cast
 
+from idis.parsers.ocr import OcrConfig, TesseractOcrAdapter
 from idis.parsers.registry import parse_bytes
 from idis.services.documents.parser_capabilities import triage_document
 
@@ -81,14 +82,29 @@ def run_parse_subprocess(
     *,
     timeout_seconds: float,
     max_memory_mb: int | None,
+    ocr_enabled: bool = False,
+    ocr_max_pages: int = 10,
+    ocr_timeout_seconds: float = 30.0,
+    ocr_dpi: int = 200,
 ) -> ParseAttempt:
     """Run production parsing in a child process with timeout and safe output."""
     queue: mp.Queue[dict[str, str]] = mp.Queue(maxsize=1)
-    process = mp.Process(target=_parse_file_worker, args=(str(path), max_memory_mb, queue))
+    process = mp.Process(
+        target=_parse_file_worker,
+        args=(
+            str(path),
+            max_memory_mb,
+            ocr_enabled,
+            ocr_max_pages,
+            ocr_timeout_seconds,
+            ocr_dpi,
+            queue,
+        ),
+    )
     process.start()
     process.join(timeout_seconds)
     if process.is_alive():
-        process.terminate()
+        _terminate_process_tree(process)
         process.join()
         return ParseAttempt.timed_out()
 
@@ -113,6 +129,10 @@ def memory_exceeded(max_memory_mb: int | None) -> bool:
 def _parse_file_worker(
     path: str,
     max_memory_mb: int | None,
+    ocr_enabled: bool,
+    ocr_max_pages: int,
+    ocr_timeout_seconds: float,
+    ocr_dpi: int,
     queue: mp.Queue[dict[str, str]],
 ) -> None:
     try:
@@ -121,7 +141,17 @@ def _parse_file_worker(
             return
         with _suppress_parser_output():
             data = Path(path).read_bytes()
-            result = parse_bytes(data, filename=None)
+            ocr_config = (
+                OcrConfig(
+                    enabled=True,
+                    adapter=TesseractOcrAdapter(dpi=ocr_dpi),
+                    max_pages=ocr_max_pages,
+                    timeout_seconds=ocr_timeout_seconds,
+                )
+                if ocr_enabled
+                else None
+            )
+            result = parse_bytes(data, filename=None, ocr_config=ocr_config)
         if memory_exceeded(max_memory_mb):
             _put_attempt(queue, ParseAttempt.deferred(reason_code="max_memory_exceeded"))
             return
@@ -130,7 +160,15 @@ def _parse_file_worker(
         else:
             capability = triage_document(filename="file", parse_result=result)
             if capability.requires_ocr:
-                attempt = ParseAttempt.ocr_required()
+                reason_code = _first_reason_code(capability.reason_codes, default="ocr_required")
+                if ocr_enabled and reason_code in {
+                    "ocr_failed",
+                    "ocr_timeout",
+                    "ocr_unavailable",
+                }:
+                    attempt = ParseAttempt.failed(reason_code=reason_code)
+                else:
+                    attempt = ParseAttempt.ocr_required()
             else:
                 reason_code = _first_reason_code(capability.reason_codes, default="parser_failed")
                 attempt = ParseAttempt.failed(reason_code=reason_code)
@@ -148,6 +186,26 @@ def _put_attempt(queue: mp.Queue[dict[str, str]], attempt: ParseAttempt) -> None
             "reason_code": attempt.reason_code,
         }
     )
+
+
+def _terminate_process_tree(process: mp.Process) -> None:
+    pid = process.pid
+    if pid is None:
+        process.terminate()
+        return
+    try:
+        import psutil
+
+        root = psutil.Process(pid)
+        children = root.children(recursive=True)
+        for child in children:
+            child.terminate()
+        root.terminate()
+        _gone, alive = psutil.wait_procs([*children, root], timeout=2)
+        for child in alive:
+            child.kill()
+    except Exception:
+        process.terminate()
 
 
 def _suppress_parser_output() -> contextlib.AbstractContextManager[None]:

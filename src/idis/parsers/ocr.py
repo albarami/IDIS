@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from queue import Empty
 from typing import Any, Protocol
 
+MAX_OCR_IMAGE_PIXELS = 20_000_000
+
 
 class OcrError(Exception):
     """Base class for safe OCR adapter failures."""
@@ -44,6 +46,14 @@ class OcrAdapter(Protocol):
     ) -> list[OcrPageText]:
         """Return OCR text by page for PDF bytes."""
 
+    def extract_image_text(
+        self,
+        data: bytes,
+        *,
+        timeout_seconds: float,
+    ) -> list[OcrPageText]:
+        """Return OCR text for image bytes."""
+
 
 @dataclass(frozen=True, slots=True)
 class OcrConfig:
@@ -55,7 +65,8 @@ class OcrConfig:
     timeout_seconds: float = 30.0
 
 
-WorkerTarget = Callable[[bytes, int, int, str, float, Any], None]
+PdfWorkerTarget = Callable[[bytes, int, int, str, float, Any], None]
+ImageWorkerTarget = Callable[[bytes, int, str, float, Any], None]
 
 
 class TesseractOcrAdapter:
@@ -66,11 +77,13 @@ class TesseractOcrAdapter:
         *,
         dpi: int = 200,
         language: str = "eng",
-        worker_target: WorkerTarget | None = None,
+        worker_target: PdfWorkerTarget | None = None,
+        image_worker_target: ImageWorkerTarget | None = None,
     ) -> None:
         self._dpi = dpi
         self._language = language
         self._worker_target = worker_target or _tesseract_ocr_worker
+        self._image_worker_target = image_worker_target or _tesseract_image_ocr_worker
 
     def extract_pdf_text(
         self,
@@ -97,29 +110,61 @@ class TesseractOcrAdapter:
             process.join()
             raise OcrTimeoutError("OCR timed out")
 
-        try:
-            payload = queue.get_nowait()
-        except Empty as exc:
-            raise OcrError("OCR worker produced no result") from exc
+        payload = _read_worker_payload(queue)
+        return _pages_from_worker_payload(payload)
 
-        status = payload.get("status")
-        if status == "success":
-            pages = payload.get("pages")
-            if not isinstance(pages, list):
-                raise OcrError("OCR worker returned malformed pages")
-            results: list[OcrPageText] = []
-            for page in pages:
-                if not isinstance(page, dict):
-                    raise OcrError("OCR worker returned malformed page")
-                results.append(
-                    OcrPageText(page_number=int(page["page_number"]), text=str(page["text"]))
-                )
-            return results
-        if status == "timeout":
+    def extract_image_text(
+        self,
+        data: bytes,
+        *,
+        timeout_seconds: float,
+    ) -> list[OcrPageText]:
+        """Return OCR text from one image in a process-isolated worker."""
+        if timeout_seconds <= 0:
+            raise OcrTimeoutError("OCR timeout must be positive")
+
+        queue: mp.Queue[dict[str, object]] = mp.Queue(maxsize=1)
+        process = mp.Process(
+            target=self._image_worker_target,
+            args=(data, self._dpi, self._language, timeout_seconds, queue),
+        )
+        process.start()
+        process.join(timeout_seconds)
+        if process.is_alive():
+            _terminate_process_tree(process)
+            process.join()
             raise OcrTimeoutError("OCR timed out")
-        if status == "unavailable":
-            raise OcrUnavailableError("OCR dependencies are unavailable")
-        raise OcrError("OCR failed")
+
+        payload = _read_worker_payload(queue)
+        return _pages_from_worker_payload(payload)
+
+
+def _read_worker_payload(queue: mp.Queue[dict[str, object]]) -> dict[str, object]:
+    try:
+        return queue.get_nowait()
+    except Empty as exc:
+        raise OcrError("OCR worker produced no result") from exc
+
+
+def _pages_from_worker_payload(payload: dict[str, object]) -> list[OcrPageText]:
+    status = payload.get("status")
+    if status == "success":
+        pages = payload.get("pages")
+        if not isinstance(pages, list):
+            raise OcrError("OCR worker returned malformed pages")
+        results: list[OcrPageText] = []
+        for page in pages:
+            if not isinstance(page, dict):
+                raise OcrError("OCR worker returned malformed page")
+            results.append(
+                OcrPageText(page_number=int(page["page_number"]), text=str(page["text"]))
+            )
+        return results
+    if status == "timeout":
+        raise OcrTimeoutError("OCR timed out")
+    if status == "unavailable":
+        raise OcrUnavailableError("OCR dependencies are unavailable")
+    raise OcrError("OCR failed")
 
 
 def _tesseract_ocr_worker(
@@ -192,8 +237,74 @@ def _tesseract_ocr_worker(
         _put_payload(queue, {"status": "failed"})
 
 
+def _tesseract_image_ocr_worker(
+    data: bytes,
+    dpi: int,
+    language: str,
+    timeout_seconds: float,
+    queue: Any,
+) -> None:
+    del dpi
+    try:
+        with _suppress_output():
+            try:
+                from io import BytesIO
+
+                from PIL import Image
+                from pytesseract import TesseractError, TesseractNotFoundError, image_to_string
+            except ImportError:
+                _put_payload(queue, {"status": "unavailable"})
+                return
+
+            try:
+                with Image.open(BytesIO(data)) as image:
+                    if not _image_within_resource_bounds(
+                        width=image.size[0],
+                        height=image.size[1],
+                        frame_count=int(getattr(image, "n_frames", 1)),
+                    ):
+                        _put_payload(queue, {"status": "failed"})
+                        return
+                    text = image_to_string(
+                        image.convert("RGB"),
+                        lang=language,
+                        timeout=timeout_seconds,
+                    )
+            except TesseractNotFoundError:
+                _put_payload(queue, {"status": "unavailable"})
+                return
+            except TesseractError as exc:
+                if _is_tesseract_unavailable(exc):
+                    _put_payload(queue, {"status": "unavailable"})
+                else:
+                    _put_payload(queue, {"status": "failed"})
+                return
+            except RuntimeError as exc:
+                if _is_timeout_error(exc):
+                    _put_payload(queue, {"status": "timeout"})
+                else:
+                    _put_payload(queue, {"status": "failed"})
+                return
+
+            _put_payload(
+                queue,
+                {
+                    "status": "success",
+                    "pages": [{"page_number": 1, "text": text}],
+                },
+            )
+    except Exception:
+        _put_payload(queue, {"status": "failed"})
+
+
 def _put_payload(queue: Any, payload: dict[str, object]) -> None:
     queue.put(payload)
+
+
+def _image_within_resource_bounds(*, width: int, height: int, frame_count: int) -> bool:
+    if width < 1 or height < 1 or frame_count != 1:
+        return False
+    return width * height <= MAX_OCR_IMAGE_PIXELS
 
 
 def _terminate_process_tree(process: mp.Process) -> None:

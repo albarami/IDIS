@@ -30,6 +30,10 @@ class ParseErrorCode(StrEnum):
     OCR_TIMEOUT = "ocr_timeout"
     OCR_UNAVAILABLE = "ocr_unavailable"
     OCR_NO_TEXT_EXTRACTED = "ocr_no_text_extracted"
+    MEDIA_TRANSCRIPTION_UNAVAILABLE = "media_transcription_unavailable"
+    MEDIA_TRANSCRIPTION_TIMEOUT = "media_transcription_timeout"
+    MEDIA_TRANSCRIPTION_FAILED = "media_transcription_failed"
+    MEDIA_NO_TEXT_EXTRACTED = "media_no_text_extracted"
     INVALID_XLSX = "invalid_xlsx"
     INTERNAL_ERROR = "internal_error"
 
@@ -118,7 +122,17 @@ class ParseResult:
         warnings: Non-fatal issues encountered during parsing.
     """
 
-    doc_type: Literal["PDF", "XLSX", "DOCX", "PPTX", "IMAGE", "HTML", "TEXT", "UNKNOWN"]
+    doc_type: Literal[
+        "PDF",
+        "XLSX",
+        "DOCX",
+        "PPTX",
+        "IMAGE",
+        "HTML",
+        "TEXT",
+        "MEDIA",
+        "UNKNOWN",
+    ]
     success: bool
     spans: list[SpanDraft] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)

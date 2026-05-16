@@ -14,6 +14,7 @@ import pytest
 from idis.api.errors import IdisHttpError
 from idis.api.routes.documents import _reject_unsupported_upload_format
 from idis.evaluation.real_example_gate import GateMode, ParseAttempt, run_real_example_gate
+from idis.evaluation.real_example_gate_ledger import media_policy_key
 from idis.models.document_classification import (
     DocumentSupportStatus,
     DocumentTriageStatus,
@@ -76,6 +77,35 @@ def test_inventory_hashing_streams_without_path_read_bytes(
     assert summary["counts_by_extension"] == {".xlsx": 1}
     assert summary["counts_by_status"] == {"inventoried": 1}
     _assert_safe_json(summary, forbidden=[str(root), "confidential"])
+
+
+def test_inventory_only_does_not_stream_mp4_body(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    root = tmp_path / "real_example"
+    root.mkdir()
+    (root / "confidential founder interview.mp4").write_bytes(b"do not stream")
+    original_open = Path.open
+
+    def fail_mp4_open(path: Path, mode: str = "r", *args: object, **kwargs: object) -> Any:
+        if path.suffix.lower() == ".mp4" and "r" in mode:
+            raise AssertionError("inventory must not stream MP4 bodies")
+        return original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", fail_mp4_open)
+
+    summary = run_real_example_gate(
+        root=root,
+        ledger_path=tmp_path / "ledger.json",
+        mode=GateMode.INVENTORY_ONLY,
+        emit_progress=False,
+    )
+
+    assert summary["total_files"] == 1
+    assert summary["counts_by_extension"] == {".mp4": 1}
+    assert summary["counts_by_status"] == {"inventoried": 1}
+    _assert_safe_json(summary, forbidden=[str(root), "confidential", "do not stream"])
 
 
 def test_parse_supported_attempts_only_supported_extensions_and_records_reasons(
@@ -479,6 +509,305 @@ def test_parse_supported_resumes_pdf_ocr_result_when_policy_is_unchanged(
     assert summary["counts_by_reason_code"] == {"ocr_no_text_extracted": 1}
     _assert_ledger_is_private(ledger_path)
     _assert_safe_json(summary, forbidden=[str(root), "confidential", "unchanged-policy"])
+
+
+def test_media_enabled_classifies_mp4_dependency_missing_without_leaks(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "real_example"
+    confidential_dir = root / "Confidential Media"
+    confidential_dir.mkdir(parents=True)
+    (confidential_dir / "secret founder interview.mp4").write_bytes(
+        b"\x00\x00\x00\x18ftypmp42 SLICE37 MEDIA SECRET"
+    )
+
+    summary = run_real_example_gate(
+        root=root,
+        ledger_path=tmp_path / "ledger.json",
+        mode=GateMode.PARSE_SUPPORTED,
+        safe_summary=True,
+        emit_progress=False,
+        media_enabled=True,
+        media_timeout_seconds=20,
+    )
+
+    assert summary["counts_by_status"] == {"deferred": 1}
+    assert summary["counts_by_parser_outcome"] == {"media_required": 1}
+    assert summary["counts_by_reason_code"] == {"media_transcription_unavailable": 1}
+    _assert_safe_json(
+        summary,
+        forbidden=[str(root), "Confidential", "secret", "founder", "SLICE37", "MEDIA"],
+    )
+
+
+def test_media_enabled_no_adapter_does_not_read_mp4_body(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    root = tmp_path / "real_example"
+    root.mkdir()
+    (root / "confidential interview.mp4").write_bytes(b"do not read")
+    original_open = Path.open
+
+    def fail_mp4_open(path: Path, mode: str = "r", *args: object, **kwargs: object) -> Any:
+        if path.suffix.lower() == ".mp4" and "r" in mode:
+            raise AssertionError("no-adapter MP4 path must not read media bytes")
+        return original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", fail_mp4_open)
+
+    summary = run_real_example_gate(
+        root=root,
+        ledger_path=tmp_path / "ledger.json",
+        mode=GateMode.PARSE_SUPPORTED,
+        safe_summary=True,
+        emit_progress=False,
+        media_enabled=True,
+    )
+
+    assert summary["counts_by_status"] == {"deferred": 1}
+    assert summary["counts_by_parser_outcome"] == {"media_required": 1}
+    assert summary["counts_by_reason_code"] == {"media_transcription_unavailable": 1}
+    _assert_safe_json(summary, forbidden=[str(root), "confidential", "do not read"])
+
+
+@pytest.mark.parametrize("media_enabled", [False, True])
+def test_defers_too_large_mp4_before_reading_body_regardless_of_media_setting(
+    tmp_path: Path,
+    monkeypatch: Any,
+    media_enabled: bool,
+) -> None:
+    root = tmp_path / "real_example"
+    root.mkdir()
+    (root / "confidential large interview.mp4").write_bytes(b"do not parse")
+    original_open = Path.open
+
+    def too_large_capability(**_: object) -> ParserCapability:
+        return ParserCapability(
+            file_type="MP4",
+            support_status=DocumentSupportStatus.TOO_LARGE,
+            triage_status=DocumentTriageStatus.TOO_LARGE,
+            reason_codes=["file_too_large"],
+            usable_without_conversion=False,
+        )
+
+    def fail_mp4_open(path: Path, mode: str = "r", *args: object, **kwargs: object) -> Any:
+        if path.suffix.lower() == ".mp4" and "r" in mode:
+            raise AssertionError("too-large MP4 files must defer before reading bytes")
+        return original_open(path, mode, *args, **kwargs)
+
+    def fail_read_bytes(_: Path) -> bytes:
+        raise AssertionError("too-large MP4 files must defer before reading bytes")
+
+    monkeypatch.setattr(
+        "idis.evaluation.real_example_gate.capability_for_document",
+        too_large_capability,
+    )
+    monkeypatch.setattr(Path, "open", fail_mp4_open)
+    monkeypatch.setattr(Path, "read_bytes", fail_read_bytes)
+
+    summary = run_real_example_gate(
+        root=root,
+        ledger_path=tmp_path / f"ledger-{media_enabled}.json",
+        mode=GateMode.PARSE_SUPPORTED,
+        safe_summary=True,
+        emit_progress=False,
+        media_enabled=media_enabled,
+    )
+
+    assert summary["counts_by_status"] == {"deferred": 1}
+    assert summary["counts_by_parser_outcome"] == {"not_attempted": 1}
+    assert summary["counts_by_reason_code"] == {"file_too_large": 1}
+    _assert_safe_json(summary, forbidden=[str(root), "confidential", "do not parse"])
+
+
+def test_media_enabled_retries_stale_mp4_result_when_policy_changes(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "real_example"
+    root.mkdir()
+    (root / "confidential interview.mp4").write_bytes(
+        b"\x00\x00\x00\x18ftypmp42 stale media policy"
+    )
+    ledger_path = tmp_path / "ledger.json"
+
+    first = run_real_example_gate(
+        root=root,
+        ledger_path=ledger_path,
+        mode=GateMode.PARSE_SUPPORTED,
+        safe_summary=True,
+        emit_progress=False,
+        media_enabled=True,
+        media_timeout_seconds=10,
+    )
+
+    second = run_real_example_gate(
+        root=root,
+        ledger_path=ledger_path,
+        mode=GateMode.PARSE_SUPPORTED,
+        safe_summary=True,
+        emit_progress=False,
+        media_enabled=True,
+        media_timeout_seconds=20,
+    )
+
+    assert first["counts_by_reason_code"] == {"media_transcription_unavailable": 1}
+    assert second["counts_by_status"] == {"deferred": 1}
+    assert second["counts_by_parser_outcome"] == {"media_required": 1}
+    assert second["counts_by_reason_code"] == {"media_transcription_unavailable": 1}
+    _assert_ledger_is_private(ledger_path)
+    _assert_safe_json(second, forbidden=[str(root), "confidential", "stale media policy"])
+
+
+def test_media_enabled_retries_stale_mp4_conversion_required_when_policy_changes(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "real_example"
+    root.mkdir()
+    (root / "confidential interview.mp4").write_bytes(
+        b"\x00\x00\x00\x18ftypmp42 stale conversion policy"
+    )
+    ledger_path = tmp_path / "ledger.json"
+
+    first = run_real_example_gate(
+        root=root,
+        ledger_path=ledger_path,
+        mode=GateMode.PARSE_SUPPORTED,
+        safe_summary=True,
+        emit_progress=False,
+        media_enabled=False,
+    )
+
+    second = run_real_example_gate(
+        root=root,
+        ledger_path=ledger_path,
+        mode=GateMode.PARSE_SUPPORTED,
+        safe_summary=True,
+        emit_progress=False,
+        media_enabled=True,
+        media_timeout_seconds=20,
+    )
+
+    assert first["counts_by_reason_code"] == {"conversion_required": 1}
+    assert second["counts_by_status"] == {"deferred": 1}
+    assert second["counts_by_parser_outcome"] == {"media_required": 1}
+    assert second["counts_by_reason_code"] == {"media_transcription_unavailable": 1}
+    _assert_ledger_is_private(ledger_path)
+    _assert_safe_json(second, forbidden=[str(root), "confidential", "stale conversion policy"])
+
+
+def test_media_enabled_resumes_mp4_result_when_policy_is_unchanged(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "real_example"
+    root.mkdir()
+    (root / "confidential interview.mp4").write_bytes(
+        b"\x00\x00\x00\x18ftypmp42 unchanged media policy"
+    )
+    ledger_path = tmp_path / "ledger.json"
+
+    first = run_real_example_gate(
+        root=root,
+        ledger_path=ledger_path,
+        mode=GateMode.PARSE_SUPPORTED,
+        safe_summary=True,
+        emit_progress=False,
+        media_enabled=True,
+        media_timeout_seconds=20,
+    )
+
+    second = run_real_example_gate(
+        root=root,
+        ledger_path=ledger_path,
+        mode=GateMode.PARSE_SUPPORTED,
+        safe_summary=True,
+        emit_progress=False,
+        media_enabled=True,
+        media_timeout_seconds=20,
+    )
+
+    assert first["counts_by_parser_outcome"] == {"media_required": 1}
+    assert second["counts_by_status"] == {"deferred": 1}
+    assert second["counts_by_parser_outcome"] == {"resumed": 1}
+    assert second["counts_by_reason_code"] == {"media_transcription_unavailable": 1}
+    _assert_ledger_is_private(ledger_path)
+    _assert_safe_json(second, forbidden=[str(root), "confidential", "unchanged media policy"])
+
+
+def test_media_policy_key_includes_enabled_adapter_timeout_and_version() -> None:
+    disabled = media_policy_key(
+        media_enabled=False,
+        media_adapter_available=False,
+        media_adapter_name="none",
+        media_timeout_seconds=20,
+    )
+    no_adapter = media_policy_key(
+        media_enabled=True,
+        media_adapter_available=False,
+        media_adapter_name="none",
+        media_timeout_seconds=20,
+    )
+    provisioned_adapter = media_policy_key(
+        media_enabled=True,
+        media_adapter_available=True,
+        media_adapter_name="fake-v1",
+        media_timeout_seconds=20,
+    )
+    longer_timeout = media_policy_key(
+        media_enabled=True,
+        media_adapter_available=True,
+        media_adapter_name="fake-v1",
+        media_timeout_seconds=30,
+    )
+
+    assert disabled is not None
+    assert "enabled=false" in disabled
+    assert "adapter_available=false" in no_adapter
+    assert "adapter=none" in no_adapter
+    assert "timeout=20.0" in no_adapter
+    assert "max_timeout=120.0" in no_adapter
+    assert "max_bytes=52428800" in no_adapter
+    assert "max_segments=500" in no_adapter
+    assert "max_segment_text_chars=20000" in no_adapter
+    assert "v1" in no_adapter
+    assert len({disabled, no_adapter, provisioned_adapter, longer_timeout}) == 4
+
+
+def test_media_disabled_retries_stale_media_unavailable_entry(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "real_example"
+    root.mkdir()
+    (root / "confidential interview.mp4").write_bytes(
+        b"\x00\x00\x00\x18ftypmp42 disabled media policy"
+    )
+    ledger_path = tmp_path / "ledger.json"
+
+    first = run_real_example_gate(
+        root=root,
+        ledger_path=ledger_path,
+        mode=GateMode.PARSE_SUPPORTED,
+        safe_summary=True,
+        emit_progress=False,
+        media_enabled=True,
+        media_timeout_seconds=20,
+    )
+
+    second = run_real_example_gate(
+        root=root,
+        ledger_path=ledger_path,
+        mode=GateMode.PARSE_SUPPORTED,
+        safe_summary=True,
+        emit_progress=False,
+        media_enabled=False,
+    )
+
+    assert first["counts_by_reason_code"] == {"media_transcription_unavailable": 1}
+    assert second["counts_by_status"] == {"deferred": 1}
+    assert second["counts_by_parser_outcome"] == {"not_attempted": 1}
+    assert second["counts_by_reason_code"] == {"conversion_required": 1}
+    _assert_ledger_is_private(ledger_path)
+    _assert_safe_json(second, forbidden=[str(root), "confidential", "disabled media policy"])
 
 
 def test_retryable_timeout_does_not_permanently_skip_hash(

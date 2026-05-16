@@ -6,7 +6,12 @@ import json
 from pathlib import Path
 from typing import Any
 
+from idis.parsers.media import MAX_MEDIA_SEGMENT_TEXT_CHARS, MAX_MEDIA_SEGMENTS
+from idis.services.ingestion.service import DEFAULT_MAX_BYTES
+
 LEDGER_VERSION = 1
+MEDIA_POLICY_VERSION = "v1"
+MEDIA_POLICY_MAX_TIMEOUT_SECONDS = 120.0
 RETRYABLE_REASON_CODES = frozenset(
     {
         "internal_error",
@@ -20,6 +25,16 @@ NON_PDF_PARSE_EXTENSIONS = frozenset({".docx", ".pptx", ".xlsx"})
 OCR_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"})
 TEXT_PARSE_EXTENSIONS = frozenset({".html", ".htm", ".txt"})
 PDF_OCR_POLICY_SENSITIVE_REASON_CODES = frozenset({"ocr_required", "ocr_no_text_extracted"})
+MEDIA_EXTENSIONS = frozenset({".mp4"})
+MEDIA_POLICY_SENSITIVE_REASON_CODES = frozenset(
+    {
+        "conversion_required",
+        "media_no_text_extracted",
+        "media_transcription_failed",
+        "media_transcription_timeout",
+        "media_transcription_unavailable",
+    }
+)
 
 
 def ocr_policy_key(
@@ -34,6 +49,27 @@ def ocr_policy_key(
         return None
     return (
         f"pdf-ocr:v1:max_pages={ocr_max_pages}:timeout={float(ocr_timeout_seconds)}:dpi={ocr_dpi}"
+    )
+
+
+def media_policy_key(
+    *,
+    media_enabled: bool,
+    media_adapter_available: bool,
+    media_adapter_name: str,
+    media_timeout_seconds: float,
+) -> str | None:
+    """Return a safe key for media settings that affect private transcription results."""
+    return (
+        f"media:{MEDIA_POLICY_VERSION}:"
+        f"enabled={str(media_enabled).lower()}:"
+        f"adapter_available={str(media_adapter_available).lower()}:"
+        f"adapter={media_adapter_name}:"
+        f"timeout={float(media_timeout_seconds)}:"
+        f"max_timeout={float(MEDIA_POLICY_MAX_TIMEOUT_SECONDS)}:"
+        f"max_bytes={DEFAULT_MAX_BYTES}:"
+        f"max_segments={MAX_MEDIA_SEGMENTS}:"
+        f"max_segment_text_chars={MAX_MEDIA_SEGMENT_TEXT_CHARS}"
     )
 
 
@@ -71,6 +107,8 @@ def terminal_ledger_entry(
     extension: str,
     ocr_enabled: bool = False,
     ocr_policy_key: str | None = None,
+    media_enabled: bool = False,
+    media_policy_key: str | None = None,
 ) -> dict[str, object] | None:
     """Return a terminal resume entry for the same hash and extension."""
     entry = _ledger_entry_for_extension(entries=entries, sha256=sha256, extension=extension)
@@ -86,6 +124,12 @@ def terminal_ledger_entry(
         and extension == ".pdf"
         and reason_code in PDF_OCR_POLICY_SENSITIVE_REASON_CODES
         and entry.get("ocr_policy_key") != ocr_policy_key
+    ):
+        return None
+    if (
+        extension in MEDIA_EXTENSIONS
+        and reason_code in MEDIA_POLICY_SENSITIVE_REASON_CODES
+        and entry.get("media_policy_key") != media_policy_key
     ):
         return None
     if ocr_enabled and extension in OCR_IMAGE_EXTENSIONS and reason_code == "ocr_required":
@@ -109,6 +153,7 @@ def record_ledger_entry(
     parser_outcome: str,
     reason_code: str,
     ocr_policy_key: str | None = None,
+    media_policy_key: str | None = None,
 ) -> None:
     """Record one safe per-extension outcome under a SHA256 key."""
     entries = ledger["entries"]
@@ -132,6 +177,8 @@ def record_ledger_entry(
     }
     if ocr_policy_key is not None:
         entry["ocr_policy_key"] = ocr_policy_key
+    if media_policy_key is not None:
+        entry["media_policy_key"] = media_policy_key
     by_extension[extension] = entry
 
 

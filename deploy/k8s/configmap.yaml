@@ -18,6 +18,8 @@ data:
   IDIS_OTEL_SERVICE_NAME: "idis-api"
   IDIS_OTEL_EXPORTER: "otlp"
   IDIS_OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
+  # OCR is opt-in and remains disabled for default public ingestion.
+  IDIS_OCR_ENABLED: "0"
   # Uvicorn settings
   UVICORN_HOST: "0.0.0.0"
   UVICORN_PORT: "8000"

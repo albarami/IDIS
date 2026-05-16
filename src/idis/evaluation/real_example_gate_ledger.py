@@ -51,6 +51,7 @@ def terminal_ledger_entry(
     entries: dict[str, object],
     sha256: str,
     extension: str,
+    ocr_enabled: bool = False,
 ) -> dict[str, object] | None:
     """Return a terminal resume entry for the same hash and extension."""
     entry = _ledger_entry_for_extension(entries=entries, sha256=sha256, extension=extension)
@@ -60,6 +61,8 @@ def terminal_ledger_entry(
         return None
     reason_code = entry.get("reason_code")
     if not isinstance(reason_code, str) or reason_code in RETRYABLE_REASON_CODES:
+        return None
+    if ocr_enabled and extension == ".pdf" and reason_code == "ocr_required":
         return None
     if reason_code == "ocr_required" and extension in NON_PDF_PARSE_EXTENSIONS:
         return None

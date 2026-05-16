@@ -11,7 +11,14 @@ from typing import Any
 
 import pytest
 
+from idis.api.errors import IdisHttpError
+from idis.api.routes.documents import _reject_unsupported_upload_format
 from idis.evaluation.real_example_gate import GateMode, ParseAttempt, run_real_example_gate
+from idis.models.document_classification import (
+    DocumentSupportStatus,
+    DocumentTriageStatus,
+    ParserCapability,
+)
 
 
 def test_inventory_only_is_deterministic_and_safe(tmp_path: Path) -> None:
@@ -81,8 +88,8 @@ def test_parse_supported_attempts_only_supported_extensions_and_records_reasons(
     unsupported = {
         ".mp4": root / "management interview.mp4",
         ".png": root / "scanned invoice.png",
-        ".html": root / "exported data room.html",
-        ".txt": root / "plain notes.txt",
+        ".csv": root / "plain notes.csv",
+        ".zip": root / "exported data room.zip",
     }
     supported.write_bytes(b"fake workbook")
     for path in unsupported.values():
@@ -123,6 +130,155 @@ def test_parse_supported_attempts_only_supported_extensions_and_records_reasons(
     assert "confidential parser diagnostic" not in captured.out
     assert "confidential parser diagnostic" not in captured.err
     _assert_safe_json(summary, forbidden=[str(root), "confidential", "management", "scanned"])
+
+
+def test_parse_supported_parses_html_and_text_without_leaking_content(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "real_example"
+    confidential_dir = root / "Confidential Notes"
+    confidential_dir.mkdir(parents=True)
+    (confidential_dir / "secret data room export.html").write_text(
+        "<html><body><h1>SLICE35 HTML SECRET</h1></body></html>",
+        encoding="utf-8",
+    )
+    (confidential_dir / "secret investment notes.txt").write_text(
+        "SLICE35 TXT SECRET\n",
+        encoding="utf-8",
+    )
+
+    summary = run_real_example_gate(
+        root=root,
+        ledger_path=tmp_path / "ledger.json",
+        mode=GateMode.PARSE_SUPPORTED,
+        safe_summary=True,
+        emit_progress=False,
+    )
+
+    assert summary["counts_by_status"] == {"parsed": 2}
+    assert summary["counts_by_parser_outcome"] == {"success": 2}
+    assert summary["counts_by_reason_code"] == {"parsed": 2}
+    _assert_safe_json(
+        summary,
+        forbidden=[
+            str(root),
+            "Confidential",
+            "secret",
+            "SLICE35",
+            "HTML",
+            "TXT",
+            "investment",
+        ],
+    )
+
+
+def test_parse_supported_retries_stale_html_text_unsupported_ledger_entries(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "real_example"
+    confidential_dir = root / "Confidential Notes Resume"
+    confidential_dir.mkdir(parents=True)
+    html_bytes = b"<html><body><p>SLICE35 HTML RESUME</p></body></html>"
+    text_bytes = b"SLICE35 TXT RESUME\n"
+    (confidential_dir / "secret old export.html").write_bytes(html_bytes)
+    (confidential_dir / "secret old notes.txt").write_bytes(text_bytes)
+    ledger_path = tmp_path / "ledger.json"
+    ledger_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "entries": {
+                    hashlib.sha256(html_bytes).hexdigest(): {
+                        "by_extension": {
+                            ".html": {
+                                "extension": ".html",
+                                "size_bytes": len(html_bytes),
+                                "status": "unsupported",
+                                "parser_outcome": "not_attempted",
+                                "reason_code": "unsupported_format",
+                            }
+                        }
+                    },
+                    hashlib.sha256(text_bytes).hexdigest(): {
+                        "by_extension": {
+                            ".txt": {
+                                "extension": ".txt",
+                                "size_bytes": len(text_bytes),
+                                "status": "unsupported",
+                                "parser_outcome": "not_attempted",
+                                "reason_code": "unsupported_format",
+                            }
+                        }
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = run_real_example_gate(
+        root=root,
+        ledger_path=ledger_path,
+        mode=GateMode.PARSE_SUPPORTED,
+        safe_summary=True,
+        emit_progress=False,
+    )
+
+    assert summary["counts_by_status"] == {"parsed": 2}
+    assert summary["counts_by_parser_outcome"] == {"success": 2}
+    assert summary["counts_by_reason_code"] == {"parsed": 2}
+    _assert_ledger_is_private(ledger_path)
+    _assert_safe_json(summary, forbidden=[str(root), "Confidential", "secret", "SLICE35"])
+
+
+def test_parse_supported_defers_too_large_text_without_reading_file(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    root = tmp_path / "real_example"
+    root.mkdir()
+    (root / "confidential large notes.txt").write_text("do not read", encoding="utf-8")
+
+    def too_large_capability(**_: object) -> ParserCapability:
+        return ParserCapability(
+            file_type="TXT",
+            support_status=DocumentSupportStatus.TOO_LARGE,
+            triage_status=DocumentTriageStatus.TOO_LARGE,
+            reason_codes=["file_too_large"],
+            usable_without_conversion=False,
+        )
+
+    def fail_read_bytes(_: Path) -> bytes:
+        raise AssertionError("too-large text files must defer before reading bytes")
+
+    monkeypatch.setattr(
+        "idis.evaluation.real_example_gate.capability_for_document",
+        too_large_capability,
+    )
+    monkeypatch.setattr(Path, "read_bytes", fail_read_bytes)
+
+    summary = run_real_example_gate(
+        root=root,
+        ledger_path=tmp_path / "ledger.json",
+        mode=GateMode.PARSE_SUPPORTED,
+        safe_summary=True,
+        emit_progress=False,
+    )
+
+    assert summary["counts_by_status"] == {"deferred": 1}
+    assert summary["counts_by_parser_outcome"] == {"not_attempted": 1}
+    assert summary["counts_by_reason_code"] == {"file_too_large": 1}
+    _assert_safe_json(summary, forbidden=[str(root), "confidential", "do not read"])
+
+
+def test_default_upload_admission_still_rejects_html_and_text_bytes() -> None:
+    with pytest.raises(IdisHttpError):
+        _reject_unsupported_upload_format(
+            b"<html><body>SLICE35 HTML</body></html>",
+            "data-room-export.html",
+        )
+    with pytest.raises(IdisHttpError):
+        _reject_unsupported_upload_format(b"SLICE35 TXT", "notes.txt")
 
 
 def test_parse_supported_reports_no_text_pdf_as_ocr_required_without_leaks(

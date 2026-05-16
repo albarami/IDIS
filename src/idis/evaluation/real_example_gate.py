@@ -42,6 +42,7 @@ MAX_OCR_DPI = 300
 SUPPORTED_PARSE_EXTENSIONS = frozenset({".pdf", ".xlsx", ".docx", ".pptx"})
 SUPPORTED_PARSER_NAMES = frozenset({"pdf", "xlsx", "docx", "pptx"})
 OCR_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"})
+TEXT_PARSE_EXTENSIONS = frozenset({".html", ".htm", ".txt"})
 
 
 class GateMode(StrEnum):
@@ -286,12 +287,20 @@ def _attempt_for_file(
         filename=f"file{file.extension}",
         file_size_bytes=file.size_bytes,
     )
+    if capability.support_status == DocumentSupportStatus.TOO_LARGE:
+        return ParseAttempt.deferred(reason_code="file_too_large")
+
     should_parse_image_ocr = _should_parse_image_with_ocr(
         extension=file.extension,
         support_status=capability.support_status,
         ocr_enabled=ocr_enabled,
     )
-    if file.extension not in SUPPORTED_PARSE_EXTENSIONS and not should_parse_image_ocr:
+    should_parse_text = file.extension in TEXT_PARSE_EXTENSIONS
+    if (
+        file.extension not in SUPPORTED_PARSE_EXTENSIONS
+        and not should_parse_image_ocr
+        and not should_parse_text
+    ):
         reason_code = (
             "unsupported_in_slice_29"
             if file.extension == ".xlsm"
@@ -305,9 +314,13 @@ def _attempt_for_file(
             return ParseAttempt.unsupported(reason_code=reason_code)
         return ParseAttempt.deferred(reason_code=reason_code)
 
-    if not should_parse_image_ocr and not _should_parse(
-        capability.support_status,
-        capability.parser_name,
+    if (
+        not should_parse_image_ocr
+        and not should_parse_text
+        and not _should_parse(
+            capability.support_status,
+            capability.parser_name,
+        )
     ):
         reason_code = _capability_reason_code(
             support_status=capability.support_status,

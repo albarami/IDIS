@@ -8,6 +8,7 @@ from idis.api.errors import IdisHttpError
 from idis.api.routes.documents import _reject_unsupported_upload_format
 from idis.parsers.base import ParseErrorCode
 from idis.parsers.media import MediaConfig, MediaSegmentText, parse_media
+from idis.parsers.registry import parse_bytes
 
 
 class _SuccessfulMediaAdapter:
@@ -42,6 +43,14 @@ class _FailedMediaAdapter:
 def test_default_upload_admission_still_rejects_mp4_bytes() -> None:
     with pytest.raises(IdisHttpError):
         _reject_unsupported_upload_format(b"\x00\x00\x00\x18ftypmp42", "demo.mp4")
+
+
+def test_global_parser_registry_does_not_admit_mp4_bytes() -> None:
+    result = parse_bytes(b"\x00\x00\x00\x18ftypmp42", filename="synthetic.mp4")
+
+    assert result.success is False
+    assert result.doc_type == "UNKNOWN"
+    assert [error.code for error in result.errors] == [ParseErrorCode.UNSUPPORTED_FORMAT]
 
 
 def test_media_parser_disabled_returns_safe_unavailable() -> None:

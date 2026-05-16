@@ -534,6 +534,8 @@ def test_media_enabled_classifies_mp4_dependency_missing_without_leaks(
     assert summary["counts_by_status"] == {"deferred": 1}
     assert summary["counts_by_parser_outcome"] == {"media_required": 1}
     assert summary["counts_by_reason_code"] == {"media_transcription_unavailable": 1}
+    assert "parsed" not in summary["counts_by_status"]
+    assert "parsed" not in summary["counts_by_reason_code"]
     _assert_safe_json(
         summary,
         forbidden=[str(root), "Confidential", "secret", "founder", "SLICE37", "MEDIA"],

@@ -17,6 +17,7 @@ from typing import Any
 from idis.evaluation.real_example_gate_ledger import (
     ledger_entry_count,
     load_ledger,
+    ocr_policy_key,
     record_ledger_entry,
     save_ledger,
     terminal_ledger_entry,
@@ -123,6 +124,12 @@ def run_real_example_gate(
     ledger_file = Path(ledger_path)
     ledger = load_ledger(ledger_file)
     resume_entries = dict(ledger["entries"])
+    current_ocr_policy_key = ocr_policy_key(
+        ocr_enabled=ocr_enabled,
+        ocr_max_pages=ocr_max_pages,
+        ocr_timeout_seconds=ocr_timeout_seconds,
+        ocr_dpi=ocr_dpi,
+    )
     progress = progress_fn or _emit_progress
     started_at = time.monotonic()
     records: list[dict[str, object]] = []
@@ -141,6 +148,7 @@ def run_real_example_gate(
             ocr_max_pages=ocr_max_pages,
             ocr_timeout_seconds=ocr_timeout_seconds,
             ocr_dpi=ocr_dpi,
+            ocr_policy_key=current_ocr_policy_key,
         )
         records.append(
             {
@@ -155,6 +163,7 @@ def run_real_example_gate(
             file=file,
             attempt=attempt,
             mode=resolved_mode,
+            ocr_policy_key=current_ocr_policy_key,
         )
         save_ledger(ledger_file, ledger)
         if emit_progress:
@@ -256,6 +265,7 @@ def _attempt_for_file(
     ocr_max_pages: int,
     ocr_timeout_seconds: float,
     ocr_dpi: int,
+    ocr_policy_key: str | None,
 ) -> ParseAttempt:
     if mode == GateMode.INVENTORY_ONLY:
         return ParseAttempt(
@@ -275,6 +285,7 @@ def _attempt_for_file(
         sha256=file.sha256,
         extension=file.extension,
         ocr_enabled=ocr_enabled,
+        ocr_policy_key=ocr_policy_key,
     )
     if existing is not None:
         return ParseAttempt(
@@ -471,6 +482,7 @@ def _record_ledger_entry(
     file: _InventoryFile,
     attempt: ParseAttempt,
     mode: GateMode,
+    ocr_policy_key: str | None,
 ) -> None:
     if mode == GateMode.PARSE_SUPPORTED and attempt.parser_outcome == "resumed":
         return
@@ -482,6 +494,7 @@ def _record_ledger_entry(
         status=attempt.status,
         parser_outcome=attempt.parser_outcome,
         reason_code=attempt.reason_code,
+        ocr_policy_key=ocr_policy_key if file.extension == ".pdf" else None,
     )
 
 

@@ -300,9 +300,9 @@ def _parse_ocr_pages(
             success=False,
             errors=[
                 ParseError(
-                    code=ParseErrorCode.NO_TEXT_EXTRACTED,
+                    code=ParseErrorCode.OCR_NO_TEXT_EXTRACTED,
                     message="OCR completed but no extractable text was found",
-                    details={"pages": page_count},
+                    details={"pages": page_count, "ocr_pages": len(pages)},
                 )
             ],
         )

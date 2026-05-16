@@ -19,6 +19,22 @@ RETRYABLE_REASON_CODES = frozenset(
 NON_PDF_PARSE_EXTENSIONS = frozenset({".docx", ".pptx", ".xlsx"})
 OCR_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"})
 TEXT_PARSE_EXTENSIONS = frozenset({".html", ".htm", ".txt"})
+PDF_OCR_POLICY_SENSITIVE_REASON_CODES = frozenset({"ocr_required", "ocr_no_text_extracted"})
+
+
+def ocr_policy_key(
+    *,
+    ocr_enabled: bool,
+    ocr_max_pages: int,
+    ocr_timeout_seconds: float,
+    ocr_dpi: int,
+) -> str | None:
+    """Return a safe key for OCR settings that affect PDF extraction results."""
+    if not ocr_enabled:
+        return None
+    return (
+        f"pdf-ocr:v1:max_pages={ocr_max_pages}:timeout={float(ocr_timeout_seconds)}:dpi={ocr_dpi}"
+    )
 
 
 def load_ledger(path: Path) -> dict[str, Any]:
@@ -54,6 +70,7 @@ def terminal_ledger_entry(
     sha256: str,
     extension: str,
     ocr_enabled: bool = False,
+    ocr_policy_key: str | None = None,
 ) -> dict[str, object] | None:
     """Return a terminal resume entry for the same hash and extension."""
     entry = _ledger_entry_for_extension(entries=entries, sha256=sha256, extension=extension)
@@ -64,7 +81,12 @@ def terminal_ledger_entry(
     reason_code = entry.get("reason_code")
     if not isinstance(reason_code, str) or reason_code in RETRYABLE_REASON_CODES:
         return None
-    if ocr_enabled and extension == ".pdf" and reason_code == "ocr_required":
+    if (
+        ocr_enabled
+        and extension == ".pdf"
+        and reason_code in PDF_OCR_POLICY_SENSITIVE_REASON_CODES
+        and entry.get("ocr_policy_key") != ocr_policy_key
+    ):
         return None
     if ocr_enabled and extension in OCR_IMAGE_EXTENSIONS and reason_code == "ocr_required":
         return None
@@ -86,6 +108,7 @@ def record_ledger_entry(
     status: str,
     parser_outcome: str,
     reason_code: str,
+    ocr_policy_key: str | None = None,
 ) -> None:
     """Record one safe per-extension outcome under a SHA256 key."""
     entries = ledger["entries"]
@@ -100,13 +123,16 @@ def record_ledger_entry(
                 by_extension[legacy_extension] = bucket
         bucket = {"by_extension": by_extension}
         entries[sha256] = bucket
-    by_extension[extension] = {
+    entry = {
         "extension": extension,
         "size_bytes": size_bytes,
         "status": status,
         "parser_outcome": parser_outcome,
         "reason_code": reason_code,
     }
+    if ocr_policy_key is not None:
+        entry["ocr_policy_key"] = ocr_policy_key
+    by_extension[extension] = entry
 
 
 def ledger_entry_count(ledger: dict[str, Any]) -> int:

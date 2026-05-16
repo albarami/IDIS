@@ -29,6 +29,7 @@ class ParseErrorCode(StrEnum):
     OCR_FAILED = "ocr_failed"
     OCR_TIMEOUT = "ocr_timeout"
     OCR_UNAVAILABLE = "ocr_unavailable"
+    OCR_NO_TEXT_EXTRACTED = "ocr_no_text_extracted"
     INVALID_XLSX = "invalid_xlsx"
     INTERNAL_ERROR = "internal_error"
 

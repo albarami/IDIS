@@ -13,6 +13,7 @@ from pathlib import Path
 from queue import Empty
 from typing import Any, cast
 
+from idis.parsers.html_text import parse_html_text
 from idis.parsers.image import parse_image
 from idis.parsers.ocr import OcrConfig, TesseractOcrAdapter
 from idis.parsers.registry import parse_bytes
@@ -20,6 +21,7 @@ from idis.services.documents.parser_capabilities import triage_document
 
 logger = logging.getLogger(__name__)
 OCR_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"})
+TEXT_PARSE_EXTENSIONS = frozenset({".html", ".htm", ".txt"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,11 +156,13 @@ def _parse_file_worker(
                 if ocr_enabled
                 else None
             )
-            result = (
-                parse_image(data, ocr_config=ocr_config)
-                if ocr_enabled and path_obj.suffix.lower() in OCR_IMAGE_EXTENSIONS
-                else parse_bytes(data, filename=None, ocr_config=ocr_config)
-            )
+            extension = path_obj.suffix.lower()
+            if ocr_enabled and extension in OCR_IMAGE_EXTENSIONS:
+                result = parse_image(data, ocr_config=ocr_config)
+            elif extension in TEXT_PARSE_EXTENSIONS:
+                result = parse_html_text(data, is_html=extension in {".html", ".htm"})
+            else:
+                result = parse_bytes(data, filename=None, ocr_config=ocr_config)
         if memory_exceeded(max_memory_mb):
             _put_attempt(queue, ParseAttempt.deferred(reason_code="max_memory_exceeded"))
             return

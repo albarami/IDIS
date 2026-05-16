@@ -17,6 +17,7 @@ from typing import Any
 from idis.evaluation.real_example_gate_ledger import (
     ledger_entry_count,
     load_ledger,
+    media_policy_key,
     ocr_policy_key,
     record_ledger_entry,
     save_ledger,
@@ -40,10 +41,12 @@ MAX_OCR_PAGES = 10
 MAX_OCR_TIMEOUT_SECONDS = 120.0
 MIN_OCR_DPI = 72
 MAX_OCR_DPI = 300
+MAX_MEDIA_TIMEOUT_SECONDS = 120.0
 SUPPORTED_PARSE_EXTENSIONS = frozenset({".pdf", ".xlsx", ".docx", ".pptx"})
 SUPPORTED_PARSER_NAMES = frozenset({"pdf", "xlsx", "docx", "pptx"})
 OCR_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"})
 TEXT_PARSE_EXTENSIONS = frozenset({".html", ".htm", ".txt"})
+MEDIA_EXTENSIONS = frozenset({".mp4"})
 
 
 class GateMode(StrEnum):
@@ -81,6 +84,8 @@ def run_real_example_gate(
     ocr_max_pages: int = 10,
     ocr_timeout_seconds: float = 30.0,
     ocr_dpi: int = 200,
+    media_enabled: bool = False,
+    media_timeout_seconds: float = 30.0,
 ) -> dict[str, object]:
     """Run the local private real_example gate and return a safe aggregate summary.
 
@@ -99,6 +104,8 @@ def run_real_example_gate(
         ocr_max_pages: Maximum leading PDF pages the OCR adapter may process.
         ocr_timeout_seconds: Maximum OCR runtime inside the parser subprocess.
         ocr_dpi: PDF rasterization DPI for OCR.
+        media_enabled: Whether to run the opt-in private media adapter boundary.
+        media_timeout_seconds: Maximum media transcription runtime inside the parser subprocess.
 
     Returns:
         Aggregate counts by extension, status, parser outcome, and reason code only.
@@ -117,6 +124,10 @@ def run_real_example_gate(
         ocr_timeout_seconds=ocr_timeout_seconds,
         ocr_dpi=ocr_dpi,
     )
+    _validate_media_options(
+        media_enabled=media_enabled,
+        media_timeout_seconds=media_timeout_seconds,
+    )
 
     root_path = Path(root)
     _validate_root(root_path)
@@ -129,6 +140,12 @@ def run_real_example_gate(
         ocr_max_pages=ocr_max_pages,
         ocr_timeout_seconds=ocr_timeout_seconds,
         ocr_dpi=ocr_dpi,
+    )
+    current_media_policy_key = media_policy_key(
+        media_enabled=media_enabled,
+        media_adapter_available=False,
+        media_adapter_name="none",
+        media_timeout_seconds=media_timeout_seconds,
     )
     progress = progress_fn or _emit_progress
     started_at = time.monotonic()
@@ -149,6 +166,9 @@ def run_real_example_gate(
             ocr_timeout_seconds=ocr_timeout_seconds,
             ocr_dpi=ocr_dpi,
             ocr_policy_key=current_ocr_policy_key,
+            media_enabled=media_enabled,
+            media_timeout_seconds=media_timeout_seconds,
+            media_policy_key=current_media_policy_key,
         )
         records.append(
             {
@@ -164,6 +184,7 @@ def run_real_example_gate(
             attempt=attempt,
             mode=resolved_mode,
             ocr_policy_key=current_ocr_policy_key,
+            media_policy_key=current_media_policy_key,
         )
         save_ledger(ledger_file, ledger)
         if emit_progress:
@@ -211,6 +232,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--ocr-max-pages", type=int, default=MAX_OCR_PAGES)
     parser.add_argument("--ocr-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--ocr-dpi", type=int, default=200)
+    parser.add_argument("--media-enabled", action="store_true")
+    parser.add_argument("--media-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--no-progress", action="store_true")
     args = parser.parse_args(argv)
 
@@ -232,6 +255,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             ocr_max_pages=args.ocr_max_pages,
             ocr_timeout_seconds=args.ocr_timeout_seconds,
             ocr_dpi=args.ocr_dpi,
+            media_enabled=args.media_enabled,
+            media_timeout_seconds=args.media_timeout_seconds,
         )
     except (FileNotFoundError, NotADirectoryError, RuntimeError, ValueError) as exc:
         print(
@@ -266,6 +291,9 @@ def _attempt_for_file(
     ocr_timeout_seconds: float,
     ocr_dpi: int,
     ocr_policy_key: str | None,
+    media_enabled: bool,
+    media_timeout_seconds: float,
+    media_policy_key: str | None,
 ) -> ParseAttempt:
     if mode == GateMode.INVENTORY_ONLY:
         return ParseAttempt(
@@ -286,6 +314,8 @@ def _attempt_for_file(
         extension=file.extension,
         ocr_enabled=ocr_enabled,
         ocr_policy_key=ocr_policy_key,
+        media_enabled=media_enabled,
+        media_policy_key=media_policy_key,
     )
     if existing is not None:
         return ParseAttempt(
@@ -307,10 +337,16 @@ def _attempt_for_file(
         ocr_enabled=ocr_enabled,
     )
     should_parse_text = file.extension in TEXT_PARSE_EXTENSIONS
+    should_parse_media = _should_parse_media(
+        extension=file.extension,
+        support_status=capability.support_status,
+        media_enabled=media_enabled,
+    )
     if (
         file.extension not in SUPPORTED_PARSE_EXTENSIONS
         and not should_parse_image_ocr
         and not should_parse_text
+        and not should_parse_media
     ):
         reason_code = (
             "unsupported_in_slice_29"
@@ -328,6 +364,7 @@ def _attempt_for_file(
     if (
         not should_parse_image_ocr
         and not should_parse_text
+        and not should_parse_media
         and not _should_parse(
             capability.support_status,
             capability.parser_name,
@@ -347,6 +384,9 @@ def _attempt_for_file(
     if memory_exceeded(max_memory_mb):
         return ParseAttempt.deferred(reason_code="max_memory_exceeded")
 
+    if should_parse_media:
+        return ParseAttempt.media_required(reason_code="media_transcription_unavailable")
+
     if parse_attempt_fn is not None:
         return run_injected_parse_with_timeout(
             file.path,
@@ -361,6 +401,8 @@ def _attempt_for_file(
         ocr_max_pages=ocr_max_pages,
         ocr_timeout_seconds=ocr_timeout_seconds,
         ocr_dpi=ocr_dpi,
+        media_enabled=media_enabled,
+        media_timeout_seconds=media_timeout_seconds,
     )
 
 
@@ -369,7 +411,16 @@ def _inventory_files(root: Path) -> list[_InventoryFile]:
     for path in sorted((item for item in root.rglob("*") if item.is_file()), key=_sort_key(root)):
         extension = path.suffix.lower() or ".unknown"
         try:
-            sha256, size_bytes = _hash_file_streaming(path)
+            if extension in MEDIA_EXTENSIONS:
+                file_stat = path.stat()
+                size_bytes = file_stat.st_size
+                sha256 = _media_no_read_file_key(
+                    extension=extension,
+                    size_bytes=size_bytes,
+                    modified_ns=file_stat.st_mtime_ns,
+                )
+            else:
+                sha256, size_bytes = _hash_file_streaming(path)
             records.append(
                 _InventoryFile(
                     path=path,
@@ -408,6 +459,17 @@ def _validate_ocr_options(
         raise ValueError("OCR DPI is outside the allowed range")
 
 
+def _validate_media_options(
+    *,
+    media_enabled: bool,
+    media_timeout_seconds: float,
+) -> None:
+    if not media_enabled:
+        return
+    if not 0 < media_timeout_seconds <= MAX_MEDIA_TIMEOUT_SECONDS:
+        raise ValueError("Media timeout is outside the allowed range")
+
+
 def _hash_file_streaming(path: Path) -> tuple[str, int]:
     digest = hashlib.sha256()
     size_bytes = 0
@@ -416,6 +478,11 @@ def _hash_file_streaming(path: Path) -> tuple[str, int]:
             size_bytes += len(chunk)
             digest.update(chunk)
     return digest.hexdigest(), size_bytes
+
+
+def _media_no_read_file_key(*, extension: str, size_bytes: int, modified_ns: int) -> str:
+    payload = f"{extension}:{size_bytes}:{modified_ns}".encode()
+    return f"media-no-read:{hashlib.sha256(payload).hexdigest()}"
 
 
 def _sort_key(root: Path) -> Callable[[Path], str]:
@@ -446,6 +513,19 @@ def _should_parse_image_with_ocr(
         ocr_enabled
         and extension in OCR_IMAGE_EXTENSIONS
         and support_status == DocumentSupportStatus.SCANNED_OR_IMAGE_ONLY
+    )
+
+
+def _should_parse_media(
+    *,
+    extension: str,
+    support_status: DocumentSupportStatus,
+    media_enabled: bool,
+) -> bool:
+    return (
+        media_enabled
+        and extension in MEDIA_EXTENSIONS
+        and support_status == DocumentSupportStatus.CONVERSION_REQUIRED
     )
 
 
@@ -483,6 +563,7 @@ def _record_ledger_entry(
     attempt: ParseAttempt,
     mode: GateMode,
     ocr_policy_key: str | None,
+    media_policy_key: str | None,
 ) -> None:
     if mode == GateMode.PARSE_SUPPORTED and attempt.parser_outcome == "resumed":
         return
@@ -495,6 +576,7 @@ def _record_ledger_entry(
         parser_outcome=attempt.parser_outcome,
         reason_code=attempt.reason_code,
         ocr_policy_key=ocr_policy_key if file.extension == ".pdf" else None,
+        media_policy_key=media_policy_key if file.extension in MEDIA_EXTENSIONS else None,
     )
 
 

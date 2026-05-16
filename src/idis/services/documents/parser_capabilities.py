@@ -93,6 +93,12 @@ _OCR_ERROR_REASON_CODES = {
     ParseErrorCode.OCR_UNAVAILABLE: "ocr_unavailable",
     ParseErrorCode.OCR_NO_TEXT_EXTRACTED: "ocr_no_text_extracted",
 }
+_MEDIA_ERROR_REASON_CODES = {
+    ParseErrorCode.MEDIA_TRANSCRIPTION_UNAVAILABLE: "media_transcription_unavailable",
+    ParseErrorCode.MEDIA_TRANSCRIPTION_TIMEOUT: "media_transcription_timeout",
+    ParseErrorCode.MEDIA_TRANSCRIPTION_FAILED: "media_transcription_failed",
+    ParseErrorCode.MEDIA_NO_TEXT_EXTRACTED: "media_no_text_extracted",
+}
 
 
 def capability_for_document(
@@ -220,6 +226,20 @@ def triage_document(
                 if error_code in error_codes
             ],
             requires_ocr=True,
+            usable_without_conversion=False,
+        )
+
+    if error_codes & set(_MEDIA_ERROR_REASON_CODES):
+        return ParserCapability(
+            file_type=file_type,
+            support_status=DocumentSupportStatus.CONVERSION_REQUIRED,
+            triage_status=DocumentTriageStatus.CONVERSION_REQUIRED,
+            reason_codes=[
+                _MEDIA_ERROR_REASON_CODES[error_code]
+                for error_code in _MEDIA_ERROR_REASON_CODES
+                if error_code in error_codes
+            ],
+            requires_conversion=True,
             usable_without_conversion=False,
         )
 

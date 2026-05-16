@@ -15,6 +15,7 @@ from typing import Any, cast
 
 from idis.parsers.html_text import parse_html_text
 from idis.parsers.image import parse_image
+from idis.parsers.media import MediaConfig, parse_media
 from idis.parsers.ocr import OcrConfig, TesseractOcrAdapter
 from idis.parsers.registry import parse_bytes
 from idis.services.documents.parser_capabilities import triage_document
@@ -22,6 +23,7 @@ from idis.services.documents.parser_capabilities import triage_document
 logger = logging.getLogger(__name__)
 OCR_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"})
 TEXT_PARSE_EXTENSIONS = frozenset({".html", ".htm", ".txt"})
+MEDIA_EXTENSIONS = frozenset({".mp4"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +53,11 @@ class ParseAttempt:
     def deferred(cls, *, reason_code: str) -> ParseAttempt:
         """Return a deferred parse attempt."""
         return cls(status="deferred", parser_outcome="not_attempted", reason_code=reason_code)
+
+    @classmethod
+    def media_required(cls, *, reason_code: str) -> ParseAttempt:
+        """Return a deferred parse attempt for media requiring conversion/transcription."""
+        return cls(status="deferred", parser_outcome="media_required", reason_code=reason_code)
 
     @classmethod
     def ocr_required(cls) -> ParseAttempt:
@@ -99,6 +106,8 @@ def run_parse_subprocess(
     ocr_max_pages: int = 10,
     ocr_timeout_seconds: float = 30.0,
     ocr_dpi: int = 200,
+    media_enabled: bool = False,
+    media_timeout_seconds: float = 30.0,
 ) -> ParseAttempt:
     """Run production parsing in a child process with timeout and safe output."""
     queue: mp.Queue[dict[str, str]] = mp.Queue(maxsize=1)
@@ -111,6 +120,8 @@ def run_parse_subprocess(
             ocr_max_pages,
             ocr_timeout_seconds,
             ocr_dpi,
+            media_enabled,
+            media_timeout_seconds,
             queue,
         ),
     )
@@ -146,6 +157,8 @@ def _parse_file_worker(
     ocr_max_pages: int,
     ocr_timeout_seconds: float,
     ocr_dpi: int,
+    media_enabled: bool,
+    media_timeout_seconds: float,
     queue: mp.Queue[dict[str, str]],
 ) -> None:
     try:
@@ -168,6 +181,15 @@ def _parse_file_worker(
             extension = path_obj.suffix.lower()
             if ocr_enabled and extension in OCR_IMAGE_EXTENSIONS:
                 result = parse_image(data, ocr_config=ocr_config)
+            elif media_enabled and extension in MEDIA_EXTENSIONS:
+                result = parse_media(
+                    data,
+                    media_config=MediaConfig(
+                        enabled=True,
+                        adapter=None,
+                        timeout_seconds=media_timeout_seconds,
+                    ),
+                )
             elif extension in TEXT_PARSE_EXTENSIONS:
                 result = parse_html_text(data, is_html=extension in {".html", ".htm"})
             else:
@@ -191,6 +213,23 @@ def _parse_file_worker(
                     attempt = ParseAttempt.ocr_no_text_extracted()
                 else:
                     attempt = ParseAttempt.ocr_required()
+            elif capability.requires_conversion:
+                reason_code = _first_reason_code(
+                    capability.reason_codes,
+                    default="conversion_required",
+                )
+                if media_enabled and reason_code in {
+                    "media_no_text_extracted",
+                    "media_transcription_unavailable",
+                }:
+                    attempt = ParseAttempt.media_required(reason_code=reason_code)
+                elif media_enabled and reason_code in {
+                    "media_transcription_failed",
+                    "media_transcription_timeout",
+                }:
+                    attempt = ParseAttempt.failed(reason_code=reason_code)
+                else:
+                    attempt = ParseAttempt.deferred(reason_code=reason_code)
             else:
                 reason_code = _first_reason_code(capability.reason_codes, default="parser_failed")
                 attempt = ParseAttempt.failed(reason_code=reason_code)

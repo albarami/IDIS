@@ -17,6 +17,7 @@ RETRYABLE_REASON_CODES = frozenset(
     }
 )
 NON_PDF_PARSE_EXTENSIONS = frozenset({".docx", ".pptx", ".xlsx"})
+OCR_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"})
 
 
 def load_ledger(path: Path) -> dict[str, Any]:
@@ -63,6 +64,8 @@ def terminal_ledger_entry(
     if not isinstance(reason_code, str) or reason_code in RETRYABLE_REASON_CODES:
         return None
     if ocr_enabled and extension == ".pdf" and reason_code == "ocr_required":
+        return None
+    if ocr_enabled and extension in OCR_IMAGE_EXTENSIONS and reason_code == "ocr_required":
         return None
     if reason_code == "ocr_required" and extension in NON_PDF_PARSE_EXTENSIONS:
         return None

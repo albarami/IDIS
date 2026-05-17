@@ -46,3 +46,12 @@ def test_go_live_plan_records_slice_38_decision_and_next_slice() -> None:
     assert "IDIS_MEDIA_STT_MODEL_PATH" in content
     assert "IDIS_MEDIA_STT_ALLOW_DOWNLOAD=1" in content
     assert "normal CI must not download a Whisper model" in content
+
+
+def test_go_live_plan_records_slice_41_operational_model_bootstrap() -> None:
+    content = GO_LIVE_PLAN.read_text(encoding="utf-8")
+
+    assert "Slice 41 operational model bootstrap status" in content
+    assert "scripts/bootstrap_faster_whisper_model.py" in content
+    assert "LOCAL_STT_MODEL_NOT_PROVISIONED" in content
+    assert "without committing models and without CI downloads" in content

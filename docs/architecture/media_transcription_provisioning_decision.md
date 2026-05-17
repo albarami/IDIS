@@ -50,3 +50,18 @@ It should choose one runtime path, then add RED tests for dependency probes, tim
 handling, process cleanup, safe unavailable/failure classifications, safe TIMECODE spans,
 ledger policy invalidation, and aggregate-only private gate output before touching
 production code.
+
+## Slice 40 Model Provisioning Update
+Slice 39 added the opt-in private-gate `faster-whisper` runtime boundary. Slice 40 keeps
+that runtime private and config-gated while documenting how to provide a model outside
+normal CI.
+
+Supported model strategies:
+- preferred: pre-provision a local faster-whisper model directory and set
+  `IDIS_MEDIA_STT_MODEL_PATH`
+- optional: set `IDIS_MEDIA_STT_MODEL_NAME` plus `IDIS_MEDIA_STT_ALLOW_DOWNLOAD=1` only
+  when an explicit download/cache policy is approved
+
+Normal CI must not download a Whisper model. If no local model path or explicit
+download/cache policy is configured, MP4 remains honestly classified as
+`media_transcription_unavailable`.

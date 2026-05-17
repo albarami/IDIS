@@ -42,3 +42,7 @@ def test_go_live_plan_records_slice_38_decision_and_next_slice() -> None:
     assert "Slice 38" in content
     assert "real MP4 transcription deferred pending media/STT provisioning decision" in content
     assert "media transcription provisioning implementation, after choosing runtime" in content
+    assert "Slice 39 completed the opt-in private-gate `faster-whisper` runtime boundary" in content
+    assert "IDIS_MEDIA_STT_MODEL_PATH" in content
+    assert "IDIS_MEDIA_STT_ALLOW_DOWNLOAD=1" in content
+    assert "normal CI must not download a Whisper model" in content

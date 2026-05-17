@@ -16,9 +16,11 @@ from idis.parsers.base import ParseErrorCode
 from idis.parsers.media import (
     FasterWhisperMediaAdapter,
     FasterWhisperMediaConfig,
+    FasterWhisperModelStatus,
     MediaConfig,
     MediaSegmentText,
     parse_media,
+    probe_faster_whisper_model,
 )
 from idis.parsers.registry import parse_bytes
 
@@ -69,6 +71,30 @@ def _successful_faster_whisper_worker(
                     "start_ms": 1000,
                     "end_ms": 2400,
                     "text": "SYNTHETIC MEDIA TRANSCRIPT",
+                }
+            ],
+        }
+    )
+
+
+def _named_model_faster_whisper_worker(
+    data: bytes,
+    config: FasterWhisperMediaConfig,
+    timeout_seconds: float,
+    queue: Any,
+) -> None:
+    del data, timeout_seconds
+    assert config.model_name == "tiny.en"
+    assert config.model_path is None
+    assert config.allow_model_download is True
+    queue.put(
+        {
+            "status": "success",
+            "segments": [
+                {
+                    "start_ms": 0,
+                    "end_ms": 1000,
+                    "text": "SYNTHETIC NAMED MODEL TRANSCRIPT",
                 }
             ],
         }
@@ -154,9 +180,25 @@ def test_faster_whisper_adapter_missing_ffmpeg_or_ffprobe_returns_unavailable() 
 
 
 def test_faster_whisper_adapter_missing_model_with_download_disabled_is_unavailable() -> None:
+    worker_called = False
+
+    def unexpected_worker(
+        data: bytes,
+        config: FasterWhisperMediaConfig,
+        timeout_seconds: float,
+        queue: Any,
+    ) -> None:
+        nonlocal worker_called
+        del data, config, timeout_seconds, queue
+        worker_called = True
+
     adapter = FasterWhisperMediaAdapter(
-        config=FasterWhisperMediaConfig(allow_model_download=False),
+        config=FasterWhisperMediaConfig(
+            model_name="tiny.en",
+            allow_model_download=False,
+        ),
         binary_resolver=lambda _: "synthetic-binary",
+        worker_target=unexpected_worker,
     )
 
     result = parse_media(
@@ -168,6 +210,63 @@ def test_faster_whisper_adapter_missing_model_with_download_disabled_is_unavaila
     assert [error.code for error in result.errors] == [
         ParseErrorCode.MEDIA_TRANSCRIPTION_UNAVAILABLE
     ]
+    assert worker_called is False
+
+
+def test_faster_whisper_model_probe_is_path_free_and_download_gated(tmp_path: Path) -> None:
+    model_path = tmp_path / "model"
+    invalid_model_path = tmp_path / "empty-model"
+    missing = probe_faster_whisper_model(
+        FasterWhisperMediaConfig(model_path=str(model_path), allow_model_download=False)
+    )
+    invalid_model_path.mkdir()
+    invalid = probe_faster_whisper_model(
+        FasterWhisperMediaConfig(model_path=str(invalid_model_path), allow_model_download=False)
+    )
+    model_path.mkdir()
+    (model_path / "model.bin").write_text("synthetic model", encoding="utf-8")
+    (model_path / "config.json").write_text("{}", encoding="utf-8")
+    local = probe_faster_whisper_model(
+        FasterWhisperMediaConfig(model_path=str(model_path), allow_model_download=False)
+    )
+    named_disabled = probe_faster_whisper_model(
+        FasterWhisperMediaConfig(model_name="tiny.en", allow_model_download=False)
+    )
+    named_allowed = probe_faster_whisper_model(
+        FasterWhisperMediaConfig(model_name="tiny.en", allow_model_download=True)
+    )
+
+    assert missing.can_attempt is False
+    assert missing.status == FasterWhisperModelStatus.MODEL_UNAVAILABLE
+    assert invalid.can_attempt is False
+    assert invalid.status == FasterWhisperModelStatus.MODEL_UNAVAILABLE
+    assert local.can_attempt is True
+    assert local.status == FasterWhisperModelStatus.LOCAL_MODEL_READY
+    assert named_disabled.can_attempt is False
+    assert named_allowed.can_attempt is True
+    assert named_allowed.status == FasterWhisperModelStatus.DOWNLOAD_ALLOWED
+    assert str(model_path) not in str(local)
+
+
+def test_faster_whisper_adapter_named_model_download_is_explicit_and_injectable() -> None:
+    adapter = FasterWhisperMediaAdapter(
+        config=FasterWhisperMediaConfig(
+            model_name="tiny.en",
+            allow_model_download=True,
+        ),
+        binary_resolver=lambda _: "synthetic-binary",
+        duration_probe=lambda _data, _config, _timeout: 1.0,
+        worker_target=_named_model_faster_whisper_worker,
+    )
+
+    result = parse_media(
+        b"synthetic private mp4",
+        media_config=MediaConfig(enabled=True, adapter=adapter, timeout_seconds=10),
+    )
+
+    assert result.success is True
+    assert [span.span_type for span in result.spans] == ["TIMECODE"]
+    assert "synthetic private mp4" not in str(result.to_dict())
 
 
 def test_faster_whisper_adapter_timeout_failure_empty_and_success_are_safe(
@@ -175,6 +274,8 @@ def test_faster_whisper_adapter_timeout_failure_empty_and_success_are_safe(
 ) -> None:
     model_path = tmp_path / "model"
     model_path.mkdir()
+    (model_path / "model.bin").write_text("synthetic model", encoding="utf-8")
+    (model_path / "config.json").write_text("{}", encoding="utf-8")
     base_config = FasterWhisperMediaConfig(
         model_path=str(model_path),
         allow_model_download=False,
@@ -254,6 +355,8 @@ def test_faster_whisper_adapter_duration_too_long_defers_before_transcription(
 ) -> None:
     model_path = tmp_path / "model"
     model_path.mkdir()
+    (model_path / "model.bin").write_text("synthetic model", encoding="utf-8")
+    (model_path / "config.json").write_text("{}", encoding="utf-8")
     worker_called = False
 
     def unexpected_worker(

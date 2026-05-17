@@ -16,7 +16,9 @@ from idis.api.routes.documents import _reject_unsupported_upload_format
 from idis.evaluation.real_example_gate import (
     GateMode,
     ParseAttempt,
+    _media_adapter_attemptable,
     _media_model_policy_key,
+    main,
     run_real_example_gate,
 )
 from idis.evaluation.real_example_gate_ledger import media_policy_key
@@ -612,6 +614,116 @@ def test_media_enabled_faster_whisper_without_model_does_not_read_mp4_body(
     _assert_safe_json(summary, forbidden=[str(root), "confidential", "do not read"])
 
 
+def test_media_enabled_missing_model_path_does_not_read_mp4_body_or_leak_path(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    root = tmp_path / "real_example"
+    root.mkdir()
+    (root / "confidential interview.mp4").write_bytes(b"MISSING MODEL PATH MEDIA SECRET")
+    missing_model_path = tmp_path / "secret-local-model"
+    original_open = Path.open
+
+    def fail_mp4_open(path: Path, mode: str = "r", *args: object, **kwargs: object) -> Any:
+        if path.suffix.lower() == ".mp4" and "r" in mode:
+            raise AssertionError("missing model path must defer before reading media bytes")
+        return original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr("idis.evaluation.real_example_gate.shutil.which", lambda _: "binary")
+    monkeypatch.setattr(Path, "open", fail_mp4_open)
+
+    summary = run_real_example_gate(
+        root=root,
+        ledger_path=tmp_path / "ledger.json",
+        mode=GateMode.PARSE_SUPPORTED,
+        safe_summary=True,
+        emit_progress=False,
+        media_enabled=True,
+        media_adapter="faster-whisper",
+        media_model_path=str(missing_model_path),
+        media_allow_model_download=False,
+    )
+
+    assert summary["counts_by_status"] == {"deferred": 1}
+    assert summary["counts_by_parser_outcome"] == {"media_required": 1}
+    assert summary["counts_by_reason_code"] == {"media_transcription_unavailable": 1}
+    _assert_safe_json(
+        summary,
+        forbidden=[
+            str(root),
+            str(missing_model_path),
+            "secret-local-model",
+            "MISSING MODEL PATH",
+        ],
+    )
+
+
+def test_media_enabled_invalid_model_directory_does_not_read_mp4_body_or_leak_path(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    root = tmp_path / "real_example"
+    root.mkdir()
+    (root / "confidential interview.mp4").write_bytes(b"INVALID MODEL DIR MEDIA SECRET")
+    invalid_model_path = tmp_path / "secret-empty-model"
+    invalid_model_path.mkdir()
+    original_open = Path.open
+
+    def fail_mp4_open(path: Path, mode: str = "r", *args: object, **kwargs: object) -> Any:
+        if path.suffix.lower() == ".mp4" and "r" in mode:
+            raise AssertionError("invalid model path must defer before reading media bytes")
+        return original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr("idis.evaluation.real_example_gate.shutil.which", lambda _: "binary")
+    monkeypatch.setattr(Path, "open", fail_mp4_open)
+
+    summary = run_real_example_gate(
+        root=root,
+        ledger_path=tmp_path / "ledger.json",
+        mode=GateMode.PARSE_SUPPORTED,
+        safe_summary=True,
+        emit_progress=False,
+        media_enabled=True,
+        media_adapter="faster-whisper",
+        media_model_path=str(invalid_model_path),
+        media_allow_model_download=False,
+    )
+
+    assert summary["counts_by_status"] == {"deferred": 1}
+    assert summary["counts_by_parser_outcome"] == {"media_required": 1}
+    assert summary["counts_by_reason_code"] == {"media_transcription_unavailable": 1}
+    _assert_safe_json(
+        summary,
+        forbidden=[
+            str(root),
+            str(invalid_model_path),
+            "secret-empty-model",
+            "INVALID MODEL DIR",
+        ],
+    )
+
+
+def test_media_adapter_attemptable_accepts_valid_local_model_path_without_download(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    model_path = tmp_path / "model"
+    model_path.mkdir()
+    (model_path / "model.bin").write_text("synthetic model metadata", encoding="utf-8")
+    (model_path / "config.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("idis.evaluation.real_example_gate.shutil.which", lambda _: "binary")
+
+    assert (
+        _media_adapter_attemptable(
+            media_adapter="faster-whisper",
+            media_model_name=None,
+            media_model_path=str(model_path),
+            media_allow_model_download=False,
+        )
+        is True
+    )
+
+
 def test_media_enabled_default_output_is_aggregate_only(tmp_path: Path, capsys: Any) -> None:
     root = tmp_path / "real_example"
     confidential_dir = root / "Confidential Media"
@@ -905,6 +1017,80 @@ def test_media_model_policy_key_changes_when_local_model_directory_child_changes
     assert present_key.startswith("dir-sha256:")
     assert changed_key.startswith("dir-sha256:")
     assert present_key != changed_key
+
+
+def test_cli_env_parsing_accepts_stt_model_path_name_and_download_policy(
+    tmp_path: Path,
+    monkeypatch: Any,
+    capsys: Any,
+) -> None:
+    captured_kwargs: dict[str, object] = {}
+    model_path = tmp_path / "model"
+    model_path.mkdir()
+
+    def fake_gate(**kwargs: object) -> dict[str, object]:
+        captured_kwargs.update(kwargs)
+        return {
+            "gate": "real_example_private_v1",
+            "safe_summary": True,
+            "mode": "inventory_only",
+            "total_files": 0,
+            "processed_files": 0,
+            "ledger_entry_count": 0,
+            "counts_by_extension": {},
+            "counts_by_status": {},
+            "counts_by_parser_outcome": {},
+            "counts_by_reason_code": {},
+        }
+
+    monkeypatch.setenv("IDIS_MEDIA_ADAPTER", "faster-whisper")
+    monkeypatch.setenv("IDIS_MEDIA_STT_MODEL_PATH", str(model_path))
+    monkeypatch.setenv("IDIS_MEDIA_STT_MODEL_NAME", "tiny.en")
+    monkeypatch.setenv("IDIS_MEDIA_STT_ALLOW_DOWNLOAD", "1")
+    monkeypatch.setattr("idis.evaluation.real_example_gate.run_real_example_gate", fake_gate)
+
+    exit_code = main(["--inventory-only", "--root", str(tmp_path)])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert captured_kwargs["media_adapter"] == "faster-whisper"
+    assert captured_kwargs["media_model_path"] == str(model_path)
+    assert captured_kwargs["media_model_name"] == "tiny.en"
+    assert captured_kwargs["media_allow_model_download"] is True
+    assert str(model_path) not in output
+
+
+def test_cli_env_parsing_ignores_legacy_download_env_without_stt_opt_in(
+    tmp_path: Path,
+    monkeypatch: Any,
+    capsys: Any,
+) -> None:
+    captured_kwargs: dict[str, object] = {}
+
+    def fake_gate(**kwargs: object) -> dict[str, object]:
+        captured_kwargs.update(kwargs)
+        return {
+            "gate": "real_example_private_v1",
+            "safe_summary": True,
+            "mode": "inventory_only",
+            "total_files": 0,
+            "processed_files": 0,
+            "ledger_entry_count": 0,
+            "counts_by_extension": {},
+            "counts_by_status": {},
+            "counts_by_parser_outcome": {},
+            "counts_by_reason_code": {},
+        }
+
+    monkeypatch.delenv("IDIS_MEDIA_STT_ALLOW_DOWNLOAD", raising=False)
+    monkeypatch.setenv("IDIS_MEDIA_ALLOW_MODEL_DOWNLOAD", "1")
+    monkeypatch.setattr("idis.evaluation.real_example_gate.run_real_example_gate", fake_gate)
+
+    exit_code = main(["--inventory-only", "--root", str(tmp_path)])
+
+    capsys.readouterr()
+    assert exit_code == 0
+    assert captured_kwargs["media_allow_model_download"] is False
 
 
 def test_media_disabled_retries_stale_media_unavailable_entry(

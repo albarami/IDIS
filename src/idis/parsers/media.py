@@ -12,6 +12,7 @@ import tempfile
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from queue import Empty
 from typing import Any, Protocol
@@ -22,6 +23,7 @@ MAX_MEDIA_SEGMENTS = 500
 MAX_MEDIA_SEGMENT_TEXT_CHARS = 20_000
 MAX_MEDIA_DURATION_SECONDS = 600.0
 FASTER_WHISPER_ADAPTER_NAME = "faster-whisper"
+FASTER_WHISPER_REQUIRED_MODEL_FILES = frozenset({"model.bin", "config.json"})
 
 
 class MediaError(Exception):
@@ -38,6 +40,14 @@ class MediaUnavailableError(MediaError):
 
 class MediaDurationExceededError(MediaError):
     """Raised when media duration exceeds the configured private gate bound."""
+
+
+class FasterWhisperModelStatus(StrEnum):
+    """Safe faster-whisper model availability states."""
+
+    LOCAL_MODEL_READY = "local_model_ready"
+    DOWNLOAD_ALLOWED = "download_allowed"
+    MODEL_UNAVAILABLE = "model_unavailable"
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +94,14 @@ class FasterWhisperMediaConfig:
     ffprobe_binary: str = "ffprobe"
 
 
+@dataclass(frozen=True, slots=True)
+class FasterWhisperModelProbe:
+    """Path-free faster-whisper model probe result."""
+
+    status: FasterWhisperModelStatus
+    can_attempt: bool
+
+
 FasterWhisperWorkerTarget = Callable[
     [bytes, FasterWhisperMediaConfig, float, Any],
     None,
@@ -116,7 +134,7 @@ class FasterWhisperMediaAdapter:
             raise MediaUnavailableError("ffmpeg is unavailable")
         if self._binary_resolver(self._config.ffprobe_binary) is None:
             raise MediaUnavailableError("ffprobe is unavailable")
-        if not _model_is_configured(self._config):
+        if not probe_faster_whisper_model(self._config).can_attempt:
             raise MediaUnavailableError("Media transcription model is unavailable")
 
         duration_seconds = self._duration_probe(data, self._config, timeout_seconds)
@@ -270,10 +288,36 @@ def _valid_segment(*, segment: MediaSegmentText, previous_start_ms: int) -> bool
     return len(segment.text) <= MAX_MEDIA_SEGMENT_TEXT_CHARS
 
 
-def _model_is_configured(config: FasterWhisperMediaConfig) -> bool:
+def probe_faster_whisper_model(config: FasterWhisperMediaConfig) -> FasterWhisperModelProbe:
+    """Return a path-free model readiness status for faster-whisper."""
     if config.model_path:
-        return Path(config.model_path).exists()
-    return bool(config.model_name and config.allow_model_download)
+        model_path = Path(config.model_path).expanduser()
+        if _valid_local_faster_whisper_model_dir(model_path):
+            return FasterWhisperModelProbe(
+                status=FasterWhisperModelStatus.LOCAL_MODEL_READY,
+                can_attempt=True,
+            )
+        return FasterWhisperModelProbe(
+            status=FasterWhisperModelStatus.MODEL_UNAVAILABLE,
+            can_attempt=False,
+        )
+    if config.model_name and config.allow_model_download:
+        return FasterWhisperModelProbe(
+            status=FasterWhisperModelStatus.DOWNLOAD_ALLOWED,
+            can_attempt=True,
+        )
+    return FasterWhisperModelProbe(
+        status=FasterWhisperModelStatus.MODEL_UNAVAILABLE,
+        can_attempt=False,
+    )
+
+
+def _valid_local_faster_whisper_model_dir(model_path: Path) -> bool:
+    if not model_path.exists() or not model_path.is_dir():
+        return False
+    return all(
+        (model_path / filename).is_file() for filename in FASTER_WHISPER_REQUIRED_MODEL_FILES
+    )
 
 
 def _read_worker_payload(queue: mp.Queue[dict[str, object]]) -> dict[str, object]:

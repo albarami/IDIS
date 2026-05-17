@@ -33,7 +33,12 @@ from idis.evaluation.real_example_gate_runtime import (
     run_parse_subprocess,
 )
 from idis.models.document_classification import DocumentSupportStatus, DocumentTriageStatus
-from idis.parsers.media import FASTER_WHISPER_ADAPTER_NAME, MAX_MEDIA_DURATION_SECONDS
+from idis.parsers.media import (
+    FASTER_WHISPER_ADAPTER_NAME,
+    MAX_MEDIA_DURATION_SECONDS,
+    FasterWhisperMediaConfig,
+    probe_faster_whisper_model,
+)
 from idis.services.documents.parser_capabilities import capability_for_document
 
 DEFAULT_REAL_EXAMPLE_ROOT = Path("real_example")
@@ -287,7 +292,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--media-allow-model-download",
         action="store_true",
-        default=_env_bool("IDIS_MEDIA_ALLOW_MODEL_DOWNLOAD", default=False),
+        default=_media_allow_model_download_default(),
     )
     parser.add_argument(
         "--media-language",
@@ -586,8 +591,18 @@ def _media_adapter_attemptable(
     if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
         return False
     if media_model_path:
-        return Path(media_model_path).exists()
-    return bool(media_model_name and media_allow_model_download)
+        return probe_faster_whisper_model(
+            FasterWhisperMediaConfig(
+                model_path=media_model_path,
+                allow_model_download=False,
+            )
+        ).can_attempt
+    return probe_faster_whisper_model(
+        FasterWhisperMediaConfig(
+            model_name=media_model_name,
+            allow_model_download=media_allow_model_download,
+        )
+    ).can_attempt
 
 
 def _media_model_policy_key(
@@ -820,6 +835,10 @@ def _env_float(name: str, *, default: float) -> float:
         return float(value)
     except ValueError:
         return default
+
+
+def _media_allow_model_download_default() -> bool:
+    return _env_bool("IDIS_MEDIA_STT_ALLOW_DOWNLOAD", default=False)
 
 
 __all__ = [

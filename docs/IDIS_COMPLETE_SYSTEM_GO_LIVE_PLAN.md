@@ -41,3 +41,18 @@ The next slice should start from exact `origin/main`, run read-only aggregate di
 choose one media/STT runtime, and only then add an opt-in private-gate implementation with
 bounded file size, duration, runtime, tenant isolation, audit artifacts, and deterministic
 media-segment provenance.
+
+## Slice 39 And 40 Media Runtime Status
+Slice 39 completed the opt-in private-gate `faster-whisper` runtime boundary. It added
+ffmpeg provisioning, the Python runtime dependency, structured media adapter outcomes, and
+kept public upload/global parser dispatch unchanged.
+
+Slice 40 model provisioning policy:
+- preferred: provide a local faster-whisper model directory with `IDIS_MEDIA_STT_MODEL_PATH`
+- optional: allow named-model download/cache only with `IDIS_MEDIA_STT_ALLOW_DOWNLOAD=1`
+- normal CI must not download a Whisper model
+- private gate summaries must remain aggregate-only and must not print model paths,
+  filenames, transcripts, frames, thumbnails, or private content
+
+Until a valid local model path or explicit download/cache policy is configured, the
+remaining MP4s are expected to stay `media_transcription_unavailable`.

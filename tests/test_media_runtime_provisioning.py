@@ -23,3 +23,23 @@ def test_ci_check_job_provisions_ffmpeg_without_model_download() -> None:
     assert "ffmpeg" in workflow
     assert "IDIS_RUN_REAL_MEDIA_STT=1" not in workflow
     assert "IDIS_MEDIA_STT_MODEL_PATH" not in workflow
+    assert "IDIS_MEDIA_STT_ALLOW_DOWNLOAD" not in workflow
+
+
+def test_media_model_provisioning_docs_are_ci_safe_and_private() -> None:
+    docs = (REPO_ROOT / "docs" / "architecture" / "media_model_provisioning.md").read_text(
+        encoding="utf-8"
+    )
+
+    required = [
+        "IDIS_MEDIA_STT_MODEL_PATH",
+        "IDIS_MEDIA_STT_MODEL_NAME",
+        "IDIS_MEDIA_STT_ALLOW_DOWNLOAD=1",
+        "normal CI must not download",
+        "Do not commit model files",
+        "private gate",
+        "--media-model-path",
+        "--media-allow-model-download",
+    ]
+    for phrase in required:
+        assert phrase in docs

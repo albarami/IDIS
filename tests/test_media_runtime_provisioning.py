@@ -248,14 +248,49 @@ def test_model_bootstrap_rejects_absolute_repo_internal_unignored_download_dir(
     assert loader_called is False
 
 
-def test_model_bootstrap_allow_download_invokes_loader_and_revalidates(
+def test_model_bootstrap_ci_blocks_real_download_attempt(
     tmp_path: Path,
+    monkeypatch: Any,
 ) -> None:
     from idis.tools.media_model_bootstrap import (
         FasterWhisperModelBootstrapOptions,
         bootstrap_faster_whisper_model,
     )
 
+    loader_called = False
+
+    def unexpected_loader(*_: object) -> None:
+        nonlocal loader_called
+        loader_called = True
+
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    result = bootstrap_faster_whisper_model(
+        FasterWhisperModelBootstrapOptions(
+            model_name="tiny.en",
+            output_dir=tmp_path / "local-media-models" / "tiny.en",
+            allow_download=True,
+        ),
+        model_loader=unexpected_loader,
+    )
+
+    assert result.status == "blocked"
+    assert result.reason_code == "MODEL_DOWNLOAD_BLOCKED_IN_CI"
+    assert result.download_attempted is False
+    assert loader_called is False
+
+
+def test_model_bootstrap_allow_download_invokes_loader_and_revalidates(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    from idis.tools.media_model_bootstrap import (
+        FasterWhisperModelBootstrapOptions,
+        bootstrap_faster_whisper_model,
+    )
+
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     output_dir = tmp_path / "local-media-models" / "tiny.en"
 
     def synthetic_loader(model_name: str, destination: Path, compute_type: str) -> None:
@@ -283,12 +318,15 @@ def test_model_bootstrap_allow_download_invokes_loader_and_revalidates(
 
 def test_model_bootstrap_revalidates_downloaded_model_path_returned_by_loader(
     tmp_path: Path,
+    monkeypatch: Any,
 ) -> None:
     from idis.tools.media_model_bootstrap import (
         FasterWhisperModelBootstrapOptions,
         bootstrap_faster_whisper_model,
     )
 
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     output_dir = tmp_path / "local-media-models"
     downloaded_path = output_dir / "snapshot" / "tiny.en"
 
@@ -315,12 +353,15 @@ def test_model_bootstrap_revalidates_downloaded_model_path_returned_by_loader(
 
 def test_model_bootstrap_rejects_unsafe_downloaded_model_path_returned_by_loader(
     tmp_path: Path,
+    monkeypatch: Any,
 ) -> None:
     from idis.tools.media_model_bootstrap import (
         FasterWhisperModelBootstrapOptions,
         bootstrap_faster_whisper_model,
     )
 
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     output_dir = tmp_path / "local-media-models"
     unsafe_returned_path = REPO_ROOT / "unsafe-returned-model-cache" / "tiny.en"
     try:

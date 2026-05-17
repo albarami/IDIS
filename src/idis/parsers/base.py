@@ -33,6 +33,7 @@ class ParseErrorCode(StrEnum):
     MEDIA_TRANSCRIPTION_UNAVAILABLE = "media_transcription_unavailable"
     MEDIA_TRANSCRIPTION_TIMEOUT = "media_transcription_timeout"
     MEDIA_TRANSCRIPTION_FAILED = "media_transcription_failed"
+    MEDIA_DURATION_EXCEEDED = "media_duration_exceeded"
     MEDIA_NO_TEXT_EXTRACTED = "media_no_text_extracted"
     INVALID_XLSX = "invalid_xlsx"
     INTERNAL_ERROR = "internal_error"

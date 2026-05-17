@@ -12,6 +12,7 @@ WORKDIR /build
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
+    ffmpeg \
     libpq-dev \
     poppler-utils \
     tesseract-ocr \
@@ -52,6 +53,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
+    ffmpeg \
     poppler-utils \
     tesseract-ocr \
     tesseract-ocr-eng \

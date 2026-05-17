@@ -2,14 +2,26 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import multiprocessing as mp
+import os
+import shutil
+import subprocess
+import tempfile
+import time
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from typing import Protocol
+from pathlib import Path
+from queue import Empty
+from typing import Any, Protocol
 
 from idis.parsers.base import ParseError, ParseErrorCode, ParseLimits, ParseResult, SpanDraft
 
 MAX_MEDIA_SEGMENTS = 500
 MAX_MEDIA_SEGMENT_TEXT_CHARS = 20_000
+MAX_MEDIA_DURATION_SECONDS = 600.0
+FASTER_WHISPER_ADAPTER_NAME = "faster-whisper"
 
 
 class MediaError(Exception):
@@ -22,6 +34,10 @@ class MediaTimeoutError(MediaError):
 
 class MediaUnavailableError(MediaError):
     """Raised when media conversion/transcription dependencies are unavailable."""
+
+
+class MediaDurationExceededError(MediaError):
+    """Raised when media duration exceeds the configured private gate bound."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +68,75 @@ class MediaConfig:
     enabled: bool = False
     adapter: MediaAdapter | None = None
     timeout_seconds: float = 30.0
+
+
+@dataclass(frozen=True, slots=True)
+class FasterWhisperMediaConfig:
+    """Config-gated faster-whisper runtime settings."""
+
+    model_name: str | None = None
+    model_path: str | None = None
+    allow_model_download: bool = False
+    language: str = "en"
+    compute_type: str = "int8"
+    max_duration_seconds: float = MAX_MEDIA_DURATION_SECONDS
+    ffmpeg_binary: str = "ffmpeg"
+    ffprobe_binary: str = "ffprobe"
+
+
+FasterWhisperWorkerTarget = Callable[
+    [bytes, FasterWhisperMediaConfig, float, Any],
+    None,
+]
+BinaryResolver = Callable[[str], str | None]
+DurationProbe = Callable[[bytes, FasterWhisperMediaConfig, float], float]
+
+
+class FasterWhisperMediaAdapter:
+    """Process-isolated private media adapter backed by faster-whisper."""
+
+    def __init__(
+        self,
+        *,
+        config: FasterWhisperMediaConfig,
+        worker_target: FasterWhisperWorkerTarget | None = None,
+        binary_resolver: BinaryResolver | None = None,
+        duration_probe: DurationProbe | None = None,
+    ) -> None:
+        self._config = config
+        self._worker_target = worker_target or _faster_whisper_worker
+        self._binary_resolver = binary_resolver or shutil.which
+        self._duration_probe = duration_probe or _ffprobe_duration_seconds
+
+    def extract_text(self, data: bytes, *, timeout_seconds: float) -> list[MediaSegmentText]:
+        """Return transcribed text for bounded media bytes."""
+        if timeout_seconds <= 0:
+            raise MediaTimeoutError("Media transcription timed out")
+        if self._binary_resolver(self._config.ffmpeg_binary) is None:
+            raise MediaUnavailableError("ffmpeg is unavailable")
+        if self._binary_resolver(self._config.ffprobe_binary) is None:
+            raise MediaUnavailableError("ffprobe is unavailable")
+        if not _model_is_configured(self._config):
+            raise MediaUnavailableError("Media transcription model is unavailable")
+
+        duration_seconds = self._duration_probe(data, self._config, timeout_seconds)
+        if duration_seconds > self._config.max_duration_seconds:
+            raise MediaDurationExceededError("Media duration exceeds configured limit")
+
+        queue: mp.Queue[dict[str, object]] = mp.Queue(maxsize=1)
+        process = mp.Process(
+            target=self._worker_target,
+            args=(data, self._config, timeout_seconds, queue),
+        )
+        process.start()
+        process.join(timeout_seconds)
+        if process.is_alive():
+            _terminate_process_tree(process)
+            process.join()
+            raise MediaTimeoutError("Media transcription timed out")
+
+        payload = _read_worker_payload(queue)
+        return _segments_from_worker_payload(payload)
 
 
 def parse_media(
@@ -102,6 +187,11 @@ def parse_media(
         return _media_error(
             ParseErrorCode.MEDIA_TRANSCRIPTION_UNAVAILABLE,
             "Media transcription unavailable",
+        )
+    except MediaDurationExceededError:
+        return _media_error(
+            ParseErrorCode.MEDIA_DURATION_EXCEEDED,
+            "Media duration exceeds configured limit",
         )
     except MediaError:
         return _media_error(
@@ -178,6 +268,180 @@ def _valid_segment(*, segment: MediaSegmentText, previous_start_ms: int) -> bool
     if not isinstance(segment.text, str):
         return False
     return len(segment.text) <= MAX_MEDIA_SEGMENT_TEXT_CHARS
+
+
+def _model_is_configured(config: FasterWhisperMediaConfig) -> bool:
+    if config.model_path:
+        return Path(config.model_path).exists()
+    return bool(config.model_name and config.allow_model_download)
+
+
+def _read_worker_payload(queue: mp.Queue[dict[str, object]]) -> dict[str, object]:
+    try:
+        return queue.get(timeout=0.5)
+    except Empty as exc:
+        raise MediaError("Media transcription worker produced no result") from exc
+
+
+def _segments_from_worker_payload(payload: dict[str, object]) -> list[MediaSegmentText]:
+    status = payload.get("status")
+    if status == "success":
+        raw_segments = payload.get("segments")
+        if not isinstance(raw_segments, list):
+            raise MediaError("Media transcription worker returned malformed segments")
+        segments: list[MediaSegmentText] = []
+        for raw_segment in raw_segments:
+            if not isinstance(raw_segment, dict):
+                raise MediaError("Media transcription worker returned malformed segment")
+            try:
+                segments.append(
+                    MediaSegmentText(
+                        start_ms=int(raw_segment["start_ms"]),
+                        end_ms=int(raw_segment["end_ms"]),
+                        text=str(raw_segment["text"]),
+                    )
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise MediaError("Media transcription worker returned malformed segment") from exc
+        return segments
+    if status == "timeout":
+        raise MediaTimeoutError("Media transcription timed out")
+    if status == "unavailable":
+        raise MediaUnavailableError("Media transcription unavailable")
+    raise MediaError("Media transcription failed")
+
+
+def _ffprobe_duration_seconds(
+    data: bytes,
+    config: FasterWhisperMediaConfig,
+    timeout_seconds: float,
+) -> float:
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as temp_file:
+        temp_file.write(data)
+        temp_path = temp_file.name
+    try:
+        result = subprocess.run(
+            [
+                config.ffprobe_binary,
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                temp_path,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=max(1.0, min(timeout_seconds, 10.0)),
+        )
+    except FileNotFoundError as exc:
+        raise MediaUnavailableError("ffprobe is unavailable") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise MediaTimeoutError("Media duration probe timed out") from exc
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(temp_path)
+
+    if result.returncode != 0:
+        raise MediaError("Media duration probe failed")
+    try:
+        return float(result.stdout.strip())
+    except ValueError as exc:
+        raise MediaError("Media duration probe returned malformed output") from exc
+
+
+def _faster_whisper_worker(
+    data: bytes,
+    config: FasterWhisperMediaConfig,
+    timeout_seconds: float,
+    queue: Any,
+) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    try:
+        with _suppress_output():
+            try:
+                from faster_whisper import WhisperModel
+            except ImportError:
+                _put_payload(queue, {"status": "unavailable"})
+                return
+
+            model_ref = config.model_path or config.model_name
+            if model_ref is None:
+                _put_payload(queue, {"status": "unavailable"})
+                return
+
+            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as temp_file:
+                temp_file.write(data)
+                temp_path = temp_file.name
+            try:
+                if deadline - time.monotonic() <= 0:
+                    _put_payload(queue, {"status": "timeout"})
+                    return
+                model = WhisperModel(
+                    model_ref,
+                    device="cpu",
+                    compute_type=config.compute_type,
+                    local_files_only=not config.allow_model_download,
+                )
+                segments, _info = model.transcribe(
+                    temp_path,
+                    language=config.language,
+                    beam_size=1,
+                    vad_filter=False,
+                )
+                payload_segments = [
+                    {
+                        "start_ms": int(float(segment.start) * 1000),
+                        "end_ms": int(float(segment.end) * 1000),
+                        "text": str(segment.text),
+                    }
+                    for segment in segments
+                ]
+                _put_payload(queue, {"status": "success", "segments": payload_segments})
+            finally:
+                with contextlib.suppress(OSError):
+                    os.unlink(temp_path)
+    except Exception:
+        _put_payload(queue, {"status": "failed"})
+
+
+def _put_payload(queue: Any, payload: dict[str, object]) -> None:
+    queue.put(payload)
+
+
+def _terminate_process_tree(process: mp.Process) -> None:
+    pid = process.pid
+    if pid is None:
+        process.terminate()
+        return
+    try:
+        import psutil
+
+        root = psutil.Process(pid)
+        children = root.children(recursive=True)
+        for child in children:
+            child.terminate()
+        root.terminate()
+        _gone, alive = psutil.wait_procs([*children, root], timeout=2)
+        for child in alive:
+            child.kill()
+    except Exception:
+        process.terminate()
+
+
+def _suppress_output() -> contextlib.AbstractContextManager[None]:
+    @contextlib.contextmanager
+    def suppress() -> Iterator[None]:
+        with (
+            open(os.devnull, "w", encoding="utf-8") as devnull,
+            contextlib.redirect_stdout(devnull),
+            contextlib.redirect_stderr(devnull),
+        ):
+            yield
+
+    return suppress()
 
 
 def _media_error(code: ParseErrorCode, message: str) -> ParseResult:

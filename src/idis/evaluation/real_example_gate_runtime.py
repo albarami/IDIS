@@ -15,7 +15,13 @@ from typing import Any, cast
 
 from idis.parsers.html_text import parse_html_text
 from idis.parsers.image import parse_image
-from idis.parsers.media import MediaConfig, parse_media
+from idis.parsers.media import (
+    FASTER_WHISPER_ADAPTER_NAME,
+    FasterWhisperMediaAdapter,
+    FasterWhisperMediaConfig,
+    MediaConfig,
+    parse_media,
+)
 from idis.parsers.ocr import OcrConfig, TesseractOcrAdapter
 from idis.parsers.registry import parse_bytes
 from idis.services.documents.parser_capabilities import triage_document
@@ -108,6 +114,13 @@ def run_parse_subprocess(
     ocr_dpi: int = 200,
     media_enabled: bool = False,
     media_timeout_seconds: float = 30.0,
+    media_adapter: str = "none",
+    media_model_name: str | None = None,
+    media_model_path: str | None = None,
+    media_allow_model_download: bool = False,
+    media_language: str = "en",
+    media_compute_type: str = "int8",
+    media_max_duration_seconds: float = 600.0,
 ) -> ParseAttempt:
     """Run production parsing in a child process with timeout and safe output."""
     queue: mp.Queue[dict[str, str]] = mp.Queue(maxsize=1)
@@ -122,6 +135,13 @@ def run_parse_subprocess(
             ocr_dpi,
             media_enabled,
             media_timeout_seconds,
+            media_adapter,
+            media_model_name,
+            media_model_path,
+            media_allow_model_download,
+            media_language,
+            media_compute_type,
+            media_max_duration_seconds,
             queue,
         ),
     )
@@ -133,7 +153,7 @@ def run_parse_subprocess(
         return ParseAttempt.timed_out()
 
     try:
-        payload = queue.get_nowait()
+        payload = queue.get(timeout=0.5)
     except Empty:
         return ParseAttempt.failed(reason_code="parser_failed")
     return ParseAttempt(
@@ -159,6 +179,13 @@ def _parse_file_worker(
     ocr_dpi: int,
     media_enabled: bool,
     media_timeout_seconds: float,
+    media_adapter: str,
+    media_model_name: str | None,
+    media_model_path: str | None,
+    media_allow_model_download: bool,
+    media_language: str,
+    media_compute_type: str,
+    media_max_duration_seconds: float,
     queue: mp.Queue[dict[str, str]],
 ) -> None:
     try:
@@ -182,11 +209,25 @@ def _parse_file_worker(
             if ocr_enabled and extension in OCR_IMAGE_EXTENSIONS:
                 result = parse_image(data, ocr_config=ocr_config)
             elif media_enabled and extension in MEDIA_EXTENSIONS:
+                adapter = (
+                    FasterWhisperMediaAdapter(
+                        config=FasterWhisperMediaConfig(
+                            model_name=media_model_name,
+                            model_path=media_model_path,
+                            allow_model_download=media_allow_model_download,
+                            language=media_language,
+                            compute_type=media_compute_type,
+                            max_duration_seconds=media_max_duration_seconds,
+                        )
+                    )
+                    if media_adapter == FASTER_WHISPER_ADAPTER_NAME
+                    else None
+                )
                 result = parse_media(
                     data,
                     media_config=MediaConfig(
                         enabled=True,
-                        adapter=None,
+                        adapter=adapter,
                         timeout_seconds=media_timeout_seconds,
                     ),
                 )
@@ -220,6 +261,7 @@ def _parse_file_worker(
                 )
                 if media_enabled and reason_code in {
                     "media_no_text_extracted",
+                    "media_duration_exceeded",
                     "media_transcription_unavailable",
                 }:
                     attempt = ParseAttempt.media_required(reason_code=reason_code)

@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import shutil
 import sys
 import time
 from collections import Counter
@@ -31,6 +33,7 @@ from idis.evaluation.real_example_gate_runtime import (
     run_parse_subprocess,
 )
 from idis.models.document_classification import DocumentSupportStatus, DocumentTriageStatus
+from idis.parsers.media import FASTER_WHISPER_ADAPTER_NAME, MAX_MEDIA_DURATION_SECONDS
 from idis.services.documents.parser_capabilities import capability_for_document
 
 DEFAULT_REAL_EXAMPLE_ROOT = Path("real_example")
@@ -42,6 +45,10 @@ MAX_OCR_TIMEOUT_SECONDS = 120.0
 MIN_OCR_DPI = 72
 MAX_OCR_DPI = 300
 MAX_MEDIA_TIMEOUT_SECONDS = 120.0
+MEDIA_ADAPTER_NONE = "none"
+MEDIA_ADAPTER_CHOICES = frozenset({MEDIA_ADAPTER_NONE, FASTER_WHISPER_ADAPTER_NAME})
+DEFAULT_MEDIA_LANGUAGE = "en"
+DEFAULT_MEDIA_COMPUTE_TYPE = "int8"
 SUPPORTED_PARSE_EXTENSIONS = frozenset({".pdf", ".xlsx", ".docx", ".pptx"})
 SUPPORTED_PARSER_NAMES = frozenset({"pdf", "xlsx", "docx", "pptx"})
 OCR_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"})
@@ -77,7 +84,7 @@ def run_real_example_gate(
     per_file_timeout_seconds: float = DEFAULT_PER_FILE_TIMEOUT_SECONDS,
     max_runtime_seconds: float | None = None,
     max_memory_mb: int | None = None,
-    emit_progress: bool = True,
+    emit_progress: bool = False,
     parse_attempt_fn: ParseAttemptFn | None = None,
     progress_fn: ProgressFn | None = None,
     ocr_enabled: bool = False,
@@ -86,6 +93,13 @@ def run_real_example_gate(
     ocr_dpi: int = 200,
     media_enabled: bool = False,
     media_timeout_seconds: float = 30.0,
+    media_adapter: str = MEDIA_ADAPTER_NONE,
+    media_model_name: str | None = None,
+    media_model_path: str | None = None,
+    media_allow_model_download: bool = False,
+    media_language: str = DEFAULT_MEDIA_LANGUAGE,
+    media_compute_type: str = DEFAULT_MEDIA_COMPUTE_TYPE,
+    media_max_duration_seconds: float = MAX_MEDIA_DURATION_SECONDS,
 ) -> dict[str, object]:
     """Run the local private real_example gate and return a safe aggregate summary.
 
@@ -97,7 +111,7 @@ def run_real_example_gate(
         per_file_timeout_seconds: Maximum seconds for one parse attempt.
         max_runtime_seconds: Optional total runtime budget.
         max_memory_mb: Optional process memory budget checked before each file.
-        emit_progress: Whether to emit safe per-file progress to stderr.
+        emit_progress: Whether to emit safe per-file progress to stderr. Defaults off.
         parse_attempt_fn: Optional test seam for parse attempts.
         progress_fn: Optional test seam for progress emission.
         ocr_enabled: Whether to run the opt-in OCR adapter for OCR-required PDFs.
@@ -106,6 +120,13 @@ def run_real_example_gate(
         ocr_dpi: PDF rasterization DPI for OCR.
         media_enabled: Whether to run the opt-in private media adapter boundary.
         media_timeout_seconds: Maximum media transcription runtime inside the parser subprocess.
+        media_adapter: Private media adapter name. Defaults to disabled.
+        media_model_name: faster-whisper model name, used only when downloads are explicit.
+        media_model_path: Local faster-whisper model path.
+        media_allow_model_download: Whether faster-whisper may download a named model.
+        media_language: Transcription language hint.
+        media_compute_type: faster-whisper compute type.
+        media_max_duration_seconds: Maximum media duration eligible for transcription.
 
     Returns:
         Aggregate counts by extension, status, parser outcome, and reason code only.
@@ -127,6 +148,8 @@ def run_real_example_gate(
     _validate_media_options(
         media_enabled=media_enabled,
         media_timeout_seconds=media_timeout_seconds,
+        media_adapter=media_adapter,
+        media_max_duration_seconds=media_max_duration_seconds,
     )
 
     root_path = Path(root)
@@ -143,9 +166,22 @@ def run_real_example_gate(
     )
     current_media_policy_key = media_policy_key(
         media_enabled=media_enabled,
-        media_adapter_available=False,
-        media_adapter_name="none",
+        media_adapter_available=_media_adapter_attemptable(
+            media_adapter=media_adapter,
+            media_model_name=media_model_name,
+            media_model_path=media_model_path,
+            media_allow_model_download=media_allow_model_download,
+        ),
+        media_adapter_name=media_adapter,
         media_timeout_seconds=media_timeout_seconds,
+        media_model_key=_media_model_policy_key(
+            media_model_name=media_model_name,
+            media_model_path=media_model_path,
+        ),
+        media_allow_model_download=media_allow_model_download,
+        media_language=media_language,
+        media_compute_type=media_compute_type,
+        media_max_duration_seconds=media_max_duration_seconds,
     )
     progress = progress_fn or _emit_progress
     started_at = time.monotonic()
@@ -168,6 +204,13 @@ def run_real_example_gate(
             ocr_policy_key=current_ocr_policy_key,
             media_enabled=media_enabled,
             media_timeout_seconds=media_timeout_seconds,
+            media_adapter=media_adapter,
+            media_model_name=media_model_name,
+            media_model_path=media_model_path,
+            media_allow_model_download=media_allow_model_download,
+            media_language=media_language,
+            media_compute_type=media_compute_type,
+            media_max_duration_seconds=media_max_duration_seconds,
             media_policy_key=current_media_policy_key,
         )
         records.append(
@@ -234,6 +277,35 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--ocr-dpi", type=int, default=200)
     parser.add_argument("--media-enabled", action="store_true")
     parser.add_argument("--media-timeout-seconds", type=float, default=30.0)
+    parser.add_argument(
+        "--media-adapter",
+        choices=sorted(MEDIA_ADAPTER_CHOICES),
+        default=os.environ.get("IDIS_MEDIA_ADAPTER", MEDIA_ADAPTER_NONE),
+    )
+    parser.add_argument("--media-model-name", default=os.environ.get("IDIS_MEDIA_STT_MODEL_NAME"))
+    parser.add_argument("--media-model-path", default=os.environ.get("IDIS_MEDIA_STT_MODEL_PATH"))
+    parser.add_argument(
+        "--media-allow-model-download",
+        action="store_true",
+        default=_env_bool("IDIS_MEDIA_ALLOW_MODEL_DOWNLOAD", default=False),
+    )
+    parser.add_argument(
+        "--media-language",
+        default=os.environ.get("IDIS_MEDIA_LANGUAGE", DEFAULT_MEDIA_LANGUAGE),
+    )
+    parser.add_argument(
+        "--media-compute-type",
+        default=os.environ.get("IDIS_MEDIA_COMPUTE_TYPE", DEFAULT_MEDIA_COMPUTE_TYPE),
+    )
+    parser.add_argument(
+        "--media-max-duration-seconds",
+        type=float,
+        default=_env_float(
+            "IDIS_MEDIA_MAX_DURATION_SECONDS",
+            default=MAX_MEDIA_DURATION_SECONDS,
+        ),
+    )
+    parser.add_argument("--emit-progress", action="store_true")
     parser.add_argument("--no-progress", action="store_true")
     args = parser.parse_args(argv)
 
@@ -250,13 +322,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             per_file_timeout_seconds=args.per_file_timeout_seconds,
             max_runtime_seconds=args.max_runtime_seconds,
             max_memory_mb=args.max_memory_mb,
-            emit_progress=not args.no_progress,
+            emit_progress=args.emit_progress and not args.no_progress,
             ocr_enabled=args.ocr_enabled,
             ocr_max_pages=args.ocr_max_pages,
             ocr_timeout_seconds=args.ocr_timeout_seconds,
             ocr_dpi=args.ocr_dpi,
             media_enabled=args.media_enabled,
             media_timeout_seconds=args.media_timeout_seconds,
+            media_adapter=args.media_adapter,
+            media_model_name=args.media_model_name,
+            media_model_path=args.media_model_path,
+            media_allow_model_download=args.media_allow_model_download,
+            media_language=args.media_language,
+            media_compute_type=args.media_compute_type,
+            media_max_duration_seconds=args.media_max_duration_seconds,
         )
     except (FileNotFoundError, NotADirectoryError, RuntimeError, ValueError) as exc:
         print(
@@ -293,6 +372,13 @@ def _attempt_for_file(
     ocr_policy_key: str | None,
     media_enabled: bool,
     media_timeout_seconds: float,
+    media_adapter: str,
+    media_model_name: str | None,
+    media_model_path: str | None,
+    media_allow_model_download: bool,
+    media_language: str,
+    media_compute_type: str,
+    media_max_duration_seconds: float,
     media_policy_key: str | None,
 ) -> ParseAttempt:
     if mode == GateMode.INVENTORY_ONLY:
@@ -384,7 +470,12 @@ def _attempt_for_file(
     if memory_exceeded(max_memory_mb):
         return ParseAttempt.deferred(reason_code="max_memory_exceeded")
 
-    if should_parse_media:
+    if should_parse_media and not _media_adapter_attemptable(
+        media_adapter=media_adapter,
+        media_model_name=media_model_name,
+        media_model_path=media_model_path,
+        media_allow_model_download=media_allow_model_download,
+    ):
         return ParseAttempt.media_required(reason_code="media_transcription_unavailable")
 
     if parse_attempt_fn is not None:
@@ -403,6 +494,13 @@ def _attempt_for_file(
         ocr_dpi=ocr_dpi,
         media_enabled=media_enabled,
         media_timeout_seconds=media_timeout_seconds,
+        media_adapter=media_adapter,
+        media_model_name=media_model_name,
+        media_model_path=media_model_path,
+        media_allow_model_download=media_allow_model_download,
+        media_language=media_language,
+        media_compute_type=media_compute_type,
+        media_max_duration_seconds=media_max_duration_seconds,
     )
 
 
@@ -463,11 +561,86 @@ def _validate_media_options(
     *,
     media_enabled: bool,
     media_timeout_seconds: float,
+    media_adapter: str,
+    media_max_duration_seconds: float,
 ) -> None:
+    if media_adapter not in MEDIA_ADAPTER_CHOICES:
+        raise ValueError("Media adapter is outside the allowed choices")
     if not media_enabled:
         return
     if not 0 < media_timeout_seconds <= MAX_MEDIA_TIMEOUT_SECONDS:
         raise ValueError("Media timeout is outside the allowed range")
+    if not 0 < media_max_duration_seconds <= MAX_MEDIA_DURATION_SECONDS:
+        raise ValueError("Media max duration is outside the allowed range")
+
+
+def _media_adapter_attemptable(
+    *,
+    media_adapter: str,
+    media_model_name: str | None,
+    media_model_path: str | None,
+    media_allow_model_download: bool,
+) -> bool:
+    if media_adapter != FASTER_WHISPER_ADAPTER_NAME:
+        return False
+    if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
+        return False
+    if media_model_path:
+        return Path(media_model_path).exists()
+    return bool(media_model_name and media_allow_model_download)
+
+
+def _media_model_policy_key(
+    *,
+    media_model_name: str | None,
+    media_model_path: str | None,
+) -> str:
+    if media_model_path:
+        model_path = Path(media_model_path).expanduser()
+        model_digest = hashlib.sha256()
+        try:
+            model_stat = model_path.stat()
+        except OSError:
+            model_digest.update(str(model_path).encode())
+            return f"path-missing-sha256:{model_digest.hexdigest()[:16]}"
+        _update_model_signature(
+            digest=model_digest,
+            label="root",
+            stat_payload=f"{model_stat.st_mode}:{model_stat.st_size}:{model_stat.st_mtime_ns}",
+        )
+        if model_path.is_dir():
+            for child_path in sorted(
+                model_path.rglob("*"),
+                key=lambda path: path.relative_to(model_path).as_posix().lower(),
+            ):
+                try:
+                    child_stat = child_path.stat()
+                except OSError:
+                    continue
+                relative_hash = hashlib.sha256(
+                    child_path.relative_to(model_path).as_posix().encode()
+                ).hexdigest()
+                _update_model_signature(
+                    digest=model_digest,
+                    label=relative_hash,
+                    stat_payload=(
+                        f"{child_stat.st_mode}:{child_stat.st_size}:{child_stat.st_mtime_ns}"
+                    ),
+                )
+            return f"dir-sha256:{model_digest.hexdigest()[:16]}"
+        return f"file-sha256:{model_digest.hexdigest()[:16]}"
+    if media_model_name:
+        return f"name:{media_model_name}"
+    return "none"
+
+
+def _update_model_signature(
+    *,
+    digest: Any,
+    label: str,
+    stat_payload: str,
+) -> None:
+    digest.update(f"{label}:{stat_payload};".encode())
 
 
 def _hash_file_streaming(path: Path) -> tuple[str, int]:
@@ -630,6 +803,23 @@ def _unreadable_file_key(*, root: Path, path: Path) -> str:
 
 def _emit_progress(event: dict[str, object]) -> None:
     print(json.dumps({"progress": event}, sort_keys=True), file=sys.stderr)
+
+
+def _env_bool(name: str, *, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_float(name: str, *, default: float) -> float:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
 
 
 __all__ = [

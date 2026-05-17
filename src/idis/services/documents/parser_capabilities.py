@@ -97,6 +97,7 @@ _MEDIA_ERROR_REASON_CODES = {
     ParseErrorCode.MEDIA_TRANSCRIPTION_UNAVAILABLE: "media_transcription_unavailable",
     ParseErrorCode.MEDIA_TRANSCRIPTION_TIMEOUT: "media_transcription_timeout",
     ParseErrorCode.MEDIA_TRANSCRIPTION_FAILED: "media_transcription_failed",
+    ParseErrorCode.MEDIA_DURATION_EXCEEDED: "media_duration_exceeded",
     ParseErrorCode.MEDIA_NO_TEXT_EXTRACTED: "media_no_text_extracted",
 }
 

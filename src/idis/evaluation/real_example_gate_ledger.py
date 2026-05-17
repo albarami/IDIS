@@ -33,6 +33,7 @@ MEDIA_POLICY_SENSITIVE_REASON_CODES = frozenset(
         "media_transcription_failed",
         "media_transcription_timeout",
         "media_transcription_unavailable",
+        "media_duration_exceeded",
     }
 )
 
@@ -58,6 +59,11 @@ def media_policy_key(
     media_adapter_available: bool,
     media_adapter_name: str,
     media_timeout_seconds: float,
+    media_model_key: str = "none",
+    media_allow_model_download: bool = False,
+    media_language: str = "en",
+    media_compute_type: str = "int8",
+    media_max_duration_seconds: float = 600.0,
 ) -> str | None:
     """Return a safe key for media settings that affect private transcription results."""
     return (
@@ -65,6 +71,11 @@ def media_policy_key(
         f"enabled={str(media_enabled).lower()}:"
         f"adapter_available={str(media_adapter_available).lower()}:"
         f"adapter={media_adapter_name}:"
+        f"model={media_model_key}:"
+        f"allow_download={str(media_allow_model_download).lower()}:"
+        f"language={media_language}:"
+        f"compute={media_compute_type}:"
+        f"max_duration={float(media_max_duration_seconds)}:"
         f"timeout={float(media_timeout_seconds)}:"
         f"max_timeout={float(MEDIA_POLICY_MAX_TIMEOUT_SECONDS)}:"
         f"max_bytes={DEFAULT_MAX_BYTES}:"

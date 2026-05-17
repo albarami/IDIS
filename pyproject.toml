@@ -141,7 +141,7 @@ module = ["faster_whisper.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["docx.*", "pytesseract.*", "psutil.*"]
+module = ["docx.*", "pdf2image.*", "pytesseract.*", "psutil.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

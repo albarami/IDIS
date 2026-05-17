@@ -68,6 +68,7 @@ var/_tmp_idem_check/
 
 # Local runner artifacts (never commit)
 artifacts/
+.local_reports/
 
 # Local STT model/cache artifacts (never commit)
 models/

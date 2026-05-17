@@ -69,6 +69,13 @@ var/_tmp_idem_check/
 # Local runner artifacts (never commit)
 artifacts/
 
+# Local STT model/cache artifacts (never commit)
+models/
+.local_models/
+.local_media_models/
+var/media-models/
+.cache/faster-whisper/
+
 # UI (Next.js)
 ui/node_modules/
 ui/.next/

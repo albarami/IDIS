@@ -56,3 +56,16 @@ Slice 40 model provisioning policy:
 
 Until a valid local model path or explicit download/cache policy is configured, the
 remaining MP4s are expected to stay `media_transcription_unavailable`.
+
+## Slice 41 operational model bootstrap status
+Slice 41 adds local faster-whisper model validation/bootstrap tooling without committing models and without CI downloads.
+
+Operational controls:
+- validate a pre-provisioned local model with `scripts/bootstrap_faster_whisper_model.py`
+- keep default bootstrap behavior download-free; named-model bootstrap requires
+  `--allow-download`
+- keep local model/cache directories ignored by git
+- keep command output and private gate summaries path-free and aggregate-only
+
+If `IDIS_MEDIA_STT_MODEL_PATH` is not configured, the exact local blocker is
+`LOCAL_STT_MODEL_NOT_PROVISIONED`.

@@ -53,10 +53,10 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install OCR system dependencies
+      - name: Install OCR and media system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends poppler-utils tesseract-ocr tesseract-ocr-eng
+          sudo apt-get install -y --no-install-recommends ffmpeg poppler-utils tesseract-ocr tesseract-ocr-eng
 
       - name: Install dependencies
         run: |

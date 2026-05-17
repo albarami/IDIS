@@ -13,7 +13,12 @@ import pytest
 
 from idis.api.errors import IdisHttpError
 from idis.api.routes.documents import _reject_unsupported_upload_format
-from idis.evaluation.real_example_gate import GateMode, ParseAttempt, run_real_example_gate
+from idis.evaluation.real_example_gate import (
+    GateMode,
+    ParseAttempt,
+    _media_model_policy_key,
+    run_real_example_gate,
+)
 from idis.evaluation.real_example_gate_ledger import media_policy_key
 from idis.models.document_classification import (
     DocumentSupportStatus,
@@ -573,6 +578,61 @@ def test_media_enabled_no_adapter_does_not_read_mp4_body(
     _assert_safe_json(summary, forbidden=[str(root), "confidential", "do not read"])
 
 
+def test_media_enabled_faster_whisper_without_model_does_not_read_mp4_body(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    root = tmp_path / "real_example"
+    root.mkdir()
+    (root / "confidential interview.mp4").write_bytes(b"do not read")
+    original_open = Path.open
+
+    def fail_mp4_open(path: Path, mode: str = "r", *args: object, **kwargs: object) -> Any:
+        if path.suffix.lower() == ".mp4" and "r" in mode:
+            raise AssertionError("unconfigured faster-whisper path must not read media bytes")
+        return original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", fail_mp4_open)
+
+    summary = run_real_example_gate(
+        root=root,
+        ledger_path=tmp_path / "ledger.json",
+        mode=GateMode.PARSE_SUPPORTED,
+        safe_summary=True,
+        emit_progress=False,
+        media_enabled=True,
+        media_adapter="faster-whisper",
+        media_model_name="tiny.en",
+        media_allow_model_download=False,
+    )
+
+    assert summary["counts_by_status"] == {"deferred": 1}
+    assert summary["counts_by_parser_outcome"] == {"media_required": 1}
+    assert summary["counts_by_reason_code"] == {"media_transcription_unavailable": 1}
+    _assert_safe_json(summary, forbidden=[str(root), "confidential", "do not read"])
+
+
+def test_media_enabled_default_output_is_aggregate_only(tmp_path: Path, capsys: Any) -> None:
+    root = tmp_path / "real_example"
+    confidential_dir = root / "Confidential Media"
+    confidential_dir.mkdir(parents=True)
+    (confidential_dir / "secret founder interview.mp4").write_bytes(b"NO PROGRESS SECRET")
+
+    summary = run_real_example_gate(
+        root=root,
+        ledger_path=tmp_path / "ledger.json",
+        mode=GateMode.PARSE_SUPPORTED,
+        safe_summary=True,
+        media_enabled=True,
+    )
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+    assert summary["counts_by_reason_code"] == {"media_transcription_unavailable": 1}
+    _assert_safe_json(summary, forbidden=[str(root), "Confidential", "secret", "NO PROGRESS"])
+
+
 @pytest.mark.parametrize("media_enabled", [False, True])
 def test_defers_too_large_mp4_before_reading_body_regardless_of_media_setting(
     tmp_path: Path,
@@ -761,6 +821,28 @@ def test_media_policy_key_includes_enabled_adapter_timeout_and_version() -> None
         media_adapter_name="fake-v1",
         media_timeout_seconds=30,
     )
+    faster_whisper = media_policy_key(
+        media_enabled=True,
+        media_adapter_available=True,
+        media_adapter_name="faster-whisper",
+        media_timeout_seconds=20,
+        media_model_key="name:tiny.en",
+        media_allow_model_download=False,
+        media_language="en",
+        media_compute_type="int8",
+        media_max_duration_seconds=60,
+    )
+    different_model = media_policy_key(
+        media_enabled=True,
+        media_adapter_available=True,
+        media_adapter_name="faster-whisper",
+        media_timeout_seconds=20,
+        media_model_key="name:base.en",
+        media_allow_model_download=False,
+        media_language="en",
+        media_compute_type="int8",
+        media_max_duration_seconds=60,
+    )
 
     assert disabled is not None
     assert "enabled=false" in disabled
@@ -772,7 +854,57 @@ def test_media_policy_key_includes_enabled_adapter_timeout_and_version() -> None
     assert "max_segments=500" in no_adapter
     assert "max_segment_text_chars=20000" in no_adapter
     assert "v1" in no_adapter
-    assert len({disabled, no_adapter, provisioned_adapter, longer_timeout}) == 4
+    assert "model=name:tiny.en" in faster_whisper
+    assert "allow_download=false" in faster_whisper
+    assert "language=en" in faster_whisper
+    assert "compute=int8" in faster_whisper
+    assert "max_duration=60.0" in faster_whisper
+    assert (
+        len(
+            {
+                disabled,
+                no_adapter,
+                provisioned_adapter,
+                longer_timeout,
+                faster_whisper,
+                different_model,
+            }
+        )
+        == 6
+    )
+
+
+def test_media_model_policy_key_changes_when_local_model_path_state_changes(
+    tmp_path: Path,
+) -> None:
+    model_path = tmp_path / "model"
+    missing_key = _media_model_policy_key(media_model_name=None, media_model_path=str(model_path))
+    model_path.write_text("synthetic model state v1", encoding="utf-8")
+    present_key = _media_model_policy_key(media_model_name=None, media_model_path=str(model_path))
+    time.sleep(0.001)
+    model_path.write_text("synthetic model state v2 with different size", encoding="utf-8")
+    changed_key = _media_model_policy_key(media_model_name=None, media_model_path=str(model_path))
+
+    assert missing_key.startswith("path-missing-sha256:")
+    assert present_key.startswith("file-sha256:")
+    assert len({missing_key, present_key, changed_key}) == 3
+
+
+def test_media_model_policy_key_changes_when_local_model_directory_child_changes(
+    tmp_path: Path,
+) -> None:
+    model_path = tmp_path / "model"
+    model_path.mkdir()
+    child_file = model_path / "model.bin"
+    child_file.write_text("synthetic child state v1", encoding="utf-8")
+    present_key = _media_model_policy_key(media_model_name=None, media_model_path=str(model_path))
+    time.sleep(0.001)
+    child_file.write_text("synthetic child state v2 with different size", encoding="utf-8")
+    changed_key = _media_model_policy_key(media_model_name=None, media_model_path=str(model_path))
+
+    assert present_key.startswith("dir-sha256:")
+    assert changed_key.startswith("dir-sha256:")
+    assert present_key != changed_key
 
 
 def test_media_disabled_retries_stale_media_unavailable_entry(

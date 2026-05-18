@@ -452,7 +452,80 @@ def _gather_preflight_corpus(
     if deal_id in deal_documents:
         return deal_documents[deal_id]
 
+    ingestion_corpus = _gather_ingestion_service_preflight_corpus(
+        request,
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+    )
+    if ingestion_corpus:
+        return ingestion_corpus
+
     return _gather_snapshot_documents(request, tenant_id, deal_id)
+
+
+def _gather_ingestion_service_preflight_corpus(
+    request: Request,
+    *,
+    tenant_id: str,
+    deal_id: str,
+) -> list[dict[str, Any]]:
+    """Load full no-DB upload corpus from the app ingestion service state."""
+    ingestion_service = getattr(request.app.state, "ingestion_service", None)
+    if ingestion_service is None:
+        return []
+
+    corpus: list[dict[str, Any]] = []
+    for _key, doc in ingestion_service._documents.items():
+        if str(doc.deal_id) != deal_id:
+            continue
+        if str(doc.tenant_id) != tenant_id:
+            continue
+        artifact = ingestion_service.get_artifact(doc.tenant_id, doc.doc_id)
+        spans = ingestion_service.get_spans(doc.tenant_id, doc.document_id)
+        corpus.append(
+            {
+                "tenant_id": str(doc.tenant_id),
+                "deal_id": str(doc.deal_id),
+                "document_id": str(doc.document_id),
+                "doc_id": str(doc.doc_id),
+                "doc_type": doc.doc_type.value
+                if hasattr(doc.doc_type, "value")
+                else str(doc.doc_type),
+                "parse_status": (
+                    doc.parse_status.value
+                    if hasattr(doc.parse_status, "value")
+                    else str(doc.parse_status)
+                ),
+                "document_name": (
+                    str(artifact.title)
+                    if artifact is not None and getattr(artifact, "title", None)
+                    else str(doc.document_id)
+                ),
+                "sha256": artifact.sha256 if artifact is not None else None,
+                "uri": artifact.uri if artifact is not None else None,
+                "metadata": dict(getattr(doc, "metadata", {}) or {}),
+                "source_metadata": (
+                    dict(getattr(artifact, "metadata", {}) or {}) if artifact is not None else {}
+                ),
+                "spans": [_ingestion_span_for_preflight(span) for span in spans],
+            }
+        )
+    return corpus
+
+
+def _ingestion_span_for_preflight(span: Any) -> dict[str, Any]:
+    return {
+        "span_id": str(span.span_id),
+        "tenant_id": str(span.tenant_id),
+        "deal_id": str(span.deal_id) if getattr(span, "deal_id", None) is not None else None,
+        "document_id": str(span.document_id),
+        "span_type": span.span_type.value
+        if hasattr(span.span_type, "value")
+        else str(span.span_type),
+        "locator": span.locator if isinstance(span.locator, dict) else {},
+        "text_excerpt": span.text_excerpt,
+        "content_hash": span.content_hash,
+    }
 
 
 def _apply_run_source_to_preflight_corpus(

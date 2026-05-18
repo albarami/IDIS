@@ -4,15 +4,33 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+import idis.evaluation.real_example_run_harness as harness_module
 from idis.evaluation.real_example_run_harness import (
+    DEFAULT_TENANT_ID,
     RealExampleFullRunHarnessOptions,
     run_real_example_full_run_harness,
 )
+from idis.models.run_step import STEP_ORDER, RunStep, StepName, StepStatus
+from idis.persistence.repositories.run_steps import (
+    clear_run_steps_store,
+    get_run_steps_repository,
+)
+from idis.persistence.repositories.runs import clear_in_memory_runs_store, get_runs_repository
+
+
+@pytest.fixture(autouse=True)
+def clear_in_memory_run_state() -> Any:
+    clear_in_memory_runs_store()
+    clear_run_steps_store()
+    yield
+    clear_in_memory_runs_store()
+    clear_run_steps_store()
 
 
 class _FakeResponse:
@@ -73,6 +91,97 @@ class _FakeApiClient:
             self.run_requests.append(json or {})
             return _FakeResponse(202, self._run_response)
         raise AssertionError(f"unexpected URL: {url}")
+
+
+class _SlowRunApiClient(_FakeApiClient):
+    def __init__(self, *, delay_seconds: float = 0.2, seed_run_snapshot: bool = True) -> None:
+        super().__init__(run_response={"status": "SUCCEEDED", "steps": []})
+        self.delay_seconds = delay_seconds
+        self.seed_run_snapshot = seed_run_snapshot
+
+    def post(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+        content: bytes | None = None,
+        json: dict[str, Any] | None = None,
+    ) -> _FakeResponse:
+        if url == "/v1/deals/deal-private-1/runs":
+            self.run_requests.append(json or {})
+            if self.seed_run_snapshot:
+                _seed_running_run_with_safe_steps()
+            print("PRIVATE_API_DIAGNOSTIC_SHOULD_BE_SUPPRESSED")
+            time.sleep(self.delay_seconds)
+            return _FakeResponse(202, self._run_response)
+        return super().post(
+            url,
+            headers=headers,
+            params=params,
+            content=content,
+            json=json,
+        )
+
+
+class _SlowUploadApiClient(_FakeApiClient):
+    def post(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+        content: bytes | None = None,
+        json: dict[str, Any] | None = None,
+    ) -> _FakeResponse:
+        if url == "/v1/deals/deal-private-1/documents/upload":
+            print("PRIVATE_UPLOAD_DIAGNOSTIC_SHOULD_BE_SUPPRESSED")
+            time.sleep(0.05)
+        return super().post(
+            url,
+            headers=headers,
+            params=params,
+            content=content,
+            json=json,
+        )
+
+
+def _seed_running_run_with_safe_steps() -> None:
+    run_id = "00000000-0000-4000-8000-000000000044"
+    runs_repo = get_runs_repository(None, DEFAULT_TENANT_ID)
+    runs_repo.create(
+        run_id=run_id,
+        deal_id="deal-private-1",
+        mode="FULL",
+        source={"type": "deal_documents", "document_ids": ["document-1"]},
+    )
+    runs_repo.try_mark_running(run_id)
+    steps_repo = get_run_steps_repository(None, DEFAULT_TENANT_ID)
+    steps_repo.create(
+        RunStep(
+            step_id="00000000-0000-4000-8000-000000000101",
+            run_id=run_id,
+            tenant_id=DEFAULT_TENANT_ID,
+            step_name=StepName.INGEST_CHECK,
+            step_order=STEP_ORDER[StepName.INGEST_CHECK],
+            status=StepStatus.COMPLETED,
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            result_summary={"document_count": 1, "private_path": "SECRET_PATH"},
+        )
+    )
+    steps_repo.create(
+        RunStep(
+            step_id="00000000-0000-4000-8000-000000000102",
+            run_id=run_id,
+            tenant_id=DEFAULT_TENANT_ID,
+            step_name=StepName.DOCUMENT_PREFLIGHT,
+            step_order=STEP_ORDER[StepName.DOCUMENT_PREFLIGHT],
+            status=StepStatus.RUNNING,
+            started_at="2026-01-01T00:00:01Z",
+            result_summary={"text_excerpt": "SECRET_TEXT"},
+        )
+    )
 
 
 def test_harness_rejects_non_private_or_unsafe_summary(tmp_path: Path) -> None:
@@ -383,6 +492,203 @@ def test_harness_reports_full_run_blocker_as_structured_safe_blocker(
     }
     assert summary["run"]["status"] == "FAILED"
     assert summary["run"]["blocked_step_count"] == 1
+
+
+def test_harness_hard_timeout_returns_structured_safe_run_timeout(
+    tmp_path: Path,
+    capsys: Any,
+) -> None:
+    root = tmp_path / "real_example"
+    confidential_dir = root / "Private Target Data Room"
+    confidential_dir.mkdir(parents=True)
+    (confidential_dir / "secret-board-pack.pdf").write_bytes(
+        b"%PDF-1.4\nPRIVATE_CONTENT_SLICE44\n%%EOF"
+    )
+    output_path = tmp_path / "timeout_summary.json"
+    resume_state_output_path = tmp_path / "resume_state.json"
+
+    summary = run_real_example_full_run_harness(
+        RealExampleFullRunHarnessOptions(
+            root=root,
+            output_path=output_path,
+            resume_state_output_path=resume_state_output_path,
+            api_client=_SlowRunApiClient(delay_seconds=0.3),
+            run_timeout_seconds=0.1,
+            run_poll_interval_seconds=0.001,
+        )
+    )
+
+    captured = capsys.readouterr()
+    assert summary["status"] == "blocked"
+    assert summary["blocker"] == {
+        "stage": "full_run",
+        "reason_code": "RUN_TIMEOUT",
+        "http_status": None,
+    }
+    assert summary["run"]["attempted"] is True
+    assert summary["run"]["status"] == "RUNNING"
+    assert summary["run"]["run_id"] == "00000000-0000-4000-8000-000000000044"
+    assert summary["run"]["last_completed_step"] == "INGEST_CHECK"
+    assert summary["run"]["current_step"] == "DOCUMENT_PREFLIGHT"
+    assert summary["run"]["failed_step"] is None
+    assert summary["run"]["elapsed_seconds_bucket"] == "under_1s"
+    assert summary["run"]["step_counts_by_status"] == {"COMPLETED": 1, "RUNNING": 1}
+    assert summary["resume"] == {
+        "supported": False,
+        "reason_code": "RESUME_UNSUPPORTED",
+        "uploaded_document_count": 1,
+        "selected_document_count": 1,
+        "run_id": "00000000-0000-4000-8000-000000000044",
+    }
+
+    encoded_summary = json.dumps(summary, sort_keys=True)
+    encoded_output = output_path.read_text(encoding="utf-8")
+    encoded_resume = resume_state_output_path.read_text(encoding="utf-8")
+    for encoded in (encoded_summary, encoded_output, encoded_resume, captured.out, captured.err):
+        assert str(root) not in encoded
+        assert "Private Target" not in encoded
+        assert "secret-board-pack" not in encoded
+        assert "PRIVATE_CONTENT_SLICE44" not in encoded
+        assert "SECRET_PATH" not in encoded
+        assert "SECRET_TEXT" not in encoded
+        assert "PRIVATE_API_DIAGNOSTIC_SHOULD_BE_SUPPRESSED" not in encoded
+
+
+def test_harness_deadline_returns_structured_timeout_during_upload(
+    tmp_path: Path,
+    capsys: Any,
+) -> None:
+    root = tmp_path / "real_example"
+    confidential_dir = root / "Private Upload Data Room"
+    confidential_dir.mkdir(parents=True)
+    (confidential_dir / "slow-secret.pdf").write_bytes(b"%PDF-1.4\nPRIVATE_UPLOAD\n%%EOF")
+
+    summary = run_real_example_full_run_harness(
+        RealExampleFullRunHarnessOptions(
+            root=root,
+            api_client=_SlowUploadApiClient(),
+            run_timeout_seconds=0.01,
+            run_poll_interval_seconds=0.001,
+        )
+    )
+
+    captured = capsys.readouterr()
+    assert summary["status"] == "blocked"
+    assert summary["blocker"] == {
+        "stage": "upload",
+        "reason_code": "RUN_TIMEOUT",
+        "http_status": None,
+    }
+    assert summary["run"]["attempted"] is False
+    assert summary["run"]["elapsed_seconds_bucket"] == "under_1s"
+    assert summary["selected_document_count"] == 0
+
+    encoded = json.dumps(summary, sort_keys=True) + captured.out + captured.err
+    assert str(root) not in encoded
+    assert "slow-secret" not in encoded
+    assert "PRIVATE_UPLOAD" not in encoded
+    assert "PRIVATE_UPLOAD_DIAGNOSTIC_SHOULD_BE_SUPPRESSED" not in encoded
+
+
+def test_harness_deadline_bounds_inventory_without_private_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "real_example"
+    root.mkdir()
+
+    def slow_inventory(path: Path) -> list[Path]:
+        assert path == root
+        time.sleep(0.3)
+        return [root / "secret-inventory.pdf"]
+
+    monkeypatch.setattr(harness_module, "_inventory_files", slow_inventory)
+
+    summary = run_real_example_full_run_harness(
+        RealExampleFullRunHarnessOptions(
+            root=root,
+            api_client=_FakeApiClient(),
+            run_timeout_seconds=0.1,
+            run_poll_interval_seconds=0.001,
+        )
+    )
+
+    encoded = json.dumps(summary, sort_keys=True)
+    assert summary["status"] == "blocked"
+    assert summary["blocker"] == {
+        "stage": "inventory",
+        "reason_code": "RUN_TIMEOUT",
+        "http_status": None,
+    }
+    assert summary["total_files"] == 0
+    assert str(root) not in encoded
+    assert "secret-inventory" not in encoded
+
+
+def test_harness_deadline_bounds_file_triage_without_private_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "real_example"
+    confidential_dir = root / "Private Triage Data Room"
+    confidential_dir.mkdir(parents=True)
+    (confidential_dir / "secret-triage.pdf").write_bytes(b"%PDF-1.4\nPRIVATE_TRIAGE\n%%EOF")
+
+    def slow_read_header(path: Path) -> bytes:
+        assert path.name == "secret-triage.pdf"
+        time.sleep(0.3)
+        return b"%PDF-1.4"
+
+    monkeypatch.setattr(harness_module, "_read_header", slow_read_header)
+
+    summary = run_real_example_full_run_harness(
+        RealExampleFullRunHarnessOptions(
+            root=root,
+            api_client=_FakeApiClient(),
+            run_timeout_seconds=0.1,
+            run_poll_interval_seconds=0.001,
+        )
+    )
+
+    encoded = json.dumps(summary, sort_keys=True)
+    assert summary["status"] == "blocked"
+    assert summary["blocker"] == {
+        "stage": "file_triage",
+        "reason_code": "RUN_TIMEOUT",
+        "http_status": None,
+    }
+    assert summary["selected_document_count"] == 0
+    assert str(root) not in encoded
+    assert "secret-triage" not in encoded
+    assert "PRIVATE_TRIAGE" not in encoded
+
+
+def test_harness_run_timeout_without_snapshot_still_reports_attempted_timeout(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "real_example"
+    root.mkdir()
+    (root / "private.pdf").write_bytes(b"%PDF-1.4\nsafe\n%%EOF")
+
+    summary = run_real_example_full_run_harness(
+        RealExampleFullRunHarnessOptions(
+            root=root,
+            api_client=_SlowRunApiClient(delay_seconds=0.3, seed_run_snapshot=False),
+            run_timeout_seconds=0.1,
+            run_poll_interval_seconds=0.001,
+        )
+    )
+
+    assert summary["status"] == "blocked"
+    assert summary["blocker"] == {
+        "stage": "full_run",
+        "reason_code": "RUN_TIMEOUT",
+        "http_status": None,
+    }
+    assert summary["run"]["attempted"] is True
+    assert summary["run"]["status"] == "TIMEOUT"
+    assert summary["run"]["block_reason"] == "RUN_TIMEOUT"
+    assert summary["run"]["step_counts_by_status"] == {}
 
 
 def test_successful_synthetic_mini_data_room_run_produces_safe_aggregate_status(

@@ -7,11 +7,13 @@ import hashlib
 import json
 import os
 import tempfile
+import threading
+import time
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Generic, Protocol, TypeVar, cast
 
 from idis.api.auth import IDIS_API_KEYS_ENV
 from idis.models.document_classification import DocumentSupportStatus, DocumentTriageStatus
@@ -23,6 +25,9 @@ UPLOAD_CONTENT_TYPE = "application/octet-stream"
 DEFAULT_API_KEY = "slice42-private-real-example-harness-key"
 DEFAULT_TENANT_ID = "11111111-1111-4111-8111-111111111111"
 DEFAULT_ACTOR_ID = "slice42-private-harness"
+RUN_TIMEOUT_REASON = "RUN_TIMEOUT"
+RESUME_UNSUPPORTED_REASON = "RESUME_UNSUPPORTED"
+T = TypeVar("T")
 
 
 class _ResponseLike(Protocol):
@@ -59,6 +64,9 @@ class RealExampleFullRunHarnessOptions:
     company_name: str = "Private real_example company"
     local_stt_model_configured: bool = False
     max_upload_files: int | None = None
+    run_timeout_seconds: float | None = None
+    run_poll_interval_seconds: float = 1.0
+    resume_state_output_path: str | Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +75,21 @@ class _FileDecision:
     extension: str
     upload_status: str
     reason_code: str
+
+
+@dataclass(frozen=True, slots=True)
+class _RunPostAttempt:
+    response: _ResponseLike | None
+    timed_out: bool
+    elapsed_seconds: float
+    timeout_snapshot: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _TimedCallAttempt(Generic[T]):
+    result: T | None
+    timed_out: bool
+    elapsed_seconds: float
 
 
 def run_real_example_full_run_harness(
@@ -100,6 +123,13 @@ def run_real_example_full_run_harness(
         destination = Path(options.output_path)
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(json.dumps(summary, sort_keys=True, indent=2), encoding="utf-8")
+    if options.resume_state_output_path is not None:
+        destination = Path(options.resume_state_output_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(
+            json.dumps(_resume_state_for_output(summary), sort_keys=True, indent=2),
+            encoding="utf-8",
+        )
     return summary
 
 
@@ -110,6 +140,10 @@ def _validate_options(options: RealExampleFullRunHarnessOptions) -> None:
         raise ValueError("real_example run harness requires safe_summary=True")
     if options.max_upload_files is not None and options.max_upload_files <= 0:
         raise ValueError("max_upload_files must be positive when provided")
+    if options.run_timeout_seconds is not None and options.run_timeout_seconds <= 0:
+        raise ValueError("run_timeout_seconds must be positive when provided")
+    if options.run_poll_interval_seconds <= 0:
+        raise ValueError("run_poll_interval_seconds must be positive")
 
 
 def _validate_root(root: Path) -> None:
@@ -125,13 +159,54 @@ def _run_with_client(
     root: Path,
     client: _ApiClientLike,
 ) -> dict[str, Any]:
-    files = _inventory_files(root)
-    deal_response = _client_post(
-        client,
-        "/v1/deals",
-        headers=_headers(options.api_key),
-        json={"name": options.deal_name, "company_name": options.company_name},
+    harness_started_at = time.monotonic()
+    inventory_attempt = _call_with_optional_deadline(
+        call=lambda: _inventory_files(root),
+        timeout_seconds=_remaining_timeout_seconds(harness_started_at, options.run_timeout_seconds),
+        poll_interval_seconds=options.run_poll_interval_seconds,
     )
+    if inventory_attempt.timed_out:
+        return _summary(
+            files=[],
+            decisions=[],
+            uploaded_document_ids=[],
+            status="blocked",
+            run_body=None,
+            run_http_status=None,
+            blocker=_blocker(
+                stage="inventory",
+                reason_code=RUN_TIMEOUT_REASON,
+                http_status=None,
+            ),
+            run_elapsed_seconds=time.monotonic() - harness_started_at,
+        )
+    files = _completed_call_result_or_raise(inventory_attempt)
+    deal_attempt = _call_response_with_optional_deadline(
+        call=lambda: _client_post(
+            client,
+            "/v1/deals",
+            headers=_headers(options.api_key),
+            json={"name": options.deal_name, "company_name": options.company_name},
+        ),
+        timeout_seconds=_remaining_timeout_seconds(harness_started_at, options.run_timeout_seconds),
+        poll_interval_seconds=options.run_poll_interval_seconds,
+    )
+    if deal_attempt.timed_out:
+        return _summary(
+            files=files,
+            decisions=[],
+            uploaded_document_ids=[],
+            status="blocked",
+            run_body=None,
+            run_http_status=None,
+            blocker=_blocker(
+                stage="deal_create",
+                reason_code=RUN_TIMEOUT_REASON,
+                http_status=None,
+            ),
+            run_elapsed_seconds=time.monotonic() - harness_started_at,
+        )
+    deal_response = _completed_response_or_raise(deal_attempt)
     if deal_response.status_code != 201:
         return _summary(
             files=files,
@@ -153,10 +228,38 @@ def _run_with_client(
     upload_index = 0
 
     for file_path in files:
-        decision = _decision_for_file(
-            path=file_path,
-            local_stt_model_configured=options.local_stt_model_configured,
+        triage_path = file_path
+
+        def triage_current_file(path: Path = triage_path) -> _FileDecision:
+            return _decision_for_file(
+                path=path,
+                local_stt_model_configured=options.local_stt_model_configured,
+            )
+
+        triage_attempt = _call_with_optional_deadline(
+            call=triage_current_file,
+            timeout_seconds=_remaining_timeout_seconds(
+                harness_started_at,
+                options.run_timeout_seconds,
+            ),
+            poll_interval_seconds=options.run_poll_interval_seconds,
         )
+        if triage_attempt.timed_out:
+            return _summary(
+                files=files,
+                decisions=decisions,
+                uploaded_document_ids=uploaded_document_ids,
+                status="blocked",
+                run_body=None,
+                run_http_status=None,
+                blocker=_blocker(
+                    stage="file_triage",
+                    reason_code=RUN_TIMEOUT_REASON,
+                    http_status=None,
+                ),
+                run_elapsed_seconds=time.monotonic() - harness_started_at,
+            )
+        decision = _completed_call_result_or_raise(triage_attempt)
         if decision.upload_status != "upload_candidate":
             decisions.append(decision)
             continue
@@ -172,13 +275,29 @@ def _run_with_client(
             continue
 
         upload_index += 1
-        try:
-            upload_response = _upload_file(
+        upload_path = file_path
+        current_upload_index = upload_index
+
+        def upload_current_file(
+            path: Path = upload_path,
+            index: int = current_upload_index,
+        ) -> _ResponseLike:
+            return _upload_file(
                 client=client,
                 api_key=options.api_key,
                 deal_id=deal_id,
-                path=file_path,
-                upload_index=upload_index,
+                path=path,
+                upload_index=index,
+            )
+
+        try:
+            upload_attempt = _call_response_with_optional_deadline(
+                call=upload_current_file,
+                timeout_seconds=_remaining_timeout_seconds(
+                    harness_started_at,
+                    options.run_timeout_seconds,
+                ),
+                poll_interval_seconds=options.run_poll_interval_seconds,
             )
         except OSError:
             decisions.append(
@@ -190,6 +309,23 @@ def _run_with_client(
                 )
             )
             continue
+        if upload_attempt.timed_out:
+            return _summary(
+                files=files,
+                decisions=decisions,
+                uploaded_document_ids=uploaded_document_ids,
+                status="blocked",
+                run_body=None,
+                run_http_status=None,
+                blocker=_blocker(
+                    stage="upload",
+                    reason_code=RUN_TIMEOUT_REASON,
+                    http_status=None,
+                ),
+                run_elapsed_seconds=time.monotonic() - harness_started_at,
+            )
+
+        upload_response = _completed_response_or_raise(upload_attempt)
         if upload_response.status_code != 201:
             decisions.append(
                 _FileDecision(
@@ -238,6 +374,21 @@ def _run_with_client(
                 reason_code="uploaded",
             )
         )
+        if _deadline_expired(harness_started_at, options.run_timeout_seconds):
+            return _summary(
+                files=files,
+                decisions=decisions,
+                uploaded_document_ids=uploaded_document_ids,
+                status="blocked",
+                run_body=None,
+                run_http_status=None,
+                blocker=_blocker(
+                    stage="upload",
+                    reason_code=RUN_TIMEOUT_REASON,
+                    http_status=None,
+                ),
+                run_elapsed_seconds=time.monotonic() - harness_started_at,
+            )
 
     if not uploaded_document_ids:
         return _summary(
@@ -254,18 +405,61 @@ def _run_with_client(
             ),
         )
 
-    run_response = _client_post(
-        client,
-        f"/v1/deals/{deal_id}/runs",
-        headers=_headers(options.api_key),
-        json={
-            "mode": "FULL",
-            "source": {
-                "type": "deal_documents",
-                "document_ids": uploaded_document_ids,
-            },
+    run_payload = {
+        "mode": "FULL",
+        "source": {
+            "type": "deal_documents",
+            "document_ids": uploaded_document_ids,
         },
+    }
+    remaining_timeout_seconds = _remaining_timeout_seconds(
+        harness_started_at,
+        options.run_timeout_seconds,
     )
+    if remaining_timeout_seconds is not None and remaining_timeout_seconds <= 0:
+        return _summary(
+            files=files,
+            decisions=decisions,
+            uploaded_document_ids=uploaded_document_ids,
+            status="blocked",
+            run_body=None,
+            run_http_status=None,
+            blocker=_blocker(
+                stage="run_start",
+                reason_code=RUN_TIMEOUT_REASON,
+                http_status=None,
+            ),
+            run_elapsed_seconds=time.monotonic() - harness_started_at,
+        )
+    run_attempt = _post_run_with_optional_deadline(
+        client=client,
+        url=f"/v1/deals/{deal_id}/runs",
+        api_key=options.api_key,
+        payload=run_payload,
+        timeout_seconds=remaining_timeout_seconds,
+        poll_interval_seconds=options.run_poll_interval_seconds,
+    )
+    if run_attempt.timed_out:
+        return _summary(
+            files=files,
+            decisions=decisions,
+            uploaded_document_ids=uploaded_document_ids,
+            status="blocked",
+            run_body=None,
+            run_http_status=None,
+            blocker=_blocker(
+                stage="full_run",
+                reason_code=RUN_TIMEOUT_REASON,
+                http_status=None,
+            ),
+            run_timeout_snapshot=run_attempt.timeout_snapshot,
+            run_elapsed_seconds=run_attempt.elapsed_seconds,
+            run_attempted_on_timeout=True,
+        )
+
+    run_response = run_attempt.response
+    if run_response is None:
+        raise RuntimeError("run attempt completed without a response")
     run_body = run_response.json()
     if run_response.status_code != 202:
         return _summary(
@@ -430,6 +624,135 @@ def _client_post(client: _ApiClientLike, url: str, **kwargs: Any) -> _ResponseLi
         return client.post(url, **kwargs)
 
 
+def _post_run_with_optional_deadline(
+    *,
+    client: _ApiClientLike,
+    url: str,
+    api_key: str,
+    payload: dict[str, Any],
+    timeout_seconds: float | None,
+    poll_interval_seconds: float,
+) -> _RunPostAttempt:
+    attempt = _call_response_with_optional_deadline(
+        call=lambda: _client_post(client, url, headers=_headers(api_key), json=payload),
+        timeout_seconds=timeout_seconds,
+        poll_interval_seconds=poll_interval_seconds,
+    )
+    if attempt.timed_out:
+        return _RunPostAttempt(
+            response=None,
+            timed_out=True,
+            elapsed_seconds=attempt.elapsed_seconds,
+            timeout_snapshot=_latest_safe_run_snapshot(),
+        )
+    return _RunPostAttempt(
+        response=_completed_response_or_raise(attempt),
+        timed_out=False,
+        elapsed_seconds=attempt.elapsed_seconds,
+    )
+
+
+def _call_response_with_optional_deadline(
+    *,
+    call: Callable[[], _ResponseLike],
+    timeout_seconds: float | None,
+    poll_interval_seconds: float,
+) -> _RunPostAttempt:
+    attempt = _call_with_optional_deadline(
+        call=call,
+        timeout_seconds=timeout_seconds,
+        poll_interval_seconds=poll_interval_seconds,
+    )
+    return _RunPostAttempt(
+        response=attempt.result,
+        timed_out=attempt.timed_out,
+        elapsed_seconds=attempt.elapsed_seconds,
+    )
+
+
+def _call_with_optional_deadline(
+    *,
+    call: Callable[[], T],
+    timeout_seconds: float | None,
+    poll_interval_seconds: float,
+) -> _TimedCallAttempt[T]:
+    started_at = time.monotonic()
+    if timeout_seconds is None:
+        immediate_result = call()
+        return _TimedCallAttempt(
+            result=immediate_result,
+            timed_out=False,
+            elapsed_seconds=time.monotonic() - started_at,
+        )
+
+    completed = threading.Event()
+    result_box: dict[str, Any] = {}
+
+    def post_run() -> None:
+        try:
+            result_box["response"] = call()
+        except BaseException as exc:  # pragma: no cover - re-raised in caller
+            result_box["exception"] = exc
+        finally:
+            completed.set()
+
+    thread = threading.Thread(target=post_run, name="idis-real-example-full-run", daemon=True)
+    thread.start()
+    deadline = started_at + timeout_seconds
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        if completed.wait(min(poll_interval_seconds, remaining)):
+            break
+
+    elapsed_seconds = time.monotonic() - started_at
+    if not completed.is_set():
+        return _TimedCallAttempt(
+            result=None,
+            timed_out=True,
+            elapsed_seconds=elapsed_seconds,
+        )
+
+    if "exception" in result_box:
+        exc = result_box["exception"]
+        if isinstance(exc, BaseException):
+            raise exc
+        raise RuntimeError("run post failed with a non-exception error")
+    completed_result = cast(T | None, result_box.get("response"))
+    if completed_result is None:
+        raise RuntimeError("timed call completed without a result")
+    return _TimedCallAttempt(
+        result=completed_result,
+        timed_out=False,
+        elapsed_seconds=elapsed_seconds,
+    )
+
+
+def _completed_response_or_raise(attempt: _RunPostAttempt) -> _ResponseLike:
+    if attempt.response is None:
+        raise RuntimeError("timed response attempt completed without a response")
+    return attempt.response
+
+
+def _completed_call_result_or_raise(attempt: _TimedCallAttempt[T]) -> T:
+    if attempt.result is None:
+        raise RuntimeError("timed call completed without a result")
+    return attempt.result
+
+
+def _deadline_expired(started_at: float, timeout_seconds: float | None) -> bool:
+    if timeout_seconds is None:
+        return False
+    return time.monotonic() - started_at >= timeout_seconds
+
+
+def _remaining_timeout_seconds(started_at: float, timeout_seconds: float | None) -> float | None:
+    if timeout_seconds is None:
+        return None
+    return max(0.0, timeout_seconds - (time.monotonic() - started_at))
+
+
 def _suppress_output() -> contextlib.AbstractContextManager[None]:
     @contextlib.contextmanager
     def suppress() -> Iterator[None]:
@@ -456,9 +779,17 @@ def _summary(
     run_body: dict[str, Any] | None,
     run_http_status: int | None,
     blocker: dict[str, Any] | None,
+    run_timeout_snapshot: dict[str, Any] | None = None,
+    run_elapsed_seconds: float | None = None,
+    run_attempted_on_timeout: bool = False,
 ) -> dict[str, Any]:
     uploaded_count = sum(1 for decision in decisions if decision.upload_status == "uploaded")
     skipped_count = sum(1 for decision in decisions if decision.upload_status != "uploaded")
+    resume = _resume_summary(
+        uploaded_document_count=uploaded_count,
+        selected_document_count=len(uploaded_document_ids),
+        run_snapshot=run_timeout_snapshot,
+    )
     return {
         "harness": "real_example_production_full_run_private_v1",
         "safe_summary": True,
@@ -472,9 +803,38 @@ def _summary(
         "counts_by_extension": _count_extensions(files),
         "counts_by_upload_status": _count_decisions(decisions, "upload_status"),
         "counts_by_deferred_reason": _deferred_reasons(decisions),
-        "run": _run_summary(run_body, http_status=run_http_status),
+        "run": _run_summary(
+            run_body,
+            http_status=run_http_status,
+            timeout_snapshot=run_timeout_snapshot,
+            elapsed_seconds=run_elapsed_seconds,
+            attempted_on_timeout=run_attempted_on_timeout,
+        ),
+        "resume": resume,
         "blocker": blocker,
     }
+
+
+def _resume_summary(
+    *,
+    uploaded_document_count: int,
+    selected_document_count: int,
+    run_snapshot: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return {
+        "supported": False,
+        "reason_code": RESUME_UNSUPPORTED_REASON,
+        "uploaded_document_count": uploaded_document_count,
+        "selected_document_count": selected_document_count,
+        "run_id": _optional_string((run_snapshot or {}).get("run_id")),
+    }
+
+
+def _resume_state_for_output(summary: dict[str, Any]) -> dict[str, Any]:
+    resume = summary.get("resume")
+    if isinstance(resume, dict):
+        return dict(resume)
+    return {"supported": False, "reason_code": RESUME_UNSUPPORTED_REASON, "run_id": None}
 
 
 def _count_extensions(files: list[Path]) -> dict[str, int]:
@@ -495,10 +855,51 @@ def _deferred_reasons(decisions: list[_FileDecision]) -> dict[str, int]:
     return dict(sorted(Counter(reasons).items()))
 
 
-def _run_summary(run_body: dict[str, Any] | None, *, http_status: int | None) -> dict[str, Any]:
+def _run_summary(
+    run_body: dict[str, Any] | None,
+    *,
+    http_status: int | None,
+    timeout_snapshot: dict[str, Any] | None = None,
+    elapsed_seconds: float | None = None,
+    attempted_on_timeout: bool = False,
+) -> dict[str, Any]:
     _ = http_status
-    if run_body is None:
+    if timeout_snapshot is not None:
+        steps = timeout_snapshot.get("steps")
+        step_list = steps if isinstance(steps, list) else []
         return {
+            "attempted": True,
+            "status": _optional_string(timeout_snapshot.get("status")) or "RUNNING",
+            "run_id": _optional_string(timeout_snapshot.get("run_id")),
+            "step_count": len(step_list),
+            "completed_step_count": _step_status_count(step_list, "COMPLETED"),
+            "failed_step_count": _step_status_count(step_list, "FAILED"),
+            "blocked_step_count": _step_status_count(step_list, "BLOCKED"),
+            "block_reason": RUN_TIMEOUT_REASON,
+            "last_completed_step": _last_step_with_status(step_list, "COMPLETED"),
+            "current_step": _first_step_with_status(step_list, "RUNNING"),
+            "failed_step": _first_failed_step(step_list),
+            "elapsed_seconds_bucket": _elapsed_seconds_bucket(elapsed_seconds),
+            "step_counts_by_status": _step_counts_by_status(step_list),
+        }
+    if run_body is None:
+        if attempted_on_timeout:
+            return {
+                "attempted": True,
+                "status": "TIMEOUT",
+                "run_id": None,
+                "step_count": 0,
+                "completed_step_count": 0,
+                "failed_step_count": 0,
+                "blocked_step_count": 0,
+                "block_reason": RUN_TIMEOUT_REASON,
+                "last_completed_step": None,
+                "current_step": None,
+                "failed_step": None,
+                "elapsed_seconds_bucket": _elapsed_seconds_bucket(elapsed_seconds),
+                "step_counts_by_status": {},
+            }
+        summary: dict[str, Any] = {
             "attempted": False,
             "status": None,
             "step_count": 0,
@@ -507,6 +908,9 @@ def _run_summary(run_body: dict[str, Any] | None, *, http_status: int | None) ->
             "blocked_step_count": 0,
             "block_reason": None,
         }
+        if elapsed_seconds is not None:
+            summary["elapsed_seconds_bucket"] = _elapsed_seconds_bucket(elapsed_seconds)
+        return summary
     steps = run_body.get("steps")
     step_list = steps if isinstance(steps, list) else []
     return {
@@ -518,6 +922,57 @@ def _run_summary(run_body: dict[str, Any] | None, *, http_status: int | None) ->
         "blocked_step_count": _step_status_count(step_list, "BLOCKED"),
         "block_reason": _run_block_reason(run_body),
     }
+
+
+def _step_counts_by_status(steps: list[Any]) -> dict[str, int]:
+    statuses = [
+        str(step.get("status")).upper()
+        for step in steps
+        if isinstance(step, dict) and isinstance(step.get("status"), str)
+    ]
+    return dict(sorted(Counter(statuses).items()))
+
+
+def _last_step_with_status(steps: list[Any], status: str) -> str | None:
+    matching = [
+        _optional_string(step.get("step_name"))
+        for step in steps
+        if isinstance(step, dict) and str(step.get("status")).upper() == status
+    ]
+    return next((step for step in reversed(matching) if step is not None), None)
+
+
+def _first_step_with_status(steps: list[Any], status: str) -> str | None:
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        if str(step.get("status")).upper() == status:
+            return _optional_string(step.get("step_name"))
+    return None
+
+
+def _first_failed_step(steps: list[Any]) -> str | None:
+    for status in ("FAILED", "BLOCKED"):
+        step_name = _first_step_with_status(steps, status)
+        if step_name is not None:
+            return step_name
+    return None
+
+
+def _elapsed_seconds_bucket(elapsed_seconds: float | None) -> str | None:
+    if elapsed_seconds is None:
+        return None
+    if elapsed_seconds < 1:
+        return "under_1s"
+    if elapsed_seconds < 5:
+        return "1_to_5s"
+    if elapsed_seconds < 30:
+        return "5_to_30s"
+    if elapsed_seconds < 60:
+        return "30_to_60s"
+    if elapsed_seconds < 300:
+        return "60_to_300s"
+    return "over_300s"
 
 
 def _step_status_count(steps: list[Any], status: str) -> int:
@@ -542,6 +997,47 @@ def _run_block_reason(run_body: dict[str, Any]) -> str | None:
             if isinstance(code, str) and code.strip():
                 return code
     return None
+
+
+def _latest_safe_run_snapshot() -> dict[str, Any] | None:
+    """Return the latest no-DB run/step state without result summaries."""
+    try:
+        from idis.persistence.repositories.run_steps import get_run_steps_repository
+        from idis.persistence.repositories.runs import _in_memory_runs_store
+    except ImportError:
+        return None
+
+    runs = [
+        run
+        for run in _in_memory_runs_store.values()
+        if run.get("tenant_id") == DEFAULT_TENANT_ID and run.get("mode") == "FULL"
+    ]
+    if not runs:
+        return None
+
+    latest = max(runs, key=lambda run: str(run.get("created_at") or ""))
+    run_id = _optional_string(latest.get("run_id"))
+    if run_id is None:
+        return None
+
+    steps_repo = get_run_steps_repository(None, DEFAULT_TENANT_ID)
+    steps = []
+    for step in steps_repo.get_by_run_id(run_id):
+        step_name = step.step_name.value if hasattr(step.step_name, "value") else step.step_name
+        step_status = step.status.value if hasattr(step.status, "value") else step.status
+        steps.append(
+            {
+                "step_name": step_name,
+                "status": step_status,
+                "error": {"code": step.error_code} if step.error_code else None,
+            }
+        )
+    return {
+        "run_id": run_id,
+        "status": _optional_string(latest.get("status")),
+        "block_reason": _optional_string(latest.get("block_reason")),
+        "steps": steps,
+    }
 
 
 def _blocker(*, stage: str, reason_code: str, http_status: int | None) -> dict[str, Any]:

@@ -38,7 +38,9 @@ from idis.api.routes.documents import clear_document_store
 from idis.audit.sink import InMemoryAuditSink
 from idis.compliance.byok import BYOKPolicyRegistry, configure_key
 from idis.idempotency.store import SqliteIdempotencyStore
+from idis.models.document import ParseStatus
 from idis.services.ingestion import IngestionService
+from idis.services.ingestion.service import IngestionResult
 from idis.storage.compliant_store import ComplianceEnforcedStore
 from idis.storage.filesystem_store import FilesystemObjectStore
 
@@ -360,6 +362,64 @@ class TestUploadDocumentBytes:
         assert body["document_id"] in {
             str(document.document_id) for document in ingestion_svc._documents.values()
         }
+
+    def test_upload_route_passes_validated_sha256_into_ingestion_without_bypass(
+        self,
+        _wired_app_context: dict[str, Any],
+        api_key_a: str,
+        deal_id: str,
+    ) -> None:
+        """The fast path still uses the public upload contract and validated bytes."""
+        client = _wired_app_context["client"]
+        pdf_data = _create_minimal_pdf()
+        expected_sha256 = hashlib.sha256(pdf_data).hexdigest()
+
+        class RecordingIngestionService:
+            _max_bytes = 50 * 1024 * 1024
+
+            def __init__(self) -> None:
+                self.calls: list[dict[str, Any]] = []
+
+            def ingest_bytes(self, **kwargs: Any) -> IngestionResult:
+                self.calls.append(kwargs)
+                validated_sha256 = kwargs["validated_sha256"]
+                return IngestionResult(
+                    success=True,
+                    artifact_id=uuid.uuid4(),
+                    document_id=uuid.uuid4(),
+                    doc_type="PDF",
+                    span_count=0,
+                    sha256=validated_sha256.value,
+                    storage_uri="deals/safe/artifacts/validated/uploaded.pdf",
+                    parse_status=ParseStatus.PARSED,
+                )
+
+        recorder = RecordingIngestionService()
+        client.app.state.ingestion_service = recorder
+
+        response = client.post(
+            f"/v1/deals/{deal_id}/documents/upload",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/octet-stream",
+            },
+            params={
+                "filename": "uploaded.pdf",
+                "doc_type": "DATA_ROOM_FILE",
+                "sha256": expected_sha256,
+                "source_system": "api-upload",
+            },
+            content=pdf_data,
+        )
+
+        assert response.status_code == 201
+        assert len(recorder.calls) == 1
+        call = recorder.calls[0]
+        assert call["validated_sha256"].value == expected_sha256
+        assert call["data"] == pdf_data
+        assert call["filename"] == "uploaded.pdf"
+        assert "root" not in call
+        assert "folder_path" not in json.dumps(call, default=str)
 
     @pytest.mark.parametrize(
         ("headers", "params", "content", "expected_status"),

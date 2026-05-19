@@ -52,6 +52,7 @@ class IngestionErrorCode(StrEnum):
 
     EMPTY_FILE = "empty_file"
     FILE_TOO_LARGE = "file_too_large"
+    UNTRUSTED_VALIDATED_SHA256 = "untrusted_validated_sha256"
     UNSUPPORTED_FORMAT = "unsupported_format"
     PARSE_FAILED = "parse_failed"
     STORAGE_FAILED = "storage_failed"
@@ -100,6 +101,35 @@ class IngestionContext:
     actor_id: str
     request_id: str
     idempotency_key: str | None = None
+
+
+_ROUTE_VALIDATED_SHA256_TOKEN = object()
+
+
+@dataclass(frozen=True, init=False)
+class RouteValidatedSha256:
+    """SHA256 digest proven against bytes at the public upload route boundary."""
+
+    value: str
+
+    def __init__(self, *, value: str, _token: object) -> None:
+        """Create a route-validated digest; callers must use ``from_bytes``."""
+        if _token is not _ROUTE_VALIDATED_SHA256_TOKEN:
+            raise ValueError("RouteValidatedSha256 must be created by from_bytes")
+        object.__setattr__(self, "value", value)
+
+    @classmethod
+    def from_bytes(
+        cls,
+        *,
+        data: bytes,
+        expected_sha256: str | None = None,
+    ) -> RouteValidatedSha256:
+        """Validate optional caller SHA against bytes and return the actual digest."""
+        actual_sha256 = hashlib.sha256(data).hexdigest()
+        if expected_sha256 is not None and actual_sha256 != expected_sha256.lower():
+            raise ValueError("SHA256_MISMATCH")
+        return cls(value=actual_sha256, _token=_ROUTE_VALIDATED_SHA256_TOKEN)
 
 
 @dataclass
@@ -196,6 +226,7 @@ class IngestionService:
         media_type: str | None,
         data: bytes,
         metadata: dict[str, Any] | None = None,
+        validated_sha256: RouteValidatedSha256 | None = None,
         db_conn: Connection | None = None,
     ) -> IngestionResult:
         """Ingest raw document bytes into the system.
@@ -216,6 +247,9 @@ class IngestionService:
             media_type: MIME type (for metadata, not format detection).
             data: Raw document bytes.
             metadata: Optional additional metadata.
+            validated_sha256: Optional digest object already validated against
+                ``data`` by a trusted API boundary. When provided, ingestion reuses
+                it instead of hashing the same bytes again.
             db_conn: Optional request-scoped Postgres connection for durable corpus writes.
 
         Returns:
@@ -234,6 +268,7 @@ class IngestionService:
                 media_type=media_type,
                 data=data,
                 metadata=metadata or {},
+                validated_sha256=validated_sha256,
                 db_conn=db_conn,
             )
         except Exception as e:
@@ -257,14 +292,22 @@ class IngestionService:
         media_type: str | None,
         data: bytes,
         metadata: dict[str, Any],
+        validated_sha256: RouteValidatedSha256 | None,
         db_conn: Connection | None,
     ) -> IngestionResult:
         """Implementation of ingest_bytes with exception propagation."""
+        trusted_sha_error = self._reject_untrusted_validated_sha256(validated_sha256)
+        if trusted_sha_error is not None:
+            return IngestionResult(success=False, errors=[trusted_sha_error])
+
         validation_error = self._validate_input(data, filename)
         if validation_error:
             return IngestionResult(success=False, errors=[validation_error])
 
-        sha256 = self._compute_sha256(data)
+        sha256 = self._validated_or_computed_sha256(
+            data=data,
+            validated_sha256=validated_sha256,
+        )
 
         storage_key = self._build_storage_key(
             tenant_id=ctx.tenant_id,
@@ -381,6 +424,29 @@ class IngestionService:
     def _compute_sha256(self, data: bytes) -> str:
         """Compute SHA256 hash of data."""
         return hashlib.sha256(data).hexdigest()
+
+    def _validated_or_computed_sha256(
+        self,
+        *,
+        data: bytes,
+        validated_sha256: RouteValidatedSha256 | None,
+    ) -> str:
+        """Return a trusted boundary-validated SHA256 or compute one locally."""
+        if validated_sha256 is None:
+            return self._compute_sha256(data)
+        return validated_sha256.value
+
+    def _reject_untrusted_validated_sha256(
+        self,
+        validated_sha256: object,
+    ) -> IngestionError | None:
+        """Fail closed when a caller passes a digest without route validation proof."""
+        if validated_sha256 is None or isinstance(validated_sha256, RouteValidatedSha256):
+            return None
+        return IngestionError(
+            code=IngestionErrorCode.UNTRUSTED_VALIDATED_SHA256,
+            message="Validated SHA256 must be produced by the public upload route boundary",
+        )
 
     def _build_storage_key(
         self,

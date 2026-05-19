@@ -28,7 +28,7 @@ from idis.api.errors import IdisHttpError
 from idis.audit.sink import AuditSinkError
 from idis.parsers.registry import detect_format
 from idis.services.ingestion import IngestionContext
-from idis.services.ingestion.service import DEFAULT_MAX_BYTES
+from idis.services.ingestion.service import DEFAULT_MAX_BYTES, RouteValidatedSha256
 
 logger = logging.getLogger(__name__)
 
@@ -456,19 +456,24 @@ def _reject_invalid_upload_body(data: bytes, max_bytes: int) -> None:
         )
 
 
-def _reject_sha256_mismatch(data: bytes, expected_sha256: str | None) -> str:
+def _reject_sha256_mismatch(
+    data: bytes,
+    expected_sha256: str | None,
+) -> RouteValidatedSha256:
     """Validate optional caller-supplied SHA256 and return the actual digest."""
-    actual_sha256 = hashlib.sha256(data).hexdigest()
-    if expected_sha256 is None:
-        return actual_sha256
-    if actual_sha256 != expected_sha256.lower():
+    try:
+        return RouteValidatedSha256.from_bytes(
+            data=data,
+            expected_sha256=expected_sha256,
+        )
+    except ValueError as error:
+        actual_sha256 = hashlib.sha256(data).hexdigest()
         raise IdisHttpError(
             status_code=400,
             code="SHA256_MISMATCH",
             message="Uploaded bytes do not match the supplied SHA256",
             details={"expected_sha256": expected_sha256, "actual_sha256": actual_sha256},
-        )
-    return actual_sha256
+        ) from error
 
 
 def _reject_unsupported_upload_format(data: bytes, filename: str) -> None:
@@ -939,6 +944,7 @@ async def upload_deal_document(
         media_type=UPLOAD_CONTENT_TYPE,
         data=data,
         metadata=metadata,
+        validated_sha256=actual_sha256,
         db_conn=getattr(request.state, "db_conn", None),
     )
     if result.artifact_id is None or result.document_id is None:
@@ -968,9 +974,9 @@ async def upload_deal_document(
         doc_type=doc_type.value,
         title=filename,
         source_system=source_system,
-        version_id=actual_sha256[:12],
+        version_id=actual_sha256.value[:12],
         ingested_at=now,
-        sha256=actual_sha256,
+        sha256=actual_sha256.value,
         uri=result.storage_uri,
         metadata=metadata,
     )

@@ -14,6 +14,7 @@ import base64
 import hashlib
 import json
 import logging
+import time
 import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -28,7 +29,11 @@ from idis.api.errors import IdisHttpError
 from idis.audit.sink import AuditSinkError
 from idis.parsers.registry import detect_format
 from idis.services.ingestion import IngestionContext
-from idis.services.ingestion.service import DEFAULT_MAX_BYTES, RouteValidatedSha256
+from idis.services.ingestion.service import (
+    DEFAULT_MAX_BYTES,
+    RouteValidatedSha256,
+    UploadIngestionPhase,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -476,6 +481,38 @@ def _reject_sha256_mismatch(
         ) from error
 
 
+def _upload_phase_recorder(request: Request) -> object | None:
+    return getattr(request.app.state, "upload_ingestion_phase_recorder", None)
+
+
+def _record_upload_phase(
+    phase_recorder: object | None,
+    phase: UploadIngestionPhase,
+    started_at: float,
+) -> None:
+    if phase_recorder is None:
+        return
+    try:
+        record_phase = getattr(phase_recorder, "record_phase", None)
+    except Exception as error:
+        logger.warning(
+            "Private upload phase recorder lookup failed: phase=%s exception_type=%s",
+            phase.value,
+            type(error).__name__,
+        )
+        return
+    if not callable(record_phase):
+        return
+    try:
+        record_phase(phase, time.monotonic() - started_at)
+    except Exception as error:
+        logger.warning(
+            "Private upload phase recorder failed: phase=%s exception_type=%s",
+            phase.value,
+            type(error).__name__,
+        )
+
+
 def _reject_unsupported_upload_format(data: bytes, filename: str) -> None:
     """Reject unsupported magic bytes before ingestion persists storage or corpus rows."""
     detected_format = detect_format(data)
@@ -920,10 +957,19 @@ async def upload_deal_document(
 
     max_bytes = _max_upload_bytes(request)
     _reject_oversized_content_length(request, max_bytes)
-    data = await request.body()
-    _reject_invalid_upload_body(data, max_bytes)
-    actual_sha256 = _reject_sha256_mismatch(data, sha256)
-    _reject_unsupported_upload_format(data, filename)
+    phase_recorder = _upload_phase_recorder(request)
+    phase_started_at = time.monotonic()
+    try:
+        data = await request.body()
+        _reject_invalid_upload_body(data, max_bytes)
+        actual_sha256 = _reject_sha256_mismatch(data, sha256)
+        _reject_unsupported_upload_format(data, filename)
+    finally:
+        _record_upload_phase(
+            phase_recorder,
+            UploadIngestionPhase.ROUTE_BODY_READ_HASH_VALIDATION,
+            phase_started_at,
+        )
 
     metadata = {
         "doc_type": doc_type.value,
@@ -945,6 +991,7 @@ async def upload_deal_document(
         data=data,
         metadata=metadata,
         validated_sha256=actual_sha256,
+        phase_recorder=phase_recorder,
         db_conn=getattr(request.state, "db_conn", None),
     )
     if result.artifact_id is None or result.document_id is None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import multiprocessing
 import os
 import tempfile
@@ -29,6 +30,27 @@ UPLOAD_THROUGHPUT_LIMIT_REASON = "UPLOAD_THROUGHPUT_LIMIT"
 RESUME_UNSUPPORTED_REASON = "RESUME_UNSUPPORTED"
 CONCURRENCY_DISABLED_REASON = "CONCURRENCY_DISABLED_BY_DEFAULT"
 UPLOAD_TIMING_PHASES = ("read", "upload_api", "run_start")
+INTERNAL_UPLOAD_API_PHASES = frozenset(
+    {
+        "route_body_read/hash_validation",
+        "object_store_write",
+        "parse",
+        "span_generation",
+        "persistence",
+        "audit",
+    }
+)
+ELAPSED_BUCKETS = frozenset(
+    {
+        "under_1s",
+        "1_to_5s",
+        "5_to_30s",
+        "30_to_60s",
+        "60_to_300s",
+        "over_300s",
+    }
+)
+logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 
@@ -107,8 +129,14 @@ class _UploadPayload:
 class _UploadTimingRecorder:
     """Collect aggregate-only timing data for the private upload harness."""
 
-    def __init__(self, *, max_upload_concurrency: int) -> None:
+    def __init__(
+        self,
+        *,
+        max_upload_concurrency: int,
+        internal_upload_phase_summary_provider: Callable[[], dict[str, Any] | None] | None = None,
+    ) -> None:
         self._max_upload_concurrency = max_upload_concurrency
+        self._internal_upload_phase_summary_provider = internal_upload_phase_summary_provider
         self._phase_elapsed_seconds: dict[str, list[float]] = {
             phase: [] for phase in UPLOAD_TIMING_PHASES
         }
@@ -134,7 +162,23 @@ class _UploadTimingRecorder:
         total_observed_upload_seconds = sum(
             sum(self._phase_elapsed_seconds[phase]) for phase in ("read", "upload_api")
         )
-        return {
+        internal_upload_api = self._internal_upload_api_summary()
+        phase_observability = {
+            "read": "observed",
+            "upload_api": "observed",
+            "parse": "included_in_upload_api",
+            "span_generation": "included_in_upload_api",
+            "run_start": "observed" if self._phase_elapsed_seconds["run_start"] else "not_observed",
+        }
+        if internal_upload_api is not None:
+            internal_phases = internal_upload_api.get("phase_counts_by_elapsed_bucket")
+            if isinstance(internal_phases, dict):
+                if "parse" in internal_phases:
+                    phase_observability["parse"] = "observed"
+                if "span_generation" in internal_phases:
+                    phase_observability["span_generation"] = "observed"
+
+        summary: dict[str, Any] = {
             "enabled": True,
             "partial": self._partial,
             "attempted_count": self._attempted_count,
@@ -155,15 +199,7 @@ class _UploadTimingRecorder:
                 if values
             },
             "observable_slowest_phase": self._observable_slowest_phase(),
-            "phase_observability": {
-                "read": "observed",
-                "upload_api": "observed",
-                "parse": "included_in_upload_api",
-                "span_generation": "included_in_upload_api",
-                "run_start": "observed"
-                if self._phase_elapsed_seconds["run_start"]
-                else "not_observed",
-            },
+            "phase_observability": phase_observability,
             "throughput": {
                 "attempted_per_minute_bucket": _rate_per_minute_bucket(
                     self._attempted_count,
@@ -180,6 +216,9 @@ class _UploadTimingRecorder:
                 "reason_code": CONCURRENCY_DISABLED_REASON,
             },
         }
+        if internal_upload_api is not None:
+            summary["internal_upload_api"] = internal_upload_api
+        return summary
 
     def _observable_slowest_phase(self) -> str | None:
         phase_totals = {
@@ -188,6 +227,12 @@ class _UploadTimingRecorder:
         if not phase_totals:
             return None
         return max(sorted(phase_totals), key=lambda phase: phase_totals[phase])
+
+    def _internal_upload_api_summary(self) -> dict[str, Any] | None:
+        if self._internal_upload_phase_summary_provider is None:
+            return None
+        summary = self._internal_upload_phase_summary_provider()
+        return _safe_internal_upload_api_summary(summary)
 
 
 def run_real_example_full_run_harness(
@@ -317,6 +362,7 @@ def _run_with_client(
     harness_started_at = time.monotonic()
     upload_timing = _UploadTimingRecorder(
         max_upload_concurrency=options.max_upload_concurrency,
+        internal_upload_phase_summary_provider=lambda: _internal_upload_phase_summary(client),
     )
     inventory_attempt = _call_with_optional_deadline(
         call=lambda: _inventory_files(root),
@@ -977,6 +1023,91 @@ def _client_post(client: _ApiClientLike, url: str, **kwargs: Any) -> _ResponseLi
         return client.post(url, **kwargs)
 
 
+def _internal_upload_phase_summary(client: _ApiClientLike) -> dict[str, Any] | None:
+    app = getattr(client, "app", None)
+    app_state = getattr(app, "state", None)
+    recorder = getattr(app_state, "upload_ingestion_phase_recorder", None)
+    try:
+        to_summary = getattr(recorder, "to_summary", None)
+    except Exception as error:
+        logger.warning(
+            "Private upload phase recorder lookup failed: exception_type=%s",
+            type(error).__name__,
+        )
+        return None
+    if not callable(to_summary):
+        return None
+    try:
+        summary = to_summary()
+    except Exception as error:
+        logger.warning(
+            "Private upload phase recorder summary failed: exception_type=%s",
+            type(error).__name__,
+        )
+        return None
+    return summary if isinstance(summary, dict) else None
+
+
+def _safe_internal_upload_api_summary(summary: object) -> dict[str, Any] | None:
+    if not isinstance(summary, dict) or summary.get("enabled") is not True:
+        return None
+
+    phase_counts = _safe_phase_bucket_counts(summary.get("phase_counts_by_elapsed_bucket"))
+    if not phase_counts:
+        return None
+
+    safe_summary: dict[str, Any] = {
+        "enabled": True,
+        "phase_counts_by_elapsed_bucket": phase_counts,
+    }
+    phase_totals = _safe_phase_bucket_values(summary.get("phase_total_elapsed_bucket"))
+    if phase_totals:
+        safe_summary["phase_total_elapsed_bucket"] = phase_totals
+    phase_max = _safe_phase_bucket_values(summary.get("phase_max_elapsed_bucket"))
+    if phase_max:
+        safe_summary["phase_max_elapsed_bucket"] = phase_max
+    slowest_phase = summary.get("observable_slowest_phase")
+    if isinstance(slowest_phase, str) and slowest_phase in INTERNAL_UPLOAD_API_PHASES:
+        safe_summary["observable_slowest_phase"] = slowest_phase
+    return safe_summary
+
+
+def _safe_phase_bucket_counts(value: object) -> dict[str, dict[str, int]]:
+    if not isinstance(value, dict):
+        return {}
+    safe: dict[str, dict[str, int]] = {}
+    for phase, bucket_counts in value.items():
+        if not isinstance(phase, str) or phase not in INTERNAL_UPLOAD_API_PHASES:
+            continue
+        if not isinstance(bucket_counts, dict):
+            continue
+        safe_counts = {
+            bucket: count
+            for bucket, count in bucket_counts.items()
+            if isinstance(bucket, str)
+            and bucket in ELAPSED_BUCKETS
+            and isinstance(count, int)
+            and count >= 0
+        }
+        if safe_counts:
+            safe[phase] = dict(sorted(safe_counts.items()))
+    return dict(sorted(safe.items()))
+
+
+def _safe_phase_bucket_values(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    safe = {
+        phase: bucket
+        for phase, bucket in value.items()
+        if isinstance(phase, str)
+        and phase in INTERNAL_UPLOAD_API_PHASES
+        and isinstance(bucket, str)
+        and bucket in ELAPSED_BUCKETS
+    }
+    return dict(sorted(safe.items()))
+
+
 def _post_run_with_optional_deadline(
     *,
     client: _ApiClientLike,
@@ -1583,6 +1714,7 @@ def _default_api_client(options: RealExampleFullRunHarnessOptions) -> Iterator[_
     from idis.api.main import create_app
     from idis.audit.sink import InMemoryAuditSink
     from idis.idempotency.store import SqliteIdempotencyStore
+    from idis.services.ingestion.service import UploadIngestionPhaseRecorder
 
     previous_api_keys = os.environ.get(IDIS_API_KEYS_ENV)
     previous_object_store = os.environ.get("IDIS_OBJECT_STORE_BASE_DIR")
@@ -1606,6 +1738,7 @@ def _default_api_client(options: RealExampleFullRunHarnessOptions) -> Iterator[_
                 idempotency_store=SqliteIdempotencyStore(in_memory=True),
                 service_region="me-south-1",
             )
+            app.state.upload_ingestion_phase_recorder = UploadIngestionPhaseRecorder()
             yield TestClient(app, raise_server_exceptions=False)
         finally:
             _restore_env(IDIS_API_KEYS_ENV, previous_api_keys)

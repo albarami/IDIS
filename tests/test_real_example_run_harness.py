@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ from idis.evaluation.real_example_run_harness import (
     DEFAULT_TENANT_ID,
     RealExampleFullRunHarnessOptions,
     run_real_example_full_run_harness,
+    run_real_example_full_run_harness_process,
 )
 from idis.models.run_step import STEP_ORDER, RunStep, StepName, StepStatus
 from idis.persistence.repositories.run_steps import (
@@ -125,6 +127,10 @@ class _SlowRunApiClient(_FakeApiClient):
 
 
 class _SlowUploadApiClient(_FakeApiClient):
+    def __init__(self, *, delay_seconds: float = 0.05) -> None:
+        super().__init__()
+        self.delay_seconds = delay_seconds
+
     def post(
         self,
         url: str,
@@ -136,7 +142,7 @@ class _SlowUploadApiClient(_FakeApiClient):
     ) -> _FakeResponse:
         if url == "/v1/deals/deal-private-1/documents/upload":
             print("PRIVATE_UPLOAD_DIAGNOSTIC_SHOULD_BE_SUPPRESSED")
-            time.sleep(0.05)
+            time.sleep(self.delay_seconds)
         return super().post(
             url,
             headers=headers,
@@ -566,8 +572,8 @@ def test_harness_deadline_returns_structured_timeout_during_upload(
     summary = run_real_example_full_run_harness(
         RealExampleFullRunHarnessOptions(
             root=root,
-            api_client=_SlowUploadApiClient(),
-            run_timeout_seconds=0.01,
+            api_client=_SlowUploadApiClient(delay_seconds=0.1),
+            run_timeout_seconds=0.04,
             run_poll_interval_seconds=0.001,
         )
     )
@@ -576,7 +582,7 @@ def test_harness_deadline_returns_structured_timeout_during_upload(
     assert summary["status"] == "blocked"
     assert summary["blocker"] == {
         "stage": "upload",
-        "reason_code": "RUN_TIMEOUT",
+        "reason_code": "UPLOAD_THROUGHPUT_LIMIT",
         "http_status": None,
     }
     assert summary["run"]["attempted"] is False
@@ -588,6 +594,422 @@ def test_harness_deadline_returns_structured_timeout_during_upload(
     assert "slow-secret" not in encoded
     assert "PRIVATE_UPLOAD" not in encoded
     assert "PRIVATE_UPLOAD_DIAGNOSTIC_SHOULD_BE_SUPPRESSED" not in encoded
+
+
+def test_harness_upload_profile_reports_safe_timing_counts_by_outcome(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "real_example"
+    confidential_dir = root / "Private Upload Profile Room"
+    confidential_dir.mkdir(parents=True)
+    (confidential_dir / "parsed-secret.pdf").write_bytes(b"%PDF-1.4\nPRIVATE_PARSED\n%%EOF")
+    (confidential_dir / "failed-secret.pdf").write_bytes(b"%PDF-1.4\nPRIVATE_FAILED\n%%EOF")
+    client = _FakeApiClient(
+        upload_statuses=[
+            (
+                201,
+                {
+                    "document_id": "document-parsed",
+                    "doc_id": "artifact-parsed",
+                    "parse_status": "PARSED",
+                },
+            ),
+            (
+                400,
+                {
+                    "code": "DOCUMENT_UPLOAD_FAILED",
+                    "details": {"private_filename": "failed-secret.pdf"},
+                },
+            ),
+        ]
+    )
+
+    summary = run_real_example_full_run_harness(
+        RealExampleFullRunHarnessOptions(root=root, api_client=client)
+    )
+
+    profile = summary["upload_profile"]
+    assert profile["attempted_count"] == 2
+    assert profile["counts_by_outcome"] == {"failed": 1, "uploaded": 1}
+    assert profile["phase_counts_by_elapsed_bucket"]["read"] == {"under_1s": 2}
+    assert profile["phase_counts_by_elapsed_bucket"]["upload_api"] == {"under_1s": 2}
+    assert profile["observable_slowest_phase"] in {"read", "upload_api"}
+    assert profile["phase_observability"]["parse"] == "included_in_upload_api"
+    assert profile["phase_observability"]["span_generation"] == "included_in_upload_api"
+    assert profile["concurrency"] == {
+        "enabled": False,
+        "max_workers": 1,
+        "reason_code": "CONCURRENCY_DISABLED_BY_DEFAULT",
+    }
+
+    encoded = json.dumps(summary, sort_keys=True)
+    assert str(root) not in encoded
+    assert "Private Upload Profile" not in encoded
+    assert "parsed-secret" not in encoded
+    assert "failed-secret" not in encoded
+    assert "PRIVATE_PARSED" not in encoded
+    assert "PRIVATE_FAILED" not in encoded
+
+
+def test_harness_upload_timeout_returns_partial_timing_profile(
+    tmp_path: Path,
+    capsys: Any,
+) -> None:
+    root = tmp_path / "real_example"
+    confidential_dir = root / "Private Slow Upload Room"
+    confidential_dir.mkdir(parents=True)
+    (confidential_dir / "first-secret.pdf").write_bytes(b"%PDF-1.4\nPRIVATE_FIRST\n%%EOF")
+    (confidential_dir / "second-secret.pdf").write_bytes(b"%PDF-1.4\nPRIVATE_SECOND\n%%EOF")
+
+    summary = run_real_example_full_run_harness(
+        RealExampleFullRunHarnessOptions(
+            root=root,
+            api_client=_SlowUploadApiClient(delay_seconds=0.05),
+            run_timeout_seconds=0.02,
+            run_poll_interval_seconds=0.001,
+        )
+    )
+
+    captured = capsys.readouterr()
+    profile = summary["upload_profile"]
+    assert summary["status"] == "blocked"
+    assert summary["blocker"] == {
+        "stage": "upload",
+        "reason_code": "UPLOAD_THROUGHPUT_LIMIT",
+        "http_status": None,
+    }
+    assert profile["attempted_count"] == 1
+    assert profile["counts_by_outcome"] == {"timeout": 1}
+    assert profile["phase_counts_by_elapsed_bucket"]["read"] == {"under_1s": 1}
+    assert profile["phase_counts_by_elapsed_bucket"]["upload_api"] == {"under_1s": 1}
+    assert profile["partial"] is True
+    assert profile["observable_slowest_phase"] == "upload_api"
+    assert summary["run"]["attempted"] is False
+
+    encoded = json.dumps(summary, sort_keys=True) + captured.out + captured.err
+    assert str(root) not in encoded
+    assert "Private Slow Upload" not in encoded
+    assert "first-secret" not in encoded
+    assert "second-secret" not in encoded
+    assert "PRIVATE_FIRST" not in encoded
+    assert "PRIVATE_SECOND" not in encoded
+    assert "PRIVATE_UPLOAD_DIAGNOSTIC_SHOULD_BE_SUPPRESSED" not in encoded
+
+
+def test_harness_upload_concurrency_is_disabled_by_default_and_order_is_stable(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "real_example"
+    root.mkdir()
+    (root / "a-private.pdf").write_bytes(b"%PDF-1.4\nfirst\n%%EOF")
+    (root / "b-private.pdf").write_bytes(b"%PDF-1.4\nsecond\n%%EOF")
+    client = _FakeApiClient()
+
+    summary = run_real_example_full_run_harness(
+        RealExampleFullRunHarnessOptions(root=root, api_client=client)
+    )
+
+    assert summary["upload_profile"]["concurrency"] == {
+        "enabled": False,
+        "max_workers": 1,
+        "reason_code": "CONCURRENCY_DISABLED_BY_DEFAULT",
+    }
+    assert client.run_requests[0]["source"]["document_ids"] == ["document-1", "document-2"]
+
+
+def test_in_process_upload_api_calls_are_not_executed_in_background_threads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "real_example"
+    root.mkdir()
+    (root / "private.pdf").write_bytes(b"%PDF-1.4\nsafe\n%%EOF")
+
+    def fail_if_thread_created(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("upload path must not create background threads")
+
+    monkeypatch.setattr(threading, "Thread", fail_if_thread_created)
+
+    summary = run_real_example_full_run_harness(
+        RealExampleFullRunHarnessOptions(
+            root=root,
+            api_client=_FakeApiClient(),
+            run_timeout_seconds=5,
+        )
+    )
+
+    assert summary["status"] == "succeeded"
+    assert summary["upload_profile"]["attempted_count"] == 1
+
+
+def test_harness_rejects_upload_concurrency_until_thread_safety_is_proven(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "real_example"
+    root.mkdir()
+
+    with pytest.raises(ValueError, match="max_upload_concurrency"):
+        run_real_example_full_run_harness(
+            RealExampleFullRunHarnessOptions(
+                root=root,
+                api_client=_FakeApiClient(),
+                max_upload_concurrency=2,
+            )
+        )
+
+
+def test_expired_deadline_does_not_start_side_effectful_call() -> None:
+    called = False
+
+    def side_effectful_call() -> str:
+        nonlocal called
+        called = True
+        return "started"
+
+    attempt = harness_module._call_with_optional_deadline(
+        call=side_effectful_call,
+        timeout_seconds=0,
+        poll_interval_seconds=0.001,
+    )
+
+    assert attempt.timed_out is True
+    assert attempt.result is None
+    assert called is False
+
+
+def test_process_wrapper_returns_structured_timeout_from_latest_checkpoint(
+    tmp_path: Path,
+) -> None:
+    checkpoint_path = tmp_path / "checkpoint.json"
+    output_path = tmp_path / "summary.json"
+    checkpoint = {
+        "harness": "real_example_production_full_run_private_v1",
+        "safe_summary": True,
+        "private_run": True,
+        "status": "running",
+        "mode": "FULL",
+        "total_files": 3,
+        "uploaded_document_count": 1,
+        "selected_document_count": 1,
+        "skipped_file_count": 1,
+        "counts_by_extension": {".pdf": 3},
+        "counts_by_upload_status": {"deferred": 1, "uploaded": 1},
+        "counts_by_deferred_reason": {"ocr_required": 1},
+        "run": {"attempted": False, "status": None},
+        "upload_profile": {
+            "enabled": True,
+            "partial": False,
+            "attempted_count": 1,
+            "counts_by_outcome": {"uploaded": 1},
+            "phase_counts_by_elapsed_bucket": {
+                "read": {"under_1s": 1},
+                "upload_api": {"1_to_5s": 1},
+            },
+            "phase_observability": {
+                "read": "observed",
+                "upload_api": "observed",
+                "parse": "included_in_upload_api",
+                "span_generation": "included_in_upload_api",
+                "run_start": "not_observed",
+            },
+            "observable_slowest_phase": "upload_api",
+            "concurrency": {
+                "enabled": False,
+                "max_workers": 1,
+                "reason_code": "CONCURRENCY_DISABLED_BY_DEFAULT",
+            },
+        },
+        "resume": {
+            "supported": False,
+            "reason_code": "RESUME_UNSUPPORTED",
+            "uploaded_document_count": 1,
+            "selected_document_count": 1,
+            "run_id": None,
+        },
+        "blocker": None,
+        "checkpoint": {"stage": "upload"},
+    }
+    checkpoint_path.write_text(json.dumps(checkpoint), encoding="utf-8")
+
+    class NeverFinishesProcess:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.terminated = False
+
+        def start(self) -> None:
+            return None
+
+        def join(self, timeout: float | None = None) -> None:
+            return None
+
+        def is_alive(self) -> bool:
+            return not self.terminated
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+    summary = run_real_example_full_run_harness_process(
+        RealExampleFullRunHarnessOptions(
+            root=tmp_path,
+            output_path=output_path,
+            checkpoint_output_path=checkpoint_path,
+            run_timeout_seconds=0.01,
+        ),
+        process_factory=NeverFinishesProcess,
+    )
+
+    assert summary["status"] == "blocked"
+    assert summary["blocker"] == {
+        "stage": "upload",
+        "reason_code": "UPLOAD_THROUGHPUT_LIMIT",
+        "http_status": None,
+    }
+    assert summary["uploaded_document_count"] == 1
+    assert summary["selected_document_count"] == 1
+    assert summary["skipped_file_count"] == 1
+    assert summary["run"]["attempted"] is False
+    assert summary["upload_profile"]["partial"] is True
+    assert output_path.read_text(encoding="utf-8")
+
+
+def test_process_wrapper_timeout_after_run_start_checkpoint_reports_attempted_run(
+    tmp_path: Path,
+) -> None:
+    checkpoint_path = tmp_path / "checkpoint.json"
+    checkpoint = {
+        "harness": "real_example_production_full_run_private_v1",
+        "safe_summary": True,
+        "private_run": True,
+        "status": "running",
+        "mode": "FULL",
+        "total_files": 1,
+        "uploaded_document_count": 1,
+        "selected_document_count": 1,
+        "skipped_file_count": 0,
+        "counts_by_extension": {".pdf": 1},
+        "counts_by_upload_status": {"uploaded": 1},
+        "counts_by_deferred_reason": {},
+        "run": {
+            "attempted": False,
+            "status": None,
+            "step_count": 0,
+            "completed_step_count": 0,
+            "failed_step_count": 0,
+            "blocked_step_count": 0,
+            "block_reason": None,
+        },
+        "upload_profile": {
+            "enabled": True,
+            "partial": False,
+            "attempted_count": 1,
+            "counts_by_outcome": {"uploaded": 1},
+            "phase_counts_by_elapsed_bucket": {
+                "read": {"under_1s": 1},
+                "upload_api": {"under_1s": 1},
+            },
+            "phase_observability": {
+                "read": "observed",
+                "upload_api": "observed",
+                "parse": "included_in_upload_api",
+                "span_generation": "included_in_upload_api",
+                "run_start": "not_observed",
+            },
+            "concurrency": {
+                "enabled": False,
+                "max_workers": 1,
+                "reason_code": "CONCURRENCY_DISABLED_BY_DEFAULT",
+            },
+        },
+        "resume": {
+            "supported": False,
+            "reason_code": "RESUME_UNSUPPORTED",
+            "uploaded_document_count": 1,
+            "selected_document_count": 1,
+            "run_id": None,
+        },
+        "blocker": None,
+        "checkpoint": {"stage": "run_start"},
+    }
+    checkpoint_path.write_text(json.dumps(checkpoint), encoding="utf-8")
+
+    class NeverFinishesProcess:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.terminated = False
+
+        def start(self) -> None:
+            return None
+
+        def join(self, timeout: float | None = None) -> None:
+            return None
+
+        def is_alive(self) -> bool:
+            return not self.terminated
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+    summary = run_real_example_full_run_harness_process(
+        RealExampleFullRunHarnessOptions(
+            root=tmp_path,
+            checkpoint_output_path=checkpoint_path,
+            run_timeout_seconds=0.01,
+        ),
+        process_factory=NeverFinishesProcess,
+    )
+
+    assert summary["blocker"] == {
+        "stage": "run_start",
+        "reason_code": "RUN_TIMEOUT",
+        "http_status": None,
+    }
+    assert summary["run"]["attempted"] is True
+    assert summary["run"]["status"] == "TIMEOUT"
+    assert summary["run"]["block_reason"] == "RUN_TIMEOUT"
+
+
+def test_process_checkpoint_is_aggregate_only_and_private_content_safe(
+    tmp_path: Path,
+) -> None:
+    checkpoint_path = tmp_path / "checkpoint.json"
+    root = tmp_path / "Private Checkpoint Room"
+    root.mkdir()
+    private_file = root / "secret-checkpoint.pdf"
+    private_file.write_bytes(b"%PDF-1.4\nPRIVATE_CHECKPOINT\n%%EOF")
+
+    summary = run_real_example_full_run_harness(
+        RealExampleFullRunHarnessOptions(
+            root=root,
+            api_client=_FakeApiClient(),
+            checkpoint_output_path=checkpoint_path,
+        )
+    )
+
+    encoded = json.dumps(summary, sort_keys=True) + checkpoint_path.read_text(encoding="utf-8")
+    assert summary["status"] == "succeeded"
+    assert "checkpoint" in checkpoint_path.read_text(encoding="utf-8")
+    assert str(root) not in encoded
+    assert "Private Checkpoint" not in encoded
+    assert "secret-checkpoint" not in encoded
+    assert "PRIVATE_CHECKPOINT" not in encoded
+
+
+def test_process_wrapper_bounded_synthetic_run_succeeds(tmp_path: Path) -> None:
+    root = tmp_path / "real_example"
+    root.mkdir()
+    (root / "private.pdf").write_bytes(b"%PDF-1.4\nsafe\n%%EOF")
+
+    summary = run_real_example_full_run_harness_process(
+        RealExampleFullRunHarnessOptions(
+            root=root,
+            output_path=tmp_path / "summary.json",
+            checkpoint_output_path=tmp_path / "checkpoint.json",
+            run_timeout_seconds=30,
+        )
+    )
+
+    assert summary["status"] in {"succeeded", "blocked"}
+    assert summary["upload_profile"]["attempted_count"] >= 1
+    assert summary["private_run"] is True
+    assert summary["safe_summary"] is True
 
 
 def test_harness_deadline_bounds_inventory_without_private_paths(

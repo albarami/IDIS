@@ -5,15 +5,15 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import multiprocessing
 import os
 import tempfile
-import threading
 import time
 from collections import Counter
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Generic, Protocol, TypeVar, cast
+from typing import Any, Generic, Protocol, TypeVar
 
 from idis.api.auth import IDIS_API_KEYS_ENV
 from idis.models.document_classification import DocumentSupportStatus, DocumentTriageStatus
@@ -26,7 +26,10 @@ DEFAULT_API_KEY = "slice42-private-real-example-harness-key"
 DEFAULT_TENANT_ID = "11111111-1111-4111-8111-111111111111"
 DEFAULT_ACTOR_ID = "slice42-private-harness"
 RUN_TIMEOUT_REASON = "RUN_TIMEOUT"
+UPLOAD_THROUGHPUT_LIMIT_REASON = "UPLOAD_THROUGHPUT_LIMIT"
 RESUME_UNSUPPORTED_REASON = "RESUME_UNSUPPORTED"
+CONCURRENCY_DISABLED_REASON = "CONCURRENCY_DISABLED_BY_DEFAULT"
+UPLOAD_TIMING_PHASES = ("read", "upload_api", "run_start")
 T = TypeVar("T")
 
 
@@ -64,9 +67,11 @@ class RealExampleFullRunHarnessOptions:
     company_name: str = "Private real_example company"
     local_stt_model_configured: bool = False
     max_upload_files: int | None = None
+    max_upload_concurrency: int = 1
     run_timeout_seconds: float | None = None
     run_poll_interval_seconds: float = 1.0
     resume_state_output_path: str | Path | None = None
+    checkpoint_output_path: str | Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +95,100 @@ class _TimedCallAttempt(Generic[T]):
     result: T | None
     timed_out: bool
     elapsed_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
+class _UploadPayload:
+    extension: str
+    headers: dict[str, str]
+    params: dict[str, Any]
+    content: bytes
+
+
+class _UploadTimingRecorder:
+    """Collect aggregate-only timing data for the private upload harness."""
+
+    def __init__(self, *, max_upload_concurrency: int) -> None:
+        self._max_upload_concurrency = max_upload_concurrency
+        self._phase_elapsed_seconds: dict[str, list[float]] = {
+            phase: [] for phase in UPLOAD_TIMING_PHASES
+        }
+        self._outcomes: Counter[str] = Counter()
+        self._attempted_count = 0
+        self._partial = False
+
+    def start_attempt(self) -> None:
+        self._attempted_count += 1
+
+    def record_phase(self, phase: str, elapsed_seconds: float) -> None:
+        if phase not in self._phase_elapsed_seconds:
+            self._phase_elapsed_seconds[phase] = []
+        self._phase_elapsed_seconds[phase].append(max(0.0, elapsed_seconds))
+
+    def record_outcome(self, outcome: str) -> None:
+        self._outcomes[outcome] += 1
+
+    def mark_partial(self) -> None:
+        self._partial = True
+
+    def to_summary(self) -> dict[str, Any]:
+        total_observed_upload_seconds = sum(
+            sum(self._phase_elapsed_seconds[phase]) for phase in ("read", "upload_api")
+        )
+        return {
+            "enabled": True,
+            "partial": self._partial,
+            "attempted_count": self._attempted_count,
+            "counts_by_outcome": dict(sorted(self._outcomes.items())),
+            "phase_counts_by_elapsed_bucket": {
+                phase: _elapsed_bucket_counts(values)
+                for phase, values in self._phase_elapsed_seconds.items()
+                if values
+            },
+            "phase_total_elapsed_bucket": {
+                phase: _elapsed_seconds_bucket(sum(values))
+                for phase, values in self._phase_elapsed_seconds.items()
+                if values
+            },
+            "phase_max_elapsed_bucket": {
+                phase: _elapsed_seconds_bucket(max(values))
+                for phase, values in self._phase_elapsed_seconds.items()
+                if values
+            },
+            "observable_slowest_phase": self._observable_slowest_phase(),
+            "phase_observability": {
+                "read": "observed",
+                "upload_api": "observed",
+                "parse": "included_in_upload_api",
+                "span_generation": "included_in_upload_api",
+                "run_start": "observed"
+                if self._phase_elapsed_seconds["run_start"]
+                else "not_observed",
+            },
+            "throughput": {
+                "attempted_per_minute_bucket": _rate_per_minute_bucket(
+                    self._attempted_count,
+                    total_observed_upload_seconds,
+                ),
+                "uploaded_per_minute_bucket": _rate_per_minute_bucket(
+                    self._outcomes["uploaded"],
+                    total_observed_upload_seconds,
+                ),
+            },
+            "concurrency": {
+                "enabled": False,
+                "max_workers": self._max_upload_concurrency,
+                "reason_code": CONCURRENCY_DISABLED_REASON,
+            },
+        }
+
+    def _observable_slowest_phase(self) -> str | None:
+        phase_totals = {
+            phase: sum(values) for phase, values in self._phase_elapsed_seconds.items() if values
+        }
+        if not phase_totals:
+            return None
+        return max(sorted(phase_totals), key=lambda phase: phase_totals[phase])
 
 
 def run_real_example_full_run_harness(
@@ -133,6 +232,59 @@ def run_real_example_full_run_harness(
     return summary
 
 
+def run_real_example_full_run_harness_process(
+    options: RealExampleFullRunHarnessOptions,
+    *,
+    process_factory: Callable[..., Any] = multiprocessing.Process,
+) -> dict[str, Any]:
+    """Run the private harness in a child process with parent-enforced deadline."""
+    _validate_options(options)
+    if options.api_client is not None:
+        raise ValueError("process harness cannot accept an in-process api_client")
+    if options.run_timeout_seconds is None:
+        raise ValueError("process harness requires run_timeout_seconds")
+
+    with tempfile.TemporaryDirectory(prefix="idis_slice45_process_") as work_dir:
+        work_path = Path(work_dir)
+        output_path = (
+            Path(options.output_path) if options.output_path else work_path / "summary.json"
+        )
+        checkpoint_path = (
+            Path(options.checkpoint_output_path)
+            if options.checkpoint_output_path
+            else work_path / "checkpoint.json"
+        )
+        child_options = replace(
+            options,
+            api_client=None,
+            output_path=output_path,
+            checkpoint_output_path=checkpoint_path,
+        )
+        process = process_factory(target=_run_harness_process_child, args=(child_options,))
+        process.start()
+        process.join(options.run_timeout_seconds)
+        if process.is_alive():
+            process.terminate()
+            process.join(5)
+            summary = _process_timeout_summary_from_checkpoint(checkpoint_path)
+            _write_summary_outputs(
+                summary=summary,
+                output_path=options.output_path,
+                resume_state_output_path=options.resume_state_output_path,
+            )
+            return summary
+
+        if output_path.exists():
+            return _load_json_object(output_path)
+        if checkpoint_path.exists():
+            return _strip_checkpoint_metadata(_load_json_object(checkpoint_path))
+        return _minimal_process_timeout_summary(stage="process")
+
+
+def _run_harness_process_child(options: RealExampleFullRunHarnessOptions) -> None:
+    run_real_example_full_run_harness(options)
+
+
 def _validate_options(options: RealExampleFullRunHarnessOptions) -> None:
     if not options.private_run:
         raise ValueError("real_example run harness requires private_run=True")
@@ -140,6 +292,10 @@ def _validate_options(options: RealExampleFullRunHarnessOptions) -> None:
         raise ValueError("real_example run harness requires safe_summary=True")
     if options.max_upload_files is not None and options.max_upload_files <= 0:
         raise ValueError("max_upload_files must be positive when provided")
+    if options.max_upload_concurrency != 1:
+        raise ValueError(
+            "max_upload_concurrency must remain 1 until upload concurrency is proven safe"
+        )
     if options.run_timeout_seconds is not None and options.run_timeout_seconds <= 0:
         raise ValueError("run_timeout_seconds must be positive when provided")
     if options.run_poll_interval_seconds <= 0:
@@ -160,6 +316,9 @@ def _run_with_client(
     client: _ApiClientLike,
 ) -> dict[str, Any]:
     harness_started_at = time.monotonic()
+    upload_timing = _UploadTimingRecorder(
+        max_upload_concurrency=options.max_upload_concurrency,
+    )
     inventory_attempt = _call_with_optional_deadline(
         call=lambda: _inventory_files(root),
         timeout_seconds=_remaining_timeout_seconds(harness_started_at, options.run_timeout_seconds),
@@ -179,8 +338,17 @@ def _run_with_client(
                 http_status=None,
             ),
             run_elapsed_seconds=time.monotonic() - harness_started_at,
+            upload_profile=upload_timing.to_summary(),
         )
     files = _completed_call_result_or_raise(inventory_attempt)
+    _write_checkpoint(
+        options=options,
+        stage="inventory",
+        files=files,
+        decisions=[],
+        uploaded_document_ids=[],
+        upload_timing=upload_timing,
+    )
     deal_attempt = _call_response_with_optional_deadline(
         call=lambda: _client_post(
             client,
@@ -205,6 +373,7 @@ def _run_with_client(
                 http_status=None,
             ),
             run_elapsed_seconds=time.monotonic() - harness_started_at,
+            upload_profile=upload_timing.to_summary(),
         )
     deal_response = _completed_response_or_raise(deal_attempt)
     if deal_response.status_code != 201:
@@ -220,12 +389,21 @@ def _run_with_client(
                 reason_code=_response_reason(deal_response),
                 http_status=deal_response.status_code,
             ),
+            upload_profile=upload_timing.to_summary(),
         )
 
     deal_id = _safe_required_string(deal_response.json(), "deal_id", default="deal")
     decisions: list[_FileDecision] = []
     uploaded_document_ids: list[str] = []
     upload_index = 0
+    _write_checkpoint(
+        options=options,
+        stage="deal_create",
+        files=files,
+        decisions=decisions,
+        uploaded_document_ids=uploaded_document_ids,
+        upload_timing=upload_timing,
+    )
 
     for file_path in files:
         triage_path = file_path
@@ -258,6 +436,7 @@ def _run_with_client(
                     http_status=None,
                 ),
                 run_elapsed_seconds=time.monotonic() - harness_started_at,
+                upload_profile=upload_timing.to_summary(),
             )
         decision = _completed_call_result_or_raise(triage_attempt)
         if decision.upload_status != "upload_candidate":
@@ -278,21 +457,21 @@ def _run_with_client(
         upload_path = file_path
         current_upload_index = upload_index
 
-        def upload_current_file(
+        def read_current_file(
             path: Path = upload_path,
             index: int = current_upload_index,
-        ) -> _ResponseLike:
-            return _upload_file(
-                client=client,
+        ) -> _UploadPayload:
+            return _read_upload_payload(
                 api_key=options.api_key,
-                deal_id=deal_id,
                 path=path,
                 upload_index=index,
             )
 
+        upload_timing.start_attempt()
+        read_started_at = time.monotonic()
         try:
-            upload_attempt = _call_response_with_optional_deadline(
-                call=upload_current_file,
+            payload_attempt = _call_with_optional_deadline(
+                call=read_current_file,
                 timeout_seconds=_remaining_timeout_seconds(
                     harness_started_at,
                     options.run_timeout_seconds,
@@ -300,6 +479,8 @@ def _run_with_client(
                 poll_interval_seconds=options.run_poll_interval_seconds,
             )
         except OSError:
+            upload_timing.record_phase("read", time.monotonic() - read_started_at)
+            upload_timing.record_outcome("failed")
             decisions.append(
                 _FileDecision(
                     path=file_path,
@@ -308,8 +489,19 @@ def _run_with_client(
                     reason_code="upload_read_failed",
                 )
             )
+            _write_checkpoint(
+                options=options,
+                stage="upload",
+                files=files,
+                decisions=decisions,
+                uploaded_document_ids=uploaded_document_ids,
+                upload_timing=upload_timing,
+            )
             continue
-        if upload_attempt.timed_out:
+        upload_timing.record_phase("read", payload_attempt.elapsed_seconds)
+        if payload_attempt.timed_out:
+            upload_timing.record_outcome("timeout")
+            upload_timing.mark_partial()
             return _summary(
                 files=files,
                 decisions=decisions,
@@ -319,14 +511,61 @@ def _run_with_client(
                 run_http_status=None,
                 blocker=_blocker(
                     stage="upload",
-                    reason_code=RUN_TIMEOUT_REASON,
+                    reason_code=UPLOAD_THROUGHPUT_LIMIT_REASON,
                     http_status=None,
                 ),
                 run_elapsed_seconds=time.monotonic() - harness_started_at,
+                upload_profile=upload_timing.to_summary(),
+            )
+
+        payload = _completed_call_result_or_raise(payload_attempt)
+
+        def upload_current_payload(upload_payload: _UploadPayload = payload) -> _ResponseLike:
+            return _post_upload_payload(
+                client=client,
+                deal_id=deal_id,
+                payload=upload_payload,
+            )
+
+        upload_attempt = _call_response_with_optional_deadline(
+            call=upload_current_payload,
+            timeout_seconds=_remaining_timeout_seconds(
+                harness_started_at,
+                options.run_timeout_seconds,
+            ),
+            poll_interval_seconds=options.run_poll_interval_seconds,
+        )
+        upload_timing.record_phase("upload_api", upload_attempt.elapsed_seconds)
+        if upload_attempt.timed_out:
+            upload_timing.record_outcome("timeout")
+            upload_timing.mark_partial()
+            _write_checkpoint(
+                options=options,
+                stage="upload",
+                files=files,
+                decisions=decisions,
+                uploaded_document_ids=uploaded_document_ids,
+                upload_timing=upload_timing,
+            )
+            return _summary(
+                files=files,
+                decisions=decisions,
+                uploaded_document_ids=uploaded_document_ids,
+                status="blocked",
+                run_body=None,
+                run_http_status=None,
+                blocker=_blocker(
+                    stage="upload",
+                    reason_code=UPLOAD_THROUGHPUT_LIMIT_REASON,
+                    http_status=None,
+                ),
+                run_elapsed_seconds=time.monotonic() - harness_started_at,
+                upload_profile=upload_timing.to_summary(),
             )
 
         upload_response = _completed_response_or_raise(upload_attempt)
         if upload_response.status_code != 201:
+            upload_timing.record_outcome("failed")
             decisions.append(
                 _FileDecision(
                     path=file_path,
@@ -335,11 +574,20 @@ def _run_with_client(
                     reason_code=_response_reason(upload_response),
                 )
             )
+            _write_checkpoint(
+                options=options,
+                stage="upload",
+                files=files,
+                decisions=decisions,
+                uploaded_document_ids=uploaded_document_ids,
+                upload_timing=upload_timing,
+            )
             continue
 
         body = upload_response.json()
         parse_status = body.get("parse_status")
         if parse_status != "PARSED":
+            upload_timing.record_outcome("uploaded_not_parsed")
             reason_code = (
                 "upload_parse_status_failed"
                 if isinstance(parse_status, str)
@@ -353,9 +601,18 @@ def _run_with_client(
                     reason_code=reason_code,
                 )
             )
+            _write_checkpoint(
+                options=options,
+                stage="upload",
+                files=files,
+                decisions=decisions,
+                uploaded_document_ids=uploaded_document_ids,
+                upload_timing=upload_timing,
+            )
             continue
         document_id = body.get("document_id")
         if not isinstance(document_id, str) or not document_id.strip():
+            upload_timing.record_outcome("failed")
             decisions.append(
                 _FileDecision(
                     path=file_path,
@@ -364,7 +621,16 @@ def _run_with_client(
                     reason_code="missing_document_id",
                 )
             )
+            _write_checkpoint(
+                options=options,
+                stage="upload",
+                files=files,
+                decisions=decisions,
+                uploaded_document_ids=uploaded_document_ids,
+                upload_timing=upload_timing,
+            )
             continue
+        upload_timing.record_outcome("uploaded")
         uploaded_document_ids.append(document_id)
         decisions.append(
             _FileDecision(
@@ -373,6 +639,14 @@ def _run_with_client(
                 upload_status="uploaded",
                 reason_code="uploaded",
             )
+        )
+        _write_checkpoint(
+            options=options,
+            stage="upload",
+            files=files,
+            decisions=decisions,
+            uploaded_document_ids=uploaded_document_ids,
+            upload_timing=upload_timing,
         )
         if _deadline_expired(harness_started_at, options.run_timeout_seconds):
             return _summary(
@@ -384,10 +658,11 @@ def _run_with_client(
                 run_http_status=None,
                 blocker=_blocker(
                     stage="upload",
-                    reason_code=RUN_TIMEOUT_REASON,
+                    reason_code=UPLOAD_THROUGHPUT_LIMIT_REASON,
                     http_status=None,
                 ),
                 run_elapsed_seconds=time.monotonic() - harness_started_at,
+                upload_profile=upload_timing.to_summary(),
             )
 
     if not uploaded_document_ids:
@@ -403,6 +678,7 @@ def _run_with_client(
                 reason_code="NO_PUBLIC_UPLOADABLE_DOCUMENTS",
                 http_status=None,
             ),
+            upload_profile=upload_timing.to_summary(),
         )
 
     run_payload = {
@@ -430,7 +706,17 @@ def _run_with_client(
                 http_status=None,
             ),
             run_elapsed_seconds=time.monotonic() - harness_started_at,
+            upload_profile=upload_timing.to_summary(),
         )
+    _write_checkpoint(
+        options=options,
+        stage="run_start",
+        files=files,
+        decisions=decisions,
+        uploaded_document_ids=uploaded_document_ids,
+        upload_timing=upload_timing,
+    )
+    run_started_at = time.monotonic()
     run_attempt = _post_run_with_optional_deadline(
         client=client,
         url=f"/v1/deals/{deal_id}/runs",
@@ -439,7 +725,19 @@ def _run_with_client(
         timeout_seconds=remaining_timeout_seconds,
         poll_interval_seconds=options.run_poll_interval_seconds,
     )
+    upload_timing.record_phase("run_start", time.monotonic() - run_started_at)
     if run_attempt.timed_out:
+        _write_checkpoint(
+            options=options,
+            stage="full_run",
+            files=files,
+            decisions=decisions,
+            uploaded_document_ids=uploaded_document_ids,
+            upload_timing=upload_timing,
+            run_timeout_snapshot=run_attempt.timeout_snapshot,
+            run_elapsed_seconds=run_attempt.elapsed_seconds,
+            run_attempted_on_timeout=True,
+        )
         return _summary(
             files=files,
             decisions=decisions,
@@ -455,6 +753,7 @@ def _run_with_client(
             run_timeout_snapshot=run_attempt.timeout_snapshot,
             run_elapsed_seconds=run_attempt.elapsed_seconds,
             run_attempted_on_timeout=True,
+            upload_profile=upload_timing.to_summary(),
         )
 
     run_response = run_attempt.response
@@ -462,6 +761,21 @@ def _run_with_client(
         raise RuntimeError("run attempt completed without a response")
     run_body = run_response.json()
     if run_response.status_code != 202:
+        _write_checkpoint(
+            options=options,
+            stage="run_start",
+            files=files,
+            decisions=decisions,
+            uploaded_document_ids=uploaded_document_ids,
+            upload_timing=upload_timing,
+            run_body=run_body,
+            run_http_status=run_response.status_code,
+            blocker=_blocker(
+                stage="run_start",
+                reason_code=_response_reason(run_response),
+                http_status=run_response.status_code,
+            ),
+        )
         return _summary(
             files=files,
             decisions=decisions,
@@ -474,10 +788,26 @@ def _run_with_client(
                 reason_code=_response_reason(run_response),
                 http_status=run_response.status_code,
             ),
+            upload_profile=upload_timing.to_summary(),
         )
 
     block_reason = _run_block_reason(run_body)
     if block_reason is not None or str(run_body.get("status")) != "SUCCEEDED":
+        _write_checkpoint(
+            options=options,
+            stage="full_run",
+            files=files,
+            decisions=decisions,
+            uploaded_document_ids=uploaded_document_ids,
+            upload_timing=upload_timing,
+            run_body=run_body,
+            run_http_status=run_response.status_code,
+            blocker=_blocker(
+                stage="full_run",
+                reason_code=block_reason or _safe_status_reason(run_body),
+                http_status=run_response.status_code,
+            ),
+        )
         return _summary(
             files=files,
             decisions=decisions,
@@ -490,8 +820,20 @@ def _run_with_client(
                 reason_code=block_reason or _safe_status_reason(run_body),
                 http_status=run_response.status_code,
             ),
+            upload_profile=upload_timing.to_summary(),
         )
 
+    _write_checkpoint(
+        options=options,
+        stage="full_run",
+        files=files,
+        decisions=decisions,
+        uploaded_document_ids=uploaded_document_ids,
+        upload_timing=upload_timing,
+        status="succeeded",
+        run_body=run_body,
+        run_http_status=run_response.status_code,
+    )
     return _summary(
         files=files,
         decisions=decisions,
@@ -500,6 +842,7 @@ def _run_with_client(
         run_body=run_body,
         run_http_status=run_response.status_code,
         blocker=None,
+        upload_profile=upload_timing.to_summary(),
     )
 
 
@@ -594,20 +937,17 @@ def _capability_reason_code(
     return "unsupported_format"
 
 
-def _upload_file(
+def _read_upload_payload(
     *,
-    client: _ApiClientLike,
     api_key: str,
-    deal_id: str,
     path: Path,
     upload_index: int,
-) -> _ResponseLike:
+) -> _UploadPayload:
     data = path.read_bytes()
     extension = path.suffix.lower() or ".bin"
     synthetic_filename = f"document-{upload_index:05d}{extension}"
-    return _client_post(
-        client,
-        f"/v1/deals/{deal_id}/documents/upload",
+    return _UploadPayload(
+        extension=extension,
         headers={**_headers(api_key), "Content-Type": UPLOAD_CONTENT_TYPE},
         params={
             "filename": synthetic_filename,
@@ -616,6 +956,21 @@ def _upload_file(
             "source_system": "real-example-production-harness",
         },
         content=data,
+    )
+
+
+def _post_upload_payload(
+    *,
+    client: _ApiClientLike,
+    deal_id: str,
+    payload: _UploadPayload,
+) -> _ResponseLike:
+    return _client_post(
+        client,
+        f"/v1/deals/{deal_id}/documents/upload",
+        headers=payload.headers,
+        params=payload.params,
+        content=payload.content,
     )
 
 
@@ -658,15 +1013,20 @@ def _call_response_with_optional_deadline(
     timeout_seconds: float | None,
     poll_interval_seconds: float,
 ) -> _RunPostAttempt:
-    attempt = _call_with_optional_deadline(
-        call=call,
-        timeout_seconds=timeout_seconds,
-        poll_interval_seconds=poll_interval_seconds,
-    )
+    _ = poll_interval_seconds
+    started_at = time.monotonic()
+    if timeout_seconds is not None and timeout_seconds <= 0:
+        return _RunPostAttempt(
+            response=None,
+            timed_out=True,
+            elapsed_seconds=time.monotonic() - started_at,
+        )
+    response = call()
+    elapsed_seconds = time.monotonic() - started_at
     return _RunPostAttempt(
-        response=attempt.result,
-        timed_out=attempt.timed_out,
-        elapsed_seconds=attempt.elapsed_seconds,
+        response=response,
+        timed_out=timeout_seconds is not None and elapsed_seconds >= timeout_seconds,
+        elapsed_seconds=elapsed_seconds,
     )
 
 
@@ -676,55 +1036,19 @@ def _call_with_optional_deadline(
     timeout_seconds: float | None,
     poll_interval_seconds: float,
 ) -> _TimedCallAttempt[T]:
+    _ = poll_interval_seconds
     started_at = time.monotonic()
-    if timeout_seconds is None:
-        immediate_result = call()
-        return _TimedCallAttempt(
-            result=immediate_result,
-            timed_out=False,
-            elapsed_seconds=time.monotonic() - started_at,
-        )
-
-    completed = threading.Event()
-    result_box: dict[str, Any] = {}
-
-    def post_run() -> None:
-        try:
-            result_box["response"] = call()
-        except BaseException as exc:  # pragma: no cover - re-raised in caller
-            result_box["exception"] = exc
-        finally:
-            completed.set()
-
-    thread = threading.Thread(target=post_run, name="idis-real-example-full-run", daemon=True)
-    thread.start()
-    deadline = started_at + timeout_seconds
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break
-        if completed.wait(min(poll_interval_seconds, remaining)):
-            break
-
-    elapsed_seconds = time.monotonic() - started_at
-    if not completed.is_set():
+    if timeout_seconds is not None and timeout_seconds <= 0:
         return _TimedCallAttempt(
             result=None,
             timed_out=True,
-            elapsed_seconds=elapsed_seconds,
+            elapsed_seconds=time.monotonic() - started_at,
         )
-
-    if "exception" in result_box:
-        exc = result_box["exception"]
-        if isinstance(exc, BaseException):
-            raise exc
-        raise RuntimeError("run post failed with a non-exception error")
-    completed_result = cast(T | None, result_box.get("response"))
-    if completed_result is None:
-        raise RuntimeError("timed call completed without a result")
+    result = call()
+    elapsed_seconds = time.monotonic() - started_at
     return _TimedCallAttempt(
-        result=completed_result,
-        timed_out=False,
+        result=result,
+        timed_out=timeout_seconds is not None and elapsed_seconds >= timeout_seconds,
         elapsed_seconds=elapsed_seconds,
     )
 
@@ -770,6 +1094,161 @@ def _headers(api_key: str) -> dict[str, str]:
     return {"X-IDIS-API-Key": api_key}
 
 
+def _write_checkpoint(
+    *,
+    options: RealExampleFullRunHarnessOptions,
+    stage: str,
+    files: list[Path],
+    decisions: list[_FileDecision],
+    uploaded_document_ids: list[str],
+    upload_timing: _UploadTimingRecorder,
+    status: str = "running",
+    run_body: dict[str, Any] | None = None,
+    run_http_status: int | None = None,
+    blocker: dict[str, Any] | None = None,
+    run_timeout_snapshot: dict[str, Any] | None = None,
+    run_elapsed_seconds: float | None = None,
+    run_attempted_on_timeout: bool = False,
+) -> None:
+    if options.checkpoint_output_path is None:
+        return
+    checkpoint = _summary(
+        files=files,
+        decisions=decisions,
+        uploaded_document_ids=uploaded_document_ids,
+        status=status,
+        run_body=run_body,
+        run_http_status=run_http_status,
+        blocker=blocker,
+        run_timeout_snapshot=run_timeout_snapshot,
+        run_elapsed_seconds=run_elapsed_seconds,
+        run_attempted_on_timeout=run_attempted_on_timeout,
+        upload_profile=upload_timing.to_summary(),
+    )
+    checkpoint["checkpoint"] = {"stage": stage}
+    _write_json_atomic(Path(options.checkpoint_output_path), checkpoint)
+
+
+def _write_summary_outputs(
+    *,
+    summary: dict[str, Any],
+    output_path: str | Path | None,
+    resume_state_output_path: str | Path | None,
+) -> None:
+    if output_path is not None:
+        _write_json_atomic(Path(output_path), summary)
+    if resume_state_output_path is not None:
+        _write_json_atomic(Path(resume_state_output_path), _resume_state_for_output(summary))
+
+
+def _write_json_atomic(destination: Path, payload: dict[str, Any]) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    tmp_destination = destination.with_name(f"{destination.name}.{os.getpid()}.tmp")
+    tmp_destination.write_text(json.dumps(payload, sort_keys=True, indent=2), encoding="utf-8")
+    tmp_destination.replace(destination)
+
+
+def _load_json_object(path: Path) -> dict[str, Any]:
+    loaded = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(loaded, dict):
+        return loaded
+    return _minimal_process_timeout_summary(stage="process")
+
+
+def _strip_checkpoint_metadata(summary: dict[str, Any]) -> dict[str, Any]:
+    stripped = dict(summary)
+    stripped.pop("checkpoint", None)
+    return stripped
+
+
+def _process_timeout_summary_from_checkpoint(checkpoint_path: Path) -> dict[str, Any]:
+    if not checkpoint_path.exists():
+        return _minimal_process_timeout_summary(stage="process")
+    checkpoint = _load_json_object(checkpoint_path)
+    stage = _checkpoint_stage(checkpoint)
+    summary = _strip_checkpoint_metadata(checkpoint)
+    summary["status"] = "blocked"
+    summary["blocker"] = _blocker(
+        stage=stage,
+        reason_code=(UPLOAD_THROUGHPUT_LIMIT_REASON if stage == "upload" else RUN_TIMEOUT_REASON),
+        http_status=None,
+    )
+    upload_profile = summary.get("upload_profile")
+    if isinstance(upload_profile, dict):
+        upload_profile["partial"] = True
+    else:
+        summary["upload_profile"] = _UploadTimingRecorder(max_upload_concurrency=1).to_summary()
+        summary["upload_profile"]["partial"] = True
+    summary["resume"] = _resume_summary(
+        uploaded_document_count=int(summary.get("uploaded_document_count") or 0),
+        selected_document_count=int(summary.get("selected_document_count") or 0),
+        run_snapshot=None,
+    )
+    if stage == "run_start":
+        summary["run"] = {
+            "attempted": True,
+            "status": "TIMEOUT",
+            "run_id": None,
+            "step_count": 0,
+            "completed_step_count": 0,
+            "failed_step_count": 0,
+            "blocked_step_count": 0,
+            "block_reason": RUN_TIMEOUT_REASON,
+            "last_completed_step": None,
+            "current_step": None,
+            "failed_step": None,
+            "step_counts_by_status": {},
+        }
+    return summary
+
+
+def _checkpoint_stage(checkpoint: dict[str, Any]) -> str:
+    checkpoint_meta = checkpoint.get("checkpoint")
+    raw_stage = checkpoint_meta.get("stage") if isinstance(checkpoint_meta, dict) else None
+    if raw_stage in {"inventory", "deal_create", "upload", "run_start", "full_run"}:
+        return str(raw_stage)
+    return "process"
+
+
+def _minimal_process_timeout_summary(*, stage: str) -> dict[str, Any]:
+    upload_profile = _UploadTimingRecorder(max_upload_concurrency=1).to_summary()
+    upload_profile["partial"] = True
+    return {
+        "harness": "real_example_production_full_run_private_v1",
+        "safe_summary": True,
+        "private_run": True,
+        "status": "blocked",
+        "mode": "FULL",
+        "total_files": 0,
+        "uploaded_document_count": 0,
+        "selected_document_count": 0,
+        "skipped_file_count": 0,
+        "counts_by_extension": {},
+        "counts_by_upload_status": {},
+        "counts_by_deferred_reason": {},
+        "run": {
+            "attempted": False,
+            "status": None,
+            "step_count": 0,
+            "completed_step_count": 0,
+            "failed_step_count": 0,
+            "blocked_step_count": 0,
+            "block_reason": None,
+        },
+        "upload_profile": upload_profile,
+        "resume": _resume_summary(
+            uploaded_document_count=0,
+            selected_document_count=0,
+            run_snapshot=None,
+        ),
+        "blocker": _blocker(
+            stage=stage,
+            reason_code=RUN_TIMEOUT_REASON,
+            http_status=None,
+        ),
+    }
+
+
 def _summary(
     *,
     files: list[Path],
@@ -782,6 +1261,7 @@ def _summary(
     run_timeout_snapshot: dict[str, Any] | None = None,
     run_elapsed_seconds: float | None = None,
     run_attempted_on_timeout: bool = False,
+    upload_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     uploaded_count = sum(1 for decision in decisions if decision.upload_status == "uploaded")
     skipped_count = sum(1 for decision in decisions if decision.upload_status != "uploaded")
@@ -810,6 +1290,9 @@ def _summary(
             elapsed_seconds=run_elapsed_seconds,
             attempted_on_timeout=run_attempted_on_timeout,
         ),
+        "upload_profile": upload_profile
+        if upload_profile is not None
+        else _UploadTimingRecorder(max_upload_concurrency=1).to_summary(),
         "resume": resume,
         "blocker": blocker,
     }
@@ -973,6 +1456,30 @@ def _elapsed_seconds_bucket(elapsed_seconds: float | None) -> str | None:
     if elapsed_seconds < 300:
         return "60_to_300s"
     return "over_300s"
+
+
+def _elapsed_bucket_counts(elapsed_seconds_values: list[float]) -> dict[str, int]:
+    buckets = [
+        bucket
+        for bucket in (_elapsed_seconds_bucket(value) for value in elapsed_seconds_values)
+        if bucket is not None
+    ]
+    return dict(sorted(Counter(buckets).items()))
+
+
+def _rate_per_minute_bucket(count: int, elapsed_seconds: float) -> str | None:
+    if count <= 0 or elapsed_seconds <= 0:
+        return None
+    rate = count / (elapsed_seconds / 60)
+    if rate < 30:
+        return "under_30_per_minute"
+    if rate < 60:
+        return "30_to_60_per_minute"
+    if rate < 120:
+        return "60_to_120_per_minute"
+    if rate < 240:
+        return "120_to_240_per_minute"
+    return "over_240_per_minute"
 
 
 def _step_status_count(steps: list[Any], status: str) -> int:

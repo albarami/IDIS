@@ -651,6 +651,45 @@ def test_harness_upload_profile_reports_safe_timing_counts_by_outcome(
     assert "PRIVATE_FAILED" not in encoded
 
 
+def test_harness_upload_profile_identifies_upload_api_as_slowest_phase_at_scale(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "real_example"
+    confidential_dir = root / "Private Upload Scale Room"
+    confidential_dir.mkdir(parents=True)
+    for index in range(4):
+        (confidential_dir / f"scale-secret-{index}.pdf").write_bytes(
+            b"%PDF-1.4\nPRIVATE_SCALE\n%%EOF"
+        )
+
+    summary = run_real_example_full_run_harness(
+        RealExampleFullRunHarnessOptions(
+            root=root,
+            api_client=_SlowUploadApiClient(delay_seconds=0.02),
+            run_timeout_seconds=5,
+            run_poll_interval_seconds=0.001,
+        )
+    )
+
+    profile = summary["upload_profile"]
+    assert summary["status"] == "succeeded"
+    assert profile["attempted_count"] == 4
+    assert profile["counts_by_outcome"] == {"uploaded": 4}
+    assert profile["observable_slowest_phase"] == "upload_api"
+    assert profile["phase_observability"]["parse"] == "included_in_upload_api"
+    assert profile["phase_observability"]["span_generation"] == "included_in_upload_api"
+    assert profile["concurrency"] == {
+        "enabled": False,
+        "max_workers": 1,
+        "reason_code": "CONCURRENCY_DISABLED_BY_DEFAULT",
+    }
+
+    encoded = json.dumps(summary, sort_keys=True)
+    assert str(root) not in encoded
+    assert "scale-secret" not in encoded
+    assert "PRIVATE_SCALE" not in encoded
+
+
 def test_harness_upload_timeout_returns_partial_timing_profile(
     tmp_path: Path,
     capsys: Any,
@@ -715,6 +754,33 @@ def test_harness_upload_concurrency_is_disabled_by_default_and_order_is_stable(
         "reason_code": "CONCURRENCY_DISABLED_BY_DEFAULT",
     }
     assert client.run_requests[0]["source"]["document_ids"] == ["document-1", "document-2"]
+
+
+def test_harness_public_upload_contract_omits_optional_sha_without_folder_bypass(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "real_example"
+    confidential_dir = root / "Private Public Contract Room"
+    confidential_dir.mkdir(parents=True)
+    (confidential_dir / "a-secret.pdf").write_bytes(b"%PDF-1.4\nfirst\n%%EOF")
+    (confidential_dir / "b-secret.pdf").write_bytes(b"%PDF-1.4\nsecond\n%%EOF")
+    client = _FakeApiClient()
+
+    summary = run_real_example_full_run_harness(
+        RealExampleFullRunHarnessOptions(root=root, api_client=client)
+    )
+
+    assert summary["selected_document_count"] == 2
+    assert len(client.uploads) == 2
+    assert client.run_requests[0]["source"]["document_ids"] == ["document-1", "document-2"]
+    for upload in client.uploads:
+        assert upload["params"]["doc_type"] == "DATA_ROOM_FILE"
+        assert upload["params"]["source_system"] == "real-example-production-harness"
+        assert "sha256" not in upload["params"]
+        encoded_upload = json.dumps(upload["params"], sort_keys=True)
+        assert "folder_path" not in encoded_upload
+        assert "data_room_root_path" not in encoded_upload
+        assert str(root) not in encoded_upload
 
 
 def test_in_process_upload_api_calls_are_not_executed_in_background_threads(

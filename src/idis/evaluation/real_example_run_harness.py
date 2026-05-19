@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import json
 import multiprocessing
 import os
@@ -952,7 +951,6 @@ def _read_upload_payload(
         params={
             "filename": synthetic_filename,
             "doc_type": "DATA_ROOM_FILE",
-            "sha256": hashlib.sha256(data).hexdigest(),
             "source_system": "real-example-production-harness",
         },
         content=data,

@@ -21,6 +21,8 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from idis.services.ingestion.service import RouteValidatedSha256
+
 
 @pytest.fixture
 def temp_storage_dir() -> Any:
@@ -136,8 +138,8 @@ startxref
 def _create_image_only_pdf() -> bytes:
     """Create a valid PDF with no extractable text."""
     try:
-        from reportlab.lib.pagesizes import letter
-        from reportlab.pdfgen import canvas
+        from reportlab.lib.pagesizes import letter  # type: ignore[import-untyped]
+        from reportlab.pdfgen import canvas  # type: ignore[import-untyped]
     except ImportError:
         pytest.skip("reportlab not installed")
 
@@ -365,6 +367,87 @@ class TestHappyPathPDF:
         )
 
         assert result.sha256 == expected_sha256
+
+    def test_ingest_bytes_reuses_route_validated_sha256_without_rehashing(
+        self,
+        ingestion_service: Any,
+        ingestion_context: Any,
+        deal_id: UUID,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A public-upload validated SHA can be reused after boundary validation."""
+        pdf_bytes = _create_minimal_pdf()
+        expected_sha256 = hashlib.sha256(pdf_bytes).hexdigest()
+
+        def fail_if_rehashed(data: bytes) -> str:
+            raise AssertionError("route-validated SHA should be reused")
+
+        monkeypatch.setattr(ingestion_service, "_compute_sha256", fail_if_rehashed)
+
+        result = ingestion_service.ingest_bytes(
+            ctx=ingestion_context,
+            deal_id=deal_id,
+            filename="route-validated.pdf",
+            media_type="application/pdf",
+            data=pdf_bytes,
+            validated_sha256=RouteValidatedSha256.from_bytes(
+                data=pdf_bytes,
+                expected_sha256=expected_sha256,
+            ),
+        )
+
+        assert result.success is True
+        assert result.sha256 == expected_sha256
+        artifact = ingestion_service.get_artifact(ingestion_context.tenant_id, result.artifact_id)
+        assert artifact is not None
+        assert artifact.sha256 == expected_sha256
+
+    def test_ingest_bytes_rejects_naked_malformed_validated_sha256(
+        self,
+        ingestion_service: Any,
+        ingestion_context: Any,
+        deal_id: UUID,
+    ) -> None:
+        """Malformed digest strings are not trusted validation-boundary objects."""
+        pdf_bytes = _create_minimal_pdf()
+
+        result = ingestion_service.ingest_bytes(
+            ctx=ingestion_context,
+            deal_id=deal_id,
+            filename="invalid-validated-shape.pdf",
+            media_type="application/pdf",
+            data=pdf_bytes,
+            validated_sha256="not-a-valid-sha",
+        )
+
+        assert result.success is False
+        assert result.errors[0].code.value == "untrusted_validated_sha256"
+        assert ingestion_service._artifacts == {}
+        assert ingestion_service._documents == {}
+
+    def test_ingest_bytes_rejects_naked_valid_shaped_wrong_validated_sha256(
+        self,
+        ingestion_service: Any,
+        ingestion_context: Any,
+        deal_id: UUID,
+    ) -> None:
+        """A valid-looking digest string is not a trusted validation boundary."""
+        pdf_bytes = _create_minimal_pdf()
+        wrong_sha256 = "f" * 64
+
+        result = ingestion_service.ingest_bytes(
+            ctx=ingestion_context,
+            deal_id=deal_id,
+            filename="wrong-naked-sha.pdf",
+            media_type="application/pdf",
+            data=pdf_bytes,
+            validated_sha256=wrong_sha256,
+        )
+
+        assert result.success is False
+        assert result.errors[0].code.value == "untrusted_validated_sha256"
+        assert ingestion_service._artifacts == {}
+        assert ingestion_service._documents == {}
 
 
 class TestHappyPathXLSX:
@@ -730,6 +813,8 @@ class TestTenantIsolation:
             media_type="application/pdf",
             data=pdf_bytes,
         )
+        assert result_b.artifact_id is not None
+        assert result_b.document_id is not None
 
         artifact_via_a = service.get_artifact(tenant_a, result_b.artifact_id)
         document_via_a = service.get_document(tenant_a, result_b.document_id)
@@ -794,6 +879,8 @@ class TestDeterminismRegression:
         )
 
         assert result1.span_count == result2.span_count
+        assert result1.document_id is not None
+        assert result2.document_id is not None
 
         spans1 = service1.get_spans(tenant_a, result1.document_id)
         spans2 = service2.get_spans(tenant_a, result2.document_id)

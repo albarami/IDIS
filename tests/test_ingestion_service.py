@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,26 @@ from uuid import UUID, uuid4
 import pytest
 
 from idis.services.ingestion.service import RouteValidatedSha256
+
+
+class _RecordingPhaseRecorder:
+    def __init__(self) -> None:
+        self.records: list[tuple[str, float]] = []
+
+    def record_phase(self, phase: Any, elapsed_seconds: float) -> None:
+        value = getattr(phase, "value", phase)
+        self.records.append((str(value), elapsed_seconds))
+
+
+class _FailingPhaseRecorder:
+    def record_phase(self, phase: Any, elapsed_seconds: float) -> None:
+        raise RuntimeError("private recorder failed")
+
+
+class _BrokenPhaseRecorderAttribute:
+    @property
+    def record_phase(self) -> Any:
+        raise RuntimeError("private recorder attribute failed")
 
 
 @pytest.fixture
@@ -138,8 +159,8 @@ startxref
 def _create_image_only_pdf() -> bytes:
     """Create a valid PDF with no extractable text."""
     try:
-        from reportlab.lib.pagesizes import letter  # type: ignore[import-untyped]
-        from reportlab.pdfgen import canvas  # type: ignore[import-untyped]
+        from reportlab.lib.pagesizes import letter
+        from reportlab.pdfgen import canvas
     except ImportError:
         pytest.skip("reportlab not installed")
 
@@ -448,6 +469,82 @@ class TestHappyPathPDF:
         assert result.errors[0].code.value == "untrusted_validated_sha256"
         assert ingestion_service._artifacts == {}
         assert ingestion_service._documents == {}
+
+    def test_ingest_bytes_records_aggregate_internal_phase_timing_without_content(
+        self,
+        ingestion_service: Any,
+        ingestion_context: Any,
+        deal_id: UUID,
+    ) -> None:
+        """Internal timing records phase names and elapsed seconds only."""
+        pdf_bytes = _create_minimal_pdf()
+        recorder = _RecordingPhaseRecorder()
+
+        result = ingestion_service.ingest_bytes(
+            ctx=ingestion_context,
+            deal_id=deal_id,
+            filename="private-phase-source.pdf",
+            media_type="application/pdf",
+            data=pdf_bytes,
+            phase_recorder=recorder,
+        )
+
+        assert result.success is True
+        assert {phase for phase, _elapsed in recorder.records} == {
+            "object_store_write",
+            "parse",
+            "span_generation",
+            "persistence",
+            "audit",
+        }
+        assert all(elapsed >= 0 for _phase, elapsed in recorder.records)
+
+        encoded_records = json.dumps(recorder.records, sort_keys=True)
+        assert "private-phase-source" not in encoded_records
+        assert "PDF-1.4" not in encoded_records
+        assert "Hello IDIS" not in encoded_records
+
+    def test_ingest_bytes_ignores_private_phase_recorder_failures(
+        self,
+        ingestion_service: Any,
+        ingestion_context: Any,
+        deal_id: UUID,
+    ) -> None:
+        """Optional private timing must not change ingestion behavior."""
+        pdf_bytes = _create_minimal_pdf()
+
+        result = ingestion_service.ingest_bytes(
+            ctx=ingestion_context,
+            deal_id=deal_id,
+            filename="recorder-failure.pdf",
+            media_type="application/pdf",
+            data=pdf_bytes,
+            phase_recorder=_FailingPhaseRecorder(),
+        )
+
+        assert result.success is True
+        assert result.document_id is not None
+
+    def test_ingest_bytes_ignores_private_phase_recorder_attribute_failures(
+        self,
+        ingestion_service: Any,
+        ingestion_context: Any,
+        deal_id: UUID,
+    ) -> None:
+        """Broken optional recorder objects must not change ingestion behavior."""
+        pdf_bytes = _create_minimal_pdf()
+
+        result = ingestion_service.ingest_bytes(
+            ctx=ingestion_context,
+            deal_id=deal_id,
+            filename="recorder-attribute-failure.pdf",
+            media_type="application/pdf",
+            data=pdf_bytes,
+            phase_recorder=_BrokenPhaseRecorderAttribute(),
+        )
+
+        assert result.success is True
+        assert result.document_id is not None
 
 
 class TestHappyPathXLSX:

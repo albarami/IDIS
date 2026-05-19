@@ -152,6 +152,65 @@ class _SlowUploadApiClient(_FakeApiClient):
         )
 
 
+class _AppState:
+    upload_ingestion_phase_recorder: Any
+
+    pass
+
+
+class _AppWithRecorder:
+    def __init__(self, recorder: Any) -> None:
+        self.state = _AppState()
+        self.state.upload_ingestion_phase_recorder = recorder
+
+
+class _AggregateOnlyPhaseRecorder:
+    def to_summary(self) -> dict[str, Any]:
+        return {
+            "enabled": True,
+            "phase_counts_by_elapsed_bucket": {
+                "route_body_read/hash_validation": {"under_1s": 1},
+                "object_store_write": {"under_1s": 1},
+                "parse": {"under_1s": 1},
+                "span_generation": {"under_1s": 1},
+                "persistence": {"under_1s": 1},
+                "audit": {"under_1s": 1},
+            },
+            "phase_total_elapsed_bucket": {
+                "route_body_read/hash_validation": "under_1s",
+                "object_store_write": "under_1s",
+                "parse": "under_1s",
+                "span_generation": "under_1s",
+                "persistence": "under_1s",
+                "audit": "under_1s",
+            },
+            "phase_max_elapsed_bucket": {
+                "route_body_read/hash_validation": "under_1s",
+                "object_store_write": "under_1s",
+                "parse": "under_1s",
+                "span_generation": "under_1s",
+                "persistence": "under_1s",
+                "audit": "under_1s",
+            },
+            "observable_slowest_phase": "parse",
+        }
+
+
+class _UnsafePhaseRecorder(_AggregateOnlyPhaseRecorder):
+    def to_summary(self) -> dict[str, Any]:
+        summary = super().to_summary()
+        summary["private_path"] = "C:/Private/SECRET_PATH"
+        summary["phase_counts_by_elapsed_bucket"]["secret_filename.pdf"] = {"under_1s": 1}
+        summary["phase_total_elapsed_bucket"]["raw_text"] = "under_1s"
+        return summary
+
+
+class _FakeApiClientWithPhaseRecorder(_FakeApiClient):
+    def __init__(self, recorder: Any | None = None) -> None:
+        super().__init__()
+        self.app = _AppWithRecorder(recorder or _AggregateOnlyPhaseRecorder())
+
+
 def _seed_running_run_with_safe_steps() -> None:
     run_id = "00000000-0000-4000-8000-000000000044"
     runs_repo = get_runs_repository(None, DEFAULT_TENANT_ID)
@@ -688,6 +747,66 @@ def test_harness_upload_profile_identifies_upload_api_as_slowest_phase_at_scale(
     assert str(root) not in encoded
     assert "scale-secret" not in encoded
     assert "PRIVATE_SCALE" not in encoded
+
+
+def test_harness_upload_profile_exposes_internal_upload_api_phase_buckets(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "real_example"
+    confidential_dir = root / "Private Upload Internals Room"
+    confidential_dir.mkdir(parents=True)
+    (confidential_dir / "internal-secret.pdf").write_bytes(
+        b"%PDF-1.4\nPRIVATE_INTERNAL_PHASE\n%%EOF"
+    )
+
+    summary = run_real_example_full_run_harness(
+        RealExampleFullRunHarnessOptions(root=root, api_client=_FakeApiClientWithPhaseRecorder())
+    )
+
+    internal_profile = summary["upload_profile"]["internal_upload_api"]
+    assert internal_profile["enabled"] is True
+    assert sorted(internal_profile["phase_counts_by_elapsed_bucket"]) == [
+        "audit",
+        "object_store_write",
+        "parse",
+        "persistence",
+        "route_body_read/hash_validation",
+        "span_generation",
+    ]
+    assert summary["upload_profile"]["phase_observability"]["parse"] == "observed"
+    assert summary["upload_profile"]["phase_observability"]["span_generation"] == "observed"
+
+    encoded = json.dumps(summary, sort_keys=True)
+    assert str(root) not in encoded
+    assert "Private Upload Internals" not in encoded
+    assert "internal-secret" not in encoded
+    assert "PRIVATE_INTERNAL_PHASE" not in encoded
+
+
+def test_harness_filters_unsafe_internal_upload_phase_recorder_summary(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "real_example"
+    confidential_dir = root / "Private Unsafe Recorder Room"
+    confidential_dir.mkdir(parents=True)
+    (confidential_dir / "unsafe-secret.pdf").write_bytes(b"%PDF-1.4\nPRIVATE_UNSAFE\n%%EOF")
+
+    summary = run_real_example_full_run_harness(
+        RealExampleFullRunHarnessOptions(
+            root=root,
+            api_client=_FakeApiClientWithPhaseRecorder(_UnsafePhaseRecorder()),
+        )
+    )
+
+    internal_profile = summary["upload_profile"]["internal_upload_api"]
+    assert "private_path" not in internal_profile
+    assert "secret_filename.pdf" not in internal_profile["phase_counts_by_elapsed_bucket"]
+    assert "raw_text" not in internal_profile["phase_total_elapsed_bucket"]
+
+    encoded = json.dumps(summary, sort_keys=True)
+    assert "SECRET_PATH" not in encoded
+    assert "secret_filename" not in encoded
+    assert "PRIVATE_UNSAFE" not in encoded
 
 
 def test_harness_upload_timeout_returns_partial_timing_profile(

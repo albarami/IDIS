@@ -21,9 +21,12 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import time
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
+from threading import Lock
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
@@ -58,6 +61,59 @@ class IngestionErrorCode(StrEnum):
     STORAGE_FAILED = "storage_failed"
     PERSISTENCE_FAILED = "persistence_failed"
     INTERNAL_ERROR = "internal_error"
+
+
+class UploadIngestionPhase(StrEnum):
+    """Aggregate timing phases inside the public upload and ingestion path."""
+
+    ROUTE_BODY_READ_HASH_VALIDATION = "route_body_read/hash_validation"
+    OBJECT_STORE_WRITE = "object_store_write"
+    PARSE = "parse"
+    SPAN_GENERATION = "span_generation"
+    PERSISTENCE = "persistence"
+    AUDIT = "audit"
+
+
+UPLOAD_INGESTION_PHASES = tuple(phase.value for phase in UploadIngestionPhase)
+
+
+class UploadIngestionPhaseRecorder:
+    """Collect aggregate-only elapsed timing for upload internals."""
+
+    def __init__(self) -> None:
+        self._phase_elapsed_seconds: dict[str, list[float]] = {
+            phase: [] for phase in UPLOAD_INGESTION_PHASES
+        }
+        self._lock = Lock()
+
+    def record_phase(self, phase: UploadIngestionPhase | str, elapsed_seconds: float) -> None:
+        """Record one aggregate elapsed time for an internal upload phase."""
+        phase_value = phase.value if isinstance(phase, UploadIngestionPhase) else phase
+        if phase_value not in UPLOAD_INGESTION_PHASES:
+            return
+        with self._lock:
+            self._phase_elapsed_seconds[phase_value].append(max(0.0, elapsed_seconds))
+
+    def to_summary(self) -> dict[str, Any]:
+        """Return aggregate-only phase timing buckets."""
+        with self._lock:
+            phase_elapsed = {
+                phase: list(values) for phase, values in self._phase_elapsed_seconds.items()
+            }
+        observed = {phase: values for phase, values in phase_elapsed.items() if values}
+        return {
+            "enabled": True,
+            "phase_counts_by_elapsed_bucket": {
+                phase: _elapsed_bucket_counts(values) for phase, values in observed.items()
+            },
+            "phase_total_elapsed_bucket": {
+                phase: _elapsed_seconds_bucket(sum(values)) for phase, values in observed.items()
+            },
+            "phase_max_elapsed_bucket": {
+                phase: _elapsed_seconds_bucket(max(values)) for phase, values in observed.items()
+            },
+            "observable_slowest_phase": _observable_slowest_phase(observed),
+        }
 
 
 @dataclass(frozen=True)
@@ -173,6 +229,66 @@ class IngestionResult:
         }
 
 
+def _record_upload_phase(
+    phase_recorder: object | None,
+    phase: UploadIngestionPhase,
+    started_at: float,
+) -> None:
+    if phase_recorder is None:
+        return
+    try:
+        record_phase = getattr(phase_recorder, "record_phase", None)
+    except Exception as error:
+        logger.warning(
+            "Private upload phase recorder lookup failed: phase=%s exception_type=%s",
+            phase.value,
+            type(error).__name__,
+        )
+        return
+    if not callable(record_phase):
+        return
+    try:
+        record_phase(phase, time.monotonic() - started_at)
+    except Exception as error:
+        logger.warning(
+            "Private upload phase recorder failed: phase=%s exception_type=%s",
+            phase.value,
+            type(error).__name__,
+        )
+
+
+def _elapsed_seconds_bucket(elapsed_seconds: float | None) -> str | None:
+    if elapsed_seconds is None:
+        return None
+    if elapsed_seconds < 1:
+        return "under_1s"
+    if elapsed_seconds < 5:
+        return "1_to_5s"
+    if elapsed_seconds < 30:
+        return "5_to_30s"
+    if elapsed_seconds < 60:
+        return "30_to_60s"
+    if elapsed_seconds < 300:
+        return "60_to_300s"
+    return "over_300s"
+
+
+def _elapsed_bucket_counts(elapsed_seconds_values: list[float]) -> dict[str, int]:
+    buckets = [
+        bucket
+        for bucket in (_elapsed_seconds_bucket(value) for value in elapsed_seconds_values)
+        if bucket is not None
+    ]
+    return dict(sorted(Counter(buckets).items()))
+
+
+def _observable_slowest_phase(phase_elapsed: dict[str, list[float]]) -> str | None:
+    phase_totals = {phase: sum(values) for phase, values in phase_elapsed.items() if values}
+    if not phase_totals:
+        return None
+    return max(sorted(phase_totals), key=lambda phase: phase_totals[phase])
+
+
 class IngestionService:
     """Document ingestion coordinator with tenant isolation.
 
@@ -227,6 +343,7 @@ class IngestionService:
         data: bytes,
         metadata: dict[str, Any] | None = None,
         validated_sha256: RouteValidatedSha256 | None = None,
+        phase_recorder: object | None = None,
         db_conn: Connection | None = None,
     ) -> IngestionResult:
         """Ingest raw document bytes into the system.
@@ -250,6 +367,7 @@ class IngestionService:
             validated_sha256: Optional digest object already validated against
                 ``data`` by a trusted API boundary. When provided, ingestion reuses
                 it instead of hashing the same bytes again.
+            phase_recorder: Optional private aggregate phase timing recorder.
             db_conn: Optional request-scoped Postgres connection for durable corpus writes.
 
         Returns:
@@ -269,6 +387,7 @@ class IngestionService:
                 data=data,
                 metadata=metadata or {},
                 validated_sha256=validated_sha256,
+                phase_recorder=phase_recorder,
                 db_conn=db_conn,
             )
         except Exception as e:
@@ -293,6 +412,7 @@ class IngestionService:
         data: bytes,
         metadata: dict[str, Any],
         validated_sha256: RouteValidatedSha256 | None,
+        phase_recorder: object | None,
         db_conn: Connection | None,
     ) -> IngestionResult:
         """Implementation of ingest_bytes with exception propagation."""
@@ -316,12 +436,20 @@ class IngestionService:
             filename=filename,
         )
 
-        storage_result = self._store_raw_bytes(
-            ctx=ctx,
-            storage_key=storage_key,
-            data=data,
-            content_type=media_type,
-        )
+        phase_started_at = time.monotonic()
+        try:
+            storage_result = self._store_raw_bytes(
+                ctx=ctx,
+                storage_key=storage_key,
+                data=data,
+                content_type=media_type,
+            )
+        finally:
+            _record_upload_phase(
+                phase_recorder,
+                UploadIngestionPhase.OBJECT_STORE_WRITE,
+                phase_started_at,
+            )
         if storage_result is not None:
             return IngestionResult(
                 success=False,
@@ -329,7 +457,11 @@ class IngestionService:
                 errors=[storage_result],
             )
 
-        parse_result = self._parse_document(data, filename, media_type)
+        phase_started_at = time.monotonic()
+        try:
+            parse_result = self._parse_document(data, filename, media_type)
+        finally:
+            _record_upload_phase(phase_recorder, UploadIngestionPhase.PARSE, phase_started_at)
 
         artifact_id = uuid4()
         document_id = uuid4()
@@ -361,23 +493,43 @@ class IngestionService:
         )
 
         spans: list[DocumentSpan] = []
-        if parse_result.success and parse_result.spans:
-            spans = self._span_generator.generate_spans(
-                span_drafts=parse_result.spans,
-                tenant_id=ctx.tenant_id,
-                document_id=document_id,
+        phase_started_at = time.monotonic()
+        try:
+            if parse_result.success and parse_result.spans:
+                spans = self._span_generator.generate_spans(
+                    span_drafts=parse_result.spans,
+                    tenant_id=ctx.tenant_id,
+                    document_id=document_id,
+                )
+        finally:
+            _record_upload_phase(
+                phase_recorder,
+                UploadIngestionPhase.SPAN_GENERATION,
+                phase_started_at,
             )
 
-        self._persist_artifact(ctx.tenant_id, artifact, db_conn=db_conn)
-        self._persist_document(ctx.tenant_id, document, db_conn=db_conn)
-        self._persist_spans(ctx.tenant_id, deal_id, document_id, spans, db_conn=db_conn)
+        phase_started_at = time.monotonic()
+        try:
+            self._persist_artifact(ctx.tenant_id, artifact, db_conn=db_conn)
+            self._persist_document(ctx.tenant_id, document, db_conn=db_conn)
+            self._persist_spans(ctx.tenant_id, deal_id, document_id, spans, db_conn=db_conn)
+        finally:
+            _record_upload_phase(
+                phase_recorder,
+                UploadIngestionPhase.PERSISTENCE,
+                phase_started_at,
+            )
 
-        self._emit_document_created(ctx, artifact, sha256)
+        phase_started_at = time.monotonic()
+        try:
+            self._emit_document_created(ctx, artifact, sha256)
 
-        if parse_result.success:
-            self._emit_ingestion_completed(ctx, document, len(spans), sha256)
-        else:
-            self._emit_ingestion_failed(ctx, document, parse_result.errors, sha256)
+            if parse_result.success:
+                self._emit_ingestion_completed(ctx, document, len(spans), sha256)
+            else:
+                self._emit_ingestion_failed(ctx, document, parse_result.errors, sha256)
+        finally:
+            _record_upload_phase(phase_recorder, UploadIngestionPhase.AUDIT, phase_started_at)
 
         errors: list[IngestionError] = []
         if not parse_result.success:

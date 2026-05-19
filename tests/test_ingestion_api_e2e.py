@@ -45,6 +45,26 @@ from idis.storage.compliant_store import ComplianceEnforcedStore
 from idis.storage.filesystem_store import FilesystemObjectStore
 
 
+class _RecordingPhaseRecorder:
+    def __init__(self) -> None:
+        self.records: list[tuple[str, float]] = []
+
+    def record_phase(self, phase: Any, elapsed_seconds: float) -> None:
+        value = getattr(phase, "value", phase)
+        self.records.append((str(value), elapsed_seconds))
+
+
+class _FailingPhaseRecorder:
+    def record_phase(self, phase: Any, elapsed_seconds: float) -> None:
+        raise RuntimeError("private recorder failed")
+
+
+class _BrokenPhaseRecorderAttribute:
+    @property
+    def record_phase(self) -> Any:
+        raise RuntimeError("private recorder attribute failed")
+
+
 def _create_minimal_pdf() -> bytes:
     """Create a minimal valid PDF for testing."""
     return b"""%PDF-1.4
@@ -420,6 +440,105 @@ class TestUploadDocumentBytes:
         assert call["filename"] == "uploaded.pdf"
         assert "root" not in call
         assert "folder_path" not in json.dumps(call, default=str)
+
+    def test_upload_route_records_internal_phase_timing_without_public_response_expansion(
+        self,
+        _wired_app_context: dict[str, Any],
+        api_key_a: str,
+        deal_id: str,
+    ) -> None:
+        """Private instrumentation records aggregate phases without changing upload response."""
+        client = _wired_app_context["client"]
+        pdf_data = _create_minimal_pdf()
+        recorder = _RecordingPhaseRecorder()
+        client.app.state.upload_ingestion_phase_recorder = recorder
+
+        response = client.post(
+            f"/v1/deals/{deal_id}/documents/upload",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/octet-stream",
+            },
+            params={
+                "filename": "private-route-phase.pdf",
+                "doc_type": "DATA_ROOM_FILE",
+                "source_system": "api-upload",
+            },
+            content=pdf_data,
+        )
+
+        body = response.json()
+        assert response.status_code == 201
+        assert "upload_profile" not in body
+        assert "internal_upload_api" not in body
+        assert {phase for phase, _elapsed in recorder.records} == {
+            "route_body_read/hash_validation",
+            "object_store_write",
+            "parse",
+            "span_generation",
+            "persistence",
+            "audit",
+        }
+        assert all(elapsed >= 0 for _phase, elapsed in recorder.records)
+
+        encoded_records = json.dumps(recorder.records, sort_keys=True)
+        assert "private-route-phase" not in encoded_records
+        assert "PDF-1.4" not in encoded_records
+        assert "Hello IDIS" not in encoded_records
+
+    def test_upload_route_ignores_private_phase_recorder_failures(
+        self,
+        _wired_app_context: dict[str, Any],
+        api_key_a: str,
+        deal_id: str,
+    ) -> None:
+        """Private instrumentation failures must not alter public upload behavior."""
+        client = _wired_app_context["client"]
+        client.app.state.upload_ingestion_phase_recorder = _FailingPhaseRecorder()
+
+        response = client.post(
+            f"/v1/deals/{deal_id}/documents/upload",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/octet-stream",
+            },
+            params={
+                "filename": "recorder-failure.pdf",
+                "doc_type": "DATA_ROOM_FILE",
+                "source_system": "api-upload",
+            },
+            content=_create_minimal_pdf(),
+        )
+
+        assert response.status_code == 201
+        assert response.json()["parse_status"] == "PARSED"
+
+    def test_upload_route_ignores_private_phase_recorder_attribute_failures(
+        self,
+        _wired_app_context: dict[str, Any],
+        api_key_a: str,
+        deal_id: str,
+    ) -> None:
+        """Broken optional recorder attributes must not alter public upload behavior."""
+        client = _wired_app_context["client"]
+        client.app.state.upload_ingestion_phase_recorder = _BrokenPhaseRecorderAttribute()
+
+        response = client.post(
+            f"/v1/deals/{deal_id}/documents/upload",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/octet-stream",
+            },
+            params={
+                "filename": "recorder-attribute-failure.pdf",
+                "doc_type": "DATA_ROOM_FILE",
+                "source_system": "api-upload",
+            },
+            content=_create_minimal_pdf(),
+        )
+
+        assert response.status_code == 201
+        assert response.json()["parse_status"] == "PARSED"
 
     @pytest.mark.parametrize(
         ("headers", "params", "content", "expected_status"),

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import tempfile
 from pathlib import Path
 from uuid import UUID
@@ -17,6 +18,7 @@ from idis.parsers.pdf import parse_pdf
 from idis.parsers.registry import parse_bytes
 from idis.services.documents.parser_capabilities import triage_document
 from idis.services.ingestion import IngestionContext, IngestionService
+from idis.services.ingestion.service import UploadIngestionPhaseRecorder
 from idis.storage.compliant_store import ComplianceEnforcedStore
 from idis.storage.filesystem_store import FilesystemObjectStore
 
@@ -55,6 +57,22 @@ class RecordingOcrAdapter:
             {
                 "byte_count": len(data),
                 "max_pages": max_pages,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
+        if self.error is not None:
+            raise self.error
+        return self.pages
+
+    def extract_image_text(
+        self,
+        data: bytes,
+        *,
+        timeout_seconds: float,
+    ) -> list[OcrPageText]:
+        self.calls.append(
+            {
+                "byte_count": len(data),
                 "timeout_seconds": timeout_seconds,
             }
         )
@@ -101,6 +119,17 @@ def test_ocr_enabled_adapter_success_creates_deterministic_page_text_spans() -> 
     assert first.errors == []
     assert first.metadata["ocr_performed"] is True
     assert first.metadata["ocr_page_count"] == 2
+    assert "pdf_diagnostic_reason" not in first.metadata
+    assert first.private_diagnostics["pdf_diagnostic_reason"] == "parsed_ocr"
+    public_result = json.dumps(first.to_dict(), sort_keys=True)
+    for forbidden in (
+        "private_diagnostics",
+        "pdf_diagnostic_reason",
+        "parsed_text",
+        "parsed_empty_password_encrypted",
+        "parsed_ocr",
+    ):
+        assert forbidden not in public_result
     assert [span.span_type for span in first.spans] == ["PAGE_TEXT", "PAGE_TEXT", "PAGE_TEXT"]
     assert [span.locator for span in first.spans] == [
         {"page": 1, "line": 1, "source": "ocr"},
@@ -258,6 +287,40 @@ def test_ingestion_ocr_opt_in_creates_spans_without_changing_default_behavior() 
     assert enabled_result.span_count == 1
     assert enabled_result.to_dict()["span_count"] == 1
     assert "Ingested OCR text" not in str(enabled_result.to_dict())
+
+
+def test_ingestion_records_pdf_ocr_no_text_reason_without_content_leakage() -> None:
+    service = _ingestion_service(
+        ocr_config=OcrConfig(
+            enabled=True,
+            adapter=RecordingOcrAdapter([]),
+        )
+    )
+    recorder = UploadIngestionPhaseRecorder()
+    ctx = IngestionContext(tenant_id=TENANT_ID, actor_id="test-user", request_id="req-ocr-empty")
+
+    result = service.ingest_bytes(
+        ctx=ctx,
+        deal_id=DEAL_ID,
+        filename="private-empty-ocr-scan.pdf",
+        media_type="application/pdf",
+        data=_create_image_only_pdf(),
+        phase_recorder=recorder,
+    )
+
+    assert result.success is False
+    assert result.parse_status == ParseStatus.FAILED
+    assert result.errors[0].code.value == "parse_failed"
+    pdf_diagnostics = recorder.to_summary()["parser_diagnostics"]["pdf_diagnostics"]
+    assert pdf_diagnostics["counts_by_outcome_reason"] == {"failed_ocr_no_text": 1}
+    assert pdf_diagnostics["parse_elapsed_by_outcome_reason"] == {
+        "failed_ocr_no_text": {"under_1s": 1}
+    }
+
+    encoded = str(pdf_diagnostics)
+    assert "private-empty-ocr-scan" not in encoded
+    assert "Ingested OCR text" not in encoded
+    assert "PAGE_TEXT" not in encoded
 
 
 def _ingestion_service(*, ocr_config: OcrConfig | None = None) -> IngestionService:

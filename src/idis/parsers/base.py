@@ -121,6 +121,7 @@ class ParseResult:
         metadata: Document-level metadata (page_count, sheet_names, etc.).
         errors: List of structured errors (empty if success=True).
         warnings: Non-fatal issues encountered during parsing.
+        private_diagnostics: Internal parser diagnostics omitted from public serialization.
     """
 
     doc_type: Literal[
@@ -139,6 +140,7 @@ class ParseResult:
     metadata: dict[str, Any] = field(default_factory=dict)
     errors: list[ParseError] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    private_diagnostics: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""

@@ -36,7 +36,7 @@ from idis.compliance.byok import DataClass
 from idis.models.document import Document, DocumentType, ParseStatus
 from idis.models.document_artifact import DocType, DocumentArtifact
 from idis.models.document_span import DocumentSpan
-from idis.parsers.base import ParseError, ParseLimits, ParseResult
+from idis.parsers.base import ParseError, ParseErrorCode, ParseLimits, ParseResult
 from idis.parsers.ocr import OcrConfig
 from idis.parsers.registry import parse_bytes
 from idis.services.ingestion.span_generator import SpanGenerator
@@ -77,6 +77,23 @@ class UploadIngestionPhase(StrEnum):
 UPLOAD_INGESTION_PHASES = tuple(phase.value for phase in UploadIngestionPhase)
 PARSER_DIAGNOSTIC_EXTENSIONS = frozenset({".pdf", ".xlsx", ".docx", ".pptx", ".unknown", ".other"})
 PARSER_DIAGNOSTIC_OUTCOMES = frozenset({"parsed", "failed"})
+PDF_DIAGNOSTIC_OUTCOME_REASONS = frozenset(
+    {
+        "parsed_text",
+        "parsed_empty_password_encrypted",
+        "parsed_ocr",
+        "failed_encrypted",
+        "failed_no_text",
+        "failed_ocr_no_text",
+        "failed_corrupted",
+        "failed_ocr_unavailable",
+        "failed_ocr_timeout",
+        "failed_ocr_failed",
+        "failed_max_size",
+        "failed_max_pages",
+        "failed_other",
+    }
+)
 
 
 class UploadIngestionPhaseRecorder:
@@ -90,6 +107,8 @@ class UploadIngestionPhaseRecorder:
         self._parser_elapsed_by_outcome: dict[str, list[float]] = {}
         self._parser_counts_by_extension: Counter[str] = Counter()
         self._parser_counts_by_outcome: Counter[str] = Counter()
+        self._pdf_elapsed_by_outcome_reason: dict[str, list[float]] = {}
+        self._pdf_counts_by_outcome_reason: Counter[str] = Counter()
         self._lock = Lock()
 
     def record_phase(self, phase: UploadIngestionPhase | str, elapsed_seconds: float) -> None:
@@ -106,6 +125,7 @@ class UploadIngestionPhaseRecorder:
         extension: str,
         outcome: str,
         elapsed_seconds: float,
+        pdf_outcome_reason: str | None = None,
     ) -> None:
         """Record one aggregate parser diagnostic sample."""
         extension_value = _safe_parser_diagnostic_extension(extension)
@@ -116,6 +136,12 @@ class UploadIngestionPhaseRecorder:
             self._parser_counts_by_outcome[outcome_value] += 1
             self._parser_elapsed_by_extension.setdefault(extension_value, []).append(elapsed_value)
             self._parser_elapsed_by_outcome.setdefault(outcome_value, []).append(elapsed_value)
+            safe_pdf_reason = _safe_pdf_diagnostic_outcome_reason(pdf_outcome_reason)
+            if safe_pdf_reason is not None:
+                self._pdf_counts_by_outcome_reason[safe_pdf_reason] += 1
+                self._pdf_elapsed_by_outcome_reason.setdefault(safe_pdf_reason, []).append(
+                    elapsed_value
+                )
 
     def to_summary(self) -> dict[str, Any]:
         """Return aggregate-only phase timing buckets."""
@@ -132,6 +158,11 @@ class UploadIngestionPhaseRecorder:
             }
             parser_counts_by_extension = Counter(self._parser_counts_by_extension)
             parser_counts_by_outcome = Counter(self._parser_counts_by_outcome)
+            pdf_elapsed_by_outcome_reason = {
+                reason: list(values)
+                for reason, values in self._pdf_elapsed_by_outcome_reason.items()
+            }
+            pdf_counts_by_outcome_reason = Counter(self._pdf_counts_by_outcome_reason)
         observed = {phase: values for phase, values in phase_elapsed.items() if values}
         summary = {
             "enabled": True,
@@ -151,6 +182,8 @@ class UploadIngestionPhaseRecorder:
             counts_by_outcome=parser_counts_by_outcome,
             elapsed_by_extension=parser_elapsed_by_extension,
             elapsed_by_outcome=parser_elapsed_by_outcome,
+            pdf_counts_by_outcome_reason=pdf_counts_by_outcome_reason,
+            pdf_elapsed_by_outcome_reason=pdf_elapsed_by_outcome_reason,
         )
         if parser_diagnostics:
             summary["parser_diagnostics"] = parser_diagnostics
@@ -322,6 +355,7 @@ def _record_parser_diagnostics(
             extension=_parser_diagnostic_extension(filename),
             outcome=_parser_diagnostic_outcome(parse_result),
             elapsed_seconds=elapsed_seconds,
+            pdf_outcome_reason=_pdf_diagnostic_outcome_reason(parse_result),
         )
     except Exception as error:
         logger.warning(
@@ -353,19 +387,67 @@ def _parser_diagnostic_outcome(parse_result: ParseResult) -> str:
     return "parsed" if parse_result.success else "failed"
 
 
+def _pdf_diagnostic_outcome_reason(parse_result: ParseResult) -> str | None:
+    if parse_result.doc_type != "PDF":
+        return None
+    if parse_result.success:
+        reason = parse_result.private_diagnostics.get("pdf_diagnostic_reason")
+        if isinstance(reason, str):
+            return _safe_pdf_diagnostic_outcome_reason(reason)
+        if parse_result.metadata.get("ocr_performed") is True:
+            return "parsed_ocr"
+        return "parsed_text"
+    if not parse_result.errors:
+        return "failed_other"
+    return _pdf_failure_reason(parse_result.errors[0].code)
+
+
+def _pdf_failure_reason(code: ParseErrorCode) -> str:
+    if code == ParseErrorCode.ENCRYPTED_PDF:
+        return "failed_encrypted"
+    if code == ParseErrorCode.NO_TEXT_EXTRACTED:
+        return "failed_no_text"
+    if code == ParseErrorCode.OCR_NO_TEXT_EXTRACTED:
+        return "failed_ocr_no_text"
+    if code == ParseErrorCode.CORRUPTED_FILE:
+        return "failed_corrupted"
+    if code == ParseErrorCode.OCR_UNAVAILABLE:
+        return "failed_ocr_unavailable"
+    if code == ParseErrorCode.OCR_TIMEOUT:
+        return "failed_ocr_timeout"
+    if code == ParseErrorCode.OCR_FAILED:
+        return "failed_ocr_failed"
+    if code == ParseErrorCode.MAX_SIZE_EXCEEDED:
+        return "failed_max_size"
+    if code == ParseErrorCode.MAX_PAGES_EXCEEDED:
+        return "failed_max_pages"
+    return "failed_other"
+
+
+def _safe_pdf_diagnostic_outcome_reason(reason: str | None) -> str | None:
+    if not isinstance(reason, str):
+        return None
+    reason_value = reason.strip().lower()
+    if reason_value in PDF_DIAGNOSTIC_OUTCOME_REASONS:
+        return reason_value
+    return "failed_other"
+
+
 def _parser_diagnostics_summary(
     *,
     counts_by_extension: Counter[str],
     counts_by_outcome: Counter[str],
     elapsed_by_extension: dict[str, list[float]],
     elapsed_by_outcome: dict[str, list[float]],
+    pdf_counts_by_outcome_reason: Counter[str],
+    pdf_elapsed_by_outcome_reason: dict[str, list[float]],
 ) -> dict[str, Any]:
     if not counts_by_extension and not counts_by_outcome:
         return {}
     observed_extensions = {
         extension: values for extension, values in elapsed_by_extension.items() if values
     }
-    return {
+    summary: dict[str, Any] = {
         "counts_by_extension": dict(sorted(counts_by_extension.items())),
         "counts_by_outcome": dict(sorted(counts_by_outcome.items())),
         "parse_elapsed_by_extension": {
@@ -386,6 +468,38 @@ def _parser_diagnostics_summary(
             for extension, values in sorted(observed_extensions.items())
         },
         "observable_slowest_extension": _observable_slowest_phase(observed_extensions),
+    }
+    pdf_diagnostics = _pdf_diagnostics_summary(
+        counts_by_outcome_reason=pdf_counts_by_outcome_reason,
+        elapsed_by_outcome_reason=pdf_elapsed_by_outcome_reason,
+    )
+    if pdf_diagnostics:
+        summary["pdf_diagnostics"] = pdf_diagnostics
+    return summary
+
+
+def _pdf_diagnostics_summary(
+    *,
+    counts_by_outcome_reason: Counter[str],
+    elapsed_by_outcome_reason: dict[str, list[float]],
+) -> dict[str, Any]:
+    if not counts_by_outcome_reason:
+        return {}
+    observed = {reason: values for reason, values in elapsed_by_outcome_reason.items() if values}
+    return {
+        "counts_by_outcome_reason": dict(sorted(counts_by_outcome_reason.items())),
+        "parse_elapsed_by_outcome_reason": {
+            reason: _elapsed_bucket_counts(values) for reason, values in sorted(observed.items())
+        },
+        "parse_total_elapsed_bucket_by_outcome_reason": {
+            reason: _elapsed_seconds_bucket(sum(values))
+            for reason, values in sorted(observed.items())
+        },
+        "parse_max_elapsed_bucket_by_outcome_reason": {
+            reason: _elapsed_seconds_bucket(max(values))
+            for reason, values in sorted(observed.items())
+        },
+        "observable_slowest_outcome_reason": _observable_slowest_phase(observed),
     }
 
 

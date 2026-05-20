@@ -36,6 +36,11 @@ if TYPE_CHECKING:
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError, PdfStreamError
 
+PDF_DIAGNOSTIC_REASON_KEY = "pdf_diagnostic_reason"
+PDF_DIAGNOSTIC_PARSED_TEXT = "parsed_text"
+PDF_DIAGNOSTIC_PARSED_EMPTY_PASSWORD_ENCRYPTED = "parsed_empty_password_encrypted"
+PDF_DIAGNOSTIC_PARSED_OCR = "parsed_ocr"
+
 
 def _compute_content_hash(text: str) -> str:
     """Compute SHA-256 hash of text content."""
@@ -110,18 +115,21 @@ def parse_pdf(
             ],
         )
 
-    if reader.is_encrypted and not _decrypt_with_empty_password(reader):
-        return ParseResult(
-            doc_type="PDF",
-            success=False,
-            errors=[
-                ParseError(
-                    code=ParseErrorCode.ENCRYPTED_PDF,
-                    message="PDF is encrypted and cannot be parsed without password",
-                    details={},
-                )
-            ],
-        )
+    opened_with_empty_password = False
+    if reader.is_encrypted:
+        if not _decrypt_with_empty_password(reader):
+            return ParseResult(
+                doc_type="PDF",
+                success=False,
+                errors=[
+                    ParseError(
+                        code=ParseErrorCode.ENCRYPTED_PDF,
+                        message="PDF is encrypted and cannot be parsed without password",
+                        details={},
+                    )
+                ],
+            )
+        opened_with_empty_password = True
 
     total_pages = len(reader.pages)
     if total_pages > limits.max_pages:
@@ -197,6 +205,13 @@ def parse_pdf(
             "page_count": total_pages,
             "span_count": len(spans),
             "total_text_length": total_text_length,
+        },
+        private_diagnostics={
+            PDF_DIAGNOSTIC_REASON_KEY: (
+                PDF_DIAGNOSTIC_PARSED_EMPTY_PASSWORD_ENCRYPTED
+                if opened_with_empty_password
+                else PDF_DIAGNOSTIC_PARSED_TEXT
+            ),
         },
         warnings=warnings,
     )
@@ -318,4 +333,5 @@ def _parse_ocr_pages(
             "ocr_performed": True,
             "ocr_page_count": len(pages),
         },
+        private_diagnostics={PDF_DIAGNOSTIC_REASON_KEY: PDF_DIAGNOSTIC_PARSED_OCR},
     )

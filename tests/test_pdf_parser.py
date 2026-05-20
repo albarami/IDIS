@@ -11,6 +11,7 @@ Tests cover:
 from __future__ import annotations
 
 import io
+import json
 
 import pytest
 
@@ -104,6 +105,17 @@ class TestPDFParserSuccess:
         assert len(result.errors) == 0
         assert len(result.spans) >= 1
         assert result.metadata["page_count"] == 1
+        assert "pdf_diagnostic_reason" not in result.metadata
+        assert result.private_diagnostics["pdf_diagnostic_reason"] == "parsed_text"
+        public_result = json.dumps(result.to_dict(), sort_keys=True)
+        for forbidden in (
+            "private_diagnostics",
+            "pdf_diagnostic_reason",
+            "parsed_text",
+            "parsed_empty_password_encrypted",
+            "parsed_ocr",
+        ):
+            assert forbidden not in public_result
 
     def test_locator_contains_page_and_line(self) -> None:
         """Verify locators contain page and line (1-indexed integers)."""
@@ -242,6 +254,19 @@ class TestPDFParserFailClosed:
 
         assert result.success is True
         assert result.errors == []
+        assert "pdf_diagnostic_reason" not in result.metadata
+        assert (
+            result.private_diagnostics["pdf_diagnostic_reason"] == "parsed_empty_password_encrypted"
+        )
+        public_result = json.dumps(result.to_dict(), sort_keys=True)
+        for forbidden in (
+            "private_diagnostics",
+            "pdf_diagnostic_reason",
+            "parsed_text",
+            "parsed_empty_password_encrypted",
+            "parsed_ocr",
+        ):
+            assert forbidden not in public_result
         assert marker in " ".join(span.text_excerpt for span in result.spans)
 
     def test_user_password_encrypted_pdf_remains_blocked(self) -> None:

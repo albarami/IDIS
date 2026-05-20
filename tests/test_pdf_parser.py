@@ -104,6 +104,7 @@ class TestPDFParserSuccess:
         assert len(result.errors) == 0
         assert len(result.spans) >= 1
         assert result.metadata["page_count"] == 1
+        assert result.metadata["pdf_diagnostic_reason"] == "parsed_text"
 
     def test_locator_contains_page_and_line(self) -> None:
         """Verify locators contain page and line (1-indexed integers)."""
@@ -242,6 +243,7 @@ class TestPDFParserFailClosed:
 
         assert result.success is True
         assert result.errors == []
+        assert result.metadata["pdf_diagnostic_reason"] == "parsed_empty_password_encrypted"
         assert marker in " ".join(span.text_excerpt for span in result.spans)
 
     def test_user_password_encrypted_pdf_remains_blocked(self) -> None:

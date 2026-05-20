@@ -52,6 +52,23 @@ ELAPSED_BUCKETS = frozenset(
 )
 PARSER_DIAGNOSTIC_EXTENSIONS = frozenset({".pdf", ".xlsx", ".docx", ".pptx", ".unknown", ".other"})
 PARSER_DIAGNOSTIC_OUTCOMES = frozenset({"parsed", "failed"})
+PDF_DIAGNOSTIC_OUTCOME_REASONS = frozenset(
+    {
+        "parsed_text",
+        "parsed_empty_password_encrypted",
+        "parsed_ocr",
+        "failed_encrypted",
+        "failed_no_text",
+        "failed_ocr_no_text",
+        "failed_corrupted",
+        "failed_ocr_unavailable",
+        "failed_ocr_timeout",
+        "failed_ocr_failed",
+        "failed_max_size",
+        "failed_max_pages",
+        "failed_other",
+    }
+)
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
@@ -1145,6 +1162,10 @@ def _safe_parser_diagnostics(value: object) -> dict[str, Any]:
     if elapsed_by_outcome:
         safe["parse_elapsed_by_outcome"] = elapsed_by_outcome
 
+    pdf_diagnostics = _safe_pdf_diagnostics(value.get("pdf_diagnostics"))
+    if pdf_diagnostics:
+        safe["pdf_diagnostics"] = pdf_diagnostics
+
     total_by_extension = _safe_bucket_values_for_keys(
         value.get("parse_total_elapsed_bucket_by_extension"),
         allowed_keys=PARSER_DIAGNOSTIC_EXTENSIONS,
@@ -1160,6 +1181,42 @@ def _safe_parser_diagnostics(value: object) -> dict[str, Any]:
     slowest_extension = value.get("observable_slowest_extension")
     if isinstance(slowest_extension, str) and slowest_extension in PARSER_DIAGNOSTIC_EXTENSIONS:
         safe["observable_slowest_extension"] = slowest_extension
+    return safe
+
+
+def _safe_pdf_diagnostics(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    counts_by_outcome_reason = _safe_count_values(
+        value.get("counts_by_outcome_reason"),
+        allowed_keys=PDF_DIAGNOSTIC_OUTCOME_REASONS,
+    )
+    elapsed_by_outcome_reason = _safe_nested_bucket_counts(
+        value.get("parse_elapsed_by_outcome_reason"),
+        allowed_outer_keys=PDF_DIAGNOSTIC_OUTCOME_REASONS,
+    )
+    if not (counts_by_outcome_reason or elapsed_by_outcome_reason):
+        return {}
+    safe: dict[str, Any] = {}
+    if counts_by_outcome_reason:
+        safe["counts_by_outcome_reason"] = counts_by_outcome_reason
+    if elapsed_by_outcome_reason:
+        safe["parse_elapsed_by_outcome_reason"] = elapsed_by_outcome_reason
+    total_by_outcome_reason = _safe_bucket_values_for_keys(
+        value.get("parse_total_elapsed_bucket_by_outcome_reason"),
+        allowed_keys=PDF_DIAGNOSTIC_OUTCOME_REASONS,
+    )
+    if total_by_outcome_reason:
+        safe["parse_total_elapsed_bucket_by_outcome_reason"] = total_by_outcome_reason
+    max_by_outcome_reason = _safe_bucket_values_for_keys(
+        value.get("parse_max_elapsed_bucket_by_outcome_reason"),
+        allowed_keys=PDF_DIAGNOSTIC_OUTCOME_REASONS,
+    )
+    if max_by_outcome_reason:
+        safe["parse_max_elapsed_bucket_by_outcome_reason"] = max_by_outcome_reason
+    slowest_reason = value.get("observable_slowest_outcome_reason")
+    if isinstance(slowest_reason, str) and slowest_reason in PDF_DIAGNOSTIC_OUTCOME_REASONS:
+        safe["observable_slowest_outcome_reason"] = slowest_reason
     return safe
 
 

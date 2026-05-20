@@ -201,6 +201,13 @@ class _AggregateOnlyPhaseRecorder:
                 "parse_total_elapsed_bucket_by_extension": {".pdf": "under_1s"},
                 "parse_max_elapsed_bucket_by_extension": {".pdf": "under_1s"},
                 "observable_slowest_extension": ".pdf",
+                "pdf_diagnostics": {
+                    "counts_by_outcome_reason": {"parsed_text": 1},
+                    "parse_elapsed_by_outcome_reason": {"parsed_text": {"under_1s": 1}},
+                    "parse_total_elapsed_bucket_by_outcome_reason": {"parsed_text": "under_1s"},
+                    "parse_max_elapsed_bucket_by_outcome_reason": {"parsed_text": "under_1s"},
+                    "observable_slowest_outcome_reason": "parsed_text",
+                },
             },
         }
 
@@ -215,6 +222,12 @@ class _UnsafePhaseRecorder(_AggregateOnlyPhaseRecorder):
         summary["parser_diagnostics"]["counts_by_outcome"]["raw_text"] = 1
         summary["parser_diagnostics"]["parse_elapsed_by_extension"]["SECRET_PATH"] = {"under_1s": 1}
         summary["parser_diagnostics"]["parse_elapsed_by_outcome"]["text_excerpt"] = {"under_1s": 1}
+        summary["parser_diagnostics"]["pdf_diagnostics"]["counts_by_outcome_reason"][
+            "secret_pdf_reason"
+        ] = 1
+        summary["parser_diagnostics"]["pdf_diagnostics"]["parse_elapsed_by_outcome_reason"][
+            "SECRET_TEXT"
+        ] = {"under_1s": 1}
         return summary
 
 
@@ -815,6 +828,13 @@ def test_harness_upload_profile_exposes_safe_parser_diagnostics(
         "counts_by_extension": {".pdf": 1},
         "counts_by_outcome": {"parsed": 1},
         "observable_slowest_extension": ".pdf",
+        "pdf_diagnostics": {
+            "counts_by_outcome_reason": {"parsed_text": 1},
+            "observable_slowest_outcome_reason": "parsed_text",
+            "parse_elapsed_by_outcome_reason": {"parsed_text": {"under_1s": 1}},
+            "parse_max_elapsed_bucket_by_outcome_reason": {"parsed_text": "under_1s"},
+            "parse_total_elapsed_bucket_by_outcome_reason": {"parsed_text": "under_1s"},
+        },
         "parse_elapsed_by_extension": {".pdf": {"under_1s": 1}},
         "parse_elapsed_by_outcome": {"parsed": {"under_1s": 1}},
         "parse_max_elapsed_bucket_by_extension": {".pdf": "under_1s"},
@@ -853,6 +873,9 @@ def test_harness_filters_unsafe_internal_upload_phase_recorder_summary(
     assert "raw_text" not in internal_profile["parser_diagnostics"]["counts_by_outcome"]
     assert "SECRET_PATH" not in internal_profile["parser_diagnostics"]["parse_elapsed_by_extension"]
     assert "text_excerpt" not in internal_profile["parser_diagnostics"]["parse_elapsed_by_outcome"]
+    pdf_diagnostics = internal_profile["parser_diagnostics"]["pdf_diagnostics"]
+    assert "secret_pdf_reason" not in pdf_diagnostics["counts_by_outcome_reason"]
+    assert "SECRET_TEXT" not in pdf_diagnostics["parse_elapsed_by_outcome_reason"]
 
     encoded = json.dumps(summary, sort_keys=True)
     assert "SECRET_PATH" not in encoded

@@ -171,6 +171,20 @@ def _create_image_only_pdf() -> bytes:
     return buffer.getvalue()
 
 
+def _create_encrypted_pdf(*, credential_value: str) -> bytes:
+    """Create an encrypted PDF for ingestion parser diagnostics tests."""
+    from pypdf import PdfReader, PdfWriter
+
+    reader = PdfReader(io.BytesIO(_create_minimal_pdf()))
+    writer = PdfWriter()
+    for page in reader.pages:
+        writer.add_page(page)
+    writer.encrypt(credential_value, "slice49-owner")
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
 def _create_empty_docx() -> bytes:
     """Create a valid DOCX with no extractable text."""
     from docx import Document
@@ -557,6 +571,100 @@ class TestHappyPathPDF:
         assert "private-corrupt-board" not in encoded
         assert "PDF-private corrupt board contents" not in encoded
         assert "Revenue" not in encoded
+
+    def test_ingest_bytes_records_safe_pdf_diagnostics_by_outcome_reason(
+        self,
+        ingestion_service: Any,
+        ingestion_context: Any,
+        deal_id: UUID,
+    ) -> None:
+        """PDF diagnostics expose only aggregate safe outcome/reason buckets."""
+        recorder = UploadIngestionPhaseRecorder()
+        private_markers = [
+            "private-text-board-pack",
+            "private-no-text-scan",
+            "private-corrupt-board",
+            "private-locked-board",
+            "private-empty-password-board",
+        ]
+
+        parsed_text = ingestion_service.ingest_bytes(
+            ctx=ingestion_context,
+            deal_id=deal_id,
+            filename=f"{private_markers[0]}.pdf",
+            media_type="application/pdf",
+            data=_create_minimal_pdf(),
+            phase_recorder=recorder,
+        )
+        failed_no_text = ingestion_service.ingest_bytes(
+            ctx=ingestion_context,
+            deal_id=deal_id,
+            filename=f"{private_markers[1]}.pdf",
+            media_type="application/pdf",
+            data=_create_image_only_pdf(),
+            phase_recorder=recorder,
+        )
+        failed_corrupt = ingestion_service.ingest_bytes(
+            ctx=ingestion_context,
+            deal_id=deal_id,
+            filename=f"{private_markers[2]}.pdf",
+            media_type="application/pdf",
+            data=b"%PDF-private corrupt board contents",
+            phase_recorder=recorder,
+        )
+        failed_encrypted = ingestion_service.ingest_bytes(
+            ctx=ingestion_context,
+            deal_id=deal_id,
+            filename=f"{private_markers[3]}.pdf",
+            media_type="application/pdf",
+            data=_create_encrypted_pdf(credential_value="locked-fixture-value"),
+            phase_recorder=recorder,
+        )
+        parsed_empty_password = ingestion_service.ingest_bytes(
+            ctx=ingestion_context,
+            deal_id=deal_id,
+            filename=f"{private_markers[4]}.pdf",
+            media_type="application/pdf",
+            data=_create_encrypted_pdf(credential_value=""),
+            phase_recorder=recorder,
+        )
+
+        assert parsed_text.success is True
+        assert failed_no_text.success is False
+        assert failed_corrupt.success is False
+        assert failed_encrypted.success is False
+        assert parsed_empty_password.success is True
+
+        pdf_diagnostics = recorder.to_summary()["parser_diagnostics"]["pdf_diagnostics"]
+        assert pdf_diagnostics["counts_by_outcome_reason"] == {
+            "failed_corrupted": 1,
+            "failed_encrypted": 1,
+            "failed_no_text": 1,
+            "parsed_empty_password_encrypted": 1,
+            "parsed_text": 1,
+        }
+        assert sorted(pdf_diagnostics["parse_elapsed_by_outcome_reason"]) == [
+            "failed_corrupted",
+            "failed_encrypted",
+            "failed_no_text",
+            "parsed_empty_password_encrypted",
+            "parsed_text",
+        ]
+        assert pdf_diagnostics["observable_slowest_outcome_reason"] in {
+            "failed_corrupted",
+            "failed_encrypted",
+            "failed_no_text",
+            "parsed_empty_password_encrypted",
+            "parsed_text",
+        }
+
+        encoded = json.dumps(pdf_diagnostics, sort_keys=True)
+        for private_marker in private_markers:
+            assert private_marker not in encoded
+        assert "PDF-private corrupt board contents" not in encoded
+        assert "Test PDF content" not in encoded
+        assert "page_count" not in encoded
+        assert "span_count" not in encoded
 
     def test_ingest_bytes_ignores_private_phase_recorder_failures(
         self,

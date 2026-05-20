@@ -193,6 +193,15 @@ class _AggregateOnlyPhaseRecorder:
                 "audit": "under_1s",
             },
             "observable_slowest_phase": "parse",
+            "parser_diagnostics": {
+                "counts_by_extension": {".pdf": 1},
+                "counts_by_outcome": {"parsed": 1},
+                "parse_elapsed_by_extension": {".pdf": {"under_1s": 1}},
+                "parse_elapsed_by_outcome": {"parsed": {"under_1s": 1}},
+                "parse_total_elapsed_bucket_by_extension": {".pdf": "under_1s"},
+                "parse_max_elapsed_bucket_by_extension": {".pdf": "under_1s"},
+                "observable_slowest_extension": ".pdf",
+            },
         }
 
 
@@ -202,6 +211,10 @@ class _UnsafePhaseRecorder(_AggregateOnlyPhaseRecorder):
         summary["private_path"] = "C:/Private/SECRET_PATH"
         summary["phase_counts_by_elapsed_bucket"]["secret_filename.pdf"] = {"under_1s": 1}
         summary["phase_total_elapsed_bucket"]["raw_text"] = "under_1s"
+        summary["parser_diagnostics"]["counts_by_extension"]["secret_filename.pdf"] = 1
+        summary["parser_diagnostics"]["counts_by_outcome"]["raw_text"] = 1
+        summary["parser_diagnostics"]["parse_elapsed_by_extension"]["SECRET_PATH"] = {"under_1s": 1}
+        summary["parser_diagnostics"]["parse_elapsed_by_outcome"]["text_excerpt"] = {"under_1s": 1}
         return summary
 
 
@@ -783,6 +796,38 @@ def test_harness_upload_profile_exposes_internal_upload_api_phase_buckets(
     assert "PRIVATE_INTERNAL_PHASE" not in encoded
 
 
+def test_harness_upload_profile_exposes_safe_parser_diagnostics(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "real_example"
+    confidential_dir = root / "Private Parser Diagnostics Room"
+    confidential_dir.mkdir(parents=True)
+    (confidential_dir / "parser-secret.pdf").write_bytes(b"%PDF-1.4\nPRIVATE_PARSER\n%%EOF")
+    client = _FakeApiClientWithPhaseRecorder()
+
+    summary = run_real_example_full_run_harness(
+        RealExampleFullRunHarnessOptions(root=root, api_client=client)
+    )
+
+    assert len(client.uploads) == 1
+    parser_diagnostics = summary["upload_profile"]["internal_upload_api"]["parser_diagnostics"]
+    assert parser_diagnostics == {
+        "counts_by_extension": {".pdf": 1},
+        "counts_by_outcome": {"parsed": 1},
+        "observable_slowest_extension": ".pdf",
+        "parse_elapsed_by_extension": {".pdf": {"under_1s": 1}},
+        "parse_elapsed_by_outcome": {"parsed": {"under_1s": 1}},
+        "parse_max_elapsed_bucket_by_extension": {".pdf": "under_1s"},
+        "parse_total_elapsed_bucket_by_extension": {".pdf": "under_1s"},
+    }
+
+    encoded = json.dumps(summary, sort_keys=True)
+    assert str(root) not in encoded
+    assert "Private Parser Diagnostics" not in encoded
+    assert "parser-secret" not in encoded
+    assert "PRIVATE_PARSER" not in encoded
+
+
 def test_harness_filters_unsafe_internal_upload_phase_recorder_summary(
     tmp_path: Path,
 ) -> None:
@@ -802,6 +847,12 @@ def test_harness_filters_unsafe_internal_upload_phase_recorder_summary(
     assert "private_path" not in internal_profile
     assert "secret_filename.pdf" not in internal_profile["phase_counts_by_elapsed_bucket"]
     assert "raw_text" not in internal_profile["phase_total_elapsed_bucket"]
+    assert (
+        "secret_filename.pdf" not in internal_profile["parser_diagnostics"]["counts_by_extension"]
+    )
+    assert "raw_text" not in internal_profile["parser_diagnostics"]["counts_by_outcome"]
+    assert "SECRET_PATH" not in internal_profile["parser_diagnostics"]["parse_elapsed_by_extension"]
+    assert "text_excerpt" not in internal_profile["parser_diagnostics"]["parse_elapsed_by_outcome"]
 
     encoded = json.dumps(summary, sort_keys=True)
     assert "SECRET_PATH" not in encoded

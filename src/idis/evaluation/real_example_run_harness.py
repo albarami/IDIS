@@ -50,6 +50,8 @@ ELAPSED_BUCKETS = frozenset(
         "over_300s",
     }
 )
+PARSER_DIAGNOSTIC_EXTENSIONS = frozenset({".pdf", ".xlsx", ".docx", ".pptx", ".unknown", ".other"})
+PARSER_DIAGNOSTIC_OUTCOMES = frozenset({"parsed", "failed"})
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
@@ -1069,6 +1071,9 @@ def _safe_internal_upload_api_summary(summary: object) -> dict[str, Any] | None:
     slowest_phase = summary.get("observable_slowest_phase")
     if isinstance(slowest_phase, str) and slowest_phase in INTERNAL_UPLOAD_API_PHASES:
         safe_summary["observable_slowest_phase"] = slowest_phase
+    parser_diagnostics = _safe_parser_diagnostics(summary.get("parser_diagnostics"))
+    if parser_diagnostics:
+        safe_summary["parser_diagnostics"] = parser_diagnostics
     return safe_summary
 
 
@@ -1102,6 +1107,111 @@ def _safe_phase_bucket_values(value: object) -> dict[str, str]:
         for phase, bucket in value.items()
         if isinstance(phase, str)
         and phase in INTERNAL_UPLOAD_API_PHASES
+        and isinstance(bucket, str)
+        and bucket in ELAPSED_BUCKETS
+    }
+    return dict(sorted(safe.items()))
+
+
+def _safe_parser_diagnostics(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    counts_by_extension = _safe_count_values(
+        value.get("counts_by_extension"),
+        allowed_keys=PARSER_DIAGNOSTIC_EXTENSIONS,
+    )
+    counts_by_outcome = _safe_count_values(
+        value.get("counts_by_outcome"),
+        allowed_keys=PARSER_DIAGNOSTIC_OUTCOMES,
+    )
+    elapsed_by_extension = _safe_nested_bucket_counts(
+        value.get("parse_elapsed_by_extension"),
+        allowed_outer_keys=PARSER_DIAGNOSTIC_EXTENSIONS,
+    )
+    elapsed_by_outcome = _safe_nested_bucket_counts(
+        value.get("parse_elapsed_by_outcome"),
+        allowed_outer_keys=PARSER_DIAGNOSTIC_OUTCOMES,
+    )
+    if not (counts_by_extension or counts_by_outcome or elapsed_by_extension or elapsed_by_outcome):
+        return {}
+
+    safe: dict[str, Any] = {}
+    if counts_by_extension:
+        safe["counts_by_extension"] = counts_by_extension
+    if counts_by_outcome:
+        safe["counts_by_outcome"] = counts_by_outcome
+    if elapsed_by_extension:
+        safe["parse_elapsed_by_extension"] = elapsed_by_extension
+    if elapsed_by_outcome:
+        safe["parse_elapsed_by_outcome"] = elapsed_by_outcome
+
+    total_by_extension = _safe_bucket_values_for_keys(
+        value.get("parse_total_elapsed_bucket_by_extension"),
+        allowed_keys=PARSER_DIAGNOSTIC_EXTENSIONS,
+    )
+    if total_by_extension:
+        safe["parse_total_elapsed_bucket_by_extension"] = total_by_extension
+    max_by_extension = _safe_bucket_values_for_keys(
+        value.get("parse_max_elapsed_bucket_by_extension"),
+        allowed_keys=PARSER_DIAGNOSTIC_EXTENSIONS,
+    )
+    if max_by_extension:
+        safe["parse_max_elapsed_bucket_by_extension"] = max_by_extension
+    slowest_extension = value.get("observable_slowest_extension")
+    if isinstance(slowest_extension, str) and slowest_extension in PARSER_DIAGNOSTIC_EXTENSIONS:
+        safe["observable_slowest_extension"] = slowest_extension
+    return safe
+
+
+def _safe_count_values(value: object, *, allowed_keys: frozenset[str]) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    safe = {
+        key: count
+        for key, count in value.items()
+        if isinstance(key, str) and key in allowed_keys and isinstance(count, int) and count >= 0
+    }
+    return dict(sorted(safe.items()))
+
+
+def _safe_nested_bucket_counts(
+    value: object,
+    *,
+    allowed_outer_keys: frozenset[str],
+) -> dict[str, dict[str, int]]:
+    if not isinstance(value, dict):
+        return {}
+    safe: dict[str, dict[str, int]] = {}
+    for outer_key, bucket_counts in value.items():
+        if not isinstance(outer_key, str) or outer_key not in allowed_outer_keys:
+            continue
+        if not isinstance(bucket_counts, dict):
+            continue
+        safe_counts = {
+            bucket: count
+            for bucket, count in bucket_counts.items()
+            if isinstance(bucket, str)
+            and bucket in ELAPSED_BUCKETS
+            and isinstance(count, int)
+            and count >= 0
+        }
+        if safe_counts:
+            safe[outer_key] = dict(sorted(safe_counts.items()))
+    return dict(sorted(safe.items()))
+
+
+def _safe_bucket_values_for_keys(
+    value: object,
+    *,
+    allowed_keys: frozenset[str],
+) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    safe = {
+        key: bucket
+        for key, bucket in value.items()
+        if isinstance(key, str)
+        and key in allowed_keys
         and isinstance(bucket, str)
         and bucket in ELAPSED_BUCKETS
     }

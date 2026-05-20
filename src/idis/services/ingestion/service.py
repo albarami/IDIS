@@ -75,6 +75,8 @@ class UploadIngestionPhase(StrEnum):
 
 
 UPLOAD_INGESTION_PHASES = tuple(phase.value for phase in UploadIngestionPhase)
+PARSER_DIAGNOSTIC_EXTENSIONS = frozenset({".pdf", ".xlsx", ".docx", ".pptx", ".unknown", ".other"})
+PARSER_DIAGNOSTIC_OUTCOMES = frozenset({"parsed", "failed"})
 
 
 class UploadIngestionPhaseRecorder:
@@ -84,6 +86,10 @@ class UploadIngestionPhaseRecorder:
         self._phase_elapsed_seconds: dict[str, list[float]] = {
             phase: [] for phase in UPLOAD_INGESTION_PHASES
         }
+        self._parser_elapsed_by_extension: dict[str, list[float]] = {}
+        self._parser_elapsed_by_outcome: dict[str, list[float]] = {}
+        self._parser_counts_by_extension: Counter[str] = Counter()
+        self._parser_counts_by_outcome: Counter[str] = Counter()
         self._lock = Lock()
 
     def record_phase(self, phase: UploadIngestionPhase | str, elapsed_seconds: float) -> None:
@@ -94,14 +100,40 @@ class UploadIngestionPhaseRecorder:
         with self._lock:
             self._phase_elapsed_seconds[phase_value].append(max(0.0, elapsed_seconds))
 
+    def record_parser_result(
+        self,
+        *,
+        extension: str,
+        outcome: str,
+        elapsed_seconds: float,
+    ) -> None:
+        """Record one aggregate parser diagnostic sample."""
+        extension_value = _safe_parser_diagnostic_extension(extension)
+        outcome_value = outcome if outcome in PARSER_DIAGNOSTIC_OUTCOMES else "failed"
+        elapsed_value = max(0.0, elapsed_seconds)
+        with self._lock:
+            self._parser_counts_by_extension[extension_value] += 1
+            self._parser_counts_by_outcome[outcome_value] += 1
+            self._parser_elapsed_by_extension.setdefault(extension_value, []).append(elapsed_value)
+            self._parser_elapsed_by_outcome.setdefault(outcome_value, []).append(elapsed_value)
+
     def to_summary(self) -> dict[str, Any]:
         """Return aggregate-only phase timing buckets."""
         with self._lock:
             phase_elapsed = {
                 phase: list(values) for phase, values in self._phase_elapsed_seconds.items()
             }
+            parser_elapsed_by_extension = {
+                extension: list(values)
+                for extension, values in self._parser_elapsed_by_extension.items()
+            }
+            parser_elapsed_by_outcome = {
+                outcome: list(values) for outcome, values in self._parser_elapsed_by_outcome.items()
+            }
+            parser_counts_by_extension = Counter(self._parser_counts_by_extension)
+            parser_counts_by_outcome = Counter(self._parser_counts_by_outcome)
         observed = {phase: values for phase, values in phase_elapsed.items() if values}
-        return {
+        summary = {
             "enabled": True,
             "phase_counts_by_elapsed_bucket": {
                 phase: _elapsed_bucket_counts(values) for phase, values in observed.items()
@@ -114,6 +146,15 @@ class UploadIngestionPhaseRecorder:
             },
             "observable_slowest_phase": _observable_slowest_phase(observed),
         }
+        parser_diagnostics = _parser_diagnostics_summary(
+            counts_by_extension=parser_counts_by_extension,
+            counts_by_outcome=parser_counts_by_outcome,
+            elapsed_by_extension=parser_elapsed_by_extension,
+            elapsed_by_outcome=parser_elapsed_by_outcome,
+        )
+        if parser_diagnostics:
+            summary["parser_diagnostics"] = parser_diagnostics
+        return summary
 
 
 @dataclass(frozen=True)
@@ -255,6 +296,97 @@ def _record_upload_phase(
             phase.value,
             type(error).__name__,
         )
+
+
+def _record_parser_diagnostics(
+    phase_recorder: object | None,
+    *,
+    filename: str | None,
+    parse_result: ParseResult,
+    elapsed_seconds: float,
+) -> None:
+    if phase_recorder is None:
+        return
+    try:
+        record_parser_result = getattr(phase_recorder, "record_parser_result", None)
+    except Exception as error:
+        logger.warning(
+            "Private parser diagnostics recorder lookup failed: exception_type=%s",
+            type(error).__name__,
+        )
+        return
+    if not callable(record_parser_result):
+        return
+    try:
+        record_parser_result(
+            extension=_parser_diagnostic_extension(filename),
+            outcome=_parser_diagnostic_outcome(parse_result),
+            elapsed_seconds=elapsed_seconds,
+        )
+    except Exception as error:
+        logger.warning(
+            "Private parser diagnostics recorder failed: exception_type=%s",
+            type(error).__name__,
+        )
+
+
+def _parser_diagnostic_extension(filename: str | None) -> str:
+    if not filename:
+        return ".unknown"
+    basename = filename.replace("\\", "/").rsplit("/", 1)[-1].strip()
+    if "." not in basename:
+        return ".unknown"
+    extension = f".{basename.rsplit('.', 1)[-1].lower()}"
+    return _safe_parser_diagnostic_extension(extension)
+
+
+def _safe_parser_diagnostic_extension(extension: str) -> str:
+    extension_value = extension.strip().lower()
+    if not extension_value.startswith("."):
+        extension_value = f".{extension_value}"
+    if extension_value in PARSER_DIAGNOSTIC_EXTENSIONS:
+        return extension_value
+    return ".other"
+
+
+def _parser_diagnostic_outcome(parse_result: ParseResult) -> str:
+    return "parsed" if parse_result.success else "failed"
+
+
+def _parser_diagnostics_summary(
+    *,
+    counts_by_extension: Counter[str],
+    counts_by_outcome: Counter[str],
+    elapsed_by_extension: dict[str, list[float]],
+    elapsed_by_outcome: dict[str, list[float]],
+) -> dict[str, Any]:
+    if not counts_by_extension and not counts_by_outcome:
+        return {}
+    observed_extensions = {
+        extension: values for extension, values in elapsed_by_extension.items() if values
+    }
+    return {
+        "counts_by_extension": dict(sorted(counts_by_extension.items())),
+        "counts_by_outcome": dict(sorted(counts_by_outcome.items())),
+        "parse_elapsed_by_extension": {
+            extension: _elapsed_bucket_counts(values)
+            for extension, values in sorted(observed_extensions.items())
+        },
+        "parse_elapsed_by_outcome": {
+            outcome: _elapsed_bucket_counts(values)
+            for outcome, values in sorted(elapsed_by_outcome.items())
+            if values
+        },
+        "parse_total_elapsed_bucket_by_extension": {
+            extension: _elapsed_seconds_bucket(sum(values))
+            for extension, values in sorted(observed_extensions.items())
+        },
+        "parse_max_elapsed_bucket_by_extension": {
+            extension: _elapsed_seconds_bucket(max(values))
+            for extension, values in sorted(observed_extensions.items())
+        },
+        "observable_slowest_extension": _observable_slowest_phase(observed_extensions),
+    }
 
 
 def _elapsed_seconds_bucket(elapsed_seconds: float | None) -> str | None:
@@ -462,6 +594,12 @@ class IngestionService:
             parse_result = self._parse_document(data, filename, media_type)
         finally:
             _record_upload_phase(phase_recorder, UploadIngestionPhase.PARSE, phase_started_at)
+        _record_parser_diagnostics(
+            phase_recorder,
+            filename=filename,
+            parse_result=parse_result,
+            elapsed_seconds=time.monotonic() - phase_started_at,
+        )
 
         artifact_id = uuid4()
         document_id = uuid4()

@@ -22,7 +22,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from idis.services.ingestion.service import RouteValidatedSha256
+from idis.services.ingestion.service import RouteValidatedSha256, UploadIngestionPhaseRecorder
 
 
 class _RecordingPhaseRecorder:
@@ -503,6 +503,60 @@ class TestHappyPathPDF:
         assert "private-phase-source" not in encoded_records
         assert "PDF-1.4" not in encoded_records
         assert "Hello IDIS" not in encoded_records
+
+    def test_ingest_bytes_records_safe_parser_diagnostics_by_extension_and_outcome(
+        self,
+        ingestion_service: Any,
+        ingestion_context: Any,
+        deal_id: UUID,
+    ) -> None:
+        """Parser diagnostics expose only aggregate extension/outcome timing buckets."""
+        recorder = UploadIngestionPhaseRecorder()
+        private_pdf_name = "private-board-pack.pdf"
+        private_xlsx_name = "private-financial-model.xlsx"
+        private_corrupt_name = "private-corrupt-board.pdf"
+
+        parsed_pdf = ingestion_service.ingest_bytes(
+            ctx=ingestion_context,
+            deal_id=deal_id,
+            filename=private_pdf_name,
+            media_type="application/pdf",
+            data=_create_minimal_pdf(),
+            phase_recorder=recorder,
+        )
+        parsed_xlsx = ingestion_service.ingest_bytes(
+            ctx=ingestion_context,
+            deal_id=deal_id,
+            filename=private_xlsx_name,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            data=_create_minimal_xlsx(),
+            phase_recorder=recorder,
+        )
+        failed_pdf = ingestion_service.ingest_bytes(
+            ctx=ingestion_context,
+            deal_id=deal_id,
+            filename=private_corrupt_name,
+            media_type="application/pdf",
+            data=b"%PDF-private corrupt board contents",
+            phase_recorder=recorder,
+        )
+
+        assert parsed_pdf.success is True
+        assert parsed_xlsx.success is True
+        assert failed_pdf.success is False
+        parser_diagnostics = recorder.to_summary()["parser_diagnostics"]
+        assert parser_diagnostics["counts_by_extension"] == {".pdf": 2, ".xlsx": 1}
+        assert parser_diagnostics["counts_by_outcome"] == {"failed": 1, "parsed": 2}
+        assert sorted(parser_diagnostics["parse_elapsed_by_extension"]) == [".pdf", ".xlsx"]
+        assert sorted(parser_diagnostics["parse_elapsed_by_outcome"]) == ["failed", "parsed"]
+        assert parser_diagnostics["observable_slowest_extension"] in {".pdf", ".xlsx"}
+
+        encoded = json.dumps(parser_diagnostics, sort_keys=True)
+        assert "private-board-pack" not in encoded
+        assert "private-financial-model" not in encoded
+        assert "private-corrupt-board" not in encoded
+        assert "PDF-private corrupt board contents" not in encoded
+        assert "Revenue" not in encoded
 
     def test_ingest_bytes_ignores_private_phase_recorder_failures(
         self,

@@ -40,7 +40,7 @@ from idis.compliance.byok import BYOKPolicyRegistry, configure_key
 from idis.idempotency.store import SqliteIdempotencyStore
 from idis.models.document import ParseStatus
 from idis.services.ingestion import IngestionService
-from idis.services.ingestion.service import IngestionResult
+from idis.services.ingestion.service import IngestionResult, UploadIngestionPhaseRecorder
 from idis.storage.compliant_store import ComplianceEnforcedStore
 from idis.storage.filesystem_store import FilesystemObjectStore
 
@@ -485,6 +485,81 @@ class TestUploadDocumentBytes:
         assert "private-route-phase" not in encoded_records
         assert "PDF-1.4" not in encoded_records
         assert "Hello IDIS" not in encoded_records
+
+    def test_upload_route_records_private_parser_diagnostics_without_response_expansion(
+        self,
+        _wired_app_context: dict[str, Any],
+        api_key_a: str,
+        deal_id: str,
+    ) -> None:
+        """Parser diagnostics stay private, aggregate-only, and route-internal."""
+        client = _wired_app_context["client"]
+        recorder = UploadIngestionPhaseRecorder()
+        client.app.state.upload_ingestion_phase_recorder = recorder
+        pdf_data = _create_minimal_pdf()
+
+        response = client.post(
+            f"/v1/deals/{deal_id}/documents/upload",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/octet-stream",
+            },
+            params={
+                "filename": "private-parser-diagnostic.pdf",
+                "doc_type": "DATA_ROOM_FILE",
+                "source_system": "api-upload",
+            },
+            content=pdf_data,
+        )
+
+        body = response.json()
+        assert response.status_code == 201
+        assert "upload_profile" not in body
+        assert "internal_upload_api" not in body
+        assert "parser_diagnostics" not in body
+
+        parser_diagnostics = recorder.to_summary()["parser_diagnostics"]
+        assert parser_diagnostics["counts_by_extension"] == {".pdf": 1}
+        assert parser_diagnostics["counts_by_outcome"] == {"parsed": 1}
+        assert parser_diagnostics["parse_elapsed_by_extension"] == {".pdf": {"under_1s": 1}}
+        assert parser_diagnostics["parse_elapsed_by_outcome"] == {"parsed": {"under_1s": 1}}
+
+        encoded = json.dumps(parser_diagnostics, sort_keys=True)
+        assert "private-parser-diagnostic" not in encoded
+        assert "PDF-1.4" not in encoded
+        assert "Test PDF content" not in encoded
+
+    def test_upload_route_rejects_unsupported_bytes_without_parser_diagnostics(
+        self,
+        _wired_app_context: dict[str, Any],
+        api_key_a: str,
+        deal_id: str,
+    ) -> None:
+        """Unsupported/deferred upload bodies do not enter parser timing diagnostics."""
+        client = _wired_app_context["client"]
+        recorder = UploadIngestionPhaseRecorder()
+        client.app.state.upload_ingestion_phase_recorder = recorder
+
+        response = client.post(
+            f"/v1/deals/{deal_id}/documents/upload",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/octet-stream",
+            },
+            params={
+                "filename": "private-unsupported.pdf",
+                "doc_type": "DATA_ROOM_FILE",
+                "source_system": "api-upload",
+            },
+            content=b"private unsupported bytes",
+        )
+
+        assert response.status_code == 400
+        summary = recorder.to_summary()
+        assert "parser_diagnostics" not in summary
+        encoded = json.dumps(summary, sort_keys=True)
+        assert "private-unsupported" not in encoded
+        assert "private unsupported bytes" not in encoded
 
     def test_upload_route_ignores_private_phase_recorder_failures(
         self,

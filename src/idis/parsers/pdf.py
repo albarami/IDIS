@@ -205,6 +205,8 @@ def parse_pdf(
             "page_count": total_pages,
             "span_count": len(spans),
             "total_text_length": total_text_length,
+        },
+        private_diagnostics={
             PDF_DIAGNOSTIC_REASON_KEY: (
                 PDF_DIAGNOSTIC_PARSED_EMPTY_PASSWORD_ENCRYPTED
                 if opened_with_empty_password
@@ -330,6 +332,6 @@ def _parse_ocr_pages(
             "total_text_length": total_text_length,
             "ocr_performed": True,
             "ocr_page_count": len(pages),
-            PDF_DIAGNOSTIC_REASON_KEY: PDF_DIAGNOSTIC_PARSED_OCR,
         },
+        private_diagnostics={PDF_DIAGNOSTIC_REASON_KEY: PDF_DIAGNOSTIC_PARSED_OCR},
     )

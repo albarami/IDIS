@@ -391,7 +391,7 @@ def _pdf_diagnostic_outcome_reason(parse_result: ParseResult) -> str | None:
     if parse_result.doc_type != "PDF":
         return None
     if parse_result.success:
-        reason = parse_result.metadata.get("pdf_diagnostic_reason")
+        reason = parse_result.private_diagnostics.get("pdf_diagnostic_reason")
         if isinstance(reason, str):
             return _safe_pdf_diagnostic_outcome_reason(reason)
         if parse_result.metadata.get("ocr_performed") is True:

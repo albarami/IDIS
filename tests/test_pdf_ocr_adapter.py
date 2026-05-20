@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import tempfile
 from pathlib import Path
 from uuid import UUID
@@ -118,7 +119,17 @@ def test_ocr_enabled_adapter_success_creates_deterministic_page_text_spans() -> 
     assert first.errors == []
     assert first.metadata["ocr_performed"] is True
     assert first.metadata["ocr_page_count"] == 2
-    assert first.metadata["pdf_diagnostic_reason"] == "parsed_ocr"
+    assert "pdf_diagnostic_reason" not in first.metadata
+    assert first.private_diagnostics["pdf_diagnostic_reason"] == "parsed_ocr"
+    public_result = json.dumps(first.to_dict(), sort_keys=True)
+    for forbidden in (
+        "private_diagnostics",
+        "pdf_diagnostic_reason",
+        "parsed_text",
+        "parsed_empty_password_encrypted",
+        "parsed_ocr",
+    ):
+        assert forbidden not in public_result
     assert [span.span_type for span in first.spans] == ["PAGE_TEXT", "PAGE_TEXT", "PAGE_TEXT"]
     assert [span.locator for span in first.spans] == [
         {"page": 1, "line": 1, "source": "ocr"},

@@ -69,6 +69,14 @@ PDF_DIAGNOSTIC_OUTCOME_REASONS = frozenset(
         "failed_other",
     }
 )
+PDF_PARSE_SUBPHASES = frozenset(
+    {
+        "reader_init",
+        "decrypt_empty_password",
+        "page_count",
+        "text_extraction/span_build",
+    }
+)
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
@@ -1214,6 +1222,28 @@ def _safe_pdf_diagnostics(value: object) -> dict[str, Any]:
     )
     if max_by_outcome_reason:
         safe["parse_max_elapsed_bucket_by_outcome_reason"] = max_by_outcome_reason
+    subphase_elapsed_by_outcome_reason = _safe_pdf_subphase_nested_bucket_counts(
+        value.get("parse_subphase_elapsed_by_outcome_reason")
+    )
+    if subphase_elapsed_by_outcome_reason:
+        safe["parse_subphase_elapsed_by_outcome_reason"] = subphase_elapsed_by_outcome_reason
+    subphase_total_by_outcome_reason = _safe_pdf_subphase_bucket_values(
+        value.get("parse_subphase_total_elapsed_bucket_by_outcome_reason")
+    )
+    if subphase_total_by_outcome_reason:
+        safe["parse_subphase_total_elapsed_bucket_by_outcome_reason"] = (
+            subphase_total_by_outcome_reason
+        )
+    subphase_max_by_outcome_reason = _safe_pdf_subphase_bucket_values(
+        value.get("parse_subphase_max_elapsed_bucket_by_outcome_reason")
+    )
+    if subphase_max_by_outcome_reason:
+        safe["parse_subphase_max_elapsed_bucket_by_outcome_reason"] = subphase_max_by_outcome_reason
+    slowest_subphase_by_outcome_reason = _safe_pdf_slowest_subphase_by_outcome_reason(
+        value.get("observable_slowest_subphase_by_outcome_reason")
+    )
+    if slowest_subphase_by_outcome_reason:
+        safe["observable_slowest_subphase_by_outcome_reason"] = slowest_subphase_by_outcome_reason
     slowest_reason = value.get("observable_slowest_outcome_reason")
     if isinstance(slowest_reason, str) and slowest_reason in PDF_DIAGNOSTIC_OUTCOME_REASONS:
         safe["observable_slowest_outcome_reason"] = slowest_reason
@@ -1271,6 +1301,72 @@ def _safe_bucket_values_for_keys(
         and key in allowed_keys
         and isinstance(bucket, str)
         and bucket in ELAPSED_BUCKETS
+    }
+    return dict(sorted(safe.items()))
+
+
+def _safe_pdf_subphase_nested_bucket_counts(value: object) -> dict[str, dict[str, dict[str, int]]]:
+    if not isinstance(value, dict):
+        return {}
+    safe: dict[str, dict[str, dict[str, int]]] = {}
+    for reason, subphase_values in value.items():
+        if not isinstance(reason, str) or reason not in PDF_DIAGNOSTIC_OUTCOME_REASONS:
+            continue
+        if not isinstance(subphase_values, dict):
+            continue
+        safe_subphases: dict[str, dict[str, int]] = {}
+        for subphase, bucket_counts in subphase_values.items():
+            if not isinstance(subphase, str) or subphase not in PDF_PARSE_SUBPHASES:
+                continue
+            if not isinstance(bucket_counts, dict):
+                continue
+            safe_counts = {
+                bucket: count
+                for bucket, count in bucket_counts.items()
+                if isinstance(bucket, str)
+                and bucket in ELAPSED_BUCKETS
+                and isinstance(count, int)
+                and count >= 0
+            }
+            if safe_counts:
+                safe_subphases[subphase] = dict(sorted(safe_counts.items()))
+        if safe_subphases:
+            safe[reason] = dict(sorted(safe_subphases.items()))
+    return dict(sorted(safe.items()))
+
+
+def _safe_pdf_subphase_bucket_values(value: object) -> dict[str, dict[str, str]]:
+    if not isinstance(value, dict):
+        return {}
+    safe: dict[str, dict[str, str]] = {}
+    for reason, subphase_values in value.items():
+        if not isinstance(reason, str) or reason not in PDF_DIAGNOSTIC_OUTCOME_REASONS:
+            continue
+        if not isinstance(subphase_values, dict):
+            continue
+        safe_subphases = {
+            subphase: bucket
+            for subphase, bucket in subphase_values.items()
+            if isinstance(subphase, str)
+            and subphase in PDF_PARSE_SUBPHASES
+            and isinstance(bucket, str)
+            and bucket in ELAPSED_BUCKETS
+        }
+        if safe_subphases:
+            safe[reason] = dict(sorted(safe_subphases.items()))
+    return dict(sorted(safe.items()))
+
+
+def _safe_pdf_slowest_subphase_by_outcome_reason(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    safe = {
+        reason: subphase
+        for reason, subphase in value.items()
+        if isinstance(reason, str)
+        and reason in PDF_DIAGNOSTIC_OUTCOME_REASONS
+        and isinstance(subphase, str)
+        and subphase in PDF_PARSE_SUBPHASES
     }
     return dict(sorted(safe.items()))
 

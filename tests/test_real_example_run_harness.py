@@ -206,6 +206,30 @@ class _AggregateOnlyPhaseRecorder:
                     "parse_elapsed_by_outcome_reason": {"parsed_text": {"under_1s": 1}},
                     "parse_total_elapsed_bucket_by_outcome_reason": {"parsed_text": "under_1s"},
                     "parse_max_elapsed_bucket_by_outcome_reason": {"parsed_text": "under_1s"},
+                    "parse_subphase_elapsed_by_outcome_reason": {
+                        "parsed_text": {
+                            "reader_init": {"under_1s": 1},
+                            "page_count": {"under_1s": 1},
+                            "text_extraction/span_build": {"under_1s": 1},
+                        }
+                    },
+                    "parse_subphase_total_elapsed_bucket_by_outcome_reason": {
+                        "parsed_text": {
+                            "reader_init": "under_1s",
+                            "page_count": "under_1s",
+                            "text_extraction/span_build": "under_1s",
+                        }
+                    },
+                    "parse_subphase_max_elapsed_bucket_by_outcome_reason": {
+                        "parsed_text": {
+                            "reader_init": "under_1s",
+                            "page_count": "under_1s",
+                            "text_extraction/span_build": "under_1s",
+                        }
+                    },
+                    "observable_slowest_subphase_by_outcome_reason": {
+                        "parsed_text": "text_extraction/span_build"
+                    },
                     "observable_slowest_outcome_reason": "parsed_text",
                 },
             },
@@ -228,6 +252,18 @@ class _UnsafePhaseRecorder(_AggregateOnlyPhaseRecorder):
         summary["parser_diagnostics"]["pdf_diagnostics"]["parse_elapsed_by_outcome_reason"][
             "SECRET_TEXT"
         ] = {"under_1s": 1}
+        summary["parser_diagnostics"]["pdf_diagnostics"][
+            "parse_subphase_elapsed_by_outcome_reason"
+        ]["parsed_text"]["secret_subphase"] = {"under_1s": 1}
+        summary["parser_diagnostics"]["pdf_diagnostics"][
+            "parse_subphase_elapsed_by_outcome_reason"
+        ]["SECRET_REASON"] = {"reader_init": {"under_1s": 1}}
+        summary["parser_diagnostics"]["pdf_diagnostics"][
+            "parse_subphase_total_elapsed_bucket_by_outcome_reason"
+        ]["parsed_text"]["raw_text"] = "under_1s"
+        summary["parser_diagnostics"]["pdf_diagnostics"][
+            "observable_slowest_subphase_by_outcome_reason"
+        ]["parsed_text"] = "SECRET_SUBPHASE"
         return summary
 
 
@@ -831,8 +867,32 @@ def test_harness_upload_profile_exposes_safe_parser_diagnostics(
         "pdf_diagnostics": {
             "counts_by_outcome_reason": {"parsed_text": 1},
             "observable_slowest_outcome_reason": "parsed_text",
+            "observable_slowest_subphase_by_outcome_reason": {
+                "parsed_text": "text_extraction/span_build"
+            },
             "parse_elapsed_by_outcome_reason": {"parsed_text": {"under_1s": 1}},
             "parse_max_elapsed_bucket_by_outcome_reason": {"parsed_text": "under_1s"},
+            "parse_subphase_elapsed_by_outcome_reason": {
+                "parsed_text": {
+                    "page_count": {"under_1s": 1},
+                    "reader_init": {"under_1s": 1},
+                    "text_extraction/span_build": {"under_1s": 1},
+                }
+            },
+            "parse_subphase_max_elapsed_bucket_by_outcome_reason": {
+                "parsed_text": {
+                    "page_count": "under_1s",
+                    "reader_init": "under_1s",
+                    "text_extraction/span_build": "under_1s",
+                }
+            },
+            "parse_subphase_total_elapsed_bucket_by_outcome_reason": {
+                "parsed_text": {
+                    "page_count": "under_1s",
+                    "reader_init": "under_1s",
+                    "text_extraction/span_build": "under_1s",
+                }
+            },
             "parse_total_elapsed_bucket_by_outcome_reason": {"parsed_text": "under_1s"},
         },
         "parse_elapsed_by_extension": {".pdf": {"under_1s": 1}},
@@ -876,6 +936,13 @@ def test_harness_filters_unsafe_internal_upload_phase_recorder_summary(
     pdf_diagnostics = internal_profile["parser_diagnostics"]["pdf_diagnostics"]
     assert "secret_pdf_reason" not in pdf_diagnostics["counts_by_outcome_reason"]
     assert "SECRET_TEXT" not in pdf_diagnostics["parse_elapsed_by_outcome_reason"]
+    subphase_elapsed = pdf_diagnostics["parse_subphase_elapsed_by_outcome_reason"]
+    assert "SECRET_REASON" not in subphase_elapsed
+    assert "secret_subphase" not in subphase_elapsed["parsed_text"]
+    subphase_totals = pdf_diagnostics["parse_subphase_total_elapsed_bucket_by_outcome_reason"]
+    assert "raw_text" not in subphase_totals["parsed_text"]
+    slowest_subphase = pdf_diagnostics.get("observable_slowest_subphase_by_outcome_reason", {})
+    assert slowest_subphase.get("parsed_text") != "SECRET_SUBPHASE"
 
     encoded = json.dumps(summary, sort_keys=True)
     assert "SECRET_PATH" not in encoded

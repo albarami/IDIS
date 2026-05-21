@@ -20,8 +20,8 @@ from idis.parsers.pdf import parse_pdf
 
 try:
     from pypdf import PdfReader, PdfWriter
-    from reportlab.lib.pagesizes import letter
-    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import letter  # type: ignore[import-untyped, unused-ignore]
+    from reportlab.pdfgen import canvas  # type: ignore[import-untyped, unused-ignore]
 
     REPORTLAB_AVAILABLE = True
 except ImportError:
@@ -267,6 +267,15 @@ class TestPDFParserFailClosed:
             "parsed_ocr",
         ):
             assert forbidden not in public_result
+        subphase_elapsed = result.private_diagnostics["pdf_subphase_elapsed_seconds"]
+        assert set(subphase_elapsed) == {
+            "reader_init",
+            "decrypt_empty_password",
+            "page_count",
+            "text_extraction/span_build",
+        }
+        assert all(isinstance(elapsed, float) for elapsed in subphase_elapsed.values())
+        assert all(elapsed >= 0 for elapsed in subphase_elapsed.values())
         assert marker in " ".join(span.text_excerpt for span in result.spans)
 
     def test_user_password_encrypted_pdf_remains_blocked(self) -> None:

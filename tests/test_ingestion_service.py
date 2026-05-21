@@ -159,8 +159,8 @@ startxref
 def _create_image_only_pdf() -> bytes:
     """Create a valid PDF with no extractable text."""
     try:
-        from reportlab.lib.pagesizes import letter
-        from reportlab.pdfgen import canvas
+        from reportlab.lib.pagesizes import letter  # type: ignore[import-untyped, unused-ignore]
+        from reportlab.pdfgen import canvas  # type: ignore[import-untyped, unused-ignore]
     except ImportError:
         pytest.skip("reportlab not installed")
 
@@ -657,13 +657,35 @@ class TestHappyPathPDF:
             "parsed_empty_password_encrypted",
             "parsed_text",
         }
+        empty_password_subphases = pdf_diagnostics["parse_subphase_elapsed_by_outcome_reason"][
+            "parsed_empty_password_encrypted"
+        ]
+        assert set(empty_password_subphases) == {
+            "reader_init",
+            "decrypt_empty_password",
+            "page_count",
+            "text_extraction/span_build",
+        }
+        assert all(
+            bucket_counts == {"under_1s": 1} for bucket_counts in empty_password_subphases.values()
+        )
+        assert set(
+            pdf_diagnostics["parse_subphase_total_elapsed_bucket_by_outcome_reason"][
+                "parsed_empty_password_encrypted"
+            ]
+        ) == set(empty_password_subphases)
+        assert (
+            pdf_diagnostics["observable_slowest_subphase_by_outcome_reason"][
+                "parsed_empty_password_encrypted"
+            ]
+            in empty_password_subphases
+        )
 
         encoded = json.dumps(pdf_diagnostics, sort_keys=True)
         for private_marker in private_markers:
             assert private_marker not in encoded
         assert "PDF-private corrupt board contents" not in encoded
         assert "Test PDF content" not in encoded
-        assert "page_count" not in encoded
         assert "span_count" not in encoded
 
     def test_ingest_bytes_ignores_private_phase_recorder_failures(

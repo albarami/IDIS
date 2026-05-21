@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import time
 from typing import TYPE_CHECKING
 
 from idis.parsers.base import (
@@ -40,6 +41,11 @@ PDF_DIAGNOSTIC_REASON_KEY = "pdf_diagnostic_reason"
 PDF_DIAGNOSTIC_PARSED_TEXT = "parsed_text"
 PDF_DIAGNOSTIC_PARSED_EMPTY_PASSWORD_ENCRYPTED = "parsed_empty_password_encrypted"
 PDF_DIAGNOSTIC_PARSED_OCR = "parsed_ocr"
+PDF_DIAGNOSTIC_SUBPHASE_ELAPSED_KEY = "pdf_subphase_elapsed_seconds"
+PDF_PARSE_SUBPHASE_READER_INIT = "reader_init"
+PDF_PARSE_SUBPHASE_EMPTY_CREDENTIAL_DECRYPT = "decrypt_empty_password"
+PDF_PARSE_SUBPHASE_PAGE_COUNT = "page_count"
+PDF_PARSE_SUBPHASE_TEXT_EXTRACTION_SPAN_BUILD = "text_extraction/span_build"
 
 
 def _compute_content_hash(text: str) -> str:
@@ -88,9 +94,15 @@ def parse_pdf(
             ],
         )
 
+    subphase_elapsed_seconds: dict[str, float] = {}
+
+    reader_init_started_at = time.monotonic()
     try:
         reader = PdfReader(io.BytesIO(data))
     except (PdfReadError, PdfStreamError) as e:
+        subphase_elapsed_seconds[PDF_PARSE_SUBPHASE_READER_INIT] = (
+            time.monotonic() - reader_init_started_at
+        )
         return ParseResult(
             doc_type="PDF",
             success=False,
@@ -101,8 +113,14 @@ def parse_pdf(
                     details={"error": str(e)},
                 )
             ],
+            private_diagnostics=_pdf_private_diagnostics(
+                subphase_elapsed_seconds=subphase_elapsed_seconds
+            ),
         )
     except Exception as e:
+        subphase_elapsed_seconds[PDF_PARSE_SUBPHASE_READER_INIT] = (
+            time.monotonic() - reader_init_started_at
+        )
         return ParseResult(
             doc_type="PDF",
             success=False,
@@ -113,11 +131,22 @@ def parse_pdf(
                     details={"error": str(e), "type": type(e).__name__},
                 )
             ],
+            private_diagnostics=_pdf_private_diagnostics(
+                subphase_elapsed_seconds=subphase_elapsed_seconds
+            ),
         )
+    subphase_elapsed_seconds[PDF_PARSE_SUBPHASE_READER_INIT] = (
+        time.monotonic() - reader_init_started_at
+    )
 
     opened_with_empty_password = False
     if reader.is_encrypted:
-        if not _decrypt_with_empty_password(reader):
+        decrypt_started_at = time.monotonic()
+        decrypted = _decrypt_with_empty_password(reader)
+        subphase_elapsed_seconds[PDF_PARSE_SUBPHASE_EMPTY_CREDENTIAL_DECRYPT] = (
+            time.monotonic() - decrypt_started_at
+        )
+        if not decrypted:
             return ParseResult(
                 doc_type="PDF",
                 success=False,
@@ -128,10 +157,17 @@ def parse_pdf(
                         details={},
                     )
                 ],
+                private_diagnostics=_pdf_private_diagnostics(
+                    subphase_elapsed_seconds=subphase_elapsed_seconds
+                ),
             )
         opened_with_empty_password = True
 
+    page_count_started_at = time.monotonic()
     total_pages = len(reader.pages)
+    subphase_elapsed_seconds[PDF_PARSE_SUBPHASE_PAGE_COUNT] = (
+        time.monotonic() - page_count_started_at
+    )
     if total_pages > limits.max_pages:
         return ParseResult(
             doc_type="PDF",
@@ -143,12 +179,16 @@ def parse_pdf(
                     details={"pages": total_pages, "limit": limits.max_pages},
                 )
             ],
+            private_diagnostics=_pdf_private_diagnostics(
+                subphase_elapsed_seconds=subphase_elapsed_seconds
+            ),
         )
 
     spans: list[SpanDraft] = []
     warnings: list[str] = []
     total_text_length = 0
 
+    text_extraction_started_at = time.monotonic()
     for page_idx, page in enumerate(reader.pages):
         page_num = page_idx + 1  # 1-indexed
         try:
@@ -177,6 +217,9 @@ def parse_pdf(
                     content_hash=_compute_content_hash(stripped),
                 )
             )
+    subphase_elapsed_seconds[PDF_PARSE_SUBPHASE_TEXT_EXTRACTION_SPAN_BUILD] = (
+        time.monotonic() - text_extraction_started_at
+    )
 
     if total_text_length == 0:
         if ocr_config is not None and ocr_config.enabled:
@@ -195,8 +238,16 @@ def parse_pdf(
                     details={"pages": total_pages},
                 )
             ],
+            private_diagnostics=_pdf_private_diagnostics(
+                subphase_elapsed_seconds=subphase_elapsed_seconds
+            ),
         )
 
+    diagnostic_reason = (
+        PDF_DIAGNOSTIC_PARSED_EMPTY_PASSWORD_ENCRYPTED
+        if opened_with_empty_password
+        else PDF_DIAGNOSTIC_PARSED_TEXT
+    )
     return ParseResult(
         doc_type="PDF",
         success=True,
@@ -206,15 +257,25 @@ def parse_pdf(
             "span_count": len(spans),
             "total_text_length": total_text_length,
         },
-        private_diagnostics={
-            PDF_DIAGNOSTIC_REASON_KEY: (
-                PDF_DIAGNOSTIC_PARSED_EMPTY_PASSWORD_ENCRYPTED
-                if opened_with_empty_password
-                else PDF_DIAGNOSTIC_PARSED_TEXT
-            ),
-        },
+        private_diagnostics=_pdf_private_diagnostics(
+            reason=diagnostic_reason,
+            subphase_elapsed_seconds=subphase_elapsed_seconds,
+        ),
         warnings=warnings,
     )
+
+
+def _pdf_private_diagnostics(
+    *,
+    subphase_elapsed_seconds: dict[str, float],
+    reason: str | None = None,
+) -> dict[str, object]:
+    diagnostics: dict[str, object] = {}
+    if reason is not None:
+        diagnostics[PDF_DIAGNOSTIC_REASON_KEY] = reason
+    if subphase_elapsed_seconds:
+        diagnostics[PDF_DIAGNOSTIC_SUBPHASE_ELAPSED_KEY] = dict(subphase_elapsed_seconds)
+    return diagnostics
 
 
 def _decrypt_with_empty_password(reader: PdfReader) -> bool:

@@ -94,6 +94,15 @@ PDF_DIAGNOSTIC_OUTCOME_REASONS = frozenset(
         "failed_other",
     }
 )
+PDF_DIAGNOSTIC_SUBPHASE_ELAPSED_KEY = "pdf_subphase_elapsed_seconds"
+PDF_PARSE_SUBPHASES = frozenset(
+    {
+        "reader_init",
+        "decrypt_empty_password",
+        "page_count",
+        "text_extraction/span_build",
+    }
+)
 
 
 class UploadIngestionPhaseRecorder:
@@ -109,6 +118,7 @@ class UploadIngestionPhaseRecorder:
         self._parser_counts_by_outcome: Counter[str] = Counter()
         self._pdf_elapsed_by_outcome_reason: dict[str, list[float]] = {}
         self._pdf_counts_by_outcome_reason: Counter[str] = Counter()
+        self._pdf_subphase_elapsed_by_outcome_reason: dict[str, dict[str, list[float]]] = {}
         self._lock = Lock()
 
     def record_phase(self, phase: UploadIngestionPhase | str, elapsed_seconds: float) -> None:
@@ -126,6 +136,7 @@ class UploadIngestionPhaseRecorder:
         outcome: str,
         elapsed_seconds: float,
         pdf_outcome_reason: str | None = None,
+        pdf_subphase_elapsed_seconds: dict[str, float] | None = None,
     ) -> None:
         """Record one aggregate parser diagnostic sample."""
         extension_value = _safe_parser_diagnostic_extension(extension)
@@ -142,6 +153,14 @@ class UploadIngestionPhaseRecorder:
                 self._pdf_elapsed_by_outcome_reason.setdefault(safe_pdf_reason, []).append(
                     elapsed_value
                 )
+                for subphase, subphase_elapsed in _safe_pdf_subphase_elapsed_seconds(
+                    pdf_subphase_elapsed_seconds
+                ).items():
+                    subphase_values = self._pdf_subphase_elapsed_by_outcome_reason.setdefault(
+                        safe_pdf_reason,
+                        {},
+                    ).setdefault(subphase, [])
+                    subphase_values.append(subphase_elapsed)
 
     def to_summary(self) -> dict[str, Any]:
         """Return aggregate-only phase timing buckets."""
@@ -163,6 +182,10 @@ class UploadIngestionPhaseRecorder:
                 for reason, values in self._pdf_elapsed_by_outcome_reason.items()
             }
             pdf_counts_by_outcome_reason = Counter(self._pdf_counts_by_outcome_reason)
+            pdf_subphase_elapsed_by_outcome_reason = {
+                reason: {subphase: list(values) for subphase, values in subphase_values.items()}
+                for reason, subphase_values in self._pdf_subphase_elapsed_by_outcome_reason.items()
+            }
         observed = {phase: values for phase, values in phase_elapsed.items() if values}
         summary = {
             "enabled": True,
@@ -184,6 +207,7 @@ class UploadIngestionPhaseRecorder:
             elapsed_by_outcome=parser_elapsed_by_outcome,
             pdf_counts_by_outcome_reason=pdf_counts_by_outcome_reason,
             pdf_elapsed_by_outcome_reason=pdf_elapsed_by_outcome_reason,
+            pdf_subphase_elapsed_by_outcome_reason=pdf_subphase_elapsed_by_outcome_reason,
         )
         if parser_diagnostics:
             summary["parser_diagnostics"] = parser_diagnostics
@@ -356,6 +380,7 @@ def _record_parser_diagnostics(
             outcome=_parser_diagnostic_outcome(parse_result),
             elapsed_seconds=elapsed_seconds,
             pdf_outcome_reason=_pdf_diagnostic_outcome_reason(parse_result),
+            pdf_subphase_elapsed_seconds=_pdf_subphase_elapsed_seconds(parse_result),
         )
     except Exception as error:
         logger.warning(
@@ -402,6 +427,21 @@ def _pdf_diagnostic_outcome_reason(parse_result: ParseResult) -> str | None:
     return _pdf_failure_reason(parse_result.errors[0].code)
 
 
+def _pdf_subphase_elapsed_seconds(parse_result: ParseResult) -> dict[str, float] | None:
+    if parse_result.doc_type != "PDF":
+        return None
+    value = parse_result.private_diagnostics.get(PDF_DIAGNOSTIC_SUBPHASE_ELAPSED_KEY)
+    if not isinstance(value, dict):
+        return None
+    safe_values: dict[str, float] = {}
+    for subphase, elapsed_seconds in value.items():
+        safe_subphase = _safe_pdf_parse_subphase(subphase)
+        if safe_subphase is None or not isinstance(elapsed_seconds, int | float):
+            continue
+        safe_values[safe_subphase] = max(0.0, float(elapsed_seconds))
+    return safe_values
+
+
 def _pdf_failure_reason(code: ParseErrorCode) -> str:
     if code == ParseErrorCode.ENCRYPTED_PDF:
         return "failed_encrypted"
@@ -433,6 +473,27 @@ def _safe_pdf_diagnostic_outcome_reason(reason: str | None) -> str | None:
     return "failed_other"
 
 
+def _safe_pdf_parse_subphase(subphase: object) -> str | None:
+    if not isinstance(subphase, str):
+        return None
+    subphase_value = subphase.strip().lower()
+    if subphase_value in PDF_PARSE_SUBPHASES:
+        return subphase_value
+    return None
+
+
+def _safe_pdf_subphase_elapsed_seconds(value: object) -> dict[str, float]:
+    if not isinstance(value, dict):
+        return {}
+    safe: dict[str, float] = {}
+    for subphase, elapsed_seconds in value.items():
+        safe_subphase = _safe_pdf_parse_subphase(subphase)
+        if safe_subphase is None or not isinstance(elapsed_seconds, int | float):
+            continue
+        safe[safe_subphase] = max(0.0, float(elapsed_seconds))
+    return safe
+
+
 def _parser_diagnostics_summary(
     *,
     counts_by_extension: Counter[str],
@@ -441,6 +502,7 @@ def _parser_diagnostics_summary(
     elapsed_by_outcome: dict[str, list[float]],
     pdf_counts_by_outcome_reason: Counter[str],
     pdf_elapsed_by_outcome_reason: dict[str, list[float]],
+    pdf_subphase_elapsed_by_outcome_reason: dict[str, dict[str, list[float]]],
 ) -> dict[str, Any]:
     if not counts_by_extension and not counts_by_outcome:
         return {}
@@ -472,6 +534,7 @@ def _parser_diagnostics_summary(
     pdf_diagnostics = _pdf_diagnostics_summary(
         counts_by_outcome_reason=pdf_counts_by_outcome_reason,
         elapsed_by_outcome_reason=pdf_elapsed_by_outcome_reason,
+        subphase_elapsed_by_outcome_reason=pdf_subphase_elapsed_by_outcome_reason,
     )
     if pdf_diagnostics:
         summary["pdf_diagnostics"] = pdf_diagnostics
@@ -482,11 +545,12 @@ def _pdf_diagnostics_summary(
     *,
     counts_by_outcome_reason: Counter[str],
     elapsed_by_outcome_reason: dict[str, list[float]],
+    subphase_elapsed_by_outcome_reason: dict[str, dict[str, list[float]]],
 ) -> dict[str, Any]:
     if not counts_by_outcome_reason:
         return {}
     observed = {reason: values for reason, values in elapsed_by_outcome_reason.items() if values}
-    return {
+    summary: dict[str, Any] = {
         "counts_by_outcome_reason": dict(sorted(counts_by_outcome_reason.items())),
         "parse_elapsed_by_outcome_reason": {
             reason: _elapsed_bucket_counts(values) for reason, values in sorted(observed.items())
@@ -501,6 +565,57 @@ def _pdf_diagnostics_summary(
         },
         "observable_slowest_outcome_reason": _observable_slowest_phase(observed),
     }
+    observed_subphases = _observed_pdf_subphase_elapsed_by_outcome_reason(
+        subphase_elapsed_by_outcome_reason
+    )
+    if observed_subphases:
+        summary["parse_subphase_elapsed_by_outcome_reason"] = {
+            reason: {
+                subphase: _elapsed_bucket_counts(values)
+                for subphase, values in sorted(subphase_values.items())
+                if values
+            }
+            for reason, subphase_values in sorted(observed_subphases.items())
+        }
+        summary["parse_subphase_total_elapsed_bucket_by_outcome_reason"] = {
+            reason: {
+                subphase: _elapsed_seconds_bucket(sum(values))
+                for subphase, values in sorted(subphase_values.items())
+                if values
+            }
+            for reason, subphase_values in sorted(observed_subphases.items())
+        }
+        summary["parse_subphase_max_elapsed_bucket_by_outcome_reason"] = {
+            reason: {
+                subphase: _elapsed_seconds_bucket(max(values))
+                for subphase, values in sorted(subphase_values.items())
+                if values
+            }
+            for reason, subphase_values in sorted(observed_subphases.items())
+        }
+        summary["observable_slowest_subphase_by_outcome_reason"] = {
+            reason: _observable_slowest_phase(subphase_values)
+            for reason, subphase_values in sorted(observed_subphases.items())
+        }
+    return summary
+
+
+def _observed_pdf_subphase_elapsed_by_outcome_reason(
+    value: dict[str, dict[str, list[float]]],
+) -> dict[str, dict[str, list[float]]]:
+    observed: dict[str, dict[str, list[float]]] = {}
+    for reason, subphase_values in value.items():
+        safe_reason = _safe_pdf_diagnostic_outcome_reason(reason)
+        if safe_reason is None:
+            continue
+        observed_subphases = {
+            subphase: values
+            for subphase, values in subphase_values.items()
+            if subphase in PDF_PARSE_SUBPHASES and values
+        }
+        if observed_subphases:
+            observed[safe_reason] = observed_subphases
+    return observed
 
 
 def _elapsed_seconds_bucket(elapsed_seconds: float | None) -> str | None:

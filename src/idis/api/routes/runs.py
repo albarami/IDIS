@@ -623,6 +623,7 @@ SENSITIVE_SUMMARY_KEY_PARTS = frozenset(
 SENSITIVE_SUMMARY_VALUE_PARTS = frozenset(
     {
         "content_b64",
+        "confidential",
         "raw bytes",
         "raw_bytes",
         "raw text",
@@ -630,6 +631,7 @@ SENSITIVE_SUMMARY_VALUE_PARTS = frozenset(
         "parsed text",
         "parsed_text",
         "text_excerpt",
+        "_marker",
         "revenue was 10m",
         "ebitda was 2m",
     }
@@ -736,7 +738,7 @@ def _safe_public_run_summary(value: object) -> object:
         sanitized: dict[str, object] = {}
         for key, item in value.items():
             key_text = str(key)
-            if _is_sensitive_summary_key(key_text):
+            if key_text.startswith("_") or _is_sensitive_summary_key(key_text):
                 continue
             safe_item = _safe_public_run_summary(item)
             if safe_item is not None:

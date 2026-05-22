@@ -420,6 +420,10 @@ class DeliverablesGenerator:
             facts = self._extract_facts_from_report(report)
 
             for fact in facts:
+                if not self._fact_has_refs(fact):
+                    if self._is_missing_evidence_fact(fact):
+                        builder.add_missing_info(text=fact["text"])
+                    continue
                 if section == "metrics":
                     builder.add_metric_fact(**fact)
                 elif section == "red_flags":
@@ -463,6 +467,8 @@ class DeliverablesGenerator:
             facts = self._extract_facts_from_report(report)
 
             for fact in facts:
+                if not self._fact_has_refs(fact):
+                    continue
                 kwargs = {
                     "text": fact["text"],
                     "claim_refs": fact.get("claim_refs"),
@@ -714,6 +720,8 @@ class DeliverablesGenerator:
             topic = agent_type.replace("_agent", "").replace("_", " ").title()
 
             for question in report.questions_for_founder:
+                if not report.supported_claim_ids and not report.supported_calc_ids:
+                    continue
                 builder.add_item(
                     agent_type=agent_type,
                     topic=topic,
@@ -845,6 +853,17 @@ class DeliverablesGenerator:
                     ),
                     code="NFF_VIOLATION",
                 )
+
+    @staticmethod
+    def _fact_has_refs(fact: dict[str, Any]) -> bool:
+        """Return True when a bridged fact has evidence references."""
+        return bool(fact.get("claim_refs") or fact.get("calc_refs"))
+
+    @staticmethod
+    def _is_missing_evidence_fact(fact: dict[str, Any]) -> bool:
+        """Identify explicit missing-evidence statements from analysis agents."""
+        text = str(fact.get("text") or "").lower()
+        return "not found in provided materials" in text
 
     @staticmethod
     def _score_to_verdict(score: float) -> str:

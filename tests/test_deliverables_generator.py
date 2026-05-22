@@ -73,6 +73,25 @@ def _make_muhasabah(agent_id: str) -> AnalysisMuhasabahRecord:
     )
 
 
+def _make_subjective_muhasabah(agent_id: str) -> AnalysisMuhasabahRecord:
+    """Create a valid subjective muhasabah record with no supporting refs."""
+    return AnalysisMuhasabahRecord(
+        agent_id=agent_id,
+        output_id=f"output-{agent_id}",
+        supported_claim_ids=[],
+        supported_calc_ids=[],
+        evidence_summary="Not found in provided materials",
+        counter_hypothesis="Evidence may be absent from the uploaded corpus",
+        falsifiability_tests=[{"test": "request_source", "description": "request source"}],
+        uncertainties=[{"area": "missing_evidence", "description": "missing evidence"}],
+        failure_modes=["missing_evidence"],
+        confidence=0.3,
+        confidence_justification="No supporting evidence was selected",
+        timestamp=_TIMESTAMP,
+        is_subjective=True,
+    )
+
+
 def _make_report(agent_type: str) -> AgentReport:
     """Create a valid agent report for testing."""
     return AgentReport(
@@ -506,6 +525,55 @@ class TestDeliverablesGeneratorHappyPath:
         assert "FOREIGN CUR BUS ACCT" not in source_summary
         assert "low-signal extracted claim omitted" in source_summary
         assert "Bank statement, span wire-1" in source_summary
+
+    def test_missing_evidence_agent_output_does_not_fail_deliverables(self) -> None:
+        """Missing-evidence sections remain diligence gaps, not ungrounded facts."""
+        sink = InMemoryAuditSink()
+        generator = DeliverablesGenerator(audit_sink=sink)
+        reports = [_make_report(agent_type) for agent_type in _AGENT_TYPES]
+        missing_report = AgentReport(
+            agent_id="technical_agent-01",
+            agent_type="technical_agent",
+            supported_claim_ids=[],
+            supported_calc_ids=[],
+            analysis_sections={
+                "technical_evidence": {
+                    "content": "Not found in provided materials.",
+                    "claim_refs": [],
+                    "calc_refs": [],
+                }
+            },
+            risks=[],
+            questions_for_founder=["Provide product architecture, API, and deployment evidence."],
+            confidence=0.3,
+            confidence_justification="No technical evidence selected",
+            muhasabah=_make_subjective_muhasabah("technical_agent-01"),
+        )
+        reports = [
+            missing_report if report.agent_type == "technical_agent" else report
+            for report in reports
+        ]
+        bundle = AnalysisBundle(
+            deal_id="deal-001",
+            tenant_id="tenant-001",
+            run_id="run-001",
+            reports=reports,
+            timestamp=_TIMESTAMP,
+        )
+
+        result = generator.generate(
+            ctx=_make_context(),
+            bundle=bundle,
+            scorecard=_make_scorecard(routing=RoutingAction.HOLD),
+            deal_name="Acme Corp",
+            generated_at=_TIMESTAMP,
+            deliverable_id_prefix="del-run001",
+        )
+
+        encoded = result.model_dump_json()
+        assert "Not found in provided materials" in encoded
+        assert result.qa_brief.items
+        assert all(item.claim_refs or item.calc_refs for item in result.qa_brief.items)
 
     def test_ic_memo_includes_thesis_risks_gaps_and_recommendation(self) -> None:
         """IC memo should read like a diligence memo, not only claim excerpts."""

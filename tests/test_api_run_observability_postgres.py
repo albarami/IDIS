@@ -341,6 +341,58 @@ def test_public_run_summary_sanitizer_removes_content_like_keys() -> None:
     }
 
 
+def test_public_run_summary_sanitizer_removes_private_analysis_payloads() -> None:
+    """Public run status must not expose private Layer 2 claim text."""
+    from idis.api.routes.runs import _safe_public_run_summary
+
+    unsafe = {
+        "status": "completed",
+        "agent_count": 8,
+        "_analysis_bundle": {
+            "reports": [
+                {
+                    "analysis_sections": {
+                        "investment_thesis_evidence": {
+                            "content": (
+                                "Upside: slice27_pdf_confidential_revenue_marker "
+                                "states revenue was 11.1 million."
+                            )
+                        }
+                    }
+                }
+            ]
+        },
+        "_analysis_context": {
+            "claim_registry": {
+                "claim-001": {
+                    "claim_text": (
+                        "slice27_pdf_confidential_revenue_marker states revenue was 11.1 million."
+                    )
+                }
+            }
+        },
+        "_scorecard": {
+            "dimension_scores": {
+                "market": {
+                    "rationale": (
+                        "slice27_pdf_confidential_revenue_marker shows qualified pipeline growth."
+                    )
+                }
+            }
+        },
+        "message": "slice27_pdf_confidential_revenue_marker should not leak",
+    }
+
+    safe = _safe_public_run_summary(unsafe)
+    encoded = json.dumps(safe, default=str)
+
+    assert safe == {"status": "completed", "agent_count": 8}
+    assert "slice27_pdf_confidential_revenue_marker" not in encoded
+    assert "_analysis_bundle" not in encoded
+    assert "_analysis_context" not in encoded
+    assert "_scorecard" not in encoded
+
+
 def test_public_step_error_message_is_generic_and_capped() -> None:
     """Public errors should expose stable codes without raw exception strings."""
     from idis.api.routes.runs import _build_step_responses

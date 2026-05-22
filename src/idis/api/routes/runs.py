@@ -623,6 +623,7 @@ SENSITIVE_SUMMARY_KEY_PARTS = frozenset(
 SENSITIVE_SUMMARY_VALUE_PARTS = frozenset(
     {
         "content_b64",
+        "confidential",
         "raw bytes",
         "raw_bytes",
         "raw text",
@@ -630,6 +631,7 @@ SENSITIVE_SUMMARY_VALUE_PARTS = frozenset(
         "parsed text",
         "parsed_text",
         "text_excerpt",
+        "_marker",
         "revenue was 10m",
         "ebitda was 2m",
     }
@@ -736,7 +738,7 @@ def _safe_public_run_summary(value: object) -> object:
         sanitized: dict[str, object] = {}
         for key, item in value.items():
             key_text = str(key)
-            if _is_sensitive_summary_key(key_text):
+            if key_text.startswith("_") or _is_sensitive_summary_key(key_text):
                 continue
             safe_item = _safe_public_run_summary(item)
             if safe_item is not None:
@@ -1079,6 +1081,8 @@ def _run_full_analysis(
     created_claim_ids: list[str],
     calc_ids: list[str],
     enrichment_refs: dict[str, Any],
+    deal_metadata: dict[str, Any] | None = None,
+    db_conn: Any = None,
 ) -> dict[str, Any]:
     """Run analysis agents for a FULL pipeline run.
 
@@ -1126,6 +1130,21 @@ def _run_full_analysis(
         claim_ids=frozenset(created_claim_ids),
         calc_ids=frozenset(calc_ids),
         enrichment_refs=enrichment_ref_models,
+        claim_registry=_build_analysis_claim_registry(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            created_claim_ids=created_claim_ids,
+            db_conn=db_conn,
+        ),
+        calc_registry=_build_analysis_calc_registry(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            calc_ids=calc_ids,
+            db_conn=db_conn,
+        ),
+        company_name=str((deal_metadata or {}).get("company_name") or ""),
+        stage=str((deal_metadata or {}).get("stage") or ""),
+        sector=str((deal_metadata or {}).get("sector") or ""),
     )
 
     audit_sink = InMemoryAuditSink()
@@ -1140,6 +1159,106 @@ def _run_full_analysis(
         "_analysis_bundle": bundle,
         "_analysis_context": analysis_ctx,
     }
+
+
+def _build_analysis_claim_registry(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    created_claim_ids: list[str],
+    db_conn: Any = None,
+) -> dict[str, Any]:
+    """Load readable claim summaries for Layer 2 analysis context."""
+    from idis.analysis.models import AnalysisClaimReference
+    from idis.persistence.repositories.claims import ClaimsRepository, InMemoryClaimsRepository
+
+    claims_repo = (
+        ClaimsRepository(db_conn, tenant_id)
+        if db_conn is not None
+        else InMemoryClaimsRepository(tenant_id)
+    )
+    registry: dict[str, AnalysisClaimReference] = {}
+    for claim_id in sorted(set(created_claim_ids)):
+        claim = claims_repo.get(claim_id)
+        if not claim or str(claim.get("deal_id")) != deal_id:
+            continue
+        source_span_id = claim.get("primary_span_id")
+        claim_class = str(claim.get("claim_class") or "")
+        claim_text = str(claim.get("claim_text") or "")
+        registry[claim_id] = AnalysisClaimReference(
+            claim_id=claim_id,
+            claim_text=claim_text,
+            claim_class=claim_class,
+            source_summary=_claim_source_summary(claim_class, source_span_id),
+            sanad_grade=claim.get("claim_grade"),
+            materiality=claim.get("materiality"),
+            claim_verdict=claim.get("claim_verdict"),
+            source_span_id=str(source_span_id) if source_span_id else None,
+        )
+    return registry
+
+
+def _claim_source_summary(claim_class: str, source_span_id: Any) -> str:
+    """Build a concise claim source summary for evidence appendices."""
+    span_summary = f"span {source_span_id}" if source_span_id else None
+    parts = [part for part in (claim_class, span_summary) if part]
+    return ", ".join(parts) if parts else "Extracted claim"
+
+
+def _build_analysis_calc_registry(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    calc_ids: list[str],
+    db_conn: Any = None,
+) -> dict[str, Any]:
+    """Load readable calculation summaries for Layer 2 analysis context."""
+    from idis.analysis.models import AnalysisCalcReference
+    from idis.persistence.repositories.calculations import get_calculations_repository
+
+    requested_ids = set(calc_ids)
+    if not requested_ids:
+        return {}
+    repo = get_calculations_repository(db_conn, tenant_id)
+    registry: dict[str, AnalysisCalcReference] = {}
+    for calc in repo.list_by_deal(deal_id):
+        calc_id = str(calc.get("calc_id") or "")
+        if calc_id not in requested_ids:
+            continue
+        output = calc.get("output")
+        input_claim_ids = _calc_input_claim_ids(calc.get("inputs"))
+        registry[calc_id] = AnalysisCalcReference(
+            calc_id=calc_id,
+            calc_type=str(calc.get("calc_type") or ""),
+            output_summary=_calc_output_summary(output),
+            input_claim_ids=input_claim_ids,
+            source_summary=(
+                f"{calc.get('calc_type') or 'calculation'} from {len(input_claim_ids)} input claims"
+            ),
+            reproducibility_hash=calc.get("reproducibility_hash"),
+        )
+    return registry
+
+
+def _calc_output_summary(output: Any) -> str:
+    """Render a calculation output to a short deterministic summary."""
+    if isinstance(output, dict):
+        value = output.get("primary_value") or output.get("value") or output.get("amount")
+        unit = output.get("unit")
+        currency = output.get("currency")
+        parts = [str(item) for item in (value, currency, unit) if item not in (None, "")]
+        return " ".join(parts) if parts else str(output)
+    return str(output or "")
+
+
+def _calc_input_claim_ids(inputs: Any) -> list[str]:
+    """Extract input claim IDs from calculation repository payloads."""
+    if not isinstance(inputs, dict):
+        return []
+    raw_claim_ids = inputs.get("input_claim_ids") or inputs.get("claim_ids") or []
+    if isinstance(raw_claim_ids, list):
+        return sorted(str(item) for item in raw_claim_ids if str(item).strip())
+    return []
 
 
 def _run_full_scoring(

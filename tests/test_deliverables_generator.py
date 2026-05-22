@@ -21,6 +21,8 @@ import pytest
 from idis.analysis.models import (
     AgentReport,
     AnalysisBundle,
+    AnalysisCalcReference,
+    AnalysisClaimReference,
     AnalysisContext,
     AnalysisMuhasabahRecord,
     Risk,
@@ -71,6 +73,25 @@ def _make_muhasabah(agent_id: str) -> AnalysisMuhasabahRecord:
     )
 
 
+def _make_subjective_muhasabah(agent_id: str) -> AnalysisMuhasabahRecord:
+    """Create a valid subjective muhasabah record with no supporting refs."""
+    return AnalysisMuhasabahRecord(
+        agent_id=agent_id,
+        output_id=f"output-{agent_id}",
+        supported_claim_ids=[],
+        supported_calc_ids=[],
+        evidence_summary="Not found in provided materials",
+        counter_hypothesis="Evidence may be absent from the uploaded corpus",
+        falsifiability_tests=[{"test": "request_source", "description": "request source"}],
+        uncertainties=[{"area": "missing_evidence", "description": "missing evidence"}],
+        failure_modes=["missing_evidence"],
+        confidence=0.3,
+        confidence_justification="No supporting evidence was selected",
+        timestamp=_TIMESTAMP,
+        is_subjective=True,
+    )
+
+
 def _make_report(agent_type: str) -> AgentReport:
     """Create a valid agent report for testing."""
     return AgentReport(
@@ -111,6 +132,45 @@ def _make_context() -> AnalysisContext:
         company_name="Acme Corp",
         stage="SERIES_A",
         sector="Fintech",
+    )
+
+
+def _make_investment_grade_context() -> AnalysisContext:
+    """Create an analysis context with source summaries for deliverables."""
+    return AnalysisContext(
+        deal_id="deal-001",
+        tenant_id="tenant-001",
+        run_id="run-001",
+        claim_ids=frozenset({"claim-fin", "claim-risk"}),
+        calc_ids=frozenset({"calc-arr"}),
+        company_name="Acme Corp",
+        stage="SERIES_A",
+        sector="Fintech",
+        claim_registry={
+            "claim-fin": AnalysisClaimReference(
+                claim_id="claim-fin",
+                claim_text="Revenue reached $1.2M ARR in FY2025.",
+                claim_class="FINANCIAL",
+                source_summary="Financial model, span fin-1",
+                sanad_grade="B",
+            ),
+            "claim-risk": AnalysisClaimReference(
+                claim_id="claim-risk",
+                claim_text="The company is dependent on two enterprise customers.",
+                claim_class="TRACTION",
+                source_summary="Customer pipeline, span cust-1",
+                sanad_grade="C",
+            ),
+        },
+        calc_registry={
+            "calc-arr": AnalysisCalcReference(
+                calc_id="calc-arr",
+                calc_type="ARR",
+                output_summary="$1.2M ARR",
+                input_claim_ids=["claim-fin"],
+                source_summary="Derived from claim-fin",
+            )
+        },
     )
 
 
@@ -271,6 +331,341 @@ class TestDeliverablesGeneratorHappyPath:
         assert result.ic_memo.deliverable_id.startswith("del-run001-")
         assert result.truth_dashboard.deliverable_id.startswith("del-run001-")
         assert result.qa_brief.deliverable_id.startswith("del-run001-")
+
+    def test_populates_memo_from_content_sections_risks_and_source_summaries(self) -> None:
+        """Generator should turn structured analysis content into IC-ready sections."""
+        sink = InMemoryAuditSink()
+        generator = DeliverablesGenerator(audit_sink=sink)
+        reports = [_make_report(at) for at in _AGENT_TYPES]
+        reports = [
+            report
+            if report.agent_type != "financial_agent"
+            else report.model_copy(
+                update={
+                    "supported_claim_ids": ["claim-fin"],
+                    "supported_calc_ids": ["calc-arr"],
+                    "analysis_sections": {
+                        "revenue": {
+                            "content": "Revenue reached $1.2M ARR in FY2025.",
+                            "claim_refs": ["claim-fin"],
+                            "calc_refs": ["calc-arr"],
+                        }
+                    },
+                    "questions_for_founder": [
+                        "Please provide the monthly revenue bridge supporting ARR."
+                    ],
+                }
+            )
+            for report in reports
+        ]
+        reports = [
+            report
+            if report.agent_type != "risk_officer_agent"
+            else report.model_copy(
+                update={
+                    "supported_claim_ids": ["claim-risk"],
+                    "supported_calc_ids": [],
+                    "analysis_sections": {
+                        "customer_concentration": {
+                            "content": "Customer concentration is a diligence risk.",
+                            "claim_refs": ["claim-risk"],
+                        }
+                    },
+                    "risks": [
+                        Risk(
+                            risk_id="risk-customer-concentration",
+                            description="Revenue concentration in two enterprise customers.",
+                            severity=RiskSeverity.HIGH,
+                            claim_ids=["claim-risk"],
+                        )
+                    ],
+                    "questions_for_founder": [
+                        "What percentage of revenue comes from the top two customers?"
+                    ],
+                }
+            )
+            for report in reports
+        ]
+        bundle = AnalysisBundle(
+            deal_id="deal-001",
+            tenant_id="tenant-001",
+            run_id="run-001",
+            reports=reports,
+            timestamp=_TIMESTAMP,
+        )
+
+        result = generator.generate(
+            ctx=_make_investment_grade_context(),
+            bundle=bundle,
+            scorecard=_make_scorecard(routing=RoutingAction.HOLD),
+            deal_name="Acme Corp",
+            generated_at=_TIMESTAMP,
+            deliverable_id_prefix="del-run001",
+        )
+
+        financial_texts = [fact.text for fact in result.ic_memo.financials.facts]
+        risk_texts = [fact.text for fact in result.ic_memo.risks_and_mitigations.facts]
+        appendix_entries = {
+            entry.ref_id: entry.source_summary for entry in result.ic_memo.audit_appendix.entries
+        }
+
+        assert "Revenue reached $1.2M ARR in FY2025." in financial_texts
+        assert any("Revenue concentration" in text for text in risk_texts)
+        assert appendix_entries["claim-fin"] == (
+            "Revenue reached $1.2M ARR in FY2025. Source: Financial model, span fin-1"
+        )
+        assert appendix_entries["calc-arr"] == "Derived from claim-fin"
+
+    def test_scorecard_refs_are_bounded_in_exported_appendices(self) -> None:
+        """Scorecard refs should not dump the full claim registry into evidence indexes."""
+        sink = InMemoryAuditSink()
+        generator = DeliverablesGenerator(audit_sink=sink)
+        scorecard = _make_scorecard(routing=RoutingAction.HOLD)
+        many_claim_refs = [f"score-claim-{index:03d}" for index in range(20)]
+        many_calc_refs = [f"score-calc-{index:03d}" for index in range(10)]
+        scorecard = scorecard.model_copy(
+            update={
+                "dimension_scores": {
+                    dim: ds.model_copy(
+                        update={
+                            "supported_claim_ids": many_claim_refs,
+                            "supported_calc_ids": many_calc_refs,
+                        }
+                    )
+                    for dim, ds in scorecard.dimension_scores.items()
+                }
+            }
+        )
+
+        result = generator.generate(
+            ctx=_make_context(),
+            bundle=_make_bundle(),
+            scorecard=scorecard,
+            deal_name="Acme Corp",
+            generated_at=_TIMESTAMP,
+            deliverable_id_prefix="del-run001",
+        )
+
+        for row in result.truth_dashboard.rows:
+            assert 0 < len(row.claim_refs) <= 4
+            assert len(row.calc_refs) <= 2
+        truth_summary = result.ic_memo.truth_dashboard_summary.facts[0]
+        assert len(truth_summary.claim_refs) <= len(ScoreDimension) * 4
+        assert len(truth_summary.calc_refs) <= len(ScoreDimension) * 2
+
+    def test_readable_appendix_summaries_are_clean_and_capped(self) -> None:
+        """Evidence index source summaries should not dump raw noisy claim text."""
+        sink = InMemoryAuditSink()
+        generator = DeliverablesGenerator(audit_sink=sink)
+        noisy_claim_id = "claim-wire-noise"
+        ctx = _make_investment_grade_context().model_copy(
+            update={
+                "claim_ids": frozenset({"claim-fin", "claim-risk", noisy_claim_id}),
+                "claim_registry": {
+                    **_make_investment_grade_context().claim_registry,
+                    noisy_claim_id: AnalysisClaimReference(
+                        claim_id=noisy_claim_id,
+                        claim_text=(
+                            "ONLINE INTERNATIONAL WIRE TRANSFER A/C: FOREIGN CUR BUS ACCT "
+                            "ORG: 00000000933802115 MYNE TECHNOLOGIES INC. BEN:/TR0900134000 "
+                            "BUSINESS EXPENSES/OCMT/EUR1034,00/EXCH/0.8904/TRN: 3519900289RE "
+                            "with additional remittance boilerplate that should not be exported "
+                            "as a long evidence-index snippet."
+                        ),
+                        claim_class="OTHER",
+                        source_summary="Bank statement, span wire-1",
+                        sanad_grade="C",
+                    ),
+                },
+            }
+        )
+        reports = [_make_report(at) for at in _AGENT_TYPES]
+        reports = [
+            report
+            if report.agent_type != "technical_agent"
+            else report.model_copy(
+                update={
+                    "supported_claim_ids": [noisy_claim_id],
+                    "supported_calc_ids": [],
+                    "analysis_sections": {
+                        "product": {
+                            "content": (
+                                "Not found in provided materials; request source documentation."
+                            ),
+                            "claim_refs": [noisy_claim_id],
+                        }
+                    },
+                }
+            )
+            for report in reports
+        ]
+        bundle = AnalysisBundle(
+            deal_id="deal-001",
+            tenant_id="tenant-001",
+            run_id="run-001",
+            reports=reports,
+            timestamp=_TIMESTAMP,
+        )
+
+        result = generator.generate(
+            ctx=ctx,
+            bundle=bundle,
+            scorecard=_make_scorecard(routing=RoutingAction.HOLD),
+            deal_name="Acme Corp",
+            generated_at=_TIMESTAMP,
+            deliverable_id_prefix="del-run001",
+        )
+        source_summary = {
+            entry.ref_id: entry.source_summary for entry in result.ic_memo.audit_appendix.entries
+        }[noisy_claim_id]
+
+        assert source_summary is not None
+        assert len(source_summary) <= 180
+        assert "ONLINE INTERNATIONAL WIRE TRANSFER" not in source_summary
+        assert "FOREIGN CUR BUS ACCT" not in source_summary
+        assert "low-signal extracted claim omitted" in source_summary
+        assert "Bank statement, span wire-1" in source_summary
+
+    def test_missing_evidence_agent_output_does_not_fail_deliverables(self) -> None:
+        """Missing-evidence sections remain diligence gaps, not ungrounded facts."""
+        sink = InMemoryAuditSink()
+        generator = DeliverablesGenerator(audit_sink=sink)
+        reports = [_make_report(agent_type) for agent_type in _AGENT_TYPES]
+        missing_report = AgentReport(
+            agent_id="technical_agent-01",
+            agent_type="technical_agent",
+            supported_claim_ids=[],
+            supported_calc_ids=[],
+            analysis_sections={
+                "technical_evidence": {
+                    "content": "Not found in provided materials.",
+                    "claim_refs": [],
+                    "calc_refs": [],
+                }
+            },
+            risks=[],
+            questions_for_founder=["Provide product architecture, API, and deployment evidence."],
+            confidence=0.3,
+            confidence_justification="No technical evidence selected",
+            muhasabah=_make_subjective_muhasabah("technical_agent-01"),
+        )
+        reports = [
+            missing_report if report.agent_type == "technical_agent" else report
+            for report in reports
+        ]
+        bundle = AnalysisBundle(
+            deal_id="deal-001",
+            tenant_id="tenant-001",
+            run_id="run-001",
+            reports=reports,
+            timestamp=_TIMESTAMP,
+        )
+
+        result = generator.generate(
+            ctx=_make_context(),
+            bundle=bundle,
+            scorecard=_make_scorecard(routing=RoutingAction.HOLD),
+            deal_name="Acme Corp",
+            generated_at=_TIMESTAMP,
+            deliverable_id_prefix="del-run001",
+        )
+
+        encoded = result.model_dump_json()
+        assert "Not found in provided materials" in encoded
+        assert result.qa_brief.items
+        assert all(item.claim_refs or item.calc_refs for item in result.qa_brief.items)
+
+    def test_ic_memo_includes_thesis_risks_gaps_and_recommendation(self) -> None:
+        """IC memo should read like a diligence memo, not only claim excerpts."""
+        sink = InMemoryAuditSink()
+        generator = DeliverablesGenerator(audit_sink=sink)
+        reports = [_make_report(at) for at in _AGENT_TYPES]
+        reports = [
+            report
+            if report.agent_type != "historian_agent"
+            else report.model_copy(
+                update={
+                    "supported_claim_ids": ["claim-fin", "claim-risk"],
+                    "supported_calc_ids": ["calc-arr"],
+                    "analysis_sections": {
+                        "investment_thesis_evidence": {
+                            "content": (
+                                "Investment thesis: revenue evidence and customer usage support "
+                                "continued diligence. Upside: ARR reached $1.2M in FY2025. "
+                                "Diligence gaps: verify revenue bridge and concentration."
+                            ),
+                            "claim_refs": ["claim-fin", "claim-risk"],
+                            "calc_refs": ["calc-arr"],
+                        }
+                    },
+                    "questions_for_founder": [
+                        "Please provide source backup for the revenue bridge."
+                    ],
+                }
+            )
+            for report in reports
+        ]
+        reports = [
+            report
+            if report.agent_type != "risk_officer_agent"
+            else report.model_copy(
+                update={
+                    "supported_claim_ids": ["claim-risk"],
+                    "supported_calc_ids": [],
+                    "analysis_sections": {
+                        "risk_evidence": {
+                            "content": (
+                                "Specific risk: revenue concentration in two enterprise customers "
+                                "requires customer-level retention and renewal backup."
+                            ),
+                            "claim_refs": ["claim-risk"],
+                        }
+                    },
+                    "risks": [
+                        Risk(
+                            risk_id="risk-customer-concentration",
+                            description=(
+                                "Specific risk: revenue concentration in two enterprise customers."
+                            ),
+                            severity=RiskSeverity.HIGH,
+                            claim_ids=["claim-risk"],
+                        )
+                    ],
+                    "questions_for_founder": [
+                        "What percentage of revenue comes from the top two customers?"
+                    ],
+                }
+            )
+            for report in reports
+        ]
+        bundle = AnalysisBundle(
+            deal_id="deal-001",
+            tenant_id="tenant-001",
+            run_id="run-001",
+            reports=reports,
+            timestamp=_TIMESTAMP,
+        )
+
+        result = generator.generate(
+            ctx=_make_investment_grade_context(),
+            bundle=bundle,
+            scorecard=_make_scorecard(routing=RoutingAction.HOLD),
+            deal_name="Acme Corp",
+            generated_at=_TIMESTAMP,
+            deliverable_id_prefix="del-run001",
+        )
+
+        executive_summary = "\n".join(fact.text for fact in result.ic_memo.executive_summary.facts)
+        risks = "\n".join(fact.text for fact in result.ic_memo.risks_and_mitigations.facts)
+        recommendation = "\n".join(fact.text for fact in result.ic_memo.recommendation.facts)
+
+        assert "Investment thesis:" in executive_summary
+        assert "Upside:" in executive_summary
+        assert "Diligence gaps:" in executive_summary
+        assert "Specific risk:" in risks
+        assert "Follow-up required" not in risks
+        assert "Recommendation:" in recommendation
+        assert "diligence gaps" in recommendation.lower()
 
 
 class TestDeliverablesGeneratorDeterminism:

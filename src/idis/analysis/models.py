@@ -43,6 +43,42 @@ class EnrichmentRef(BaseModel):
     )
 
 
+class AnalysisClaimReference(BaseModel):
+    """Source-backed claim summary available to Layer 2 analysis agents."""
+
+    model_config = ConfigDict(frozen=True)
+
+    claim_id: str = Field(..., min_length=1, description="Claim identifier")
+    claim_text: str = Field(default="", description="Claim text available for analysis")
+    claim_class: str = Field(default="", description="Domain class for this claim")
+    source_summary: str | None = Field(
+        default=None,
+        description="Human-readable source/span summary for deliverable evidence traces",
+    )
+    sanad_grade: str | None = Field(default=None, description="Sanad grade when available")
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    materiality: str | None = None
+    claim_verdict: str | None = None
+    document_id: str | None = None
+    source_span_id: str | None = None
+
+
+class AnalysisCalcReference(BaseModel):
+    """Source-backed calculation summary available to Layer 2 analysis agents."""
+
+    model_config = ConfigDict(frozen=True)
+
+    calc_id: str = Field(..., min_length=1, description="Calculation identifier")
+    calc_type: str = Field(default="", description="Calculation type/name")
+    output_summary: str = Field(default="", description="Readable calculation result")
+    input_claim_ids: list[str] = Field(default_factory=list)
+    source_summary: str | None = Field(
+        default=None,
+        description="Human-readable calc source/provenance summary",
+    )
+    reproducibility_hash: str | None = None
+
+
 class AnalysisContext(BaseModel):
     """Input context for analysis agents.
 
@@ -60,6 +96,14 @@ class AnalysisContext(BaseModel):
     enrichment_refs: dict[str, EnrichmentRef] = Field(
         default_factory=dict,
         description="Enrichment references keyed by ref_id, each with full provenance",
+    )
+    claim_registry: dict[str, AnalysisClaimReference] = Field(
+        default_factory=dict,
+        description="Readable claim summaries keyed by claim_id for Layer 2 analysis",
+    )
+    calc_registry: dict[str, AnalysisCalcReference] = Field(
+        default_factory=dict,
+        description="Readable calculation summaries keyed by calc_id for Layer 2 analysis",
     )
     company_name: str = Field(default="", description="Company name for deal context")
     stage: str = Field(default="", description="Deal stage (e.g. Series A, Seed)")

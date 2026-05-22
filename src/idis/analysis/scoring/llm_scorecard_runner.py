@@ -64,8 +64,23 @@ def _build_context_payload(
     Returns:
         JSON string with stable key ordering.
     """
-    claim_registry: dict[str, str] = {cid: cid for cid in sorted(ctx.claim_ids)}
-    calc_registry: dict[str, str] = {cid: cid for cid in sorted(ctx.calc_ids)}
+    claim_registry: dict[str, Any] = {}
+    for cid in sorted(ctx.claim_ids):
+        claim = ctx.claim_registry.get(cid)
+        claim_registry[cid] = (
+            claim.model_dump(mode="json", exclude_none=True)
+            if claim is not None
+            else {"claim_id": cid}
+        )
+
+    calc_registry: dict[str, Any] = {}
+    for cid in sorted(ctx.calc_ids):
+        calc = ctx.calc_registry.get(cid)
+        calc_registry[cid] = (
+            calc.model_dump(mode="json", exclude_none=True)
+            if calc is not None
+            else {"calc_id": cid}
+        )
     enrichment_refs: dict[str, dict[str, str]] = {
         ref_id: {
             "ref_id": ref.ref_id,

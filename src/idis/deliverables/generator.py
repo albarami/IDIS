@@ -31,10 +31,13 @@ from idis.deliverables.qa_brief import QABriefBuilder
 from idis.deliverables.screening import ScreeningSnapshotBuilder
 from idis.deliverables.truth_dashboard import TruthDashboardBuilder
 from idis.models.deliverables import (
+    AuditAppendix,
+    AuditAppendixEntry,
     DeclineLetter,
     DeliverablesBundle,
     ICMemo,
     QABrief,
+    RefType,
     ScreeningSnapshot,
     TruthDashboard,
 )
@@ -83,6 +86,8 @@ _AGENT_TYPE_TO_SNAPSHOT_SECTION: dict[str, str] = {
 _DIMENSION_TO_TOPIC: dict[str, str] = {
     dim.value: dim.value.replace("_", " ").title() for dim in ScoreDimension
 }
+_MAX_SCORECARD_CLAIM_REFS_PER_FACT = 4
+_MAX_SCORECARD_CALC_REFS_PER_FACT = 2
 
 
 class DeliverablesGeneratorError(Exception):
@@ -204,6 +209,13 @@ class DeliverablesGenerator:
                     generated_at=generated_at,
                     deliverable_id=f"{deliverable_id_prefix}-decline",
                 )
+
+            screening = self._with_readable_appendix(screening, ctx)
+            memo = self._with_readable_appendix(memo, ctx)
+            truth = self._with_readable_appendix(truth, ctx)
+            qa = self._with_readable_appendix(qa, ctx)
+            if decline is not None:
+                decline = self._with_readable_appendix(decline, ctx)
 
             self._validate_nff(screening, memo, truth, qa, decline)
 
@@ -334,10 +346,13 @@ class DeliverablesGenerator:
                                     "calc_refs": list(report.supported_calc_ids),
                                 }
                             )
-                        elif isinstance(item, dict) and item.get("text"):
+                        elif isinstance(item, dict):
+                            item_text = self._section_text(item)
+                            if not item_text:
+                                continue
                             facts.append(
                                 {
-                                    "text": item["text"],
+                                    "text": item_text,
                                     "claim_refs": item.get(
                                         "claim_refs",
                                         list(report.supported_claim_ids),
@@ -350,8 +365,35 @@ class DeliverablesGenerator:
                                     "confidence": item.get("confidence"),
                                 }
                             )
+                elif isinstance(value, dict):
+                    value_text = self._section_text(value)
+                    if value_text:
+                        facts.append(
+                            {
+                                "text": value_text,
+                                "claim_refs": value.get(
+                                    "claim_refs",
+                                    list(report.supported_claim_ids),
+                                ),
+                                "calc_refs": value.get(
+                                    "calc_refs",
+                                    list(report.supported_calc_ids),
+                                ),
+                                "sanad_grade": value.get("sanad_grade"),
+                                "confidence": value.get("confidence"),
+                            }
+                        )
 
         return facts
+
+    @staticmethod
+    def _section_text(value: dict[str, Any]) -> str:
+        """Return text from the section shapes used by specialist agents."""
+        for key in ("text", "content", "narrative", "summary"):
+            text = value.get(key)
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+        return ""
 
     def _build_screening_snapshot(
         self,
@@ -443,14 +485,41 @@ class DeliverablesGenerator:
                 else:
                     builder.add_company_overview_fact(**kwargs)
 
+            for risk in report.risks:
+                builder.add_risks_fact(
+                    text=f"{risk.severity.value} risk: {risk.description}",
+                    claim_refs=list(risk.claim_ids),
+                    calc_refs=list(risk.calc_ids),
+                )
+
         all_claim_refs: list[str] = []
         all_calc_refs: list[str] = []
         for ds in scorecard.dimension_scores.values():
-            all_claim_refs.extend(ds.supported_claim_ids)
-            all_calc_refs.extend(ds.supported_calc_ids)
+            all_claim_refs.extend(
+                self._bounded_refs(
+                    ds.supported_claim_ids,
+                    limit=_MAX_SCORECARD_CLAIM_REFS_PER_FACT,
+                )
+            )
+            all_calc_refs.extend(
+                self._bounded_refs(
+                    ds.supported_calc_ids,
+                    limit=_MAX_SCORECARD_CALC_REFS_PER_FACT,
+                )
+            )
         builder.add_truth_dashboard_fact(
             text=f"Composite score: {scorecard.composite_score:.1f} "
             f"({scorecard.score_band.value}) → {scorecard.routing.value}",
+            claim_refs=sorted(set(all_claim_refs)),
+            calc_refs=sorted(set(all_calc_refs)),
+        )
+        builder.add_recommendation_fact(
+            text=(
+                f"Recommendation: {scorecard.routing.value} at composite score "
+                f"{scorecard.composite_score:.1f} ({scorecard.score_band.value}). "
+                "Proceed only after the risk register, financial support, and QA "
+                "diligence gaps are resolved."
+            ),
             claim_refs=sorted(set(all_claim_refs)),
             calc_refs=sorted(set(all_calc_refs)),
         )
@@ -459,6 +528,121 @@ class DeliverablesGenerator:
         builder.set_sanad_grade_distribution(grade_dist)
 
         return builder.build()
+
+    def _with_readable_appendix(self, deliverable: Any, ctx: AnalysisContext) -> Any:
+        """Attach readable source summaries to existing audit appendix entries."""
+        appendix = getattr(deliverable, "audit_appendix", None)
+        if appendix is None:
+            return deliverable
+
+        entries: list[AuditAppendixEntry] = []
+        for entry in appendix.entries:
+            source_summary = entry.source_summary
+            sanad_grade = entry.sanad_grade
+            reproducibility_hash = entry.reproducibility_hash
+            if entry.ref_type == RefType.CLAIM:
+                claim = ctx.claim_registry.get(entry.ref_id)
+                if claim is not None:
+                    source_summary = source_summary or self._claim_appendix_summary(claim)
+                    sanad_grade = sanad_grade or claim.sanad_grade
+            elif entry.ref_type == RefType.CALC:
+                calc = ctx.calc_registry.get(entry.ref_id)
+                if calc is not None:
+                    source_summary = source_summary or calc.source_summary or calc.output_summary
+                    reproducibility_hash = reproducibility_hash or calc.reproducibility_hash
+            entries.append(
+                entry.model_copy(
+                    update={
+                        "source_summary": source_summary,
+                        "sanad_grade": sanad_grade,
+                        "reproducibility_hash": reproducibility_hash,
+                    }
+                )
+            )
+
+        enriched = AuditAppendix(
+            entries=entries,
+            generated_at=appendix.generated_at,
+            deal_id=appendix.deal_id,
+            tenant_id=appendix.tenant_id,
+        )
+        return deliverable.model_copy(update={"audit_appendix": enriched})
+
+    @staticmethod
+    def _claim_appendix_summary(claim: Any) -> str:
+        """Build a readable evidence summary from claim text and source locator."""
+        claim_text = DeliverablesGenerator._clean_appendix_claim_text(
+            str(getattr(claim, "claim_text", "") or "")
+        )
+        source = str(getattr(claim, "source_summary", "") or "").strip()
+        if DeliverablesGenerator._is_low_signal_appendix_claim(claim_text):
+            if source:
+                return f"low-signal extracted claim omitted from memo text. Source: {source}"
+            return "low-signal extracted claim omitted from memo text."
+        if claim_text and source:
+            source_clause = f" Source: {source}"
+            max_claim_len = max(40, 180 - len(source_clause))
+            claim_summary = DeliverablesGenerator._truncate_text(claim_text, max_claim_len)
+            return f"{claim_summary}{source_clause}"
+        return claim_text or source
+
+    @staticmethod
+    def _clean_appendix_claim_text(text: str) -> str:
+        """Normalize source summaries before rendering evidence indexes."""
+        cleaned = text.replace("\u00a0", " ").replace("#", "; ")
+        cleaned = cleaned.replace("cashpurchases", "cash purchases")
+        cleaned = " ".join(cleaned.split()).strip(" -:;")
+        return DeliverablesGenerator._truncate_text(cleaned, 180)
+
+    @staticmethod
+    def _is_low_signal_appendix_claim(text: str) -> bool:
+        """Detect raw snippets that should not be dumped into evidence indexes."""
+        lowered = text.lower()
+        low_signal_markers = (
+            "orig co name",
+            "trace#",
+            "online international wire transfer",
+            "foreign cur bus acct",
+            "ben:/",
+            "/ocmt/",
+            "/exch/",
+            "business expenses",
+            "consultancy expenses",
+            "in witness whereof",
+            "duly executed and delivered",
+            "stockholder proposal",
+            "proxy statement",
+            "during the term of this agreement",
+            "upon termination",
+            "pennsylvania ave",
+            "e-mail:",
+            "finance@",
+            "entemrises",
+            "peopk",
+            "eng,1ge",
+            "chips credit",
+            "wells fargo",
+            "b/o:",
+            "nbnf=",
+            "/ac-",
+            "org=/",
+            "technolo~",
+            "connectivicy",
+            "toi)ics",
+            "ericsson booth",
+        )
+        if any(marker in lowered for marker in low_signal_markers):
+            return True
+        if "momentmomentmoment" in lowered or "moment moment moment" in lowered:
+            return True
+        return lowered in {"", "$", "0.00"}
+
+    @staticmethod
+    def _truncate_text(text: str, limit: int) -> str:
+        """Truncate text at a word boundary for readable evidence indexes."""
+        if len(text) <= limit:
+            return text
+        return text[: max(0, limit - 3)].rstrip(" ,;:.") + "..."
 
     def _build_truth_dashboard(
         self,
@@ -486,8 +670,14 @@ class DeliverablesGenerator:
                 dimension=dim.value,
                 assertion=ds.rationale,
                 verdict=verdict,
-                claim_refs=list(ds.supported_claim_ids),
-                calc_refs=list(ds.supported_calc_ids),
+                claim_refs=self._bounded_refs(
+                    ds.supported_claim_ids,
+                    limit=_MAX_SCORECARD_CLAIM_REFS_PER_FACT,
+                ),
+                calc_refs=self._bounded_refs(
+                    ds.supported_calc_ids,
+                    limit=_MAX_SCORECARD_CALC_REFS_PER_FACT,
+                ),
                 sanad_grade=None,
                 confidence=ds.confidence,
             )
@@ -673,6 +863,11 @@ class DeliverablesGenerator:
         if score >= 0.35:
             return "UNVERIFIED"
         return "REFUTED"
+
+    @staticmethod
+    def _bounded_refs(refs: list[str] | tuple[str, ...], *, limit: int) -> list[str]:
+        """Keep exported scorecard evidence references concise and readable."""
+        return sorted(set(refs))[:limit]
 
     def _emit_audit(self, event_type: str, data: dict[str, Any]) -> None:
         """Emit an audit event. Fail-closed on sink failure.

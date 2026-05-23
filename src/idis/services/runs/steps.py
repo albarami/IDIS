@@ -129,7 +129,7 @@ def build_run_context(
         extract_fn=partial(_run_snapshot_extraction, db_conn=db_conn),
         grade_fn=partial(_run_snapshot_auto_grade, db_conn=db_conn),
         calc_fn=partial(_run_snapshot_calc, db_conn=db_conn),
-        enrich_fn=_run_full_enrichment if is_full else None,
+        enrich_fn=partial(_run_full_enrichment, db_conn=db_conn) if is_full else None,
         debate_fn=partial(_run_full_debate, db_conn=db_conn) if is_full else None,
         analysis_fn=(
             partial(_run_full_analysis, db_conn=db_conn, deal_metadata=deal_metadata)

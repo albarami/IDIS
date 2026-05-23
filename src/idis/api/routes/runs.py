@@ -224,9 +224,20 @@ async def start_run(
     if request_body.mode == "FULL" and is_strict_full_live_required(
         dotenv_path=strict_dotenv_path,
     ):
+        from idis.persistence.repositories.enrichment_credentials import (
+            get_enrichment_credentials_repository,
+        )
+        from idis.services.enrichment.byol_credentials import SafeByolProviderHealthChecker
+
         strict_report = build_strict_full_live_readiness_report(
             preflight_corpus=preflight_corpus,
             dotenv_path=strict_dotenv_path,
+            tenant_id=tenant_ctx.tenant_id,
+            byol_credential_repo=get_enrichment_credentials_repository(
+                db_conn,
+                tenant_ctx.tenant_id,
+            ),
+            byol_health_checker=SafeByolProviderHealthChecker(),
         )
         if not strict_report.may_proceed:
             raise IdisHttpError(
@@ -1017,6 +1028,7 @@ def _run_full_enrichment(
     deal_id: str,
     created_claim_ids: list[str],
     calc_ids: list[str],
+    db_conn: Any = None,
 ) -> dict[str, Any]:
     """Run enrichment for all configured providers in a FULL pipeline run.
 
@@ -1030,11 +1042,15 @@ def _run_full_enrichment(
         deal_id: Deal UUID.
         created_claim_ids: Claim IDs from extraction/grading.
         calc_ids: Calc IDs from calculation step.
+        db_conn: Optional database connection for durable BYOL credential repository.
 
     Returns:
         Dict with provider_count, result_count, blocked_count, enrichment_refs.
     """
     from idis.audit.sink import InMemoryAuditSink
+    from idis.persistence.repositories.enrichment_credentials import (
+        get_enrichment_credentials_repository,
+    )
     from idis.services.enrichment.models import (
         EnrichmentPurpose,
         EnrichmentQuery,
@@ -1045,7 +1061,15 @@ def _run_full_enrichment(
     from idis.services.enrichment.service import create_default_enrichment_service
 
     audit_sink = InMemoryAuditSink()
-    service = create_default_enrichment_service(audit_sink=audit_sink)
+    strict_dotenv_path = os.environ.get(IDIS_STRICT_DOTENV_PATH_ENV)
+    strict_full_live = is_strict_full_live_required(dotenv_path=strict_dotenv_path)
+    service = create_default_enrichment_service(
+        audit_sink=audit_sink,
+        credential_repo=get_enrichment_credentials_repository(db_conn, tenant_id),
+        strict_full_live=strict_full_live,
+        tenant_id=tenant_id,
+        strict_dotenv_path=strict_dotenv_path,
+    )
     providers = service.list_providers()
 
     result_count = 0
@@ -1063,7 +1087,9 @@ def _run_full_enrichment(
         provider_id = provider_info["provider_id"]
         try:
             result = service.enrich(provider_id=provider_id, request=request)
-        except Exception:
+        except Exception as exc:
+            if strict_full_live:
+                raise RuntimeError(f"Strict enrichment provider failed: {provider_id}") from exc
             logger.warning(
                 "Enrichment provider %s failed for deal %s in run %s",
                 provider_id,
@@ -1086,7 +1112,11 @@ def _run_full_enrichment(
             EnrichmentStatus.BLOCKED_RIGHTS,
             EnrichmentStatus.BLOCKED_MISSING_BYOL,
         ):
+            if strict_full_live:
+                raise RuntimeError(f"Strict enrichment provider blocked: {provider_id}")
             blocked_count += 1
+        elif result.status == EnrichmentStatus.ERROR and strict_full_live:
+            raise RuntimeError(f"Strict enrichment provider failed: {provider_id}")
 
     return {
         "provider_count": len(providers),

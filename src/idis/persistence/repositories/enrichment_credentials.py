@@ -19,9 +19,15 @@ import logging
 import os
 import secrets
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
+from sqlalchemy import text
+
+from idis.persistence.db import is_postgres_configured, set_tenant_local
+
+if TYPE_CHECKING:
+    from sqlalchemy import Connection
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +77,8 @@ class InMemoryCredentialRepository:
     Credentials are stored as plaintext dicts keyed by (tenant_id, connector_id).
     No encryption applied in-memory mode.
     """
+
+    is_durable = False
 
     def __init__(self) -> None:
         """Initialize empty credential store."""
@@ -200,6 +208,167 @@ class InMemoryCredentialRepository:
         """Clear all stored credentials. For testing only."""
         self._store.clear()
         self._metadata.clear()
+
+
+class PostgresCredentialRepository:
+    """Tenant-scoped Postgres BYOL credential repository.
+
+    Credentials are encrypted before persistence using the existing
+    ``IDIS_ENRICHMENT_ENCRYPTION_KEY`` helper path.
+    """
+
+    is_durable = True
+
+    def __init__(self, conn: Connection, tenant_id: str) -> None:
+        """Initialize repository with a transaction-scoped tenant context.
+
+        Args:
+            conn: SQLAlchemy connection in an active transaction.
+            tenant_id: Tenant UUID string for RLS scoping.
+        """
+        self._conn = conn
+        self._tenant_id = tenant_id
+        set_tenant_local(conn, tenant_id)
+
+    def store(
+        self,
+        *,
+        tenant_id: str,
+        connector_id: str,
+        credentials: dict[str, str],
+    ) -> CredentialRecord:
+        """Encrypt and store credentials for a tenant/provider pair."""
+        self._ensure_tenant(tenant_id)
+        now = datetime.now(UTC)
+        existing = self._metadata(tenant_id=tenant_id, connector_id=connector_id)
+        ciphertext = encrypt_credentials(credentials)
+        self._conn.execute(
+            text(
+                """
+                INSERT INTO enrichment_credentials
+                    (tenant_id, connector_id, ciphertext, created_at, rotated_at, revoked_at)
+                VALUES
+                    (:tenant_id, :connector_id, :ciphertext, :created_at, NULL, NULL)
+                ON CONFLICT (tenant_id, connector_id)
+                DO UPDATE SET
+                    ciphertext = :ciphertext,
+                    rotated_at = :rotated_at,
+                    revoked_at = NULL
+                """
+            ),
+            {
+                "tenant_id": tenant_id,
+                "connector_id": connector_id,
+                "ciphertext": ciphertext,
+                "created_at": now,
+                "rotated_at": now,
+            },
+        )
+        return CredentialRecord(
+            tenant_id=tenant_id,
+            connector_id=connector_id,
+            created_at=existing.created_at if existing is not None else now,
+            rotated_at=now if existing is not None else None,
+            revoked_at=None,
+        )
+
+    def load(self, *, tenant_id: str, connector_id: str) -> dict[str, str]:
+        """Load and decrypt active credentials for a tenant/provider pair."""
+        self._ensure_tenant(tenant_id)
+        result = self._conn.execute(
+            text(
+                """
+                SELECT ciphertext
+                FROM enrichment_credentials
+                WHERE tenant_id = :tenant_id
+                  AND connector_id = :connector_id
+                  AND revoked_at IS NULL
+                """
+            ),
+            {"tenant_id": tenant_id, "connector_id": connector_id},
+        )
+        row = result.fetchone()
+        if row is None:
+            raise CredentialNotFoundError(tenant_id, connector_id)
+        return decrypt_credentials(str(row.ciphertext))
+
+    def revoke(self, *, tenant_id: str, connector_id: str) -> CredentialRecord:
+        """Revoke active credentials for a tenant/provider pair."""
+        self._ensure_tenant(tenant_id)
+        existing = self._metadata(tenant_id=tenant_id, connector_id=connector_id)
+        if existing is None:
+            raise CredentialNotFoundError(tenant_id, connector_id)
+        now = datetime.now(UTC)
+        self._conn.execute(
+            text(
+                """
+                UPDATE enrichment_credentials
+                SET revoked_at = :revoked_at
+                WHERE tenant_id = :tenant_id
+                  AND connector_id = :connector_id
+                """
+            ),
+            {
+                "tenant_id": tenant_id,
+                "connector_id": connector_id,
+                "revoked_at": now,
+            },
+        )
+        return existing.model_copy(update={"revoked_at": now})
+
+    def exists(self, *, tenant_id: str, connector_id: str) -> bool:
+        """Return whether active credentials exist for a tenant/provider pair."""
+        self._ensure_tenant(tenant_id)
+        result = self._conn.execute(
+            text(
+                """
+                SELECT 1
+                FROM enrichment_credentials
+                WHERE tenant_id = :tenant_id
+                  AND connector_id = :connector_id
+                  AND revoked_at IS NULL
+                """
+            ),
+            {"tenant_id": tenant_id, "connector_id": connector_id},
+        )
+        return result.fetchone() is not None
+
+    def _metadata(self, *, tenant_id: str, connector_id: str) -> CredentialRecord | None:
+        result = self._conn.execute(
+            text(
+                """
+                SELECT tenant_id, connector_id, created_at, rotated_at, revoked_at
+                FROM enrichment_credentials
+                WHERE tenant_id = :tenant_id
+                  AND connector_id = :connector_id
+                """
+            ),
+            {"tenant_id": tenant_id, "connector_id": connector_id},
+        )
+        row = result.fetchone()
+        if row is None:
+            return None
+        return CredentialRecord(
+            tenant_id=str(row.tenant_id),
+            connector_id=str(row.connector_id),
+            created_at=row.created_at,
+            rotated_at=row.rotated_at,
+            revoked_at=row.revoked_at,
+        )
+
+    def _ensure_tenant(self, tenant_id: str) -> None:
+        if tenant_id != self._tenant_id:
+            raise ValueError("Tenant mismatch in credential repository access")
+
+
+def get_enrichment_credentials_repository(
+    conn: Connection | None,
+    tenant_id: str,
+) -> PostgresCredentialRepository | InMemoryCredentialRepository:
+    """Return the configured enrichment credential repository."""
+    if conn is not None and is_postgres_configured():
+        return PostgresCredentialRepository(conn, tenant_id)
+    return InMemoryCredentialRepository()
 
 
 def _get_encryption_key() -> bytes:

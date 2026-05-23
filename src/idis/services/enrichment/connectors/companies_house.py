@@ -113,11 +113,11 @@ class CompaniesHouseConnector:
 
         try:
             response_data = self._make_request(url=url, ctx=ctx, api_key=api_key)
-        except CompaniesHouseFetchError as exc:
-            logger.warning("Companies House fetch failed for %s: %s", company_name, exc)
+        except CompaniesHouseFetchError:
+            logger.warning("Companies House fetch failed for safe public lookup")
             return EnrichmentResult(
                 status=EnrichmentStatus.ERROR,
-                normalized={"error": str(exc)},
+                normalized={"error": "Companies House provider fetch failed"},
             )
 
         if response_data is None:

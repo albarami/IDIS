@@ -105,11 +105,11 @@ class WorldBankConnector:
 
         try:
             response_data = self._make_request(url=url, ctx=ctx)
-        except WorldBankFetchError as exc:
-            logger.warning("World Bank fetch failed for %s: %s", jurisdiction, exc)
+        except WorldBankFetchError:
+            logger.warning("World Bank fetch failed for safe public lookup")
             return EnrichmentResult(
                 status=EnrichmentStatus.ERROR,
-                normalized={"error": str(exc)},
+                normalized={"error": "World Bank provider fetch failed"},
             )
 
         if response_data is None:

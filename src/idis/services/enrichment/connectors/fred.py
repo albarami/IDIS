@@ -115,11 +115,11 @@ class FredConnector:
 
         try:
             response_data = self._make_request(url=url, ctx=ctx)
-        except FredFetchError as exc:
-            logger.warning("FRED fetch failed for %s: %s", series_id, exc)
+        except FredFetchError:
+            logger.warning("FRED fetch failed for safe public lookup")
             return EnrichmentResult(
                 status=EnrichmentStatus.ERROR,
-                normalized={"error": str(exc)},
+                normalized={"error": "FRED provider fetch failed"},
             )
 
         if response_data is None:

@@ -99,11 +99,11 @@ class WaybackConnector:
 
         try:
             response_data = self._make_request(url=url, ctx=ctx)
-        except WaybackFetchError as exc:
-            logger.warning("Wayback fetch failed for %s: %s", domain, exc)
+        except WaybackFetchError:
+            logger.warning("Wayback fetch failed for safe public lookup")
             return EnrichmentResult(
                 status=EnrichmentStatus.ERROR,
-                normalized={"error": str(exc)},
+                normalized={"error": "Wayback provider fetch failed"},
             )
 
         if response_data is None:

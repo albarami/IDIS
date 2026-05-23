@@ -103,11 +103,11 @@ class QatarOpenDataConnector:
 
         try:
             response_data = self._make_request(url=url, ctx=ctx)
-        except QatarOpenDataFetchError as exc:
-            logger.warning("Qatar Open Data fetch failed for %s: %s", company_name, exc)
+        except QatarOpenDataFetchError:
+            logger.warning("Qatar Open Data fetch failed for safe public lookup")
             return EnrichmentResult(
                 status=EnrichmentStatus.ERROR,
-                normalized={"error": str(exc)},
+                normalized={"error": "Qatar Open Data provider fetch failed"},
             )
 
         if response_data is None:

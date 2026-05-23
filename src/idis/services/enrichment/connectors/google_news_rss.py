@@ -99,11 +99,11 @@ class GoogleNewsRssConnector:
 
         try:
             raw_xml = self._make_request(url=url, ctx=ctx)
-        except GoogleNewsRssFetchError as exc:
-            logger.warning("Google News RSS fetch failed for %s: %s", company_name, exc)
+        except GoogleNewsRssFetchError:
+            logger.warning("Google News RSS fetch failed for safe public lookup")
             return EnrichmentResult(
                 status=EnrichmentStatus.ERROR,
-                normalized={"error": str(exc)},
+                normalized={"error": "Google News RSS provider fetch failed"},
             )
 
         if raw_xml is None:
@@ -111,11 +111,11 @@ class GoogleNewsRssConnector:
 
         try:
             items = self._parse_rss(raw_xml)
-        except GoogleNewsRssParseError as exc:
-            logger.warning("Google News RSS parse failed for %s: %s", company_name, exc)
+        except GoogleNewsRssParseError:
+            logger.warning("Google News RSS parse failed for safe public lookup")
             return EnrichmentResult(
                 status=EnrichmentStatus.ERROR,
-                normalized={"error": str(exc)},
+                normalized={"error": "Google News RSS provider parse failed"},
             )
 
         normalized = self._normalize_response(items, company_name)

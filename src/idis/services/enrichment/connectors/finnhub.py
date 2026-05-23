@@ -110,11 +110,11 @@ class FinnhubConnector:
 
         try:
             response_data = self._make_request(url=url, ctx=ctx)
-        except FinnhubFetchError as exc:
-            logger.warning("Finnhub fetch failed for %s: %s", ticker, exc)
+        except FinnhubFetchError:
+            logger.warning("Finnhub fetch failed for safe public lookup")
             return EnrichmentResult(
                 status=EnrichmentStatus.ERROR,
-                normalized={"error": str(exc)},
+                normalized={"error": "Finnhub provider fetch failed"},
             )
 
         if response_data is None:

@@ -28,6 +28,10 @@ from idis.persistence.repositories.enrichment_credentials import (
     CredentialNotFoundError,
     InMemoryCredentialRepository,
 )
+from idis.services.enrichment.byol_credentials import (
+    ByolCredentialRepository,
+    load_byol_credentials_from_env,
+)
 from idis.services.enrichment.cache_policy import (
     EnrichmentCacheStore,
     store_cache_entry,
@@ -70,7 +74,7 @@ class EnrichmentService:
         *,
         registry: EnrichmentProviderRegistry,
         audit_sink: AuditSink,
-        credential_repo: InMemoryCredentialRepository,
+        credential_repo: ByolCredentialRepository,
         cache_store: EnrichmentCacheStore,
         environment: EnvironmentMode = EnvironmentMode.DEV,
     ) -> None:
@@ -216,18 +220,18 @@ class EnrichmentService:
         # Step 5: Call provider fetch
         try:
             result = descriptor.connector.fetch(request, ctx)
-        except Exception as exc:
+        except Exception:
             self._emit_audit_event(
                 event_type="enrichment.failed",
                 tenant_id=request.tenant_id,
                 provider_id=provider_id,
                 request_id=request_id,
                 severity="MEDIUM",
-                details={"error": str(exc)},
+                details={"error": "provider_fetch_failed"},
             )
             return EnrichmentResult(
                 status=EnrichmentStatus.ERROR,
-                normalized={"error": f"Provider fetch failed: {exc}"},
+                normalized={"error": "Provider fetch failed"},
             )
 
         # Step 6: Persist cache entry
@@ -324,19 +328,33 @@ def create_default_enrichment_service(
     *,
     audit_sink: AuditSink,
     environment: EnvironmentMode = EnvironmentMode.DEV,
+    credential_repo: ByolCredentialRepository | None = None,
+    strict_full_live: bool = False,
+    tenant_id: str | None = None,
+    strict_dotenv_path: str | None = None,
 ) -> EnrichmentService:
     """Create an EnrichmentService with all registered connectors.
 
     Args:
         audit_sink: Audit sink for event emission.
         environment: Deployment environment mode.
+        credential_repo: Optional tenant credential repository abstraction.
+        strict_full_live: Whether to load strict BYOL runtime config.
+        tenant_id: Tenant scope used when strict BYOL loading is enabled.
+        strict_dotenv_path: Optional explicit strict-runtime dotenv path.
 
     Returns:
         Configured EnrichmentService instance.
     """
     registry = _build_default_registry()
 
-    credential_repo = InMemoryCredentialRepository()
+    credential_repo = credential_repo or InMemoryCredentialRepository()
+    if strict_full_live and tenant_id is not None:
+        load_byol_credentials_from_env(
+            tenant_id=tenant_id,
+            credential_repo=credential_repo,
+            dotenv_path=strict_dotenv_path,
+        )
     cache_store = EnrichmentCacheStore()
 
     return EnrichmentService(

@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from idis.api.auth import RequireTenantContext
 from idis.api.errors import IdisHttpError
 from idis.audit.sink import AuditSinkError
-from idis.parsers.registry import detect_format
+from idis.parsers.registry import detect_format, is_image_source, is_media_source
 from idis.services.ingestion import IngestionContext
 from idis.services.ingestion.service import (
     DEFAULT_MAX_BYTES,
@@ -517,6 +517,11 @@ def _reject_unsupported_upload_format(data: bytes, filename: str) -> None:
     """Reject unsupported magic bytes before ingestion persists storage or corpus rows."""
     detected_format = detect_format(data)
     if detected_format is not None:
+        return
+    if is_image_source(filename=filename, mime_type=None) or is_media_source(
+        filename=filename,
+        mime_type=None,
+    ):
         return
     raise IdisHttpError(
         status_code=400,

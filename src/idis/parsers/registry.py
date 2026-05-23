@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import zipfile
 from io import BytesIO
+from pathlib import PurePath
 
 from idis.parsers.base import (
     ParseError,
@@ -21,6 +22,8 @@ from idis.parsers.base import (
     ParseResult,
 )
 from idis.parsers.docx import parse_docx
+from idis.parsers.image import parse_image
+from idis.parsers.media import MediaConfig, parse_media
 from idis.parsers.ocr import OcrConfig
 from idis.parsers.pdf import parse_pdf
 from idis.parsers.pptx import parse_pptx
@@ -28,6 +31,10 @@ from idis.parsers.xlsx import parse_xlsx
 
 PDF_MAGIC = b"%PDF-"
 ZIP_MAGIC = b"PK\x03\x04"
+IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"})
+IMAGE_MIME_PREFIX = "image/"
+MEDIA_EXTENSIONS = frozenset({".mp4"})
+MEDIA_MIME_TYPES = frozenset({"video/mp4", "application/mp4"})
 
 
 def _is_pdf(data: bytes) -> bool:
@@ -98,6 +105,7 @@ def parse_bytes(
     mime_type: str | None = None,
     limits: ParseLimits | None = None,
     ocr_config: OcrConfig | None = None,
+    media_config: MediaConfig | None = None,
 ) -> ParseResult:
     """Parse document bytes by detecting format and dispatching to parser.
 
@@ -106,7 +114,8 @@ def parse_bytes(
         filename: Optional filename (used for error context, not detection).
         mime_type: Optional MIME type (used for error context, not detection).
         limits: Optional parsing limits (defaults to ParseLimits()).
-        ocr_config: Optional explicit OCR execution config for PDF parsing.
+        ocr_config: Optional explicit OCR execution config for PDF/image parsing.
+        media_config: Optional explicit media transcription config for media parsing.
 
     Returns:
         ParseResult from the appropriate parser, or error result for
@@ -148,6 +157,12 @@ def parse_bytes(
     if detected_format == "PPTX":
         return parse_pptx(data, limits=limits)
 
+    if is_image_source(filename=filename, mime_type=mime_type):
+        return parse_image(data, limits=limits, ocr_config=ocr_config)
+
+    if is_media_source(filename=filename, mime_type=mime_type):
+        return parse_media(data, limits=limits, media_config=media_config)
+
     return ParseResult(
         doc_type="UNKNOWN",
         success=False,
@@ -163,3 +178,21 @@ def parse_bytes(
             )
         ],
     )
+
+
+def is_image_source(*, filename: str | None, mime_type: str | None) -> bool:
+    """Return whether filename or MIME type requests configured image OCR dispatch."""
+    extension = PurePath(filename or "").suffix.lower()
+    if extension in IMAGE_EXTENSIONS:
+        return True
+    normalized_mime = str(mime_type or "").split(";", maxsplit=1)[0].strip().lower()
+    return normalized_mime.startswith(IMAGE_MIME_PREFIX)
+
+
+def is_media_source(*, filename: str | None, mime_type: str | None) -> bool:
+    """Return whether filename or MIME type requests configured media STT dispatch."""
+    extension = PurePath(filename or "").suffix.lower()
+    if extension in MEDIA_EXTENSIONS:
+        return True
+    normalized_mime = str(mime_type or "").split(";", maxsplit=1)[0].strip().lower()
+    return normalized_mime in MEDIA_MIME_TYPES

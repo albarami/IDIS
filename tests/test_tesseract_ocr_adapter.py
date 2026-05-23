@@ -10,7 +10,6 @@ from typing import Any
 
 import pytest
 
-from idis.api.errors import IdisHttpError
 from idis.api.routes.documents import _reject_unsupported_upload_format
 from idis.evaluation.real_example_gate import GateMode, run_real_example_gate
 from idis.parsers.base import ParseErrorCode
@@ -176,12 +175,11 @@ def test_tesseract_adapter_success_parses_image_bytes_when_explicitly_enabled() 
     assert "OCR" in " ".join(span.text_excerpt for span in result.spans)
 
 
-def test_default_upload_admission_still_rejects_image_bytes() -> None:
-    with pytest.raises(IdisHttpError):
-        _reject_unsupported_upload_format(
-            _create_image_text_png("SLICE34 DEFAULT REJECTED"),
-            "scan.png",
-        )
+def test_default_upload_admission_allows_image_for_honest_ingestion_defer() -> None:
+    _reject_unsupported_upload_format(
+        _create_image_text_png("SLICE34 DEFAULT DEFERRED"),
+        "scan.png",
+    )
 
 
 def test_image_ocr_resource_bounds_reject_oversized_or_multipage_images() -> None:

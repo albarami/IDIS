@@ -27,6 +27,7 @@ class DocumentType(StrEnum):
     PPTX = "PPTX"
     XLSX = "XLSX"
     DOCX = "DOCX"
+    IMAGE = "IMAGE"
     AUDIO = "AUDIO"
     VIDEO = "VIDEO"
 

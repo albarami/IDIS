@@ -304,7 +304,17 @@ def test_strict_readiness_byol_clears_component_when_loaded_and_health_passes() 
     }
     assert "enrichment BYOL providers" not in report.blocking_components
     assert report.may_proceed is False
-    assert "OCR" in report.blocking_components
+    assert "OCR" not in report.blocking_components
+
+    report_with_ocr_evidence = build_strict_full_live_readiness_report(
+        data_room_file_extensions=[".png"],
+        env=_full_byol_env(),
+        tenant_id=TENANT_ID,
+        byol_credential_repo=repo,
+        byol_health_checker=_HealthyProvider(),
+        binary_resolver=lambda _binary: None,
+    )
+    assert "OCR" in report_with_ocr_evidence.blocking_components
     encoded = json.dumps(report.model_dump(mode="json"), sort_keys=True)
     for forbidden in _full_byol_env().values():
         assert forbidden not in encoded

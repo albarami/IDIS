@@ -12,6 +12,11 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from idis.parsers.media import (
+    FASTER_WHISPER_ADAPTER_NAME,
+    FasterWhisperMediaConfig,
+    probe_faster_whisper_model,
+)
 from idis.services.enrichment.byol_credentials import (
     ByolCredentialRepository,
     ByolProviderHealthChecker,
@@ -26,6 +31,7 @@ from idis.services.enrichment.byol_credentials import (
 IDIS_REQUIRE_FULL_LIVE_ENV = "IDIS_REQUIRE_FULL_LIVE"
 IDIS_STRICT_DOTENV_PATH_ENV = "IDIS_STRICT_DOTENV_PATH"
 STRICT_FULL_LIVE_BLOCKED = "STRICT_FULL_LIVE_BLOCKED"
+OCR_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"})
 
 PROCESS_ENV_SOURCE = "process"
 DOTENV_ENV_SOURCE = "dotenv"
@@ -77,8 +83,11 @@ TRACKED_ENV_VARS: tuple[str, ...] = (
     "IDIS_API_KEYS",
     "IDIS_OBJECT_STORE_BACKEND",
     "IDIS_OBJECT_STORE_BASE_DIR",
+    "IDIS_OCR_ENABLED",
+    "IDIS_OCR_ADAPTER",
     "IDIS_MEDIA_STT_MODEL_PATH",
     "IDIS_MEDIA_STT_MODEL_NAME",
+    "IDIS_MEDIA_ADAPTER",
     "IDIS_ENRICHMENT_ENCRYPTION_KEY",
     "COMPANIES_HOUSE_API_KEY",
     "GITHUB_API_TOKEN",
@@ -200,6 +209,9 @@ def build_strict_full_live_readiness_report(
     has_media = any(
         extension == ".mp4" for extension in extensions
     ) or _preflight_has_media_document(preflight_corpus)
+    has_ocr_evidence = any(extension in OCR_IMAGE_EXTENSIONS for extension in extensions) or (
+        _preflight_has_ocr_required_document(preflight_corpus)
+    )
     byol_providers = assess_byol_provider_readiness(
         tenant_id=tenant_id,
         credential_repo=byol_credential_repo,
@@ -213,7 +225,7 @@ def build_strict_full_live_readiness_report(
     components = [
         _supported_parsers_extraction(values),
         _durable_runtime(values),
-        _ocr(preflight_corpus=preflight_corpus),
+        _ocr(has_ocr_evidence=has_ocr_evidence, env=values, binary_resolver=resolver),
         _mp4_stt(has_media=has_media, env=values, binary_resolver=resolver),
         _live("deterministic_calculations", "src/idis/services/calc/runner.py"),
         _external_enrichment_apis(
@@ -242,6 +254,7 @@ def build_strict_full_live_readiness_report(
     component_inventory = _build_component_inventory(
         env_source=env_source,
         preflight_corpus=preflight_corpus,
+        has_ocr_evidence=has_ocr_evidence,
         has_media=has_media,
         binary_resolver=resolver,
         byol_providers=byol_providers,
@@ -296,24 +309,84 @@ def _supported_parsers_extraction(env: Mapping[str, str]) -> StrictComponentRead
 
 def _ocr(
     *,
-    preflight_corpus: Sequence[Mapping[str, Any]] | None,
+    has_ocr_evidence: bool,
+    env: Mapping[str, str],
+    binary_resolver: Callable[[str], str | None],
 ) -> StrictComponentReadiness:
-    requires_ocr = _preflight_has_ocr_required_document(preflight_corpus)
-    blocker = (
-        "OCR-required documents are present and OCR is not wired into default FULL ingestion."
-        if requires_ocr
-        else "OCR adapter code exists, but default FULL ingestion does not enable OCR."
+    evidence = (
+        "src/idis/parsers/pdf.py; src/idis/parsers/image.py; "
+        "src/idis/services/ingestion/defaults.py"
     )
+    if not has_ocr_evidence:
+        return StrictComponentReadiness(
+            component_name="ocr",
+            status=StrictComponentStatus.CODE_EXISTS_BUT_NOT_WIRED,
+            blocker_message="",
+            required_env_vars=[],
+            required_services=[],
+            evidence=evidence,
+            may_proceed=True,
+        )
+    if _ocr_runtime_ready(env=env, binary_resolver=binary_resolver):
+        return _live("ocr", evidence)
+    missing_services = []
+    if binary_resolver("tesseract") is None:
+        missing_services.append("tesseract")
+    missing_env = []
+    if not _truthy(env.get("IDIS_OCR_ENABLED")):
+        missing_env.append("IDIS_OCR_ENABLED=1")
     return StrictComponentReadiness(
         component_name="ocr",
-        status=StrictComponentStatus.CODE_EXISTS_BUT_NOT_WIRED,
-        blocker_message=blocker,
-        required_env_vars=[],
-        required_services=["Tesseract OCR runtime"],
-        evidence=(
-            "src/idis/parsers/pdf.py; src/idis/parsers/image.py; "
-            "src/idis/services/ingestion/defaults.py"
+        status=StrictComponentStatus.MISSING_INFRASTRUCTURE,
+        blocker_message=(
+            "OCR-required documents are present and OCR is not full-live ready: "
+            "default ingestion requires enabled OCR config, Tesseract runtime, "
+            "and persisted PAGE_TEXT spans."
         ),
+        required_env_vars=missing_env or ["IDIS_OCR_ENABLED=1"],
+        required_services=missing_services or ["Tesseract OCR runtime"],
+        evidence=evidence,
+        may_proceed=False,
+    )
+
+
+def _mp4_stt(
+    *,
+    has_media: bool,
+    env: Mapping[str, str],
+    binary_resolver: Callable[[str], str | None],
+) -> StrictComponentReadiness:
+    evidence = "src/idis/parsers/media.py; src/idis/services/ingestion/defaults.py"
+    if not has_media:
+        return StrictComponentReadiness(
+            component_name="mp4_stt",
+            status=StrictComponentStatus.CODE_EXISTS_BUT_NOT_WIRED,
+            blocker_message="",
+            required_env_vars=[],
+            required_services=[],
+            evidence=evidence,
+            may_proceed=True,
+        )
+    if _media_runtime_ready(env=env, binary_resolver=binary_resolver):
+        return _live("mp4_stt", evidence)
+    missing_services = [
+        service for service in ("ffmpeg", "ffprobe") if binary_resolver(service) is None
+    ]
+    missing_env = _missing_media_env(env)
+    if not _media_model_probe_ready(env):
+        missing_services.append("faster-whisper model")
+    blocker_prefix = "MP4 files are present and " if has_media else ""
+    return StrictComponentReadiness(
+        component_name="mp4_stt",
+        status=StrictComponentStatus.MISSING_INFRASTRUCTURE,
+        blocker_message=(
+            f"{blocker_prefix}STT is not full-live ready: media transcription requires "
+            "ffmpeg, ffprobe, a provisioned faster-whisper model, and FULL ingestion wiring."
+        ),
+        required_env_vars=missing_env
+        or ["IDIS_MEDIA_ADAPTER=faster-whisper", "IDIS_MEDIA_STT_MODEL_PATH"],
+        required_services=missing_services or ["ffmpeg", "ffprobe", "faster-whisper model"],
+        evidence=evidence,
         may_proceed=False,
     )
 
@@ -341,35 +414,6 @@ def _durable_runtime(env: Mapping[str, str]) -> StrictComponentReadiness:
     return _live(
         "durable_runtime",
         "src/idis/api/main.py; src/idis/services/ingestion/defaults.py",
-    )
-
-
-def _mp4_stt(
-    *,
-    has_media: bool,
-    env: Mapping[str, str],
-    binary_resolver: Callable[[str], str | None],
-) -> StrictComponentReadiness:
-    missing_services = [
-        service for service in ("ffmpeg", "ffprobe") if binary_resolver(service) is None
-    ]
-    missing_env = [
-        key
-        for key in ("IDIS_MEDIA_STT_MODEL_PATH", "IDIS_MEDIA_STT_MODEL_NAME")
-        if not _has_value(env, key)
-    ]
-    blocker_prefix = "MP4 files are present and " if has_media else ""
-    return StrictComponentReadiness(
-        component_name="mp4_stt",
-        status=StrictComponentStatus.MISSING_INFRASTRUCTURE,
-        blocker_message=(
-            f"{blocker_prefix}STT is not full-live ready: media transcription requires "
-            "ffmpeg, ffprobe, a provisioned faster-whisper model, and FULL ingestion wiring."
-        ),
-        required_env_vars=missing_env or ["IDIS_MEDIA_STT_MODEL_PATH", "IDIS_MEDIA_STT_MODEL_NAME"],
-        required_services=missing_services or ["ffmpeg", "ffprobe", "faster-whisper model"],
-        evidence="src/idis/parsers/media.py; src/idis/services/documents/parser_capabilities.py",
-        may_proceed=False,
     )
 
 
@@ -613,12 +657,15 @@ def _build_component_inventory(
     *,
     env_source: _StrictEnvSource,
     preflight_corpus: Sequence[Mapping[str, Any]] | None,
+    has_ocr_evidence: bool,
     has_media: bool,
     binary_resolver: Callable[[str], str | None],
     byol_providers: list[ByolProviderReadiness],
     byol_credentials_durable: bool,
 ) -> list[StrictComponentInventory]:
     env = env_source.effective_env
+    ocr_ready = _ocr_runtime_ready(env=env, binary_resolver=binary_resolver)
+    media_ready = _media_runtime_ready(env=env, binary_resolver=binary_resolver)
     inventory = [
         _inventory_item(
             "API FULL path",
@@ -682,14 +729,20 @@ def _build_component_inventory(
         _inventory_item(
             "OCR",
             exists=True,
-            full_wired=False,
-            config_present=True,
-            health="not_wired",
-            output_visible=False,
+            full_wired=ocr_ready or not has_ocr_evidence,
+            config_present=_truthy(env.get("IDIS_OCR_ENABLED")) or not has_ocr_evidence,
+            health=(
+                "healthy"
+                if ocr_ready
+                else "not_applicable"
+                if not has_ocr_evidence
+                else "missing_config"
+            ),
+            output_visible=ocr_ready or not has_ocr_evidence,
             blocker=(
-                "OCR-required documents are present and OCR is not output-visible in FULL."
-                if _preflight_has_ocr_required_document(preflight_corpus)
-                else "OCR code exists, but default FULL ingestion/output visibility is not proven."
+                "OCR-required documents are present and OCR runtime/config is missing or unhealthy."
+                if has_ocr_evidence
+                else "OCR runtime/config is optional until OCR-required evidence is present."
             ),
             slice_name="Slice 58",
             evidence=[
@@ -701,14 +754,18 @@ def _build_component_inventory(
         _inventory_item(
             "MP4/STT",
             exists=True,
-            full_wired=False,
-            config_present=_media_model_config_present(env),
-            health=_media_health_status(env=env, binary_resolver=binary_resolver),
-            output_visible=False,
-            blocker=(
-                "MP4 files are present and STT is not FULL-wired/output-visible."
+            full_wired=media_ready or not has_media,
+            config_present=_media_model_config_present(env) or not has_media,
+            health=(
+                _media_health_status(env=env, binary_resolver=binary_resolver)
                 if has_media
-                else "Media parser exists, but MP4/STT is not FULL-wired/output-visible."
+                else "not_applicable"
+            ),
+            output_visible=media_ready or not has_media,
+            blocker=(
+                "MP4 files are present and STT runtime/config is missing or unhealthy."
+                if has_media
+                else "Media STT runtime/config is optional until media evidence is present."
             ),
             slice_name="Slice 58",
             evidence=[
@@ -1184,14 +1241,67 @@ def _media_model_config_present(env: Mapping[str, str]) -> bool:
     )
 
 
+def _ocr_runtime_ready(
+    *,
+    env: Mapping[str, str],
+    binary_resolver: Callable[[str], str | None],
+) -> bool:
+    adapter_name = str(env.get("IDIS_OCR_ADAPTER", "tesseract")).strip().lower()
+    return (
+        _truthy(env.get("IDIS_OCR_ENABLED"))
+        and adapter_name == "tesseract"
+        and binary_resolver("tesseract") is not None
+    )
+
+
+def _media_runtime_ready(
+    *,
+    env: Mapping[str, str],
+    binary_resolver: Callable[[str], str | None],
+) -> bool:
+    return (
+        str(env.get("IDIS_MEDIA_ADAPTER", "")).strip().lower() == FASTER_WHISPER_ADAPTER_NAME
+        and all(binary_resolver(binary) is not None for binary in ("ffmpeg", "ffprobe"))
+        and _media_model_probe_ready(env)
+    )
+
+
+def _media_model_probe_ready(env: Mapping[str, str]) -> bool:
+    if not _media_model_config_present(env):
+        return False
+    return probe_faster_whisper_model(
+        FasterWhisperMediaConfig(
+            model_path=_optional_env(env, "IDIS_MEDIA_STT_MODEL_PATH"),
+            model_name=_optional_env(env, "IDIS_MEDIA_STT_MODEL_NAME"),
+            allow_model_download=_truthy(env.get("IDIS_MEDIA_STT_ALLOW_DOWNLOAD")),
+        )
+    ).can_attempt
+
+
+def _missing_media_env(env: Mapping[str, str]) -> list[str]:
+    missing: list[str] = []
+    if str(env.get("IDIS_MEDIA_ADAPTER", "")).strip().lower() != FASTER_WHISPER_ADAPTER_NAME:
+        missing.append("IDIS_MEDIA_ADAPTER=faster-whisper")
+    if not _media_model_config_present(env):
+        missing.append("IDIS_MEDIA_STT_MODEL_PATH or IDIS_MEDIA_STT_MODEL_NAME")
+    return missing
+
+
+def _optional_env(env: Mapping[str, str], key: str) -> str | None:
+    value = env.get(key)
+    if value is None:
+        return None
+    stripped = str(value).strip()
+    return stripped or None
+
+
 def _media_health_status(
     *,
     env: Mapping[str, str],
     binary_resolver: Callable[[str], str | None],
 ) -> str:
-    has_binaries = all(binary_resolver(binary) is not None for binary in ("ffmpeg", "ffprobe"))
-    if has_binaries and _media_model_config_present(env):
-        return "not_wired"
+    if _media_runtime_ready(env=env, binary_resolver=binary_resolver):
+        return "healthy"
     return "missing_config"
 
 
@@ -1242,6 +1352,10 @@ def _has_value(env: Mapping[str, str], key: str) -> bool:
     return bool(str(env.get(key, "")).strip())
 
 
+def _truthy(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _safe_extensions(
     *,
     data_room_root_path: str | Path | None,
@@ -1265,12 +1379,22 @@ def _preflight_has_ocr_required_document(
         metadata = document.get("metadata")
         if not isinstance(metadata, Mapping):
             metadata = {}
+        document_name = str(document.get("document_name") or "")
+        doc_type = str(document.get("doc_type") or "").lower()
         capability = metadata.get("parser_capability")
+        metadata_types = {
+            str(metadata.get(key) or "").lower()
+            for key in ("detected_format", "parser_doc_type", "file_type")
+        }
         reason_codes = (
             _string_set(metadata.get("parser_reason_codes"))
             | _string_set(metadata.get("reason_codes"))
             | _string_set(metadata.get("parse_error_codes"))
         )
+        if Path(document_name).suffix.lower() in OCR_IMAGE_EXTENSIONS:
+            return True
+        if doc_type == "image" or metadata_types & {"image"}:
+            return True
         if metadata.get("parser_requires_ocr") is True or metadata.get("requires_ocr") is True:
             return True
         if isinstance(capability, Mapping) and capability.get("requires_ocr") is True:
@@ -1300,7 +1424,12 @@ def _preflight_has_media_document(
         )
         if Path(document_name).suffix.lower() == ".mp4":
             return True
-        if doc_type in {"media", "mp4"} or metadata_types & {"media", "mp4"}:
+        if doc_type in {"media", "mp4", "video", "audio"} or metadata_types & {
+            "media",
+            "mp4",
+            "video",
+            "audio",
+        }:
             return True
         if (
             "media_transcription_unavailable" in reason_codes

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -260,6 +261,169 @@ def test_runtime_health_accepts_complete_valid_api_key_record() -> None:
     )
 
     assert result.passed is True
+
+
+def test_dotenv_byol_keys_are_config_present_not_wired_without_secret_leaks(
+    tmp_path: Path,
+) -> None:
+    """BYOL env keys in dotenv must not be reported as simply missing or leak values."""
+    from idis.services.runs.strict_full_live import (
+        StrictComponentStatus,
+        build_strict_full_live_readiness_report,
+    )
+
+    dotenv = tmp_path / ".env"
+    dotenv.write_text(
+        "\n".join(
+            [
+                "COMPANIES_HOUSE_API_KEY=companies-secret-value",
+                "FRED_API_KEY=fred-secret-value",
+                "FINNHUB_API_KEY=finnhub-secret-value",
+                "FMP_API_KEY=fmp-secret-value",
+                "GITHUB_API_TOKEN=github-secret-value",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = build_strict_full_live_readiness_report(env={}, dotenv_path=dotenv)
+    enrichment = report.component("external_enrichment_apis")
+
+    assert enrichment.status == StrictComponentStatus.CODE_EXISTS_BUT_NOT_WIRED
+    assert enrichment.mode == "config-present-not-wired"
+    assert set(enrichment.required_env_vars) == {
+        "COMPANIES_HOUSE_API_KEY",
+        "FRED_API_KEY",
+        "FINNHUB_API_KEY",
+        "FMP_API_KEY",
+        "GITHUB_API_TOKEN",
+    }
+    encoded = report.model_dump_json()
+    for secret_value in (
+        "companies-secret-value",
+        "fred-secret-value",
+        "finnhub-secret-value",
+        "fmp-secret-value",
+        "github-secret-value",
+    ):
+        assert secret_value not in encoded
+
+
+def test_supabase_vars_are_classified_without_false_product_wiring(tmp_path: Path) -> None:
+    """Supabase product vars must not imply Auth/Storage/Vector wiring."""
+    from idis.services.runs.strict_full_live import (
+        StrictComponentStatus,
+        build_strict_full_live_readiness_report,
+    )
+    from idis.services.runs.strict_full_live_health import StrictHealthCheckResult
+
+    dotenv = tmp_path / ".env"
+    dotenv.write_text(
+        "\n".join(
+            [
+                "SUPABASE_URL=https://project.supabase.co",
+                "SUPABASE_KEY=supabase-key-secret",
+                "SUPABASE_SECRET_KEY=supabase-secret-key",
+                "IDIS_DATABASE_URL=postgresql://postgres:secret@db.project.supabase.co/postgres",
+                f"{IDIS_API_KEYS_ENV}={_valid_api_keys_json()}",
+                "IDIS_OBJECT_STORE_BACKEND=filesystem",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = build_strict_full_live_readiness_report(
+        env={},
+        dotenv_path=dotenv,
+        runtime_health_checker=lambda _request: StrictHealthCheckResult.ok(
+            service="durable_runtime",
+            message="Durable runtime health check passed",
+        ),
+    )
+
+    assert report.component("supabase_database").status == (
+        StrictComponentStatus.LIVE_WIRED_AND_USED
+    )
+    assert report.component("supabase_database").mode == "managed-postgres-runtime"
+    for component_name in (
+        "supabase_auth",
+        "supabase_storage",
+        "supabase_vectors_rag",
+        "supabase_edge_realtime_cron_queues",
+    ):
+        component = report.component(component_name)
+        assert component.status != StrictComponentStatus.LIVE_WIRED_AND_USED
+        assert component.mode == "config-present-not-wired"
+    encoded = report.model_dump_json()
+    assert "supabase-key-secret" not in encoded
+    assert "supabase-secret-key" not in encoded
+    assert "postgres:secret" not in encoded
+
+
+def test_dotenv_database_url_needs_connectivity_before_runtime_is_live(
+    tmp_path: Path,
+) -> None:
+    """Dotenv DB config should satisfy presence only after health passes."""
+    from idis.services.runs.strict_full_live import (
+        StrictComponentStatus,
+        build_strict_full_live_readiness_report,
+    )
+    from idis.services.runs.strict_full_live_health import StrictHealthCheckResult
+
+    dotenv = tmp_path / ".env"
+    dotenv.write_text(
+        "\n".join(
+            [
+                "IDIS_DATABASE_URL=postgresql://app:secret@db.example/idis",
+                "IDIS_DATABASE_ADMIN_URL=postgresql://admin:secret@db.example/idis",
+                f"{IDIS_API_KEYS_ENV}={_valid_api_keys_json()}",
+                "IDIS_OBJECT_STORE_BACKEND=filesystem",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    failed = build_strict_full_live_readiness_report(
+        env={},
+        dotenv_path=dotenv,
+        runtime_health_checker=lambda _request: StrictHealthCheckResult.failed(
+            service="durable_runtime",
+            message="Postgres SELECT 1 failed",
+        ),
+    )
+
+    runtime = failed.component("durable_runtime")
+    assert runtime.status == StrictComponentStatus.CONFIGURED_BUT_FAILED_HEALTH_CHECK
+    assert runtime.mode == "configured-health-check-failed"
+    db_inventory = next(
+        item for item in failed.env_config_inventory if item.env_var == "IDIS_DATABASE_URL"
+    )
+    assert db_inventory.present_in_dotenv is True
+    assert db_inventory.loaded_in_process is False
+    assert db_inventory.health_checked_live is False
+    admin_inventory = next(
+        item for item in failed.env_config_inventory if item.env_var == "IDIS_DATABASE_ADMIN_URL"
+    )
+    assert admin_inventory.present_in_dotenv is True
+    assert admin_inventory.health_checked_live is False
+
+    passed = build_strict_full_live_readiness_report(
+        env={},
+        dotenv_path=dotenv,
+        runtime_health_checker=lambda _request: StrictHealthCheckResult.ok(
+            service="durable_runtime",
+            message="Durable runtime health check passed",
+        ),
+    )
+
+    assert passed.component("durable_runtime").status == StrictComponentStatus.LIVE_WIRED_AND_USED
+    passed_admin_inventory = next(
+        item for item in passed.env_config_inventory if item.env_var == "IDIS_DATABASE_ADMIN_URL"
+    )
+    assert passed_admin_inventory.health_checked_live is False
+    encoded = failed.model_dump_json() + passed.model_dump_json()
+    assert "app:secret" not in encoded
+    assert "admin:secret" not in encoded
 
 
 def test_strict_builders_reject_deterministic_backends() -> None:

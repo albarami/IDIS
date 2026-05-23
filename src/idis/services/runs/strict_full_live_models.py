@@ -44,6 +44,7 @@ class StrictFullLiveReadinessReport(BaseModel):
     blocker_count: int
     blocking_components: list[str]
     components: list[StrictComponentReadiness]
+    env_config_inventory: list[StrictEnvVarInventory] = Field(default_factory=list)
 
     def component(self, component_name: str) -> StrictComponentReadiness:
         """Return a named component readiness result."""
@@ -52,3 +53,17 @@ class StrictFullLiveReadinessReport(BaseModel):
                 return component
         msg = f"Unknown strict full-live component: {component_name}"
         raise KeyError(msg)
+
+
+class StrictEnvVarInventory(BaseModel):
+    """Secret-free inventory of strict config propagation state."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    env_var: str
+    present_in_dotenv: bool
+    loaded_in_process: bool
+    read_by_code: bool
+    wired_into_full: bool
+    health_checked_live: bool
+    note: str

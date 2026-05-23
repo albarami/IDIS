@@ -22,6 +22,7 @@ from idis.services.runs.strict_full_live import (
     STRICT_FULL_LIVE_BLOCKED,
     build_strict_full_live_readiness_report,
 )
+from idis.services.runs.strict_full_live_env import find_nearest_dotenv
 
 PUBLIC_UPLOAD_EXTENSIONS = frozenset({".pdf", ".xlsx", ".docx", ".pptx"})
 MEDIA_EXTENSIONS = frozenset({".mp4"})
@@ -125,6 +126,7 @@ class RealExampleFullRunHarnessOptions:
     resume_state_output_path: str | Path | None = None
     checkpoint_output_path: str | Path | None = None
     require_full_live: bool = False
+    dotenv_path: str | Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -293,6 +295,7 @@ def run_real_example_full_run_harness(
         files = _inventory_files(root)
         report = build_strict_full_live_readiness_report(
             data_room_file_extensions=[path.suffix for path in files],
+            dotenv_path=options.dotenv_path or find_nearest_dotenv(root),
         )
         strict_full_live_report = report.model_dump(mode="json")
         if not report.may_proceed:

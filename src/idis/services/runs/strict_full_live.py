@@ -18,6 +18,10 @@ from idis.services.runs.strict_full_live_document_scan import (
     preflight_has_ocr_required_document,
     safe_extensions,
 )
+from idis.services.runs.strict_full_live_env import (
+    build_env_config_inventory,
+    build_strict_env_source,
+)
 from idis.services.runs.strict_full_live_health import (
     StrictHealthCheckResult,
     StrictLLMHealthCheckRequest,
@@ -27,6 +31,10 @@ from idis.services.runs.strict_full_live_health import (
     missing_model_env,
     runtime_health_result,
     runtime_provenance,
+)
+from idis.services.runs.strict_full_live_integrations import (
+    external_enrichment_apis,
+    supabase_components,
 )
 from idis.services.runs.strict_full_live_models import (
     StrictComponentReadiness,
@@ -57,9 +65,15 @@ def build_strict_full_live_readiness_report(
     runtime_health_checker: Callable[[StrictRuntimeHealthCheckRequest], StrictHealthCheckResult]
     | None = None,
     db_conn: Any = None,
+    dotenv_path: str | Path | None = None,
 ) -> StrictFullLiveReadinessReport:
     """Build a safe strict full-live readiness report without executing a run."""
-    values = os.environ if env is None else env
+    process_values = os.environ if env is None else env
+    env_source = build_strict_env_source(
+        process_env=process_values,
+        dotenv_path=dotenv_path,
+    )
+    values = env_source.effective_env
     resolver = binary_resolver or shutil.which
     extensions = safe_extensions(
         data_room_root_path=data_room_root_path,
@@ -77,10 +91,11 @@ def build_strict_full_live_readiness_report(
     components = [
         _supported_parsers_extraction(values, llm_health=llm_health),
         _durable_runtime(values, runtime_health=runtime_health),
+        *supabase_components(values, runtime_health=runtime_health),
         _ocr(preflight_corpus=preflight_corpus),
         _mp4_stt(has_media=has_media, env=values, binary_resolver=resolver),
         live("deterministic_calculations", "src/idis/services/calc/runner.py"),
-        _external_enrichment_apis(),
+        external_enrichment_apis(values),
         _live_llm_model_clients(values, llm_health=llm_health),
         _analysis(values, llm_health=llm_health),
         _debate_layer_1(values, llm_health=llm_health),
@@ -109,6 +124,11 @@ def build_strict_full_live_readiness_report(
         blocker_count=len(blocking_components),
         blocking_components=blocking_components,
         components=components,
+        env_config_inventory=build_env_config_inventory(
+            env_source=env_source,
+            llm_health=llm_health,
+            runtime_health=runtime_health,
+        ),
     )
 
 
@@ -258,30 +278,6 @@ def _mp4_stt(
         may_proceed=False,
         mode="missing-infrastructure",
         provenance={"provider": "faster-whisper", "fallback": "none"},
-    )
-
-
-def _external_enrichment_apis() -> StrictComponentReadiness:
-    return StrictComponentReadiness(
-        component_name="external_enrichment_apis",
-        status=StrictComponentStatus.MISSING_CREDENTIALS,
-        blocker_message=(
-            "FULL enrichment is wired, but BYOL providers use an empty in-memory credential "
-            "repository and strict mode cannot allow silent provider blocking."
-        ),
-        required_env_vars=[],
-        required_services=[
-            "tenant BYOL credential store",
-            "companies_house credentials",
-            "github credentials",
-            "fred credentials",
-            "finnhub credentials",
-            "fmp credentials",
-        ],
-        evidence="src/idis/services/enrichment/service.py:create_default_enrichment_service",
-        may_proceed=False,
-        mode="missing-credentials",
-        provenance={"provider": "byol+public", "fallback": "blocked"},
     )
 
 

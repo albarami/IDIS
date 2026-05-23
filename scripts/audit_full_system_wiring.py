@@ -3598,7 +3598,10 @@ def _neo4j_graph(root: Path, files: dict[str, str]) -> WiringItem:
     api_refs = _source_references(
         root,
         "GraphProjectionService",
-        exclude_paths={"graph_consistency.py"},
+        exclude_paths={
+            "graph_consistency.py",
+            "strict_full_live.py",
+        },
     )
     status = "PARTIAL" if api_refs else "TEST_ONLY"
     return WiringItem(

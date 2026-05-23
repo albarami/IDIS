@@ -221,6 +221,7 @@ async def start_run(
     if request_body.mode == "FULL" and is_strict_full_live_required():
         strict_report = build_strict_full_live_readiness_report(
             preflight_corpus=preflight_corpus,
+            db_conn=db_conn,
         )
         if not strict_report.may_proceed:
             raise IdisHttpError(
@@ -1405,8 +1406,16 @@ def _build_scoring_llm_client() -> Any:
     if backend == "anthropic":
         from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
 
-        model = os.environ.get("IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT", "claude-sonnet-4-20250514")
+        model = _strict_model_env_or_default(
+            env_key="IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT",
+            default="claude-sonnet-4-20250514",
+        )
         return AnthropicLLMClient(model=model, max_tokens=16384)
+
+    _reject_deterministic_backend_in_strict_mode(
+        backend_env="IDIS_DEBATE_BACKEND",
+        backend=backend,
+    )
 
     from idis.services.extraction.extractors.llm_client import DeterministicScoringLLMClient
 
@@ -1430,8 +1439,16 @@ def _build_analysis_llm_client() -> Any:
     if backend == "anthropic":
         from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
 
-        model = os.environ.get("IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT", "claude-sonnet-4-20250514")
+        model = _strict_model_env_or_default(
+            env_key="IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT",
+            default="claude-sonnet-4-20250514",
+        )
         return AnthropicLLMClient(model=model, max_tokens=8192)
+
+    _reject_deterministic_backend_in_strict_mode(
+        backend_env="IDIS_DEBATE_BACKEND",
+        backend=backend,
+    )
 
     from idis.services.extraction.extractors.llm_client import DeterministicAnalysisLLMClient
 
@@ -1727,8 +1744,16 @@ def _build_extraction_llm_client() -> Any:
     if backend == "anthropic":
         from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
 
-        model = os.environ.get("IDIS_ANTHROPIC_MODEL_EXTRACT", "claude-sonnet-4-20250514")
+        model = _strict_model_env_or_default(
+            env_key="IDIS_ANTHROPIC_MODEL_EXTRACT",
+            default="claude-sonnet-4-20250514",
+        )
         return AnthropicLLMClient(model=model, max_tokens=4096)
+
+    _reject_deterministic_backend_in_strict_mode(
+        backend_env="IDIS_EXTRACT_BACKEND",
+        backend=backend,
+    )
 
     from idis.services.extraction.extractors.llm_client import DeterministicLLMClient
 
@@ -1757,16 +1782,24 @@ def _build_debate_role_runners(context: Any = None) -> Any:
     backend = os.environ.get("IDIS_DEBATE_BACKEND", "deterministic")
 
     if backend != "anthropic":
+        _reject_deterministic_backend_in_strict_mode(
+            backend_env="IDIS_DEBATE_BACKEND",
+            backend=backend,
+        )
         return RoleRunners()
 
     from idis.debate.roles.llm_role_runner import LLMRoleRunner
     from idis.models.debate import DebateRole
     from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
 
-    default_model = os.environ.get(
-        "IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT", "claude-sonnet-4-20250514"
+    default_model = _strict_model_env_or_default(
+        env_key="IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT",
+        default="claude-sonnet-4-20250514",
     )
-    arbiter_model = os.environ.get("IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER", "claude-opus-4-20250514")
+    arbiter_model = _strict_model_env_or_default(
+        env_key="IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER",
+        default="claude-opus-4-20250514",
+    )
 
     prompts = _load_debate_prompts()
 
@@ -1805,6 +1838,25 @@ def _build_debate_role_runners(context: Any = None) -> Any:
             context=context,
         ),
     )
+
+
+def _reject_deterministic_backend_in_strict_mode(*, backend_env: str, backend: str) -> None:
+    if not is_strict_full_live_required():
+        return
+    msg = f"{backend_env}=anthropic is required when IDIS_REQUIRE_FULL_LIVE=1; got {backend!r}"
+    raise ValueError(msg)
+
+
+def _strict_model_env_or_default(*, env_key: str, default: str) -> str:
+    import os
+
+    model = os.environ.get(env_key, "")
+    if model.strip():
+        return model
+    if is_strict_full_live_required():
+        msg = f"{env_key} is required when IDIS_REQUIRE_FULL_LIVE=1"
+        raise ValueError(msg)
+    return default
 
 
 def _load_debate_prompts() -> dict[str, str]:

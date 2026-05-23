@@ -121,7 +121,7 @@ def test_strict_report_blocks_missing_durable_runtime_env() -> None:
     assert runtime.status == StrictComponentStatus.MISSING_INFRASTRUCTURE
     assert runtime.required_env_vars == [
         "IDIS_DATABASE_URL",
-        "IDIS_API_KEYS",
+        IDIS_API_KEYS_ENV,
         "IDIS_OBJECT_STORE_BACKEND",
     ]
     assert runtime.may_proceed is False
@@ -282,6 +282,40 @@ def test_private_harness_require_full_live_proceeds_when_preflight_passes(
     assert summary["status"] == "succeeded"
     assert len(client.uploads) == 1
     assert len(client.run_requests) == 1
+
+
+def test_private_harness_require_full_live_passes_discovered_dotenv_to_preflight(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    """Private strict harness must not ignore a local dotenv file."""
+    root = tmp_path / "repo" / "real_example"
+    root.mkdir(parents=True)
+    (tmp_path / "repo" / ".env").write_text("ANTHROPIC_API_KEY=redacted\n", encoding="utf-8")
+    (root / "public-safe.pdf").write_bytes(b"%PDF-1.4\nSAFE\n%%EOF")
+    client = _FakeApiClient()
+    observed: dict[str, Any] = {}
+
+    def capture_report_kwargs(**kwargs: Any) -> _PassingStrictReport:
+        observed.update(kwargs)
+        return _PassingStrictReport()
+
+    monkeypatch.setattr(
+        harness_module,
+        "build_strict_full_live_readiness_report",
+        capture_report_kwargs,
+    )
+
+    summary = run_real_example_full_run_harness(
+        RealExampleFullRunHarnessOptions(
+            root=root,
+            api_client=client,
+            require_full_live=True,
+        )
+    )
+
+    assert summary["status"] == "succeeded"
+    assert observed["dotenv_path"] == tmp_path / "repo" / ".env"
 
 
 def test_private_harness_non_strict_behavior_still_uploads_and_runs(tmp_path: Path) -> None:

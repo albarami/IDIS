@@ -37,6 +37,7 @@ from idis.models.document import Document, DocumentType, ParseStatus
 from idis.models.document_artifact import DocType, DocumentArtifact
 from idis.models.document_span import DocumentSpan
 from idis.parsers.base import ParseError, ParseErrorCode, ParseLimits, ParseResult
+from idis.parsers.media import FASTER_WHISPER_ADAPTER_NAME, FasterWhisperMediaAdapter, MediaConfig
 from idis.parsers.ocr import OcrConfig
 from idis.parsers.registry import parse_bytes
 from idis.services.ingestion.span_generator import SpanGenerator
@@ -669,6 +670,7 @@ class IngestionService:
         max_bytes: int = DEFAULT_MAX_BYTES,
         parse_limits: ParseLimits | None = None,
         ocr_config: OcrConfig | None = None,
+        media_config: MediaConfig | None = None,
     ) -> None:
         """Initialize the ingestion service.
 
@@ -681,6 +683,7 @@ class IngestionService:
             max_bytes: Maximum file size in bytes.
             parse_limits: Parser limits configuration.
             ocr_config: Explicit OCR execution config. Disabled by default.
+            media_config: Explicit media transcription config. Disabled by default.
         """
         self._compliant_store = compliant_store
         self._audit_sink = audit_sink or InMemoryAuditSink()
@@ -689,6 +692,7 @@ class IngestionService:
         self._max_bytes = max_bytes
         self._parse_limits = parse_limits or ParseLimits()
         self._ocr_config = ocr_config
+        self._media_config = media_config
 
         self._artifacts: dict[str, DocumentArtifact] = {}
         self._documents: dict[str, Document] = {}
@@ -847,6 +851,11 @@ class IngestionService:
 
         parse_status = ParseStatus.PARSED if parse_result.success else ParseStatus.FAILED
         doc_type_enum = self._map_doc_type(parse_result.doc_type)
+        parse_metadata = self._parse_metadata_for_persistence(
+            parse_result,
+            document_id=document_id,
+            artifact_id=artifact_id,
+        )
 
         document = self._create_document(
             document_id=document_id,
@@ -855,7 +864,7 @@ class IngestionService:
             artifact_id=artifact_id,
             doc_type=doc_type_enum,
             parse_status=parse_status,
-            parse_metadata=self._parse_metadata_for_persistence(parse_result),
+            parse_metadata=parse_metadata,
             timestamp=now,
         )
 
@@ -1074,6 +1083,7 @@ class IngestionService:
             mime_type=mime_type,
             limits=self._parse_limits,
             ocr_config=self._ocr_config,
+            media_config=self._media_config,
         )
 
     def _map_doc_type(self, parser_doc_type: str) -> DocumentType:
@@ -1083,27 +1093,76 @@ class IngestionService:
             "XLSX": DocumentType.XLSX,
             "DOCX": DocumentType.DOCX,
             "PPTX": DocumentType.PPTX,
+            "IMAGE": DocumentType.IMAGE,
+            "MEDIA": DocumentType.VIDEO,
             "UNKNOWN": DocumentType.PDF,
         }
         return type_map.get(parser_doc_type, DocumentType.PDF)
 
-    def _parse_metadata_for_persistence(self, parse_result: ParseResult) -> dict[str, Any]:
+    def _parse_metadata_for_persistence(
+        self,
+        parse_result: ParseResult,
+        *,
+        document_id: UUID,
+        artifact_id: UUID,
+    ) -> dict[str, Any]:
         """Return safe parser metadata needed for persisted preflight triage."""
         from idis.services.documents.parser_capabilities import triage_document
 
         capability = triage_document(parse_result=parse_result)
+        parser_runtime = self._parser_runtime(parse_result)
+        parser_source_type = self._parser_source_type(parse_result)
+        error_codes = [error.code.value for error in parse_result.errors]
         return {
             **parse_result.metadata,
-            "parse_error_codes": [error.code.value for error in parse_result.errors],
+            "parse_error_codes": error_codes,
             "parse_warning_codes": [str(warning) for warning in parse_result.warnings],
             "detected_format": parse_result.doc_type,
             "parser_doc_type": parse_result.doc_type,
+            "parser_mode": self._parser_mode(parse_result),
+            "parser_runtime": parser_runtime,
+            "parser_runtime_status": "completed" if parse_result.success else "failed",
+            "parser_source_type": parser_source_type,
             "parser_support_status": capability.support_status.value,
             "parser_triage_status": capability.triage_status.value,
             "parser_reason_codes": capability.reason_codes,
             "parser_requires_ocr": capability.requires_ocr,
             "parser_requires_conversion": capability.requires_conversion,
+            "source_evidence_id": str(document_id),
+            "source_document_id": str(document_id),
+            "source_artifact_id": str(artifact_id),
         }
+
+    def _parser_mode(self, parse_result: ParseResult) -> str:
+        if parse_result.metadata.get("media_transcription_performed") is True:
+            return "media_stt"
+        if parse_result.metadata.get("ocr_performed") is True:
+            return "ocr"
+        if parse_result.doc_type in {"IMAGE"}:
+            return "ocr"
+        if parse_result.doc_type in {"MEDIA"}:
+            return "media_stt"
+        return "native"
+
+    def _parser_runtime(self, parse_result: ParseResult) -> str:
+        if self._parser_mode(parse_result) == "ocr":
+            return "tesseract" if self._ocr_config is not None else "unconfigured_ocr"
+        if self._parser_mode(parse_result) == "media_stt":
+            if isinstance(getattr(self._media_config, "adapter", None), FasterWhisperMediaAdapter):
+                return FASTER_WHISPER_ADAPTER_NAME
+            if self._media_config is not None:
+                return "configured_media_adapter"
+            return "unconfigured_media_stt"
+        return "built_in"
+
+    def _parser_source_type(self, parse_result: ParseResult) -> str:
+        if parse_result.doc_type == "IMAGE":
+            return "image_ocr"
+        if parse_result.doc_type == "MEDIA":
+            return "media_stt"
+        if parse_result.metadata.get("ocr_performed") is True:
+            return "pdf_ocr_fallback"
+        return "native_parser"
 
     def _create_artifact(
         self,

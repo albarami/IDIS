@@ -10,7 +10,6 @@ from typing import Any
 
 import pytest
 
-from idis.api.errors import IdisHttpError
 from idis.api.routes.documents import _reject_unsupported_upload_format
 from idis.parsers.base import ParseErrorCode
 from idis.parsers.media import (
@@ -131,17 +130,18 @@ def _slow_faster_whisper_worker(
     time.sleep(5)
 
 
-def test_default_upload_admission_still_rejects_mp4_bytes() -> None:
-    with pytest.raises(IdisHttpError):
-        _reject_unsupported_upload_format(b"\x00\x00\x00\x18ftypmp42", "demo.mp4")
+def test_default_upload_admission_allows_mp4_for_honest_ingestion_defer() -> None:
+    _reject_unsupported_upload_format(b"\x00\x00\x00\x18ftypmp42", "demo.mp4")
 
 
-def test_global_parser_registry_does_not_admit_mp4_bytes() -> None:
+def test_global_parser_registry_defers_mp4_without_configured_media_adapter() -> None:
     result = parse_bytes(b"\x00\x00\x00\x18ftypmp42", filename="synthetic.mp4")
 
     assert result.success is False
-    assert result.doc_type == "UNKNOWN"
-    assert [error.code for error in result.errors] == [ParseErrorCode.UNSUPPORTED_FORMAT]
+    assert result.doc_type == "MEDIA"
+    assert [error.code for error in result.errors] == [
+        ParseErrorCode.MEDIA_TRANSCRIPTION_UNAVAILABLE
+    ]
 
 
 def test_faster_whisper_dependency_probe_is_importable() -> None:

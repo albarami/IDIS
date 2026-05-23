@@ -254,12 +254,16 @@ def _span_for_run(span: Any) -> dict[str, Any]:
 
 def _document_for_run(document: dict[str, Any], spans: list[dict[str, Any]]) -> dict[str, Any]:
     """Convert a repository document and spans to the run document shape."""
-    return {
+    result = {
         "document_id": document["document_id"],
         "doc_type": document["doc_type"],
         "document_name": document["document_name"],
         "spans": [_span_for_run(span) for span in spans],
     }
+    metadata = dict(document.get("metadata") or {})
+    if "parser_mode" in metadata:
+        result["metadata"] = metadata
+    return result
 
 
 def _span_for_preflight(span: dict[str, Any]) -> dict[str, Any]:

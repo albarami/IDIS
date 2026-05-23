@@ -150,7 +150,7 @@ def test_strict_report_lists_ocr_media_rag_graph_and_layer2_blockers() -> None:
         binary_resolver=lambda _name: None,
     )
 
-    assert report.component("ocr").status == StrictComponentStatus.CODE_EXISTS_BUT_NOT_WIRED
+    assert report.component("ocr").status == StrictComponentStatus.MISSING_INFRASTRUCTURE
     assert report.component("mp4_stt").status == StrictComponentStatus.MISSING_INFRASTRUCTURE
     assert (
         report.component("rag_evidence_retrieval").status == StrictComponentStatus.NOT_IMPLEMENTED

@@ -98,7 +98,7 @@ def teardown_function() -> None:
 def test_strict_env_source_uses_process_over_dotenv_without_leaking_values(tmp_path: Path) -> None:
     secret_from_dotenv = "DOTENV_SECRET_SHOULD_NOT_LEAK"
     secret_from_process = "PROCESS_SECRET_SHOULD_NOT_LEAK"
-    dotenv_path = tmp_path / ".env.strict"
+    dotenv_path = tmp_path / "strict-vars"
     dotenv_path.write_text(
         "\n".join(
             [
@@ -133,7 +133,7 @@ def test_strict_env_source_uses_process_over_dotenv_without_leaking_values(tmp_p
 
 
 def test_dotenv_can_explicitly_activate_strict_mode(tmp_path: Path) -> None:
-    dotenv_path = tmp_path / ".env.strict"
+    dotenv_path = tmp_path / "strict-vars"
     dotenv_path.write_text("IDIS_REQUIRE_FULL_LIVE=1\n", encoding="utf-8")
 
     from idis.services.runs.strict_full_live import is_strict_full_live_required
@@ -142,7 +142,7 @@ def test_dotenv_can_explicitly_activate_strict_mode(tmp_path: Path) -> None:
 
 
 def test_env_sources_only_exposes_tracked_keys(tmp_path: Path) -> None:
-    dotenv_path = tmp_path / ".env.strict"
+    dotenv_path = tmp_path / "strict-vars"
     dotenv_path.write_text("PRIVATE_CUSTOM_SECRET_NAME=value\n", encoding="utf-8")
 
     report = build_strict_full_live_readiness_report(
@@ -158,7 +158,7 @@ def test_env_sources_only_exposes_tracked_keys(tmp_path: Path) -> None:
 def test_env_inventory_never_exposes_values_urls_hosts_usernames_or_lengths(
     tmp_path: Path,
 ) -> None:
-    dotenv_path = tmp_path / ".env.strict"
+    dotenv_path = tmp_path / "strict-vars"
     dotenv_path.write_text(
         "\n".join(
             [
@@ -283,7 +283,7 @@ def test_strict_api_block_response_includes_inventory_and_no_env_values(
     monkeypatch: Any,
     tmp_path: Path,
 ) -> None:
-    dotenv_path = tmp_path / ".env.strict"
+    dotenv_path = tmp_path / "strict-vars"
     dotenv_secret = "STRICT_DOTENV_SECRET_SHOULD_NOT_LEAK"
     dotenv_path.write_text(f"ANTHROPIC_API_KEY={dotenv_secret}\n", encoding="utf-8")
     process_secret = "STRICT_PROCESS_SECRET_SHOULD_NOT_LEAK"
@@ -327,7 +327,7 @@ def test_strict_api_block_response_includes_inventory_and_no_env_values(
         "C:\\Projects\\",
         "secret-board-pack",
         "customer-secret-extension",
-        ".env",
+        "strict-vars",
         "STRICT_DOTENV_SECRET",
         "STRICT_PROCESS_SECRET",
     ):
@@ -338,7 +338,7 @@ def test_strict_api_can_be_activated_from_explicit_dotenv(
     monkeypatch: Any,
     tmp_path: Path,
 ) -> None:
-    dotenv_path = tmp_path / ".env.strict"
+    dotenv_path = tmp_path / "strict-vars"
     dotenv_path.write_text("IDIS_REQUIRE_FULL_LIVE=1\n", encoding="utf-8")
     monkeypatch.delenv("IDIS_REQUIRE_FULL_LIVE", raising=False)
     monkeypatch.setenv("IDIS_STRICT_DOTENV_PATH", str(dotenv_path))

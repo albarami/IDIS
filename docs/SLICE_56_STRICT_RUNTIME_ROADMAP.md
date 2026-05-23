@@ -60,7 +60,7 @@ Acceptance criteria:
 - Exported bundle includes executive summary, commercial diligence, financial diligence, risk register, IC memo, truth dashboard, QA brief, evidence index, and run summary JSON.
 - API can retrieve bundle metadata and download URIs.
 - Strict readiness blocks when product export storage or export path is not configured.
-- Final package output does not depend on `.local_reports` or hidden private scripts.
+- Final package output does not depend on local-only report directories or hidden private scripts.
 
 ## Slice 60: Calculation Persistence And CalcSanad
 

@@ -18,6 +18,10 @@ from typing import Any, Generic, Protocol, TypeVar
 from idis.api.auth import IDIS_API_KEYS_ENV
 from idis.models.document_classification import DocumentSupportStatus, DocumentTriageStatus
 from idis.services.documents.parser_capabilities import capability_for_document
+from idis.services.runs.strict_full_live import (
+    STRICT_FULL_LIVE_BLOCKED,
+    build_strict_full_live_readiness_report,
+)
 
 PUBLIC_UPLOAD_EXTENSIONS = frozenset({".pdf", ".xlsx", ".docx", ".pptx"})
 MEDIA_EXTENSIONS = frozenset({".mp4"})
@@ -120,6 +124,7 @@ class RealExampleFullRunHarnessOptions:
     run_poll_interval_seconds: float = 1.0
     resume_state_output_path: str | Path | None = None
     checkpoint_output_path: str | Path | None = None
+    require_full_live: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -283,7 +288,25 @@ def run_real_example_full_run_harness(
     root = Path(options.root)
     _validate_root(root)
 
-    if options.api_client is not None:
+    strict_full_live_report: dict[str, Any] | None = None
+    if options.require_full_live:
+        files = _inventory_files(root)
+        report = build_strict_full_live_readiness_report(
+            data_room_file_extensions=[path.suffix for path in files],
+        )
+        strict_full_live_report = report.model_dump(mode="json")
+        if not report.may_proceed:
+            summary = _strict_full_live_block_summary(
+                files=files,
+                strict_full_live_report=strict_full_live_report,
+            )
+        elif options.api_client is not None:
+            summary = _run_with_client(options=options, root=root, client=options.api_client)
+        else:
+            with _default_api_client(options) as client:
+                summary = _run_with_client(options=options, root=root, client=client)
+        summary["strict_full_live"] = strict_full_live_report
+    elif options.api_client is not None:
         summary = _run_with_client(options=options, root=root, client=options.api_client)
     else:
         with _default_api_client(options) as client:
@@ -1654,6 +1677,7 @@ def _summary(
     run_elapsed_seconds: float | None = None,
     run_attempted_on_timeout: bool = False,
     upload_profile: dict[str, Any] | None = None,
+    strict_full_live_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     uploaded_count = sum(1 for decision in decisions if decision.upload_status == "uploaded")
     skipped_count = sum(1 for decision in decisions if decision.upload_status != "uploaded")
@@ -1662,7 +1686,7 @@ def _summary(
         selected_document_count=len(uploaded_document_ids),
         run_snapshot=run_timeout_snapshot,
     )
-    return {
+    summary = {
         "harness": "real_example_production_full_run_private_v1",
         "safe_summary": True,
         "private_run": True,
@@ -1688,6 +1712,31 @@ def _summary(
         "resume": resume,
         "blocker": blocker,
     }
+    if strict_full_live_report is not None:
+        summary["strict_full_live"] = strict_full_live_report
+    return summary
+
+
+def _strict_full_live_block_summary(
+    *,
+    files: list[Path],
+    strict_full_live_report: dict[str, Any],
+) -> dict[str, Any]:
+    return _summary(
+        files=files,
+        decisions=[],
+        uploaded_document_ids=[],
+        status="blocked",
+        run_body=None,
+        run_http_status=None,
+        blocker=_blocker(
+            stage="strict_full_live_preflight",
+            reason_code=STRICT_FULL_LIVE_BLOCKED,
+            http_status=None,
+        ),
+        upload_profile={"enabled": False, "reason_code": STRICT_FULL_LIVE_BLOCKED},
+        strict_full_live_report=strict_full_live_report,
+    )
 
 
 def _resume_summary(

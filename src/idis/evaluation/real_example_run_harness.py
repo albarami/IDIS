@@ -125,6 +125,7 @@ class RealExampleFullRunHarnessOptions:
     resume_state_output_path: str | Path | None = None
     checkpoint_output_path: str | Path | None = None
     require_full_live: bool = False
+    dotenv_path: str | Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -293,6 +294,7 @@ def run_real_example_full_run_harness(
         files = _inventory_files(root)
         report = build_strict_full_live_readiness_report(
             data_room_file_extensions=[path.suffix for path in files],
+            dotenv_path=options.dotenv_path,
         )
         strict_full_live_report = report.model_dump(mode="json")
         if not report.may_proceed:
@@ -1678,6 +1680,7 @@ def _summary(
     run_attempted_on_timeout: bool = False,
     upload_profile: dict[str, Any] | None = None,
     strict_full_live_report: dict[str, Any] | None = None,
+    safe_extension_categories: bool = False,
 ) -> dict[str, Any]:
     uploaded_count = sum(1 for decision in decisions if decision.upload_status == "uploaded")
     skipped_count = sum(1 for decision in decisions if decision.upload_status != "uploaded")
@@ -1696,7 +1699,10 @@ def _summary(
         "uploaded_document_count": uploaded_count,
         "selected_document_count": len(uploaded_document_ids),
         "skipped_file_count": skipped_count,
-        "counts_by_extension": _count_extensions(files),
+        "counts_by_extension": _count_extensions(
+            files,
+            safe_categories=safe_extension_categories,
+        ),
         "counts_by_upload_status": _count_decisions(decisions, "upload_status"),
         "counts_by_deferred_reason": _deferred_reasons(decisions),
         "run": _run_summary(
@@ -1736,6 +1742,7 @@ def _strict_full_live_block_summary(
         ),
         upload_profile={"enabled": False, "reason_code": STRICT_FULL_LIVE_BLOCKED},
         strict_full_live_report=strict_full_live_report,
+        safe_extension_categories=True,
     )
 
 
@@ -1761,8 +1768,27 @@ def _resume_state_for_output(summary: dict[str, Any]) -> dict[str, Any]:
     return {"supported": False, "reason_code": RESUME_UNSUPPORTED_REASON, "run_id": None}
 
 
-def _count_extensions(files: list[Path]) -> dict[str, int]:
+def _count_extensions(
+    files: list[Path],
+    *,
+    safe_categories: bool = False,
+) -> dict[str, int]:
+    if safe_categories:
+        return dict(
+            sorted(Counter(_safe_summary_extension_category(path.suffix) for path in files).items())
+        )
     return dict(sorted(Counter(path.suffix.lower() or ".unknown" for path in files).items()))
+
+
+def _safe_summary_extension_category(raw_extension: str) -> str:
+    extension = raw_extension.lower() or ".unknown"
+    if extension == ".pdf":
+        return "pdf"
+    if extension in {".xlsx", ".docx", ".pptx"}:
+        return "office"
+    if extension in MEDIA_EXTENSIONS:
+        return "media"
+    return "unsupported_or_unknown"
 
 
 def _count_decisions(decisions: list[_FileDecision], field: str) -> dict[str, int]:

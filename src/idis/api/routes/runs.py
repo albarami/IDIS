@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,6 +31,7 @@ from idis.persistence.repositories.runs import get_runs_repository
 from idis.services.runs.execution import RunExecutionService
 from idis.services.runs.steps import build_run_context
 from idis.services.runs.strict_full_live import (
+    IDIS_STRICT_DOTENV_PATH_ENV,
     STRICT_FULL_LIVE_BLOCKED,
     build_strict_full_live_readiness_report,
     is_strict_full_live_required,
@@ -218,9 +220,13 @@ async def start_run(
         )
     documents = _extraction_ready_documents_from_preflight_corpus(preflight_corpus)
 
-    if request_body.mode == "FULL" and is_strict_full_live_required():
+    strict_dotenv_path = os.environ.get(IDIS_STRICT_DOTENV_PATH_ENV)
+    if request_body.mode == "FULL" and is_strict_full_live_required(
+        dotenv_path=strict_dotenv_path,
+    ):
         strict_report = build_strict_full_live_readiness_report(
             preflight_corpus=preflight_corpus,
+            dotenv_path=strict_dotenv_path,
         )
         if not strict_report.may_proceed:
             raise IdisHttpError(

@@ -110,11 +110,11 @@ class FmpConnector:
 
         try:
             response_data = self._make_request(url=url, ctx=ctx)
-        except FmpFetchError as exc:
-            logger.warning("FMP fetch failed for %s: %s", ticker, exc)
+        except FmpFetchError:
+            logger.warning("FMP fetch failed for safe public lookup")
             return EnrichmentResult(
                 status=EnrichmentStatus.ERROR,
-                normalized={"error": str(exc)},
+                normalized={"error": "FMP provider fetch failed"},
             )
 
         if response_data is None:

@@ -12,6 +12,17 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from idis.services.enrichment.byol_credentials import (
+    ByolCredentialRepository,
+    ByolProviderHealthChecker,
+    ByolProviderReadiness,
+    ByolProviderStatus,
+    EnrichmentProviderMatrixEntry,
+    assess_byol_provider_readiness,
+    build_enrichment_provider_matrix,
+    byol_all_health_passed,
+)
+
 IDIS_REQUIRE_FULL_LIVE_ENV = "IDIS_REQUIRE_FULL_LIVE"
 IDIS_STRICT_DOTENV_PATH_ENV = "IDIS_STRICT_DOTENV_PATH"
 STRICT_FULL_LIVE_BLOCKED = "STRICT_FULL_LIVE_BLOCKED"
@@ -136,6 +147,8 @@ class StrictFullLiveReadinessReport(BaseModel):
     components: list[StrictComponentReadiness]
     component_inventory: list[StrictComponentInventory] = Field(default_factory=list)
     env_sources: dict[str, str] = Field(default_factory=dict)
+    byol_providers: list[ByolProviderReadiness] = Field(default_factory=list)
+    enrichment_provider_matrix: list[EnrichmentProviderMatrixEntry] = Field(default_factory=list)
 
     def component(self, component_name: str) -> StrictComponentReadiness:
         """Return a named component readiness result."""
@@ -168,6 +181,10 @@ def build_strict_full_live_readiness_report(
     env: Mapping[str, str] | None = None,
     dotenv_path: str | Path | None = None,
     binary_resolver: Callable[[str], str | None] | None = None,
+    tenant_id: str | None = None,
+    byol_credential_repo: ByolCredentialRepository | None = None,
+    load_byol_env_credentials: bool = True,
+    byol_health_checker: ByolProviderHealthChecker | None = None,
 ) -> StrictFullLiveReadinessReport:
     """Build a safe strict full-live readiness report without executing a run."""
     env_source = _build_strict_env_source(
@@ -183,13 +200,26 @@ def build_strict_full_live_readiness_report(
     has_media = any(
         extension == ".mp4" for extension in extensions
     ) or _preflight_has_media_document(preflight_corpus)
+    byol_providers = assess_byol_provider_readiness(
+        tenant_id=tenant_id,
+        credential_repo=byol_credential_repo,
+        env=values,
+        env_sources=_env_source_map(env_source),
+        load_env_credentials=load_byol_env_credentials,
+        health_checker=byol_health_checker,
+    )
+    byol_credentials_durable = _byol_credentials_durable(byol_credential_repo)
+    enrichment_provider_matrix = _build_enrichment_provider_matrix(byol_providers)
     components = [
         _supported_parsers_extraction(values),
         _durable_runtime(values),
         _ocr(preflight_corpus=preflight_corpus),
         _mp4_stt(has_media=has_media, env=values, binary_resolver=resolver),
         _live("deterministic_calculations", "src/idis/services/calc/runner.py"),
-        _external_enrichment_apis(),
+        _external_enrichment_apis(
+            byol_providers=byol_providers,
+            byol_credentials_durable=byol_credentials_durable,
+        ),
         _live_llm_model_clients(values),
         _analysis(values),
         _debate_layer_1(values),
@@ -214,6 +244,8 @@ def build_strict_full_live_readiness_report(
         preflight_corpus=preflight_corpus,
         has_media=has_media,
         binary_resolver=resolver,
+        byol_providers=byol_providers,
+        byol_credentials_durable=byol_credentials_durable,
     )
     blocking_components = [
         component.component_name for component in components if not component.may_proceed
@@ -230,6 +262,8 @@ def build_strict_full_live_readiness_report(
         components=components,
         component_inventory=component_inventory,
         env_sources=_env_source_map(env_source),
+        byol_providers=byol_providers,
+        enrichment_provider_matrix=enrichment_provider_matrix,
     )
 
 
@@ -339,13 +373,23 @@ def _mp4_stt(
     )
 
 
-def _external_enrichment_apis() -> StrictComponentReadiness:
+def _external_enrichment_apis(
+    *,
+    byol_providers: list[ByolProviderReadiness],
+    byol_credentials_durable: bool,
+) -> StrictComponentReadiness:
+    if byol_all_health_passed(byol_providers) and byol_credentials_durable:
+        return _live(
+            "external_enrichment_apis",
+            "src/idis/services/enrichment/service.py; "
+            "src/idis/services/enrichment/byol_credentials.py",
+        )
     return StrictComponentReadiness(
         component_name="external_enrichment_apis",
         status=StrictComponentStatus.MISSING_CREDENTIALS,
         blocker_message=(
-            "FULL enrichment is wired, but BYOL providers use an empty in-memory credential "
-            "repository and strict mode cannot allow silent provider blocking."
+            "FULL enrichment is wired, but BYOL providers are not loaded into durable "
+            "tenant credential storage with passing health checks."
         ),
         required_env_vars=[],
         required_services=[
@@ -571,6 +615,8 @@ def _build_component_inventory(
     preflight_corpus: Sequence[Mapping[str, Any]] | None,
     has_media: bool,
     binary_resolver: Callable[[str], str | None],
+    byol_providers: list[ByolProviderReadiness],
+    byol_credentials_durable: bool,
 ) -> list[StrictComponentInventory]:
     env = env_source.effective_env
     inventory = [
@@ -721,19 +767,10 @@ def _build_component_inventory(
                 "src/idis/services/enrichment/connectors",
             ],
         ),
-        _inventory_item(
-            "enrichment BYOL providers",
-            exists=True,
-            full_wired=False,
-            config_present=_any_env_present(env, _BYOL_ENV_KEYS),
-            health="not_wired",
-            output_visible=False,
-            blocker="BYOL env keys are not tenant-credential-wired.",
-            slice_name="Slice 57",
-            evidence=[
-                "src/idis/services/enrichment/service.py",
-                "src/idis/persistence/repositories/enrichment_credentials.py",
-            ],
+        _inventory_byol_item(
+            byol_providers=byol_providers,
+            env=env,
+            byol_credentials_durable=byol_credentials_durable,
         ),
         _inventory_item(
             "Supabase database",
@@ -943,6 +980,102 @@ _BYOL_ENV_KEYS = (
     "FINNHUB_API_KEY",
     "FMP_API_KEY",
 )
+
+_DOC_MENTIONED_NOT_REGISTERED_ENRICHMENT_PROVIDERS = [
+    "epo_open_patent",
+    "google_trends",
+]
+
+
+def _build_enrichment_provider_matrix(
+    byol_providers: list[ByolProviderReadiness],
+) -> list[EnrichmentProviderMatrixEntry]:
+    from idis.services.enrichment.service import _build_default_registry
+
+    registry = _build_default_registry()
+    return build_enrichment_provider_matrix(
+        provider_descriptors=registry.list_providers(),
+        byol_providers=byol_providers,
+        not_registered_provider_ids=_DOC_MENTIONED_NOT_REGISTERED_ENRICHMENT_PROVIDERS,
+    )
+
+
+def _inventory_byol_item(
+    *,
+    byol_providers: list[ByolProviderReadiness],
+    env: Mapping[str, str],
+    byol_credentials_durable: bool,
+) -> StrictComponentInventory:
+    health_passed = byol_all_health_passed(byol_providers)
+    full_wired = health_passed and byol_credentials_durable
+    return _inventory_item(
+        "enrichment BYOL providers",
+        exists=True,
+        full_wired=full_wired,
+        config_present=health_passed or _any_env_present(env, _BYOL_ENV_KEYS),
+        health="passed"
+        if full_wired
+        else _byol_inventory_health(
+            byol_providers=byol_providers,
+            byol_credentials_durable=byol_credentials_durable,
+        ),
+        output_visible=full_wired,
+        blocker=""
+        if full_wired
+        else _byol_inventory_blocker(
+            byol_providers=byol_providers,
+            byol_credentials_durable=byol_credentials_durable,
+        ),
+        slice_name="Slice 57",
+        evidence=[
+            "src/idis/services/enrichment/byol_credentials.py",
+            "src/idis/services/enrichment/service.py",
+            "src/idis/persistence/repositories/enrichment_credentials.py",
+        ],
+    )
+
+
+def _byol_inventory_health(
+    *,
+    byol_providers: list[ByolProviderReadiness],
+    byol_credentials_durable: bool,
+) -> str:
+    if byol_all_health_passed(byol_providers) and not byol_credentials_durable:
+        return "configured_not_durable"
+    statuses = {provider.status for provider in byol_providers}
+    if ByolProviderStatus.HEALTH_FAILED in statuses:
+        return "configured_failed"
+    if ByolProviderStatus.TENANT_CREDENTIAL_LOADED in statuses:
+        return "contract_only"
+    if ByolProviderStatus.ENV_KEY_PRESENT_NOT_LOADED in statuses:
+        return "not_wired"
+    return "missing_config"
+
+
+def _byol_inventory_blocker(
+    *,
+    byol_providers: list[ByolProviderReadiness],
+    byol_credentials_durable: bool,
+) -> str:
+    if not byol_providers:
+        return "BYOL provider readiness has not been evaluated."
+    if byol_all_health_passed(byol_providers) and not byol_credentials_durable:
+        return "BYOL provider credentials are health-checked but not using durable tenant storage."
+    failed = [
+        provider.provider_id
+        for provider in byol_providers
+        if provider.status != ByolProviderStatus.HEALTH_PASSED
+    ]
+    return (
+        "BYOL providers are not strict-ready; provider statuses are reported "
+        f"without credential values for: {', '.join(failed)}."
+    )
+
+
+def _byol_credentials_durable(
+    credential_repo: ByolCredentialRepository | None,
+) -> bool:
+    return bool(getattr(credential_repo, "is_durable", False))
 
 
 def _inventory_llm_item(

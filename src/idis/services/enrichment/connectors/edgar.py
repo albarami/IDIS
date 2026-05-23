@@ -110,15 +110,11 @@ class EdgarConnector:
 
         try:
             response_data = self._make_request(url=url, ctx=ctx)
-        except EdgarFetchError as exc:
-            logger.warning(
-                "EDGAR fetch failed for CIK %s: %s",
-                cik,
-                exc,
-            )
+        except EdgarFetchError:
+            logger.warning("EDGAR fetch failed for safe public lookup")
             return EnrichmentResult(
                 status=EnrichmentStatus.ERROR,
-                normalized={"error": str(exc)},
+                normalized={"error": "EDGAR provider fetch failed"},
             )
 
         if response_data is None:

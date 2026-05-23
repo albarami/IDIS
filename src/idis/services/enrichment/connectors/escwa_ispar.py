@@ -147,15 +147,11 @@ class EscwaIsparConnector:
 
         try:
             response_data = self._make_request(iso3=iso3, ctx=ctx)
-        except EscwaIsparFetchError as exc:
-            logger.warning(
-                "ESCWA ISPAR fetch failed for %s: %s",
-                iso3,
-                exc,
-            )
+        except EscwaIsparFetchError:
+            logger.warning("ESCWA ISPAR fetch failed for safe public lookup")
             return EnrichmentResult(
                 status=EnrichmentStatus.ERROR,
-                normalized={"error": str(exc)},
+                normalized={"error": "ESCWA ISPAR provider fetch failed"},
             )
 
         if response_data is None:

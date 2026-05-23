@@ -109,11 +109,11 @@ class PatentsViewConnector:
 
         try:
             response_data = self._make_request(url=url, ctx=ctx)
-        except PatentsViewFetchError as exc:
-            logger.warning("PatentsView fetch failed for %s: %s", company_name, exc)
+        except PatentsViewFetchError:
+            logger.warning("PatentsView fetch failed for safe public lookup")
             return EnrichmentResult(
                 status=EnrichmentStatus.ERROR,
-                normalized={"error": str(exc)},
+                normalized={"error": "PatentsView provider fetch failed"},
             )
 
         if response_data is None:

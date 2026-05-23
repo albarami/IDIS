@@ -33,8 +33,8 @@ SUPPORTED_CONTENT_TOKENS = (
     "slice27_pptx_confidential_market_marker",
 )
 UNSUPPORTED_CONTENT_TOKENS = (
-    "slice27 unsupported mp4 confidential marker",
-    "slice27 unsupported png confidential marker",
+    "slice27 unsupported binary video confidential marker",
+    "slice27 unsupported binary image confidential marker",
     "slice27 unsupported html confidential marker",
     "slice27 unsupported txt confidential marker",
 )
@@ -240,11 +240,11 @@ def _upload_supported_file(client: TestClient, *, deal_id: str, path: Path) -> d
 def _unsupported_upload_examples() -> list[dict[str, Any]]:
     return [
         {
-            "filename": "slice27-board-recording.mp4",
+            "filename": "slice27-board-recording.bin",
             "data": b"\x00\x00\x00\x18ftypmp42" + UNSUPPORTED_CONTENT_TOKENS[0].encode(),
         },
         {
-            "filename": "slice27-warehouse-photo.png",
+            "filename": "slice27-warehouse-photo.bin",
             "data": b"\x89PNG\r\n\x1a\n" + UNSUPPORTED_CONTENT_TOKENS[1].encode(),
         },
         {

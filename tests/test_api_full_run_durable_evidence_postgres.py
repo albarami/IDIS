@@ -249,8 +249,8 @@ def _upload_supported_file(client: TestClient, *, deal_id: str, path: Path) -> d
 
 def _unsupported_upload_examples() -> list[dict[str, Any]]:
     return [
-        {"filename": "slice26-video.mp4", "data": b"\x00\x00\x00\x18ftypmp42"},
-        {"filename": "slice26-image.png", "data": b"\x89PNG\r\n\x1a\n"},
+        {"filename": "slice26-video.bin", "data": b"\x00\x00\x00\x18ftypmp42"},
+        {"filename": "slice26-image.bin", "data": b"\x89PNG\r\n\x1a\n"},
         {"filename": "slice26-page.html", "data": b"<html><body>unsupported</body></html>"},
         {"filename": "slice26-note.txt", "data": b"unsupported plain text"},
     ]

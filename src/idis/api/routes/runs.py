@@ -29,6 +29,11 @@ from idis.persistence.repositories.run_steps import get_run_steps_repository
 from idis.persistence.repositories.runs import get_runs_repository
 from idis.services.runs.execution import RunExecutionService
 from idis.services.runs.steps import build_run_context
+from idis.services.runs.strict_full_live import (
+    STRICT_FULL_LIVE_BLOCKED,
+    build_strict_full_live_readiness_report,
+    is_strict_full_live_required,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +217,18 @@ async def start_run(
             ),
         )
     documents = _extraction_ready_documents_from_preflight_corpus(preflight_corpus)
+
+    if request_body.mode == "FULL" and is_strict_full_live_required():
+        strict_report = build_strict_full_live_readiness_report(
+            preflight_corpus=preflight_corpus,
+        )
+        if not strict_report.may_proceed:
+            raise IdisHttpError(
+                status_code=409,
+                code=STRICT_FULL_LIVE_BLOCKED,
+                message=("Strict full-live preflight blocked this FULL run before execution"),
+                details={"strict_full_live": strict_report.model_dump(mode="json")},
+            )
 
     run_data = runs_repo.create(
         run_id=run_id,

@@ -121,7 +121,7 @@ def test_strict_report_blocks_missing_durable_runtime_env() -> None:
     assert runtime.status == StrictComponentStatus.MISSING_INFRASTRUCTURE
     assert runtime.required_env_vars == [
         "IDIS_DATABASE_URL",
-        "IDIS_API_KEYS",
+        IDIS_API_KEYS_ENV,
         "IDIS_OBJECT_STORE_BACKEND",
     ]
     assert runtime.may_proceed is False

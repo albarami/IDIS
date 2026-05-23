@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,74 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 IDIS_REQUIRE_FULL_LIVE_ENV = "IDIS_REQUIRE_FULL_LIVE"
+IDIS_STRICT_DOTENV_PATH_ENV = "IDIS_STRICT_DOTENV_PATH"
 STRICT_FULL_LIVE_BLOCKED = "STRICT_FULL_LIVE_BLOCKED"
+
+PROCESS_ENV_SOURCE = "process"
+DOTENV_ENV_SOURCE = "dotenv"
+MISSING_ENV_SOURCE = "missing"
+
+REQUIRED_STRICT_COMPONENTS: tuple[str, ...] = (
+    "API FULL path",
+    "worker path",
+    "private harness path",
+    "parsers",
+    "OCR",
+    "MP4/STT",
+    "Anthropic extraction",
+    "Anthropic debate",
+    "Anthropic analysis",
+    "Anthropic scoring",
+    "enrichment public providers",
+    "enrichment BYOL providers",
+    "Supabase database",
+    "Supabase Auth",
+    "Supabase Storage",
+    "Supabase Vectors/RAG",
+    "Postgres/RLS",
+    "object storage",
+    "audit sink",
+    "calculation engine",
+    "CalcSanad",
+    "Neo4j graph projection",
+    "graph retrieval",
+    "pgvector/RAG",
+    "Layer 1 debate",
+    "Layer 2 IC challenge",
+    "deliverable generation",
+    "product export",
+    "UI/API download",
+    "real_example gate",
+)
+
+TRACKED_ENV_VARS: tuple[str, ...] = (
+    "ANTHROPIC_API_KEY",
+    "IDIS_EXTRACT_BACKEND",
+    "IDIS_DEBATE_BACKEND",
+    "IDIS_ANTHROPIC_MODEL_EXTRACT",
+    "IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT",
+    "IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER",
+    "IDIS_DATABASE_URL",
+    "IDIS_DATABASE_ADMIN_URL",
+    "IDIS_API_KEYS_JSON",
+    "IDIS_API_KEYS",
+    "IDIS_OBJECT_STORE_BACKEND",
+    "IDIS_OBJECT_STORE_BASE_DIR",
+    "IDIS_MEDIA_STT_MODEL_PATH",
+    "IDIS_MEDIA_STT_MODEL_NAME",
+    "IDIS_ENRICHMENT_ENCRYPTION_KEY",
+    "COMPANIES_HOUSE_API_KEY",
+    "GITHUB_API_TOKEN",
+    "FRED_API_KEY",
+    "FINNHUB_API_KEY",
+    "FMP_API_KEY",
+    "SUPABASE_URL",
+    "SUPABASE_KEY",
+    "SUPABASE_SECRET_KEY",
+    "NEO4J_URI",
+    "NEO4J_USERNAME",
+    "NEO4J_PASSWORD",
+)
 
 
 class StrictComponentStatus(StrEnum):
@@ -40,6 +108,22 @@ class StrictComponentReadiness(BaseModel):
     may_proceed: bool
 
 
+class StrictComponentInventory(BaseModel):
+    """Truth-table inventory for one strict full-live component."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    component_name: str
+    exists_in_code: bool
+    full_wired: bool
+    config_present: bool
+    health_check_status: str
+    output_visible: bool
+    blocker: str
+    implementation_slice: str
+    evidence_files: list[str]
+
+
 class StrictFullLiveReadinessReport(BaseModel):
     """Strict full-live preflight report."""
 
@@ -50,6 +134,8 @@ class StrictFullLiveReadinessReport(BaseModel):
     blocker_count: int
     blocking_components: list[str]
     components: list[StrictComponentReadiness]
+    component_inventory: list[StrictComponentInventory] = Field(default_factory=list)
+    env_sources: dict[str, str] = Field(default_factory=dict)
 
     def component(self, component_name: str) -> StrictComponentReadiness:
         """Return a named component readiness result."""
@@ -60,10 +146,17 @@ class StrictFullLiveReadinessReport(BaseModel):
         raise KeyError(msg)
 
 
-def is_strict_full_live_required(env: Mapping[str, str] | None = None) -> bool:
+def is_strict_full_live_required(
+    env: Mapping[str, str] | None = None,
+    *,
+    dotenv_path: str | Path | None = None,
+) -> bool:
     """Return whether strict full-live mode is enabled by environment."""
-    values = os.environ if env is None else env
-    value = str(values.get(IDIS_REQUIRE_FULL_LIVE_ENV, "")).strip().lower()
+    env_source = _build_strict_env_source(
+        process_env=os.environ if env is None else env,
+        dotenv_path=dotenv_path,
+    )
+    value = str(env_source.effective_env.get(IDIS_REQUIRE_FULL_LIVE_ENV, "")).strip().lower()
     return value in {"1", "true", "yes", "on"}
 
 
@@ -73,10 +166,15 @@ def build_strict_full_live_readiness_report(
     data_room_root_path: str | Path | None = None,
     data_room_file_extensions: Sequence[str] | None = None,
     env: Mapping[str, str] | None = None,
+    dotenv_path: str | Path | None = None,
     binary_resolver: Callable[[str], str | None] | None = None,
 ) -> StrictFullLiveReadinessReport:
     """Build a safe strict full-live readiness report without executing a run."""
-    values = os.environ if env is None else env
+    env_source = _build_strict_env_source(
+        process_env=os.environ if env is None else env,
+        dotenv_path=dotenv_path,
+    )
+    values = env_source.effective_env
     resolver = binary_resolver or shutil.which
     extensions = _safe_extensions(
         data_room_root_path=data_room_root_path,
@@ -111,15 +209,27 @@ def build_strict_full_live_readiness_report(
         _live("deliverable_generation", "src/idis/deliverables/generator.py"),
         _product_export_bundle(),
     ]
+    component_inventory = _build_component_inventory(
+        env_source=env_source,
+        preflight_corpus=preflight_corpus,
+        has_media=has_media,
+        binary_resolver=resolver,
+    )
     blocking_components = [
         component.component_name for component in components if not component.may_proceed
     ]
+    blocking_components.extend(
+        item.component_name for item in component_inventory if _inventory_item_blocks(item)
+    )
+    deduped_blocking_components = list(dict.fromkeys(blocking_components))
     return StrictFullLiveReadinessReport(
         required=True,
-        may_proceed=not blocking_components,
-        blocker_count=len(blocking_components),
-        blocking_components=blocking_components,
+        may_proceed=not deduped_blocking_components,
+        blocker_count=len(deduped_blocking_components),
+        blocking_components=deduped_blocking_components,
         components=components,
+        component_inventory=component_inventory,
+        env_sources=_env_source_map(env_source),
     )
 
 
@@ -383,6 +493,573 @@ def _product_export_bundle() -> StrictComponentReadiness:
         ),
         may_proceed=False,
     )
+
+
+@dataclass(frozen=True)
+class _StrictEnvSource:
+    effective_env: dict[str, str]
+    process_keys: frozenset[str]
+    dotenv_keys: frozenset[str]
+
+
+def _build_strict_env_source(
+    *,
+    process_env: Mapping[str, str],
+    dotenv_path: str | Path | None,
+) -> _StrictEnvSource:
+    dotenv_values = _parse_dotenv_values(dotenv_path)
+    effective_env = dict(dotenv_values)
+    effective_env.update({key: str(value) for key, value in process_env.items()})
+    return _StrictEnvSource(
+        effective_env=effective_env,
+        process_keys=frozenset(process_env.keys()),
+        dotenv_keys=frozenset(dotenv_values.keys()),
+    )
+
+
+def _parse_dotenv_values(dotenv_path: str | Path | None) -> dict[str, str]:
+    if dotenv_path is None:
+        return {}
+    path = Path(dotenv_path)
+    if not path.exists() or not path.is_file():
+        return {}
+    values: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        parsed = _parse_dotenv_line(line)
+        if parsed is not None:
+            key, value = parsed
+            values[key] = value
+    return values
+
+
+def _parse_dotenv_line(line: str) -> tuple[str, str] | None:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#") or "=" not in stripped:
+        return None
+    key, value = stripped.split("=", 1)
+    key = key.strip()
+    if key.startswith("export "):
+        key = key.removeprefix("export ").strip()
+    if not key:
+        return None
+    return key, _strip_dotenv_value(value.strip())
+
+
+def _strip_dotenv_value(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
+    if " #" in value:
+        return value.split(" #", 1)[0].rstrip()
+    return value
+
+
+def _env_source_map(env_source: _StrictEnvSource) -> dict[str, str]:
+    return {key: _env_source_for_key(env_source, key) for key in TRACKED_ENV_VARS}
+
+
+def _env_source_for_key(env_source: _StrictEnvSource, key: str) -> str:
+    if key in env_source.process_keys:
+        return PROCESS_ENV_SOURCE
+    if key in env_source.dotenv_keys:
+        return DOTENV_ENV_SOURCE
+    return MISSING_ENV_SOURCE
+
+
+def _build_component_inventory(
+    *,
+    env_source: _StrictEnvSource,
+    preflight_corpus: Sequence[Mapping[str, Any]] | None,
+    has_media: bool,
+    binary_resolver: Callable[[str], str | None],
+) -> list[StrictComponentInventory]:
+    env = env_source.effective_env
+    inventory = [
+        _inventory_item(
+            "API FULL path",
+            exists=True,
+            full_wired=True,
+            config_present=True,
+            health="passed",
+            output_visible=True,
+            blocker="",
+            slice_name="Slice 56",
+            evidence=["src/idis/models/run_step.py", "src/idis/api/routes/runs.py"],
+        ),
+        _inventory_item(
+            "worker path",
+            exists=True,
+            full_wired=True,
+            config_present=_has_value(env, "IDIS_WORKER_TENANT_IDS"),
+            health="passed",
+            output_visible=True,
+            blocker=(
+                "Classified as canonical only through RunExecutionService; "
+                "legacy PipelineExecutor is non-authoritative."
+            ),
+            slice_name="Slice 56",
+            evidence=["src/idis/pipeline/worker.py", "src/idis/services/runs/execution.py"],
+        ),
+        _inventory_item(
+            "private harness path",
+            exists=True,
+            full_wired=False,
+            config_present=True,
+            health="non_authoritative",
+            output_visible=False,
+            blocker=(
+                "Private harness is aggregate-only and cannot be authoritative "
+                "for strict success claims."
+            ),
+            slice_name="Slice 56",
+            evidence=[
+                "src/idis/evaluation/real_example_run_harness.py",
+                "scripts/run_real_example_gate.py",
+            ],
+        ),
+        _inventory_item(
+            "parsers",
+            exists=True,
+            full_wired=True,
+            config_present=True,
+            health="contract_only",
+            output_visible=True,
+            blocker=(
+                "Parser support remains partial; strict readiness must expose "
+                "unsupported/deferred classes."
+            ),
+            slice_name="Slice 56",
+            evidence=[
+                "src/idis/parsers/registry.py",
+                "src/idis/services/documents/parser_capabilities.py",
+            ],
+        ),
+        _inventory_item(
+            "OCR",
+            exists=True,
+            full_wired=False,
+            config_present=True,
+            health="not_wired",
+            output_visible=False,
+            blocker=(
+                "OCR-required documents are present and OCR is not output-visible in FULL."
+                if _preflight_has_ocr_required_document(preflight_corpus)
+                else "OCR code exists, but default FULL ingestion/output visibility is not proven."
+            ),
+            slice_name="Slice 58",
+            evidence=[
+                "src/idis/parsers/ocr.py",
+                "src/idis/parsers/image.py",
+                "src/idis/parsers/pdf.py",
+            ],
+        ),
+        _inventory_item(
+            "MP4/STT",
+            exists=True,
+            full_wired=False,
+            config_present=_media_model_config_present(env),
+            health=_media_health_status(env=env, binary_resolver=binary_resolver),
+            output_visible=False,
+            blocker=(
+                "MP4 files are present and STT is not FULL-wired/output-visible."
+                if has_media
+                else "Media parser exists, but MP4/STT is not FULL-wired/output-visible."
+            ),
+            slice_name="Slice 58",
+            evidence=[
+                "src/idis/parsers/media.py",
+                "src/idis/services/documents/parser_capabilities.py",
+            ],
+        ),
+        _inventory_llm_item(
+            "Anthropic extraction",
+            backend_key="IDIS_EXTRACT_BACKEND",
+            model_keys=["IDIS_ANTHROPIC_MODEL_EXTRACT"],
+            evidence=[
+                "src/idis/api/routes/runs.py",
+                "src/idis/services/extraction/extractors/anthropic_client.py",
+            ],
+            env=env,
+        ),
+        _inventory_llm_item(
+            "Anthropic debate",
+            backend_key="IDIS_DEBATE_BACKEND",
+            model_keys=[
+                "IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT",
+                "IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER",
+            ],
+            evidence=["src/idis/api/routes/runs.py", "src/idis/debate/roles/llm_role_runner.py"],
+            env=env,
+        ),
+        _inventory_llm_item(
+            "Anthropic analysis",
+            backend_key="IDIS_DEBATE_BACKEND",
+            model_keys=["IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT"],
+            evidence=["src/idis/api/routes/runs.py", "src/idis/analysis/agents/__init__.py"],
+            env=env,
+        ),
+        _inventory_llm_item(
+            "Anthropic scoring",
+            backend_key="IDIS_DEBATE_BACKEND",
+            model_keys=["IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT"],
+            evidence=[
+                "src/idis/api/routes/runs.py",
+                "src/idis/analysis/scoring/llm_scorecard_runner.py",
+            ],
+            env=env,
+        ),
+        _inventory_item(
+            "enrichment public providers",
+            exists=True,
+            full_wired=True,
+            config_present=True,
+            health="contract_only",
+            output_visible=False,
+            blocker="Public enrichment results are not yet strict provenance/output-visible.",
+            slice_name="Slice 57",
+            evidence=[
+                "src/idis/services/enrichment/service.py",
+                "src/idis/services/enrichment/connectors",
+            ],
+        ),
+        _inventory_item(
+            "enrichment BYOL providers",
+            exists=True,
+            full_wired=False,
+            config_present=_any_env_present(env, _BYOL_ENV_KEYS),
+            health="not_wired",
+            output_visible=False,
+            blocker="BYOL env keys are not tenant-credential-wired.",
+            slice_name="Slice 57",
+            evidence=[
+                "src/idis/services/enrichment/service.py",
+                "src/idis/persistence/repositories/enrichment_credentials.py",
+            ],
+        ),
+        _inventory_item(
+            "Supabase database",
+            exists=True,
+            full_wired=False,
+            config_present=_any_env_present(
+                env, ("SUPABASE_URL", "SUPABASE_KEY", "SUPABASE_SECRET_KEY")
+            )
+            or "supabase" in str(env.get("IDIS_DATABASE_URL", "")).lower(),
+            health="not_implemented",
+            output_visible=False,
+            blocker="Supabase is not separately health-checked; DB path is generic Postgres only.",
+            slice_name="Slice 56",
+            evidence=["src/idis/persistence/db.py"],
+        ),
+        _not_implemented_inventory("Supabase Auth", "Slice TBD"),
+        _not_implemented_inventory("Supabase Storage", "Slice 59"),
+        _not_implemented_inventory("Supabase Vectors/RAG", "Slice 62"),
+        _inventory_item(
+            "Postgres/RLS",
+            exists=True,
+            full_wired=True,
+            config_present=_has_value(env, "IDIS_DATABASE_URL"),
+            health="contract_only" if _has_value(env, "IDIS_DATABASE_URL") else "missing_config",
+            output_visible=True,
+            blocker="" if _has_value(env, "IDIS_DATABASE_URL") else "IDIS_DATABASE_URL missing.",
+            slice_name="Slice 56",
+            evidence=["src/idis/persistence/db.py", "src/idis/persistence/migrations/versions"],
+        ),
+        _inventory_item(
+            "object storage",
+            exists=True,
+            full_wired=True,
+            config_present=_has_value(env, "IDIS_OBJECT_STORE_BACKEND"),
+            health="contract_only"
+            if _has_value(env, "IDIS_OBJECT_STORE_BACKEND")
+            else "missing_config",
+            output_visible=False,
+            blocker=(
+                "Object storage exists for ingestion, but final bundle output "
+                "visibility is not wired."
+            ),
+            slice_name="Slice 59",
+            evidence=[
+                "src/idis/storage/filesystem_store.py",
+                "src/idis/services/ingestion/defaults.py",
+            ],
+        ),
+        _inventory_item(
+            "audit sink",
+            exists=True,
+            full_wired=False,
+            config_present=_has_value(env, "IDIS_AUDIT_LOG_PATH")
+            or _has_value(env, "IDIS_DATABASE_URL"),
+            health="contract_only",
+            output_visible=True,
+            blocker="Some run helpers still instantiate InMemoryAuditSink.",
+            slice_name="Slice 56",
+            evidence=["src/idis/audit", "src/idis/api/middleware/audit.py"],
+        ),
+        _inventory_item(
+            "calculation engine",
+            exists=True,
+            full_wired=True,
+            config_present=True,
+            health="contract_only",
+            output_visible=False,
+            blocker="Calculation outputs are not yet final-package-visible.",
+            slice_name="Slice 60",
+            evidence=["src/idis/services/calc/runner.py", "src/idis/calc/engine.py"],
+        ),
+        _inventory_item(
+            "CalcSanad",
+            exists=True,
+            full_wired=True,
+            config_present=True,
+            health="contract_only",
+            output_visible=False,
+            blocker="CalcSanad persistence exists, but final-package visibility is not proven.",
+            slice_name="Slice 60",
+            evidence=[
+                "src/idis/models/calc_sanad.py",
+                "src/idis/persistence/repositories/calculations.py",
+            ],
+        ),
+        _inventory_item(
+            "Neo4j graph projection",
+            exists=True,
+            full_wired=False,
+            config_present=_any_env_present(env, ("NEO4J_URI", "NEO4J_USERNAME", "NEO4J_PASSWORD")),
+            health="not_wired",
+            output_visible=False,
+            blocker="GraphProjectionService exists, but FULL does not call projection.",
+            slice_name="Slice 61",
+            evidence=[
+                "src/idis/persistence/graph_consistency.py",
+                "src/idis/persistence/graph_repo.py",
+            ],
+        ),
+        _inventory_item(
+            "graph retrieval",
+            exists=True,
+            full_wired=False,
+            config_present=_any_env_present(env, ("NEO4J_URI", "NEO4J_USERNAME", "NEO4J_PASSWORD")),
+            health="not_wired",
+            output_visible=False,
+            blocker="Graph retrieval methods exist, but no FULL consumer/API path uses them.",
+            slice_name="Slice 61",
+            evidence=["src/idis/persistence/graph_repo.py", "src/idis/persistence/cypher"],
+        ),
+        _inventory_item(
+            "pgvector/RAG",
+            exists=False,
+            full_wired=False,
+            config_present=_has_value(env, "IDIS_ENABLE_VECTOR_SEARCH"),
+            health="not_implemented",
+            output_visible=False,
+            blocker="No production embedding/index/query/retriever path exists.",
+            slice_name="Slice 62",
+            evidence=["scripts/pg_init.sql", "docker-compose.yml"],
+        ),
+        _inventory_item(
+            "Layer 1 debate",
+            exists=True,
+            full_wired=True,
+            config_present=_has_value(env, "IDIS_DEBATE_BACKEND"),
+            health="contract_only",
+            output_visible=True,
+            blocker="Live Anthropic provenance is not fully health-checked in strict inventory.",
+            slice_name="Slice 56",
+            evidence=["src/idis/debate/orchestrator.py", "src/idis/api/routes/runs.py"],
+        ),
+        _inventory_item(
+            "Layer 2 IC challenge",
+            exists=False,
+            full_wired=False,
+            config_present=False,
+            health="not_implemented",
+            output_visible=False,
+            blocker="Only Layer 2 readiness package exists; no distinct IC challenge debate loop.",
+            slice_name="Slice 63",
+            evidence=["src/idis/services/runs/methodology_layer2_readiness_package.py"],
+        ),
+        _inventory_item(
+            "deliverable generation",
+            exists=True,
+            full_wired=True,
+            config_present=True,
+            health="contract_only",
+            output_visible=True,
+            blocker="Generation is in-run; durable product export is separate.",
+            slice_name="Slice 59",
+            evidence=["src/idis/deliverables/generator.py", "src/idis/api/routes/runs.py"],
+        ),
+        _inventory_item(
+            "product export",
+            exists=True,
+            full_wired=False,
+            config_present=False,
+            health="not_wired",
+            output_visible=False,
+            blocker=(
+                "Export primitives exist, but strict VC bundle persistence/API access is not wired."
+            ),
+            slice_name="Slice 59",
+            evidence=["src/idis/deliverables/export.py", "src/idis/api/routes/deliverables.py"],
+        ),
+        _inventory_item(
+            "UI/API download",
+            exists=True,
+            full_wired=False,
+            config_present=True,
+            health="not_wired",
+            output_visible=False,
+            blocker=(
+                "Deliverables API/UI can list metadata, but strict bundle download "
+                "URIs are not produced."
+            ),
+            slice_name="Slice 64",
+            evidence=[
+                "src/idis/api/routes/deliverables.py",
+                "ui/src/app/deals/[dealId]/deliverables/page.tsx",
+            ],
+        ),
+        _inventory_item(
+            "real_example gate",
+            exists=True,
+            full_wired=False,
+            config_present=True,
+            health="contract_only",
+            output_visible=False,
+            blocker="Gate is aggregate/private; strict VC package run is not implemented.",
+            slice_name="Slice 65",
+            evidence=[
+                "src/idis/evaluation/real_example_gate.py",
+                "src/idis/evaluation/real_example_run_harness.py",
+            ],
+        ),
+    ]
+    return _ordered_inventory(inventory)
+
+
+_BYOL_ENV_KEYS = (
+    "COMPANIES_HOUSE_API_KEY",
+    "GITHUB_API_TOKEN",
+    "FRED_API_KEY",
+    "FINNHUB_API_KEY",
+    "FMP_API_KEY",
+)
+
+
+def _inventory_llm_item(
+    component_name: str,
+    *,
+    backend_key: str,
+    model_keys: Sequence[str],
+    evidence: list[str],
+    env: Mapping[str, str],
+) -> StrictComponentInventory:
+    configured = (
+        env.get(backend_key) == "anthropic"
+        and _has_value(env, "ANTHROPIC_API_KEY")
+        and all(_has_value(env, key) for key in model_keys)
+    )
+    return _inventory_item(
+        component_name,
+        exists=True,
+        full_wired=True,
+        config_present=configured,
+        health="not_implemented" if configured else "missing_config",
+        output_visible=False,
+        blocker=(
+            "Live Anthropic config is present, but Slice 56 has no real live model health check."
+            if configured
+            else "Live Anthropic backend/API key/model config is incomplete."
+        ),
+        slice_name="Slice 56",
+        evidence=evidence,
+    )
+
+
+def _not_implemented_inventory(component_name: str, slice_name: str) -> StrictComponentInventory:
+    return _inventory_item(
+        component_name,
+        exists=False,
+        full_wired=False,
+        config_present=False,
+        health="not_implemented",
+        output_visible=False,
+        blocker=f"{component_name} is not implemented in the current strict FULL path.",
+        slice_name=slice_name,
+        evidence=[],
+    )
+
+
+def _inventory_item(
+    component_name: str,
+    *,
+    exists: bool,
+    full_wired: bool,
+    config_present: bool,
+    health: str,
+    output_visible: bool,
+    blocker: str,
+    slice_name: str,
+    evidence: list[str],
+) -> StrictComponentInventory:
+    return StrictComponentInventory(
+        component_name=component_name,
+        exists_in_code=exists,
+        full_wired=full_wired,
+        config_present=config_present,
+        health_check_status=health,
+        output_visible=output_visible,
+        blocker=blocker,
+        implementation_slice=slice_name,
+        evidence_files=evidence,
+    )
+
+
+def _ordered_inventory(
+    inventory: list[StrictComponentInventory],
+) -> list[StrictComponentInventory]:
+    by_name = {item.component_name: item for item in inventory}
+    return [by_name[name] for name in REQUIRED_STRICT_COMPONENTS]
+
+
+def _inventory_item_blocks(item: StrictComponentInventory) -> bool:
+    if item.health_check_status == "non_authoritative":
+        return True
+    return (
+        not item.exists_in_code
+        or not item.full_wired
+        or not item.config_present
+        or not item.output_visible
+        or item.health_check_status
+        in {
+            "contract_only",
+            "missing_config",
+            "not_implemented",
+            "not_wired",
+            "configured_failed",
+        }
+    )
+
+
+def _any_env_present(env: Mapping[str, str], keys: Sequence[str]) -> bool:
+    return any(_has_value(env, key) for key in keys)
+
+
+def _media_model_config_present(env: Mapping[str, str]) -> bool:
+    return _has_value(env, "IDIS_MEDIA_STT_MODEL_PATH") or _has_value(
+        env,
+        "IDIS_MEDIA_STT_MODEL_NAME",
+    )
+
+
+def _media_health_status(
+    *,
+    env: Mapping[str, str],
+    binary_resolver: Callable[[str], str | None],
+) -> str:
+    has_binaries = all(binary_resolver(binary) is not None for binary in ("ffmpeg", "ffprobe"))
+    if has_binaries and _media_model_config_present(env):
+        return "not_wired"
+    return "missing_config"
 
 
 def _not_implemented(

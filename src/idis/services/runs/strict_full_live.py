@@ -227,7 +227,8 @@ def build_strict_full_live_readiness_report(
         _durable_runtime(values),
         _ocr(has_ocr_evidence=has_ocr_evidence, env=values, binary_resolver=resolver),
         _mp4_stt(has_media=has_media, env=values, binary_resolver=resolver),
-        _live("deterministic_calculations", "src/idis/services/calc/runner.py"),
+        _calculation_engine(values),
+        _calc_sanad(values),
         _external_enrichment_apis(
             byol_providers=byol_providers,
             byol_credentials_durable=byol_credentials_durable,
@@ -445,6 +446,49 @@ def _external_enrichment_apis(
             "fmp credentials",
         ],
         evidence="src/idis/services/enrichment/service.py:create_default_enrichment_service",
+        may_proceed=False,
+    )
+
+
+def _calculation_engine(env: Mapping[str, str]) -> StrictComponentReadiness:
+    evidence = (
+        "src/idis/services/calc/runner.py; src/idis/calc/engine.py; "
+        "src/idis/deliverables/product_bundle.py"
+    )
+    if _calculation_visibility_ready(env):
+        return _live("deterministic_calculations", evidence)
+    return StrictComponentReadiness(
+        component_name="deterministic_calculations",
+        status=StrictComponentStatus.CODE_EXISTS_BUT_NOT_WIRED,
+        blocker_message=(
+            "Deterministic calculations exist, but strict mode requires durable "
+            "Postgres persistence and product-bundle visibility before claiming them live."
+        ),
+        required_env_vars=_missing_product_export_env(env),
+        required_services=["Postgres deterministic_calculations table", "product export bundle"],
+        evidence=evidence,
+        may_proceed=False,
+    )
+
+
+def _calc_sanad(env: Mapping[str, str]) -> StrictComponentReadiness:
+    evidence = (
+        "src/idis/models/calc_sanad.py; "
+        "src/idis/persistence/repositories/calculations.py; "
+        "src/idis/deliverables/product_bundle.py"
+    )
+    if _calculation_visibility_ready(env):
+        return _live("calc_sanad", evidence)
+    return StrictComponentReadiness(
+        component_name="calc_sanad",
+        status=StrictComponentStatus.CODE_EXISTS_BUT_NOT_WIRED,
+        blocker_message=(
+            "CalcSanad persistence exists, but strict mode requires linked durable rows "
+            "and product-bundle evidence index visibility before claiming it live."
+        ),
+        required_env_vars=_missing_product_export_env(env),
+        required_services=["Postgres calc_sanads table", "product export bundle"],
+        evidence=evidence,
         may_proceed=False,
     )
 
@@ -901,9 +945,11 @@ def _build_component_inventory(
             exists=True,
             full_wired=True,
             config_present=True,
-            health="contract_only",
-            output_visible=False,
-            blocker="Calculation outputs are not yet final-package-visible.",
+            health="healthy" if _calculation_visibility_ready(env) else "contract_only",
+            output_visible=_calculation_visibility_ready(env),
+            blocker=""
+            if _calculation_visibility_ready(env)
+            else "Calculation outputs are not yet final-package-visible.",
             slice_name="Slice 60",
             evidence=["src/idis/services/calc/runner.py", "src/idis/calc/engine.py"],
         ),
@@ -912,13 +958,16 @@ def _build_component_inventory(
             exists=True,
             full_wired=True,
             config_present=True,
-            health="contract_only",
-            output_visible=False,
-            blocker="CalcSanad persistence exists, but final-package visibility is not proven.",
+            health="healthy" if _calculation_visibility_ready(env) else "contract_only",
+            output_visible=_calculation_visibility_ready(env),
+            blocker=""
+            if _calculation_visibility_ready(env)
+            else "CalcSanad persistence exists, but final-package visibility is not proven.",
             slice_name="Slice 60",
             evidence=[
                 "src/idis/models/calc_sanad.py",
                 "src/idis/persistence/repositories/calculations.py",
+                "src/idis/deliverables/product_bundle.py",
             ],
         ),
         _inventory_item(
@@ -1253,6 +1302,10 @@ def _any_env_present(env: Mapping[str, str], keys: Sequence[str]) -> bool:
 
 def _product_export_ready(env: Mapping[str, str]) -> bool:
     return _has_value(env, "IDIS_DATABASE_URL") and _product_export_object_store_ready(env)
+
+
+def _calculation_visibility_ready(env: Mapping[str, str]) -> bool:
+    return _product_export_ready(env)
 
 
 def _product_export_config_present(env: Mapping[str, str]) -> bool:

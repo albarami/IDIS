@@ -77,6 +77,16 @@ class AnalysisCalcReference(BaseModel):
         description="Human-readable calc source/provenance summary",
     )
     reproducibility_hash: str | None = None
+    calc_sanad_id: str | None = Field(
+        default=None,
+        description="CalcSanad identifier linking the calculation to source claims",
+    )
+    formula_hash: str | None = None
+    code_version: str | None = None
+    output: dict[str, Any] = Field(default_factory=dict)
+    assumptions: dict[str, Any] = Field(default_factory=dict)
+    calc_grade: str | None = None
+    input_min_sanad_grade: str | None = None
 
 
 class AnalysisContext(BaseModel):

@@ -130,6 +130,7 @@ class ProductBundleExporter:
         scorecard: Scorecard,
         export_timestamp: str,
     ) -> list[_ArtifactDraft]:
+        calc_package = self._calc_package(analysis_context)
         screening_snapshot = self._safe_text_export_deliverable(bundle.screening_snapshot)
         ic_memo = self._safe_text_export_deliverable(bundle.ic_memo)
         screening_pdf = self._deliverable_exporter.export_to_pdf(
@@ -210,6 +211,7 @@ class ProductBundleExporter:
                     if bundle.ic_memo.scenario_analysis is not None
                     else None,
                     "sanad_grade_distribution": bundle.ic_memo.sanad_grade_distribution,
+                    "calculation_package": calc_package,
                 },
             ),
             self._json_draft(
@@ -220,7 +222,7 @@ class ProductBundleExporter:
             self._json_draft(
                 "evidence_index",
                 "evidence_index.json",
-                self._evidence_index(bundle),
+                self._evidence_index(bundle, calc_package=calc_package),
             ),
             self._json_draft(
                 "run_summary",
@@ -232,6 +234,20 @@ class ProductBundleExporter:
                     "generated_at": bundle.generated_at,
                     "composite_score": scorecard.composite_score,
                     "routing": scorecard.routing.value,
+                    "calculation_status": calc_package["status"],
+                    "calc_count": calc_package["calc_count"],
+                    "calc_ids": [item["calc_id"] for item in calc_package["calculations"]],
+                    "calc_sanad_count": calc_package["calc_sanad_count"],
+                    "calc_sanad_ids": [
+                        item["calc_sanad_id"]
+                        for item in calc_package["calculations"]
+                        if item.get("calc_sanad_id")
+                    ],
+                    "reproducibility_hashes": [
+                        item["reproducibility_hash"]
+                        for item in calc_package["calculations"]
+                        if item.get("reproducibility_hash")
+                    ],
                 },
             ),
         ]
@@ -356,7 +372,39 @@ class ProductBundleExporter:
         key_hash = hashlib.sha256(metadata.key.encode("utf-8")).hexdigest()[:16]
         return f"object:{self._object_store_backend}:{metadata.sha256[:16]}:{key_hash}"
 
-    def _evidence_index(self, bundle: DeliverablesBundle) -> dict[str, Any]:
+    def _calc_package(self, analysis_context: AnalysisContext) -> dict[str, Any]:
+        calculations: list[dict[str, Any]] = []
+        for calc_id, calc in sorted(analysis_context.calc_registry.items()):
+            if not calc.calc_sanad_id or not _is_sha256_hex(calc.reproducibility_hash):
+                continue
+            item = {
+                "calc_id": calc_id,
+                "calc_sanad_id": calc.calc_sanad_id,
+                "calc_type": calc.calc_type,
+                "input_claim_ids": sorted(calc.input_claim_ids),
+                "assumptions": calc.assumptions,
+                "output": calc.output,
+                "formula_hash": calc.formula_hash,
+                "code_version": calc.code_version,
+                "reproducibility_hash": calc.reproducibility_hash,
+                "calc_grade": calc.calc_grade,
+                "input_min_sanad_grade": calc.input_min_sanad_grade,
+            }
+            calculations.append(item)
+
+        return {
+            "status": "calculations_available" if calculations else "no_eligible_calculations",
+            "calc_count": len(calculations),
+            "calc_sanad_count": sum(1 for item in calculations if item.get("calc_sanad_id")),
+            "calculations": calculations,
+        }
+
+    def _evidence_index(
+        self,
+        bundle: DeliverablesBundle,
+        *,
+        calc_package: dict[str, Any],
+    ) -> dict[str, Any]:
         entries: list[dict[str, Any]] = []
         for deliverable in (
             bundle.screening_snapshot,
@@ -372,7 +420,16 @@ class ProductBundleExporter:
                 entry.model_dump(mode="json")
                 for entry in bundle.decline_letter.audit_appendix.entries
             )
-        return {"entries": entries}
+        calc_entries = [
+            {
+                "calc_id": item["calc_id"],
+                "calc_sanad_id": item.get("calc_sanad_id"),
+                "source_claim_ids": item.get("input_claim_ids", []),
+                "reproducibility_hash": item.get("reproducibility_hash"),
+            }
+            for item in calc_package["calculations"]
+        ]
+        return {"entries": entries, "calc_entries": calc_entries}
 
 
 def _is_sensitive_artifact_key(key: str) -> bool:
@@ -387,3 +444,9 @@ def _is_sensitive_artifact_string(value: str) -> bool:
         or POSIX_LOCAL_PATH_PATTERN.search(value) is not None
         or any(part in normalized for part in SENSITIVE_ARTIFACT_VALUE_PARTS)
     )
+
+
+def _is_sha256_hex(value: object) -> bool:
+    if not isinstance(value, str) or len(value) != 64:
+        return False
+    return all(char in "0123456789abcdefABCDEF" for char in value)

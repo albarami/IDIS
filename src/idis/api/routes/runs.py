@@ -775,6 +775,8 @@ def _safe_public_run_summary(value: object) -> object:
             key_text = str(key)
             if key_text.startswith("_"):
                 continue
+            if key_text == "blocked_candidates":
+                continue
             if key_text == "manifest_uri":
                 if isinstance(item, str):
                     from idis.persistence.repositories.deliverables import (
@@ -787,6 +789,22 @@ def _safe_public_run_summary(value: object) -> object:
             if key_text == "artifact_count":
                 if isinstance(item, int | float) and not isinstance(item, bool):
                     sanitized[key_text] = item
+                continue
+            if key_text == "reproducibility_hashes":
+                if isinstance(item, list):
+                    hashes = [value for value in item if _is_sha256_hex(value)]
+                    if hashes:
+                        sanitized[key_text] = hashes
+                    elif item == []:
+                        sanitized[key_text] = []
+                continue
+            if key_text == "blocked_candidate_reason_counts":
+                if isinstance(item, dict):
+                    reason_counts = _safe_reason_counts(item)
+                    if reason_counts:
+                        sanitized[key_text] = reason_counts
+                    elif item == {}:
+                        sanitized[key_text] = {}
                 continue
             if key_text not in SAFE_PUBLIC_SUMMARY_KEYS and _is_sensitive_summary_key(key_text):
                 continue
@@ -827,6 +845,23 @@ def _is_safe_public_summary_string(value: str) -> bool:
     ):
         return False
     return not (len(value) > 1 and value[1] == ":")
+
+
+def _is_sha256_hex(value: object) -> bool:
+    if not isinstance(value, str) or len(value) != 64:
+        return False
+    return all(char in "0123456789abcdefABCDEF" for char in value)
+
+
+def _safe_reason_counts(value: dict[object, object]) -> dict[str, int]:
+    safe: dict[str, int] = {}
+    for key, item in value.items():
+        key_text = str(key)
+        if not key_text.replace("_", "").isalnum():
+            continue
+        if isinstance(item, int) and not isinstance(item, bool) and item >= 0:
+            safe[key_text] = item
+    return safe
 
 
 def _looks_like_base64_blob(value: str) -> bool:
@@ -1290,12 +1325,17 @@ def _build_analysis_calc_registry(
         return {}
     repo = get_calculations_repository(db_conn, tenant_id)
     registry: dict[str, AnalysisCalcReference] = {}
+    calc_sanads_by_calc_id = {
+        str(calc_sanad.get("calc_id") or ""): calc_sanad
+        for calc_sanad in repo.list_calc_sanads_by_deal(deal_id)
+    }
     for calc in repo.list_by_deal(deal_id):
         calc_id = str(calc.get("calc_id") or "")
         if calc_id not in requested_ids:
             continue
         output = calc.get("output")
         input_claim_ids = _calc_input_claim_ids(calc.get("inputs"))
+        calc_sanad = calc_sanads_by_calc_id.get(calc_id, {})
         registry[calc_id] = AnalysisCalcReference(
             calc_id=calc_id,
             calc_type=str(calc.get("calc_type") or ""),
@@ -1305,6 +1345,13 @@ def _build_analysis_calc_registry(
                 f"{calc.get('calc_type') or 'calculation'} from {len(input_claim_ids)} input claims"
             ),
             reproducibility_hash=calc.get("reproducibility_hash"),
+            calc_sanad_id=calc_sanad.get("calc_sanad_id"),
+            formula_hash=calc.get("formula_hash"),
+            code_version=calc.get("code_version"),
+            output=_calc_output_payload(output),
+            assumptions=_calc_assumptions(calc.get("inputs")),
+            calc_grade=calc_sanad.get("calc_grade"),
+            input_min_sanad_grade=calc_sanad.get("input_min_sanad_grade"),
         )
     return registry
 
@@ -1318,6 +1365,36 @@ def _calc_output_summary(output: Any) -> str:
         parts = [str(item) for item in (value, currency, unit) if item not in (None, "")]
         return " ".join(parts) if parts else str(output)
     return str(output or "")
+
+
+def _calc_output_payload(output: Any) -> dict[str, Any]:
+    """Return the safe structured output fields used by product exports."""
+    if not isinstance(output, dict):
+        return {}
+    payload: dict[str, Any] = {}
+    for key in ("primary_value", "value", "amount", "unit", "currency"):
+        if key in output:
+            payload[key] = output[key]
+    secondary_values = output.get("secondary_values")
+    if isinstance(secondary_values, dict):
+        payload["secondary_values"] = secondary_values
+    return payload
+
+
+def _calc_assumptions(inputs: Any) -> dict[str, Any]:
+    """Expose calculation inputs/metadata as deterministic assumptions."""
+    if not isinstance(inputs, dict):
+        return {}
+    assumptions: dict[str, Any] = {}
+    values = inputs.get("values")
+    metadata = inputs.get("metadata")
+    if isinstance(values, dict):
+        assumptions["inputs"] = {str(key): value for key, value in sorted(values.items())}
+    if isinstance(metadata, dict) and metadata:
+        assumptions["metadata"] = {
+            str(key): value for key, value in sorted(metadata.items()) if value not in (None, "")
+        }
+    return assumptions
 
 
 def _calc_input_claim_ids(inputs: Any) -> list[str]:

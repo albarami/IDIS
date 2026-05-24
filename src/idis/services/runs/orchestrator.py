@@ -7,7 +7,8 @@ fail-closed semantics on audit failures.
 SNAPSHOT: INGEST_CHECK -> DOCUMENT_PREFLIGHT -> METHODOLOGY_COVERAGE_INIT -> EXTRACT
           -> GRADE -> CALC.
 FULL: INGEST_CHECK -> DOCUMENT_PREFLIGHT -> METHODOLOGY_COVERAGE_INIT -> EXTRACT
-      -> GRADE -> CALC -> ENRICHMENT -> DEBATE -> ANALYSIS -> SCORING -> DELIVERABLES.
+      -> GRADE -> CALC -> GRAPH_EVIDENCE -> ENRICHMENT -> DEBATE -> ANALYSIS
+      -> SCORING -> DELIVERABLES.
 
 No FastAPI globals. All dependencies injected via constructor or execute().
 """
@@ -410,6 +411,7 @@ class RunContext:
     ) = None
     calc_fn: Callable[..., dict[str, Any]] | None = None
     calc_types: list[CalcType] | None = None
+    graph_fn: Callable[..., dict[str, Any]] | None = None
     enrich_fn: Callable[..., dict[str, Any]] | None = None
     debate_fn: Callable[..., dict[str, Any]] | None = None
     analysis_fn: Callable[..., dict[str, Any]] | None = None
@@ -450,8 +452,8 @@ class RunOrchestrator:
         For SNAPSHOT: INGEST_CHECK -> DOCUMENT_PREFLIGHT -> METHODOLOGY_COVERAGE_INIT
                       -> EXTRACT -> GRADE -> CALC.
         For FULL: INGEST_CHECK -> DOCUMENT_PREFLIGHT -> METHODOLOGY_COVERAGE_INIT
-                  -> EXTRACT -> GRADE -> CALC -> ENRICHMENT -> DEBATE
-                  -> ANALYSIS -> SCORING -> DELIVERABLES.
+                  -> EXTRACT -> GRADE -> CALC -> GRAPH_EVIDENCE
+                  -> ENRICHMENT -> DEBATE -> ANALYSIS -> SCORING -> DELIVERABLES.
 
         Skips steps that are already COMPLETED (idempotent resume).
         Fails closed on audit emission errors.
@@ -622,6 +624,8 @@ class RunOrchestrator:
             return self._execute_grade(ctx, accumulated)
         if step_name == StepName.CALC:
             return self._execute_calc(ctx, accumulated)
+        if step_name == StepName.GRAPH_EVIDENCE:
+            return self._execute_graph_evidence(ctx, accumulated)
         if step_name == StepName.ENRICHMENT:
             return self._execute_enrichment(ctx, accumulated)
         if step_name == StepName.DEBATE:
@@ -1822,6 +1826,28 @@ class RunOrchestrator:
             calc_ids=calc_ids,
         )
 
+    def _execute_graph_evidence(
+        self,
+        ctx: RunContext,
+        accumulated: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Run Neo4j graph projection/retrieval visibility via injected callable."""
+        if ctx.graph_fn is None:
+            return {
+                "graph_status": "skipped",
+                "graph_projection": {"status": "skipped"},
+                "graph_retrieval": {"status": "skipped"},
+            }
+
+        return ctx.graph_fn(
+            run_id=ctx.run_id,
+            tenant_id=ctx.tenant_id,
+            deal_id=ctx.deal_id,
+            documents=ctx.documents,
+            created_claim_ids=accumulated.get("created_claim_ids", []),
+            calc_ids=accumulated.get("calc_ids", []),
+        )
+
     def _execute_debate(
         self,
         ctx: RunContext,
@@ -1947,6 +1973,11 @@ class RunOrchestrator:
             analysis_bundle=accumulated.get("_analysis_bundle"),
             analysis_context=accumulated.get("_analysis_context"),
             scorecard=accumulated.get("_scorecard"),
+            graph_evidence={
+                "graph_status": accumulated.get("graph_status"),
+                "graph_projection": accumulated.get("graph_projection"),
+                "graph_retrieval": accumulated.get("graph_retrieval"),
+            },
         )
 
     def _start_step(

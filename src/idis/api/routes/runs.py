@@ -1460,6 +1460,7 @@ def _run_full_deliverables(
     analysis_bundle: Any,
     analysis_context: Any,
     scorecard: Any,
+    graph_evidence: dict[str, Any] | None = None,
     db_conn: Any = None,
     object_store: Any = None,
 ) -> dict[str, Any]:
@@ -1529,6 +1530,7 @@ def _run_full_deliverables(
             analysis_context=analysis_context,
             scorecard=scorecard,
             export_timestamp=generated_at,
+            graph_evidence=graph_evidence,
         )
 
     return {
@@ -1537,6 +1539,308 @@ def _run_full_deliverables(
         "deliverable_ids": sorted(deliverable_ids),
         "durable_export": False,
     }
+
+
+def _run_full_graph_evidence(
+    *,
+    run_id: str,
+    tenant_id: str,
+    deal_id: str,
+    documents: list[dict[str, Any]],
+    created_claim_ids: list[str],
+    calc_ids: list[str],
+    db_conn: Any = None,
+    strict_full_live: bool | None = None,
+    neo4j_health_checker: Any = None,
+    projection_service: Any = None,
+    retrieval_service: Any = None,
+) -> dict[str, Any]:
+    """Project and retrieve Neo4j graph evidence for product visibility."""
+    from idis.persistence.neo4j_driver import Neo4jHealthStatus, check_neo4j_health
+    from idis.services.runs.orchestrator import RunStepBlockedError
+
+    health = (
+        neo4j_health_checker(os.environ)
+        if neo4j_health_checker is not None
+        else check_neo4j_health()
+    )
+    strict = (
+        strict_full_live
+        if strict_full_live is not None
+        else is_strict_full_live_required(
+            dotenv_path=os.environ.get(IDIS_STRICT_DOTENV_PATH_ENV),
+        )
+    )
+    if health.status != Neo4jHealthStatus.HEALTHY:
+        summary = {
+            "graph_status": "skipped",
+            "graph_projection": {"status": "skipped"},
+            "graph_retrieval": {"status": "skipped"},
+            "neo4j_health_status": health.status.value,
+            "missing_env_vars": health.missing_env_vars,
+        }
+        if strict:
+            raise RunStepBlockedError(
+                "GRAPH_HEALTH_BLOCKED",
+                "Neo4j graph evidence is not health-check ready",
+                result_summary=summary,
+            )
+        return summary
+
+    projection_summary = _project_graph_evidence(
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        documents=documents,
+        created_claim_ids=created_claim_ids,
+        db_conn=db_conn,
+        projection_service=projection_service,
+    )
+    projection_status = projection_summary["status"]
+    if projection_status != "projected":
+        graph_status = "skipped" if projection_status == "skipped" else "blocked"
+        summary = {
+            "graph_status": graph_status,
+            "graph_projection": projection_summary,
+            "graph_retrieval": {"status": "not_attempted"},
+        }
+        if strict:
+            raise RunStepBlockedError(
+                "GRAPH_PROJECTION_BLOCKED",
+                "Neo4j graph projection failed",
+                result_summary=summary,
+            )
+        return summary
+
+    retrieval_summary = _retrieve_graph_evidence(
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        claim_ids=created_claim_ids,
+        retrieval_service=retrieval_service,
+    )
+    retrieval_status = retrieval_summary["status"]
+    if retrieval_status != "retrieved":
+        graph_status = "skipped" if retrieval_status == "skipped" else "blocked"
+        summary = {
+            "graph_status": graph_status,
+            "graph_projection": projection_summary,
+            "graph_retrieval": retrieval_summary,
+        }
+        if strict:
+            raise RunStepBlockedError(
+                "GRAPH_RETRIEVAL_BLOCKED",
+                "Neo4j graph retrieval failed",
+                result_summary=summary,
+            )
+        return summary
+
+    return {
+        "graph_status": "available",
+        "graph_projection": projection_summary,
+        "graph_retrieval": retrieval_summary,
+    }
+
+
+def _project_graph_evidence(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    documents: list[dict[str, Any]],
+    created_claim_ids: list[str],
+    db_conn: Any,
+    projection_service: Any = None,
+) -> dict[str, Any]:
+    from idis.persistence.graph_consistency import GraphProjectionService, ProjectionStatus
+
+    service = projection_service or GraphProjectionService()
+    safe_documents = _graph_documents(documents)
+    safe_spans = _graph_spans(documents)
+    try:
+        deal_result = service.project_deal(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            documents=safe_documents,
+            spans=safe_spans,
+        )
+    except Exception:
+        return {
+            "status": "failed",
+            "projected_document_count": 0,
+            "projected_span_count": 0,
+            "projected_claim_count": 0,
+            "projected_calculation_count": 0,
+        }
+    if deal_result.status == ProjectionStatus.SKIPPED:
+        return {
+            "status": "skipped",
+            "projected_document_count": 0,
+            "projected_span_count": 0,
+            "projected_claim_count": 0,
+            "projected_calculation_count": 0,
+        }
+    if deal_result.status != ProjectionStatus.SUCCESS:
+        return {"status": "failed", "projected_document_count": 0, "projected_span_count": 0}
+
+    try:
+        claims = _graph_claims(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            created_claim_ids=created_claim_ids,
+            db_conn=db_conn,
+        )
+        evidence_by_claim = _graph_evidence_by_claim(
+            tenant_id=tenant_id,
+            created_claim_ids=created_claim_ids,
+            db_conn=db_conn,
+        )
+    except Exception:
+        return {
+            "status": "failed",
+            "projected_document_count": len(safe_documents),
+            "projected_span_count": len(safe_spans),
+            "projected_claim_count": 0,
+            "projected_calculation_count": 0,
+        }
+    projected_claim_count = 0
+    for claim in claims:
+        try:
+            result = service.project_claim_sanad(
+                tenant_id=tenant_id,
+                claim=claim,
+                evidence_items=evidence_by_claim.get(claim["claim_id"], []),
+                transmission_nodes=[],
+                calculations=[],
+            )
+        except Exception:
+            return {
+                "status": "failed",
+                "projected_document_count": len(safe_documents),
+                "projected_span_count": len(safe_spans),
+                "projected_claim_count": projected_claim_count,
+                "projected_calculation_count": 0,
+            }
+        if result.status != ProjectionStatus.SUCCESS:
+            return {
+                "status": "failed",
+                "projected_document_count": len(safe_documents),
+                "projected_span_count": len(safe_spans),
+                "projected_claim_count": projected_claim_count,
+                "projected_calculation_count": 0,
+            }
+        projected_claim_count += 1
+
+    return {
+        "status": "projected",
+        "projected_document_count": len(safe_documents),
+        "projected_span_count": len(safe_spans),
+        "projected_claim_count": projected_claim_count,
+        "projected_calculation_count": 0,
+    }
+
+
+def _retrieve_graph_evidence(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    claim_ids: list[str],
+    retrieval_service: Any = None,
+) -> dict[str, Any]:
+    from idis.services.graph.retrieval import GraphRetrievalService
+
+    service = retrieval_service or GraphRetrievalService()
+    try:
+        return service.retrieve_deal_graph_summary(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            claim_ids=claim_ids,
+        )
+    except Exception:
+        return {"status": "failed", "retrieval_count": 0, "query_summaries": []}
+
+
+def _graph_documents(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "document_id": str(document["document_id"]),
+            "doc_type": str(document.get("doc_type") or ""),
+        }
+        for document in documents
+        if document.get("document_id")
+    ]
+
+
+def _graph_spans(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    spans: list[dict[str, Any]] = []
+    for document in documents:
+        document_id = str(document.get("document_id") or "")
+        if not document_id:
+            continue
+        for span in document.get("spans") or []:
+            if not isinstance(span, dict) or not span.get("span_id"):
+                continue
+            spans.append(
+                {
+                    "span_id": str(span["span_id"]),
+                    "document_id": document_id,
+                    "span_type": str(span.get("span_type") or ""),
+                }
+            )
+    return spans
+
+
+def _graph_claims(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    created_claim_ids: list[str],
+    db_conn: Any,
+) -> list[dict[str, Any]]:
+    from idis.persistence.repositories.claims import ClaimsRepository, InMemoryClaimsRepository
+
+    repo = (
+        ClaimsRepository(db_conn, tenant_id)
+        if db_conn is not None
+        else InMemoryClaimsRepository(tenant_id)
+    )
+    claims: list[dict[str, Any]] = []
+    for claim_id in sorted(set(created_claim_ids)):
+        claim = repo.get(claim_id)
+        claims.append(
+            {
+                "claim_id": claim_id,
+                "claim_text": str((claim or {}).get("claim_text") or ""),
+                "claim_grade": str((claim or {}).get("claim_grade") or "D"),
+                "claim_verdict": str((claim or {}).get("claim_verdict") or "UNVERIFIED"),
+                "materiality": str((claim or {}).get("materiality") or "MEDIUM"),
+                "claim_class": str((claim or {}).get("claim_class") or "OTHER"),
+                "deal_id": deal_id,
+            }
+        )
+    return claims
+
+
+def _graph_evidence_by_claim(
+    *,
+    tenant_id: str,
+    created_claim_ids: list[str],
+    db_conn: Any,
+) -> dict[str, list[dict[str, Any]]]:
+    from idis.persistence.repositories.evidence import get_evidence_repository
+
+    repo = get_evidence_repository(db_conn, tenant_id)
+    evidence_by_claim: dict[str, list[dict[str, Any]]] = {}
+    for claim_id in sorted(set(created_claim_ids)):
+        evidence_items = []
+        for item in repo.get_by_claim(claim_id):
+            evidence_items.append(
+                {
+                    "evidence_id": str(item.get("evidence_id") or ""),
+                    "source_grade": str(item.get("source_grade") or "D"),
+                    "source_system": "idis",
+                    "upstream_origin_id": str(item.get("source_span_id") or ""),
+                }
+            )
+        evidence_by_claim[claim_id] = [item for item in evidence_items if item["evidence_id"]]
+    return evidence_by_claim
 
 
 def _build_scoring_llm_client() -> Any:

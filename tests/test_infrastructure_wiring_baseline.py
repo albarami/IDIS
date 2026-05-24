@@ -19,14 +19,14 @@ def test_postgres_and_docker_postgres_are_wired_but_supabase_is_target_only() ->
     assert any("no Supabase SDK" in item for item in inventory["supabase"].gaps)
 
 
-def test_neo4j_projection_is_present_but_not_live_run_wired() -> None:
-    """Neo4j code exists, but live run/write paths must not be overstated."""
+def test_neo4j_projection_is_partially_full_wired_but_health_gated() -> None:
+    """Neo4j graph code is FULL-wired only through the Slice61 gated graph step."""
     inventory = collect_wiring_inventory(REPO_ROOT)
     neo4j = inventory["neo4j_graph"]
 
-    assert neo4j.status == "TEST_ONLY"
+    assert neo4j.status == "PARTIAL"
     assert any("GraphProjectionService" in item for item in neo4j.evidence)
-    assert any("not called by live run/write paths" in item for item in neo4j.gaps)
+    assert any("not proven live" in item.lower() or "health" in item.lower() for item in neo4j.gaps)
 
 
 def test_redis_and_pgvector_are_configured_without_runtime_use() -> None:

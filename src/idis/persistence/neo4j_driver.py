@@ -18,16 +18,19 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable, Mapping
 from enum import StrEnum
 from typing import Any
 
 from neo4j import Driver, GraphDatabase, Session
+from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
 
 NEO4J_URI_ENV = "NEO4J_URI"
 NEO4J_USERNAME_ENV = "NEO4J_USERNAME"
 NEO4J_PASSWORD_ENV = "NEO4J_PASSWORD"
+NEO4J_DATABASE_ENV = "NEO4J_DATABASE"
 
 _driver: Driver | None = None
 
@@ -38,6 +41,54 @@ class Neo4jConfigError(Exception):
     Fail-closed: operations requiring Neo4j must not proceed
     without valid, complete configuration.
     """
+
+
+class Neo4jHealthStatus(StrEnum):
+    """Safe Neo4j health status values."""
+
+    HEALTHY = "healthy"
+    MISSING_CREDENTIALS = "missing_credentials"
+    FAILED = "failed"
+
+
+class Neo4jHealthCheck(BaseModel):
+    """Sanitized Neo4j health-check result."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Neo4jHealthStatus
+    config_present: bool
+    missing_env_vars: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+    @classmethod
+    def healthy(cls) -> Neo4jHealthCheck:
+        """Return a successful health result."""
+        return cls(
+            status=Neo4jHealthStatus.HEALTHY,
+            config_present=True,
+            missing_env_vars=[],
+        )
+
+    @classmethod
+    def missing(cls, *, missing_env_vars: list[str]) -> Neo4jHealthCheck:
+        """Return a missing/partial configuration result."""
+        return cls(
+            status=Neo4jHealthStatus.MISSING_CREDENTIALS,
+            config_present=False,
+            missing_env_vars=missing_env_vars,
+            error="Neo4j configuration is incomplete.",
+        )
+
+    @classmethod
+    def failed(cls) -> Neo4jHealthCheck:
+        """Return a sanitized failed health result."""
+        return cls(
+            status=Neo4jHealthStatus.FAILED,
+            config_present=True,
+            missing_env_vars=[],
+            error="Neo4j health check failed.",
+        )
 
 
 class NodeLabel(StrEnum):
@@ -119,6 +170,48 @@ def _validate_config() -> tuple[str, str, str]:
         )
 
     return uri, username, password
+
+
+def check_neo4j_health(
+    *,
+    env: Mapping[str, str] | None = None,
+    driver_factory: Callable[..., Driver] | None = None,
+) -> Neo4jHealthCheck:
+    """Check Neo4j connectivity without exposing connection details.
+
+    Args:
+        env: Environment mapping to inspect. Defaults to ``os.environ``.
+        driver_factory: Injectable driver constructor for unit tests.
+
+    Returns:
+        Sanitized health-check result.
+    """
+    values = os.environ if env is None else env
+    required = [NEO4J_URI_ENV, NEO4J_USERNAME_ENV, NEO4J_PASSWORD_ENV]
+    missing = [key for key in required if not str(values.get(key, "")).strip()]
+    if missing:
+        return Neo4jHealthCheck.missing(missing_env_vars=missing)
+
+    uri = str(values[NEO4J_URI_ENV])
+    username = str(values[NEO4J_USERNAME_ENV])
+    password = str(values[NEO4J_PASSWORD_ENV])
+    make_driver = driver_factory or GraphDatabase.driver
+    driver = None
+    try:
+        driver = make_driver(
+            uri,
+            auth=(username, password),
+            max_connection_lifetime=3600,
+            max_connection_pool_size=5,
+            connection_acquisition_timeout=10,
+        )
+        driver.verify_connectivity()
+    except Exception:
+        return Neo4jHealthCheck.failed()
+    finally:
+        if driver is not None:
+            driver.close()
+    return Neo4jHealthCheck.healthy()
 
 
 def get_neo4j_driver() -> Driver:

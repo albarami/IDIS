@@ -156,7 +156,7 @@ def test_strict_report_lists_ocr_media_rag_graph_and_layer2_blockers() -> None:
         report.component("rag_evidence_retrieval").status == StrictComponentStatus.NOT_IMPLEMENTED
     )
     assert report.component("graph_evidence_layer").status == (
-        StrictComponentStatus.CODE_EXISTS_BUT_NOT_WIRED
+        StrictComponentStatus.MISSING_CREDENTIALS
     )
     assert report.component("debate_layer_2_ic_challenge").status == (
         StrictComponentStatus.NOT_IMPLEMENTED

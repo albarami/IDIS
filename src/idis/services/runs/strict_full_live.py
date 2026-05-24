@@ -17,6 +17,7 @@ from idis.parsers.media import (
     FasterWhisperMediaConfig,
     probe_faster_whisper_model,
 )
+from idis.persistence.neo4j_driver import Neo4jHealthCheck, Neo4jHealthStatus, check_neo4j_health
 from idis.services.enrichment.byol_credentials import (
     ByolCredentialRepository,
     ByolProviderHealthChecker,
@@ -100,6 +101,11 @@ TRACKED_ENV_VARS: tuple[str, ...] = (
     "NEO4J_URI",
     "NEO4J_USERNAME",
     "NEO4J_PASSWORD",
+    "NEO4J_DATABASE",
+    "NEO4J_CLIENT_ID",
+    "NEO4J_CLIENT_SECRET",
+    "AURA_INSTANCEID",
+    "AURA_INSTANCENAME",
 )
 
 
@@ -194,6 +200,7 @@ def build_strict_full_live_readiness_report(
     byol_credential_repo: ByolCredentialRepository | None = None,
     load_byol_env_credentials: bool = True,
     byol_health_checker: ByolProviderHealthChecker | None = None,
+    neo4j_health_checker: Callable[[Mapping[str, str]], Neo4jHealthCheck] | None = None,
 ) -> StrictFullLiveReadinessReport:
     """Build a safe strict full-live readiness report without executing a run."""
     env_source = _build_strict_env_source(
@@ -222,6 +229,7 @@ def build_strict_full_live_readiness_report(
     )
     byol_credentials_durable = _byol_credentials_durable(byol_credential_repo)
     enrichment_provider_matrix = _build_enrichment_provider_matrix(byol_providers)
+    graph_health = _neo4j_health(values, neo4j_health_checker)
     components = [
         _supported_parsers_extraction(values),
         _durable_runtime(values),
@@ -248,7 +256,7 @@ def build_strict_full_live_readiness_report(
             "RAG/vector retrieval has no production embedding, index, query, or FULL wiring.",
             "migrations/*pgvector*; src/idis/debate/graph.py",
         ),
-        _graph_evidence_layer(),
+        _graph_evidence_layer(values, graph_health),
         _live("deliverable_generation", "src/idis/deliverables/generator.py"),
         _product_export_bundle(values),
     ]
@@ -260,6 +268,7 @@ def build_strict_full_live_readiness_report(
         binary_resolver=resolver,
         byol_providers=byol_providers,
         byol_credentials_durable=byol_credentials_durable,
+        graph_health=graph_health,
     )
     blocking_components = [
         component.component_name for component in components if not component.may_proceed
@@ -595,17 +604,39 @@ def _scoring(env: Mapping[str, str]) -> StrictComponentReadiness:
     return _live("scoring", "src/idis/scoring/engine.py")
 
 
-def _graph_evidence_layer() -> StrictComponentReadiness:
+def _graph_evidence_layer(
+    env: Mapping[str, str],
+    graph_health: Neo4jHealthCheck,
+) -> StrictComponentReadiness:
+    graph_ready = _graph_visibility_ready(env, graph_health)
+    if graph_ready:
+        return _live(
+            "graph_evidence_layer",
+            "src/idis/persistence/graph_consistency.py:GraphProjectionService; "
+            "src/idis/services/graph/retrieval.py; src/idis/deliverables/product_bundle.py",
+        )
+    status = (
+        StrictComponentStatus.CONFIGURED_BUT_FAILED_HEALTH_CHECK
+        if graph_health.status == Neo4jHealthStatus.FAILED
+        else StrictComponentStatus.MISSING_CREDENTIALS
+        if graph_health.status == Neo4jHealthStatus.MISSING_CREDENTIALS
+        else StrictComponentStatus.CODE_EXISTS_BUT_NOT_WIRED
+    )
     return StrictComponentReadiness(
         component_name="graph_evidence_layer",
-        status=StrictComponentStatus.CODE_EXISTS_BUT_NOT_WIRED,
+        status=status,
         blocker_message=(
-            "GraphProjectionService and Neo4j repository code exist, but FULL does not call "
-            "the graph projection or graph retrieval paths."
+            "GraphProjectionService and Neo4j repository code exist, but strict graph "
+            "readiness requires complete Neo4j env, passing health, FULL projection/retrieval "
+            "wiring, and product-bundle visibility."
         ),
-        required_env_vars=["NEO4J_URI", "NEO4J_USERNAME", "NEO4J_PASSWORD"],
+        required_env_vars=graph_health.missing_env_vars
+        or ["NEO4J_URI", "NEO4J_USERNAME", "NEO4J_PASSWORD"],
         required_services=["Neo4j"],
-        evidence="src/idis/persistence/graph_consistency.py:GraphProjectionService",
+        evidence=(
+            "src/idis/persistence/graph_consistency.py:GraphProjectionService; "
+            "src/idis/services/graph/retrieval.py"
+        ),
         may_proceed=False,
     )
 
@@ -712,10 +743,13 @@ def _build_component_inventory(
     binary_resolver: Callable[[str], str | None],
     byol_providers: list[ByolProviderReadiness],
     byol_credentials_durable: bool,
+    graph_health: Neo4jHealthCheck,
 ) -> list[StrictComponentInventory]:
     env = env_source.effective_env
     ocr_ready = _ocr_runtime_ready(env=env, binary_resolver=binary_resolver)
     media_ready = _media_runtime_ready(env=env, binary_resolver=binary_resolver)
+    graph_ready = _graph_visibility_ready(env, graph_health)
+    graph_health_status = _graph_inventory_health(graph_health)
     inventory = [
         _inventory_item(
             "API FULL path",
@@ -973,27 +1007,47 @@ def _build_component_inventory(
         _inventory_item(
             "Neo4j graph projection",
             exists=True,
-            full_wired=False,
-            config_present=_any_env_present(env, ("NEO4J_URI", "NEO4J_USERNAME", "NEO4J_PASSWORD")),
-            health="not_wired",
-            output_visible=False,
-            blocker="GraphProjectionService exists, but FULL does not call projection.",
+            full_wired=graph_ready,
+            config_present=graph_health.config_present,
+            health=graph_health_status,
+            output_visible=graph_ready,
+            blocker=(
+                ""
+                if graph_ready
+                else (
+                    "GraphProjectionService exists, but strict readiness requires complete "
+                    "Neo4j env, passing health, FULL projection, retrieval, and product export."
+                )
+            ),
             slice_name="Slice 61",
             evidence=[
                 "src/idis/persistence/graph_consistency.py",
                 "src/idis/persistence/graph_repo.py",
+                "src/idis/api/routes/runs.py",
             ],
         ),
         _inventory_item(
             "graph retrieval",
             exists=True,
-            full_wired=False,
-            config_present=_any_env_present(env, ("NEO4J_URI", "NEO4J_USERNAME", "NEO4J_PASSWORD")),
-            health="not_wired",
-            output_visible=False,
-            blocker="Graph retrieval methods exist, but no FULL consumer/API path uses them.",
+            full_wired=graph_ready,
+            config_present=graph_health.config_present,
+            health=graph_health_status,
+            output_visible=graph_ready,
+            blocker=(
+                ""
+                if graph_ready
+                else (
+                    "Graph retrieval methods exist, but strict readiness requires complete "
+                    "Neo4j env, passing health, FULL retrieval, and product-bundle visibility."
+                )
+            ),
             slice_name="Slice 61",
-            evidence=["src/idis/persistence/graph_repo.py", "src/idis/persistence/cypher"],
+            evidence=[
+                "src/idis/persistence/graph_repo.py",
+                "src/idis/persistence/cypher",
+                "src/idis/services/graph/retrieval.py",
+                "src/idis/deliverables/product_bundle.py",
+            ],
         ),
         _inventory_item(
             "pgvector/RAG",
@@ -1306,6 +1360,27 @@ def _product_export_ready(env: Mapping[str, str]) -> bool:
 
 def _calculation_visibility_ready(env: Mapping[str, str]) -> bool:
     return _product_export_ready(env)
+
+
+def _neo4j_health(
+    env: Mapping[str, str],
+    neo4j_health_checker: Callable[[Mapping[str, str]], Neo4jHealthCheck] | None,
+) -> Neo4jHealthCheck:
+    if neo4j_health_checker is not None:
+        return neo4j_health_checker(env)
+    return check_neo4j_health(env=env)
+
+
+def _graph_visibility_ready(env: Mapping[str, str], graph_health: Neo4jHealthCheck) -> bool:
+    return graph_health.status == Neo4jHealthStatus.HEALTHY and _product_export_ready(env)
+
+
+def _graph_inventory_health(graph_health: Neo4jHealthCheck) -> str:
+    if graph_health.status == Neo4jHealthStatus.HEALTHY:
+        return "healthy"
+    if graph_health.status == Neo4jHealthStatus.FAILED:
+        return "configured_failed"
+    return "missing_config"
 
 
 def _product_export_config_present(env: Mapping[str, str]) -> bool:

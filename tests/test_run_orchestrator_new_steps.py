@@ -159,6 +159,7 @@ def _stub_deliverables(
     analysis_bundle: Any,
     analysis_context: Any,
     scorecard: Any,
+    graph_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Deterministic deliverables stub."""
     return {
@@ -250,6 +251,7 @@ class TestStepOrderingConstants:
             StepName.EXTRACT,
             StepName.GRADE,
             StepName.CALC,
+            StepName.GRAPH_EVIDENCE,
             StepName.ENRICHMENT,
             StepName.DEBATE,
             StepName.ANALYSIS,
@@ -275,6 +277,7 @@ class TestStepOrderingConstants:
             StepName.METHODOLOGY_EVIDENCE_TRUST_COURT,
             StepName.METHODOLOGY_VALIDATED_EVIDENCE_PACKAGE,
             StepName.METHODOLOGY_EXTERNAL_INTELLIGENCE_CONFLICT_CHECK_PLAN,
+            StepName.GRAPH_EVIDENCE,
             StepName.ENRICHMENT,
             StepName.ANALYSIS,
             StepName.SCORING,
@@ -316,8 +319,8 @@ class TestFullVsSnapshotEnforcement:
         for full_only in FULL_ONLY_STEPS:
             assert full_only not in step_names
 
-    def test_full_has_twenty_five_steps(self) -> None:
-        """FULL mode completes with all 25 steps."""
+    def test_full_has_twenty_six_steps(self) -> None:
+        """FULL mode completes with all 26 steps."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -326,7 +329,7 @@ class TestFullVsSnapshotEnforcement:
         result = orchestrator.execute(ctx)
 
         assert result.status == "SUCCEEDED"
-        assert len(result.steps) == 25
+        assert len(result.steps) == 26
         step_names = [step.step_name for step in result.steps]
         assert step_names.index(StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING) < (
             step_names.index(StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION)
@@ -346,6 +349,8 @@ class TestFullVsSnapshotEnforcement:
         assert step_names.index(StepName.METHODOLOGY_DETERMINISTIC_CALCULATION) < (
             step_names.index(StepName.METHODOLOGY_TRUTH_DASHBOARD)
         )
+        assert step_names.index(StepName.CALC) < step_names.index(StepName.GRAPH_EVIDENCE)
+        assert step_names.index(StepName.GRAPH_EVIDENCE) < step_names.index(StepName.ENRICHMENT)
         assert step_names.index(StepName.METHODOLOGY_TRUTH_DASHBOARD) < (
             step_names.index(StepName.METHODOLOGY_EVIDENCE_TRUST_COURT)
         )
@@ -449,7 +454,7 @@ class TestResumeSkipsCompletedSteps:
 
         result1 = orchestrator.execute(ctx)
         assert result1.status == "SUCCEEDED"
-        assert len(result1.steps) == 25
+        assert len(result1.steps) == 26
 
         call_count = {"enrichment": 0}
         original_enrich = _stub_enrichment

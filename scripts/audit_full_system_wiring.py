@@ -3604,16 +3604,29 @@ def _neo4j_graph(root: Path, files: dict[str, str]) -> WiringItem:
         },
     )
     status = "PARTIAL" if api_refs else "TEST_ONLY"
+    gaps = (
+        [
+            "Neo4j graph projection/retrieval is gated by strict env, health, and "
+            "product-bundle visibility checks."
+        ]
+        if api_refs
+        else ["GraphProjectionService is not called by live run/write paths."]
+    )
     return WiringItem(
         key="neo4j_graph",
         label="Neo4j / graph projection",
         status=status,
-        summary="Neo4j driver and projection code exist, but live run projection is not wired.",
+        summary=(
+            "Neo4j driver, projection, and retrieval code are wired into the FULL run graph "
+            "evidence step."
+            if api_refs
+            else "Neo4j driver and projection code exist, but live run projection is not wired."
+        ),
         evidence=[
             "`GraphProjectionService`, `GraphRepository`, and Neo4j driver exist.",
             "Graph projection has dedicated tests.",
         ],
-        gaps=["GraphProjectionService is not called by live run/write paths."],
+        gaps=gaps,
     )
 
 

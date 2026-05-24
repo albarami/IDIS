@@ -77,6 +77,7 @@ class ProductBundleExporter:
         analysis_context: AnalysisContext,
         scorecard: Scorecard,
         export_timestamp: str,
+        graph_evidence: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Persist a product bundle and return a safe run-step summary."""
         artifacts: list[_StoredArtifact] = []
@@ -85,6 +86,7 @@ class ProductBundleExporter:
             analysis_context=analysis_context,
             scorecard=scorecard,
             export_timestamp=export_timestamp,
+            graph_evidence=graph_evidence,
         ):
             artifacts.append(
                 self._store_artifact(
@@ -129,8 +131,10 @@ class ProductBundleExporter:
         analysis_context: AnalysisContext,
         scorecard: Scorecard,
         export_timestamp: str,
+        graph_evidence: dict[str, Any] | None,
     ) -> list[_ArtifactDraft]:
         calc_package = self._calc_package(analysis_context)
+        graph_package = _graph_package(graph_evidence)
         screening_snapshot = self._safe_text_export_deliverable(bundle.screening_snapshot)
         ic_memo = self._safe_text_export_deliverable(bundle.ic_memo)
         screening_pdf = self._deliverable_exporter.export_to_pdf(
@@ -222,7 +226,11 @@ class ProductBundleExporter:
             self._json_draft(
                 "evidence_index",
                 "evidence_index.json",
-                self._evidence_index(bundle, calc_package=calc_package),
+                self._evidence_index(
+                    bundle,
+                    calc_package=calc_package,
+                    graph_package=graph_package,
+                ),
             ),
             self._json_draft(
                 "run_summary",
@@ -248,6 +256,17 @@ class ProductBundleExporter:
                         for item in calc_package["calculations"]
                         if item.get("reproducibility_hash")
                     ],
+                    "graph_status": graph_package["status"],
+                    "graph_projection_status": graph_package["projection"]["status"],
+                    "graph_retrieval_status": graph_package["retrieval"]["status"],
+                    "graph_projected_claim_count": graph_package["projection"].get(
+                        "projected_claim_count",
+                        0,
+                    ),
+                    "graph_retrieval_count": graph_package["retrieval"].get(
+                        "retrieval_count",
+                        0,
+                    ),
                 },
             ),
         ]
@@ -404,6 +423,7 @@ class ProductBundleExporter:
         bundle: DeliverablesBundle,
         *,
         calc_package: dict[str, Any],
+        graph_package: dict[str, Any],
     ) -> dict[str, Any]:
         entries: list[dict[str, Any]] = []
         for deliverable in (
@@ -429,7 +449,7 @@ class ProductBundleExporter:
             }
             for item in calc_package["calculations"]
         ]
-        return {"entries": entries, "calc_entries": calc_entries}
+        return {"entries": entries, "calc_entries": calc_entries, "graph_evidence": graph_package}
 
 
 def _is_sensitive_artifact_key(key: str) -> bool:
@@ -450,3 +470,93 @@ def _is_sha256_hex(value: object) -> bool:
     if not isinstance(value, str) or len(value) != 64:
         return False
     return all(char in "0123456789abcdefABCDEF" for char in value)
+
+
+def _graph_package(graph_evidence: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(graph_evidence, dict):
+        return _empty_graph_package()
+    projection = _safe_graph_projection(graph_evidence.get("graph_projection"))
+    retrieval = _safe_graph_retrieval(graph_evidence.get("graph_retrieval"))
+    status = str(graph_evidence.get("graph_status") or "")
+    if status not in {"available", "blocked", "skipped"}:
+        status = "available" if projection["status"] == "projected" else "skipped"
+    return {"status": status, "projection": projection, "retrieval": retrieval}
+
+
+def _empty_graph_package() -> dict[str, Any]:
+    return {
+        "status": "skipped",
+        "projection": _empty_graph_projection(),
+        "retrieval": _empty_graph_retrieval(),
+    }
+
+
+def _empty_graph_projection() -> dict[str, Any]:
+    return {
+        "status": "skipped",
+        "projected_document_count": 0,
+        "projected_span_count": 0,
+        "projected_claim_count": 0,
+        "projected_calculation_count": 0,
+    }
+
+
+def _empty_graph_retrieval() -> dict[str, Any]:
+    return {
+        "status": "skipped",
+        "retrieval_count": 0,
+        "query_summaries": [],
+    }
+
+
+def _safe_graph_projection(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return _empty_graph_projection()
+    status = str(value.get("status") or "skipped")
+    if status not in {"projected", "failed", "skipped", "not_attempted"}:
+        status = "skipped"
+    return {
+        "status": status,
+        "projected_document_count": _safe_non_negative_int(value.get("projected_document_count")),
+        "projected_span_count": _safe_non_negative_int(value.get("projected_span_count")),
+        "projected_claim_count": _safe_non_negative_int(value.get("projected_claim_count")),
+        "projected_calculation_count": _safe_non_negative_int(
+            value.get("projected_calculation_count")
+        ),
+    }
+
+
+def _safe_graph_retrieval(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return _empty_graph_retrieval()
+    status = str(value.get("status") or "skipped")
+    if status not in {"retrieved", "failed", "skipped", "not_attempted"}:
+        status = "skipped"
+    query_summaries = []
+    raw_summaries = value.get("query_summaries")
+    if isinstance(raw_summaries, list):
+        for item in raw_summaries:
+            if not isinstance(item, dict):
+                continue
+            query = str(item.get("query") or "")
+            if not query.replace("_", "").isalnum():
+                continue
+            summary: dict[str, Any] = {
+                "query": query,
+                "record_count": _safe_non_negative_int(item.get("record_count")),
+            }
+            claim_id = item.get("claim_id")
+            if isinstance(claim_id, str) and claim_id:
+                summary["claim_id"] = claim_id
+            query_summaries.append(summary)
+    return {
+        "status": status,
+        "retrieval_count": _safe_non_negative_int(value.get("retrieval_count")),
+        "query_summaries": query_summaries,
+    }
+
+
+def _safe_non_negative_int(value: object) -> int:
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return 0

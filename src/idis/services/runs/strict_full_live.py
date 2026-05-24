@@ -249,7 +249,7 @@ def build_strict_full_live_readiness_report(
         ),
         _graph_evidence_layer(),
         _live("deliverable_generation", "src/idis/deliverables/generator.py"),
-        _product_export_bundle(),
+        _product_export_bundle(values),
     ]
     component_inventory = _build_component_inventory(
         env_source=env_source,
@@ -566,18 +566,24 @@ def _graph_evidence_layer() -> StrictComponentReadiness:
     )
 
 
-def _product_export_bundle() -> StrictComponentReadiness:
+def _product_export_bundle(env: Mapping[str, str]) -> StrictComponentReadiness:
+    if _product_export_ready(env):
+        return _live(
+            "product_export_bundle",
+            "src/idis/deliverables/product_bundle.py; src/idis/services/runs/steps.py",
+        )
     return StrictComponentReadiness(
         component_name="product_export_bundle",
         status=StrictComponentStatus.CODE_EXISTS_BUT_NOT_WIRED,
         blocker_message=(
-            "Product export primitives exist, but strict VC export is not product-wired from "
-            "strict-live run outputs."
+            "Product export requires Postgres deliverable rows, explicit filesystem object "
+            "storage, FULL DELIVERABLES durable wiring, and API-visible completed rows."
         ),
-        required_env_vars=[],
-        required_services=["product deliverable export storage/path"],
+        required_env_vars=_missing_product_export_env(env),
+        required_services=["Postgres deliverables table", "filesystem object store"],
         evidence=(
-            "src/idis/deliverables/exporter.py; docs/architecture/strict_full_live_readiness.md"
+            "src/idis/deliverables/product_bundle.py; src/idis/services/runs/steps.py; "
+            "src/idis/api/routes/deliverables.py"
         ),
         may_proceed=False,
     )
@@ -862,18 +868,20 @@ def _build_component_inventory(
             exists=True,
             full_wired=True,
             config_present=_has_value(env, "IDIS_OBJECT_STORE_BACKEND"),
-            health="contract_only"
-            if _has_value(env, "IDIS_OBJECT_STORE_BACKEND")
-            else "missing_config",
-            output_visible=False,
+            health="healthy" if _product_export_object_store_ready(env) else "missing_config",
+            output_visible=_product_export_object_store_ready(env),
             blocker=(
-                "Object storage exists for ingestion, but final bundle output "
-                "visibility is not wired."
+                ""
+                if _product_export_object_store_ready(env)
+                else (
+                    "Object storage exists, but explicit filesystem product export "
+                    "config is missing."
+                )
             ),
             slice_name="Slice 59",
             evidence=[
                 "src/idis/storage/filesystem_store.py",
-                "src/idis/services/ingestion/defaults.py",
+                "src/idis/storage/defaults.py",
             ],
         ),
         _inventory_item(
@@ -985,15 +993,24 @@ def _build_component_inventory(
         _inventory_item(
             "product export",
             exists=True,
-            full_wired=False,
-            config_present=False,
-            health="not_wired",
-            output_visible=False,
+            full_wired=_product_export_ready(env),
+            config_present=_product_export_config_present(env),
+            health="healthy" if _product_export_ready(env) else "missing_config",
+            output_visible=_product_export_ready(env),
             blocker=(
-                "Export primitives exist, but strict VC bundle persistence/API access is not wired."
+                ""
+                if _product_export_ready(env)
+                else (
+                    "Durable product bundle export is missing DB/object-store config "
+                    "or FULL/API wiring."
+                )
             ),
             slice_name="Slice 59",
-            evidence=["src/idis/deliverables/export.py", "src/idis/api/routes/deliverables.py"],
+            evidence=[
+                "src/idis/deliverables/product_bundle.py",
+                "src/idis/services/runs/steps.py",
+                "src/idis/api/routes/deliverables.py",
+            ],
         ),
         _inventory_item(
             "UI/API download",
@@ -1232,6 +1249,51 @@ def _inventory_item_blocks(item: StrictComponentInventory) -> bool:
 
 def _any_env_present(env: Mapping[str, str], keys: Sequence[str]) -> bool:
     return any(_has_value(env, key) for key in keys)
+
+
+def _product_export_ready(env: Mapping[str, str]) -> bool:
+    return _has_value(env, "IDIS_DATABASE_URL") and _product_export_object_store_ready(env)
+
+
+def _product_export_config_present(env: Mapping[str, str]) -> bool:
+    return _has_value(env, "IDIS_DATABASE_URL") or _product_export_object_store_ready(env)
+
+
+def _product_export_object_store_ready(env: Mapping[str, str]) -> bool:
+    if str(
+        env.get("IDIS_OBJECT_STORE_BACKEND", "")
+    ).strip().lower() != "filesystem" or not _has_value(env, "IDIS_OBJECT_STORE_BASE_DIR"):
+        return False
+    from idis.storage.defaults import build_configured_product_export_object_store
+    from idis.storage.errors import ObjectStorageError
+
+    store = build_configured_product_export_object_store(env)
+    if store is None:
+        return False
+    tenant_id = "00000000-0000-0000-0000-000000000000"
+    key = "_health/product_export.txt"
+    try:
+        store.put(
+            tenant_id=tenant_id,
+            key=key,
+            data=b"ok",
+            content_type="text/plain",
+        )
+        store.delete(tenant_id=tenant_id, key=key)
+    except (ObjectStorageError, OSError, ValueError):
+        return False
+    return True
+
+
+def _missing_product_export_env(env: Mapping[str, str]) -> list[str]:
+    missing: list[str] = []
+    if not _has_value(env, "IDIS_DATABASE_URL"):
+        missing.append("IDIS_DATABASE_URL")
+    if str(env.get("IDIS_OBJECT_STORE_BACKEND", "")).strip().lower() != "filesystem":
+        missing.append("IDIS_OBJECT_STORE_BACKEND=filesystem")
+    if not _has_value(env, "IDIS_OBJECT_STORE_BASE_DIR"):
+        missing.append("IDIS_OBJECT_STORE_BASE_DIR")
+    return missing
 
 
 def _media_model_config_present(env: Mapping[str, str]) -> bool:

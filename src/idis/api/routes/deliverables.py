@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from idis.api.auth import RequireTenantContext
 from idis.api.errors import IdisHttpError
+from idis.persistence.repositories.deliverables import safe_public_deliverable_uri
 
 router = APIRouter(prefix="/v1", tags=["Deliverables"])
 
@@ -56,52 +57,19 @@ class PaginatedDeliverableList(BaseModel):
 
 def _list_deliverables_from_postgres(
     conn: Any,
+    tenant_id: str,
     deal_id: str,
     limit: int,
     cursor: str | None,
 ) -> tuple[list[dict[str, Any]], str | None]:
     """List deliverables from Postgres with pagination."""
-    from sqlalchemy import text
+    from idis.persistence.repositories.deliverables import PostgresDeliverablesRepository
 
-    query = """
-        SELECT deliverable_id, tenant_id, deal_id, deliverable_type, format, status, uri, created_at
-        FROM deliverables
-        WHERE deal_id = :deal_id
-    """
-    params: dict[str, Any] = {"deal_id": deal_id, "limit": limit + 1}
-
-    if cursor:
-        query += " AND created_at < :cursor"
-        params["cursor"] = cursor
-
-    query += " ORDER BY created_at DESC LIMIT :limit"
-
-    result = conn.execute(text(query), params)
-    rows = result.fetchall()
-
-    items: list[dict[str, Any]] = []
-    next_cursor = None
-
-    for i, row in enumerate(rows):
-        if i >= limit:
-            next_cursor = items[-1]["created_at"] if items else None
-            break
-        items.append(
-            {
-                "deliverable_id": str(row.deliverable_id),
-                "tenant_id": str(row.tenant_id),
-                "deal_id": str(row.deal_id),
-                "deliverable_type": row.deliverable_type,
-                "format": row.format,
-                "status": row.status,
-                "uri": row.uri,
-                "created_at": row.created_at.isoformat().replace("+00:00", "Z")
-                if row.created_at
-                else None,
-            }
-        )
-
-    return items, next_cursor
+    return PostgresDeliverablesRepository(conn, tenant_id).list_by_deal(
+        deal_id=deal_id,
+        limit=limit,
+        cursor=cursor,
+    )
 
 
 def _create_deliverable_in_postgres(
@@ -211,7 +179,7 @@ def list_deliverables(
 
     if db_conn is not None:
         items, next_cursor = _list_deliverables_from_postgres(
-            db_conn, deal_id, limit, validated_cursor
+            db_conn, tenant_ctx.tenant_id, deal_id, limit, validated_cursor
         )
     else:
         all_items = [
@@ -230,7 +198,7 @@ def list_deliverables(
                 deal_id=d["deal_id"],
                 deliverable_type=d["deliverable_type"],
                 status=d["status"],
-                uri=d.get("uri"),
+                uri=safe_public_deliverable_uri(d.get("uri")),
                 created_at=d["created_at"],
             )
             for d in items

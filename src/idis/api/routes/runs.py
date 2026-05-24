@@ -670,6 +670,7 @@ SENSITIVE_SUMMARY_VALUE_PARTS = frozenset(
         "ebitda was 2m",
     }
 )
+SAFE_PUBLIC_SUMMARY_KEYS = frozenset({"artifact_count", "manifest_uri"})
 
 
 def _build_step_responses(steps: list[Any]) -> list[RunStepResponse]:
@@ -772,7 +773,22 @@ def _safe_public_run_summary(value: object) -> object:
         sanitized: dict[str, object] = {}
         for key, item in value.items():
             key_text = str(key)
-            if key_text.startswith("_") or _is_sensitive_summary_key(key_text):
+            if key_text.startswith("_"):
+                continue
+            if key_text == "manifest_uri":
+                if isinstance(item, str):
+                    from idis.persistence.repositories.deliverables import (
+                        safe_public_deliverable_uri,
+                    )
+
+                    if safe_uri := safe_public_deliverable_uri(item):
+                        sanitized[key_text] = safe_uri
+                continue
+            if key_text == "artifact_count":
+                if isinstance(item, int | float) and not isinstance(item, bool):
+                    sanitized[key_text] = item
+                continue
+            if key_text not in SAFE_PUBLIC_SUMMARY_KEYS and _is_sensitive_summary_key(key_text):
                 continue
             safe_item = _safe_public_run_summary(item)
             if safe_item is not None:
@@ -1367,6 +1383,8 @@ def _run_full_deliverables(
     analysis_bundle: Any,
     analysis_context: Any,
     scorecard: Any,
+    db_conn: Any = None,
+    object_store: Any = None,
 ) -> dict[str, Any]:
     """Run deliverables generation for a FULL pipeline run.
 
@@ -1417,10 +1435,30 @@ def _run_full_deliverables(
         types.append(bundle.decline_letter.deliverable_type)
         deliverable_ids.append(bundle.decline_letter.deliverable_id)
 
+    if db_conn is not None and object_store is not None:
+        from idis.deliverables.product_bundle import ProductBundleExporter
+        from idis.persistence.repositories.deliverables import PostgresDeliverablesRepository
+
+        exporter = ProductBundleExporter(
+            deliverables_repo=PostgresDeliverablesRepository(db_conn, tenant_id),
+            object_store=object_store,
+            object_store_backend=object_store.backend_name,
+        )
+        return exporter.export_bundle(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            run_id=run_id,
+            bundle=bundle,
+            analysis_context=analysis_context,
+            scorecard=scorecard,
+            export_timestamp=generated_at,
+        )
+
     return {
         "deliverable_count": len(types),
         "types": sorted(types),
         "deliverable_ids": sorted(deliverable_ids),
+        "durable_export": False,
     }
 
 

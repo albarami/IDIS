@@ -108,6 +108,11 @@ def build_run_context(
 
     _ = audit_sink
     is_full = mode == "FULL"
+    object_store = None
+    if is_full:
+        from idis.storage.defaults import build_configured_product_export_object_store
+
+        object_store = build_configured_product_export_object_store()
     return RunContext(
         run_id=run_id,
         tenant_id=tenant_id,
@@ -137,7 +142,13 @@ def build_run_context(
             else None
         ),
         scoring_fn=_run_full_scoring if is_full else None,
-        deliverables_fn=_run_full_deliverables if is_full else None,
+        deliverables_fn=partial(
+            _run_full_deliverables,
+            db_conn=db_conn,
+            object_store=object_store,
+        )
+        if is_full
+        else None,
     )
 
 

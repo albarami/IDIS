@@ -1,0 +1,389 @@
+"""Durable product export bundle writer."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from dataclasses import dataclass
+from typing import Any
+
+from idis.analysis.models import AnalysisContext
+from idis.analysis.scoring.models import Scorecard
+from idis.deliverables.export import DeliverableExporter
+from idis.models.deliverables import DeliverablesBundle, ICMemo, ScreeningSnapshot
+from idis.persistence.repositories.deliverables import (
+    DeliverablesRepository,
+    deterministic_deliverable_row_id,
+)
+from idis.storage.models import StoredObjectMetadata
+from idis.storage.object_store import ObjectStore
+
+JSON_CONTENT_TYPE = "application/json"
+PDF_CONTENT_TYPE = "application/pdf"
+DOCX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+SENSITIVE_ARTIFACT_KEY_PARTS = frozenset({"local_path", "raw_text"})
+SENSITIVE_ARTIFACT_VALUE_PARTS = frozenset(
+    {".local_reports", "c:\\projects", "confidential marker", "raw_text"}
+)
+WINDOWS_PATH_PATTERN = re.compile(r"(?i)(^|[^a-z0-9])[a-z]:[\\/]")
+POSIX_LOCAL_PATH_PATTERN = re.compile(r"(?i)(^|[^a-z0-9])/(tmp|var|home|users|private|opt)/")
+
+
+@dataclass(frozen=True)
+class _ArtifactDraft:
+    artifact_type: str
+    format: str
+    filename: str
+    content_bytes: bytes
+    content_type: str
+
+
+@dataclass(frozen=True)
+class _StoredArtifact:
+    artifact_type: str
+    format: str
+    object_key: str
+    uri: str
+    sha256: str
+    size_bytes: int
+    content_type: str
+    deliverable_id: str
+
+
+class ProductBundleExporter:
+    """Persist product bundle artifacts to object storage and deliverable rows."""
+
+    def __init__(
+        self,
+        *,
+        deliverables_repo: DeliverablesRepository,
+        object_store: ObjectStore,
+        object_store_backend: str,
+    ) -> None:
+        """Initialize the durable product bundle exporter."""
+        self._repo = deliverables_repo
+        self._object_store = object_store
+        self._object_store_backend = object_store_backend
+        self._deliverable_exporter = DeliverableExporter(validate_before_export=True)
+
+    def export_bundle(
+        self,
+        *,
+        tenant_id: str,
+        deal_id: str,
+        run_id: str,
+        bundle: DeliverablesBundle,
+        analysis_context: AnalysisContext,
+        scorecard: Scorecard,
+        export_timestamp: str,
+    ) -> dict[str, Any]:
+        """Persist a product bundle and return a safe run-step summary."""
+        artifacts: list[_StoredArtifact] = []
+        for draft in self._artifact_drafts(
+            bundle=bundle,
+            analysis_context=analysis_context,
+            scorecard=scorecard,
+            export_timestamp=export_timestamp,
+        ):
+            artifacts.append(
+                self._store_artifact(
+                    tenant_id=tenant_id,
+                    deal_id=deal_id,
+                    run_id=run_id,
+                    draft=draft,
+                )
+            )
+
+        manifest_bytes = self._manifest_bytes(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            run_id=run_id,
+            generated_at=export_timestamp,
+            artifacts=artifacts,
+        )
+        manifest = self._store_artifact(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            run_id=run_id,
+            draft=_ArtifactDraft(
+                artifact_type="product_bundle_manifest",
+                format="JSON",
+                filename="manifest.json",
+                content_bytes=manifest_bytes,
+                content_type=JSON_CONTENT_TYPE,
+            ),
+        )
+        all_artifacts = [*artifacts, manifest]
+        return {
+            "artifact_count": len(all_artifacts),
+            "manifest_uri": manifest.uri,
+            "deliverable_ids": sorted(artifact.deliverable_id for artifact in all_artifacts),
+            "types": sorted({artifact.artifact_type for artifact in all_artifacts}),
+        }
+
+    def _artifact_drafts(
+        self,
+        *,
+        bundle: DeliverablesBundle,
+        analysis_context: AnalysisContext,
+        scorecard: Scorecard,
+        export_timestamp: str,
+    ) -> list[_ArtifactDraft]:
+        screening_snapshot = self._safe_text_export_deliverable(bundle.screening_snapshot)
+        ic_memo = self._safe_text_export_deliverable(bundle.ic_memo)
+        screening_pdf = self._deliverable_exporter.export_to_pdf(
+            screening_snapshot,
+            export_timestamp=export_timestamp,
+        )
+        screening_docx = self._deliverable_exporter.export_to_docx(
+            screening_snapshot,
+            export_timestamp=export_timestamp,
+        )
+        memo_pdf = self._deliverable_exporter.export_to_pdf(
+            ic_memo,
+            export_timestamp=export_timestamp,
+        )
+        memo_docx = self._deliverable_exporter.export_to_docx(
+            ic_memo,
+            export_timestamp=export_timestamp,
+        )
+        return [
+            _ArtifactDraft(
+                artifact_type="screening_snapshot",
+                format="PDF",
+                filename="screening_snapshot.pdf",
+                content_bytes=screening_pdf.content_bytes,
+                content_type=PDF_CONTENT_TYPE,
+            ),
+            _ArtifactDraft(
+                artifact_type="screening_snapshot",
+                format="DOCX",
+                filename="screening_snapshot.docx",
+                content_bytes=screening_docx.content_bytes,
+                content_type=DOCX_CONTENT_TYPE,
+            ),
+            _ArtifactDraft(
+                artifact_type="ic_memo",
+                format="PDF",
+                filename="ic_memo.pdf",
+                content_bytes=memo_pdf.content_bytes,
+                content_type=PDF_CONTENT_TYPE,
+            ),
+            _ArtifactDraft(
+                artifact_type="ic_memo",
+                format="DOCX",
+                filename="ic_memo.docx",
+                content_bytes=memo_docx.content_bytes,
+                content_type=DOCX_CONTENT_TYPE,
+            ),
+            self._json_draft(
+                "truth_dashboard",
+                "truth_dashboard.json",
+                bundle.truth_dashboard.model_dump(mode="json"),
+            ),
+            self._json_draft(
+                "qa_brief",
+                "qa_brief.json",
+                bundle.qa_brief.model_dump(mode="json"),
+            ),
+            self._json_draft(
+                "executive_summary",
+                "executive_summary.json",
+                bundle.ic_memo.executive_summary.model_dump(mode="json"),
+            ),
+            self._json_draft(
+                "commercial_diligence",
+                "commercial_diligence.json",
+                {
+                    "company_overview": bundle.ic_memo.company_overview.model_dump(mode="json"),
+                    "market_analysis": bundle.ic_memo.market_analysis.model_dump(mode="json"),
+                    "team_assessment": bundle.ic_memo.team_assessment.model_dump(mode="json"),
+                },
+            ),
+            self._json_draft(
+                "financial_diligence",
+                "financial_diligence.json",
+                {
+                    "financials": bundle.ic_memo.financials.model_dump(mode="json"),
+                    "scenario_analysis": bundle.ic_memo.scenario_analysis.model_dump(mode="json")
+                    if bundle.ic_memo.scenario_analysis is not None
+                    else None,
+                    "sanad_grade_distribution": bundle.ic_memo.sanad_grade_distribution,
+                },
+            ),
+            self._json_draft(
+                "risk_register",
+                "risk_register.json",
+                bundle.ic_memo.risks_and_mitigations.model_dump(mode="json"),
+            ),
+            self._json_draft(
+                "evidence_index",
+                "evidence_index.json",
+                self._evidence_index(bundle),
+            ),
+            self._json_draft(
+                "run_summary",
+                "run_summary.json",
+                {
+                    "tenant_id": analysis_context.tenant_id,
+                    "deal_id": analysis_context.deal_id,
+                    "run_id": analysis_context.run_id,
+                    "generated_at": bundle.generated_at,
+                    "composite_score": scorecard.composite_score,
+                    "routing": scorecard.routing.value,
+                },
+            ),
+        ]
+
+    def _json_draft(
+        self,
+        artifact_type: str,
+        filename: str,
+        payload: dict[str, Any],
+    ) -> _ArtifactDraft:
+        data = json.dumps(
+            self._safe_json_artifact_payload(payload),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return _ArtifactDraft(
+            artifact_type=artifact_type,
+            format="JSON",
+            filename=filename,
+            content_bytes=data,
+            content_type=JSON_CONTENT_TYPE,
+        )
+
+    def _safe_json_artifact_payload(self, value: Any) -> Any:
+        if isinstance(value, dict):
+            sanitized: dict[str, Any] = {}
+            for key, item in value.items():
+                key_text = str(key)
+                if _is_sensitive_artifact_key(key_text):
+                    continue
+                sanitized[key_text] = self._safe_json_artifact_payload(item)
+            return sanitized
+        if isinstance(value, list):
+            return [self._safe_json_artifact_payload(item) for item in value]
+        if isinstance(value, str):
+            return "" if _is_sensitive_artifact_string(value) else value
+        return value
+
+    def _safe_text_export_deliverable(
+        self,
+        deliverable: ScreeningSnapshot | ICMemo,
+    ) -> ScreeningSnapshot | ICMemo:
+        payload = self._safe_json_artifact_payload(deliverable.model_dump(mode="json"))
+        if isinstance(deliverable, ScreeningSnapshot):
+            return ScreeningSnapshot.model_validate(payload)
+        return ICMemo.model_validate(payload)
+
+    def _store_artifact(
+        self,
+        *,
+        tenant_id: str,
+        deal_id: str,
+        run_id: str,
+        draft: _ArtifactDraft,
+    ) -> _StoredArtifact:
+        object_key = f"runs/{run_id}/product_bundle/{draft.filename}"
+        metadata = self._object_store.put(
+            tenant_id=tenant_id,
+            key=object_key,
+            data=draft.content_bytes,
+            content_type=draft.content_type,
+        )
+        uri = self._safe_object_uri(metadata)
+        deliverable_id = deterministic_deliverable_row_id(
+            tenant_id=tenant_id,
+            run_id=run_id,
+            deliverable_type=draft.artifact_type,
+            format_=draft.format,
+        )
+        self._repo.create_completed(
+            deliverable_id=deliverable_id,
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            run_id=run_id,
+            deliverable_type=draft.artifact_type,
+            format_=draft.format,
+            uri=uri,
+        )
+        return _StoredArtifact(
+            artifact_type=draft.artifact_type,
+            format=draft.format,
+            object_key=object_key,
+            uri=uri,
+            sha256=metadata.sha256,
+            size_bytes=metadata.size_bytes,
+            content_type=draft.content_type,
+            deliverable_id=deliverable_id,
+        )
+
+    def _manifest_bytes(
+        self,
+        *,
+        tenant_id: str,
+        deal_id: str,
+        run_id: str,
+        generated_at: str,
+        artifacts: list[_StoredArtifact],
+    ) -> bytes:
+        payload = {
+            "tenant_id": tenant_id,
+            "deal_id": deal_id,
+            "run_id": run_id,
+            "generated_at": generated_at,
+            "artifact_count": len(artifacts),
+            "artifacts": [
+                {
+                    "type": artifact.artifact_type,
+                    "format": artifact.format,
+                    "sha256": artifact.sha256,
+                    "size_bytes": artifact.size_bytes,
+                    "content_type": artifact.content_type,
+                    "object_key": artifact.object_key,
+                    "uri": artifact.uri,
+                    "deliverable_id": artifact.deliverable_id,
+                }
+                for artifact in artifacts
+            ],
+        }
+        return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+    def _safe_object_uri(self, metadata: StoredObjectMetadata) -> str:
+        key_hash = hashlib.sha256(metadata.key.encode("utf-8")).hexdigest()[:16]
+        return f"object:{self._object_store_backend}:{metadata.sha256[:16]}:{key_hash}"
+
+    def _evidence_index(self, bundle: DeliverablesBundle) -> dict[str, Any]:
+        entries: list[dict[str, Any]] = []
+        for deliverable in (
+            bundle.screening_snapshot,
+            bundle.ic_memo,
+            bundle.truth_dashboard,
+            bundle.qa_brief,
+        ):
+            entries.extend(
+                entry.model_dump(mode="json") for entry in deliverable.audit_appendix.entries
+            )
+        if bundle.decline_letter is not None:
+            entries.extend(
+                entry.model_dump(mode="json")
+                for entry in bundle.decline_letter.audit_appendix.entries
+            )
+        return {"entries": entries}
+
+
+def _is_sensitive_artifact_key(key: str) -> bool:
+    normalized = key.lower()
+    return any(part in normalized for part in SENSITIVE_ARTIFACT_KEY_PARTS)
+
+
+def _is_sensitive_artifact_string(value: str) -> bool:
+    normalized = value.lower()
+    return (
+        WINDOWS_PATH_PATTERN.search(value) is not None
+        or POSIX_LOCAL_PATH_PATTERN.search(value) is not None
+        or any(part in normalized for part in SENSITIVE_ARTIFACT_VALUE_PARTS)
+    )

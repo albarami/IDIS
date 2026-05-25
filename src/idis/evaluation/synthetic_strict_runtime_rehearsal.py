@@ -1,8 +1,9 @@
-"""Synthetic strict-runtime rehearsal helpers for GDBS-only shakeout."""
+"""Synthetic GDBS status, corpus inspection, and package-surface helpers."""
 
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -13,9 +14,99 @@ from idis.deliverables.artifact_catalog import resolve_content_type
 from idis.evaluation.benchmarks.gdbs import load_gdbs_suite
 from idis.services.runs.strict_full_live import build_strict_full_live_readiness_report
 
+MAX_SYNTHETIC_REHEARSAL_CASES = 20
+
 
 class SyntheticRehearsalScopeError(ValueError):
     """Raised when a rehearsal attempts to leave the approved synthetic scope."""
+
+
+def discover_synthetic_corpus(
+    *, dataset_root: Path, repo_root: Path | None = None
+) -> dict[str, Any]:
+    """Discover the approved GDBS-F synthetic corpus without exposing paths."""
+    resolved_dataset_root = _require_gdbs_dataset_root(dataset_root, repo_root=repo_root)
+    deal_dirs = _gdbs_deal_dirs(resolved_dataset_root)
+    load_result = load_gdbs_suite(resolved_dataset_root, "gdbs-f", strict=True)
+    files = [path for path in resolved_dataset_root.rglob("*") if path.is_file()]
+    artifact_files = [path for path in files if path.suffix.lower() in {".pdf", ".xlsx"}]
+
+    report = {
+        "synthetic_rehearsal_only": True,
+        "real_example_not_run": True,
+        "not_vc_ready": True,
+        "runtime_proof_required": True,
+        "dataset_id": "gdbs-f",
+        "dataset_root": "datasets/gdbs_full",
+        "safe_synthetic_data": True,
+        "deal_directory_count": len(deal_dirs),
+        "loader_case_count": len(load_result.cases),
+        "loader_success": load_result.success,
+        "dataset_hash": load_result.dataset_hash,
+        "total_file_count": len(files),
+        "total_size_bytes": sum(path.stat().st_size for path in files),
+        "formats": _format_counts(files),
+        "artifact_file_count": len(artifact_files),
+    }
+    _assert_no_report_leakage(report)
+    return report
+
+
+def build_bounded_synthetic_corpus_inspection(
+    *,
+    dataset_root: Path,
+    env: dict[str, str],
+    max_cases: int | None,
+    allow_synthetic_inspection: bool,
+    repo_root: Path | None = None,
+) -> dict[str, Any]:
+    """Build a bounded, non-approval synthetic corpus inspection report."""
+    if max_cases is None or max_cases <= 0:
+        raise SyntheticRehearsalScopeError("SYNTHETIC_MAX_CASES_REQUIRED")
+    if max_cases > MAX_SYNTHETIC_REHEARSAL_CASES:
+        raise SyntheticRehearsalScopeError("SYNTHETIC_MAX_CASES_TOO_LARGE")
+
+    resolved_dataset_root = _require_gdbs_dataset_root(dataset_root, repo_root=repo_root)
+    corpus = discover_synthetic_corpus(dataset_root=resolved_dataset_root, repo_root=repo_root)
+    load_result = load_gdbs_suite(resolved_dataset_root, "gdbs-f", strict=True)
+    strict_report = build_strict_full_live_readiness_report(env=env)
+    selected_cases = load_result.cases[:max_cases]
+
+    bounded_inspection: dict[str, Any] = {
+        "enabled": allow_synthetic_inspection,
+        "requested_case_count": max_cases,
+        "selected_case_ids": [],
+        "inspected_case_count": 0,
+        "artifact_count": 0,
+        "artifact_types": [],
+        "artifact_formats": [],
+        "artifact_sha256": [],
+        "artifact_sha256_mismatches": [],
+    }
+    if allow_synthetic_inspection:
+        bounded_inspection["selected_case_ids"] = [case.case_id for case in selected_cases]
+        bounded_inspection.update(
+            _summarize_selected_artifacts(resolved_dataset_root, selected_cases)
+        )
+        bounded_inspection["inspected_case_count"] = len(selected_cases)
+
+    report = {
+        "synthetic_rehearsal_only": True,
+        "real_example_not_run": True,
+        "not_vc_ready": True,
+        "runtime_proof_required": True,
+        "real_example_gate_cleared": False,
+        "strict_global_may_proceed": False,
+        "dataset": corpus,
+        "bounded_inspection": bounded_inspection,
+        "strict_blockers": _safe_strict_blockers(strict_report),
+        "strict_runtime_blocked_reason_code": (
+            "STRICT_FULL_LIVE_BLOCKED" if not strict_report.may_proceed else None
+        ),
+        "approval_evidence": False,
+    }
+    _assert_no_report_leakage(report)
+    return report
 
 
 def build_synthetic_rehearsal_status(
@@ -150,10 +241,11 @@ def verify_package_surfaces(
     return report
 
 
-def _require_gdbs_dataset_root(dataset_root: Path) -> Path:
-    expected = (Path.cwd() / "datasets" / "gdbs_full").resolve()
+def _require_gdbs_dataset_root(dataset_root: Path, *, repo_root: Path | None = None) -> Path:
+    base = (repo_root or Path.cwd()).resolve()
+    expected = (base / "datasets" / "gdbs_full").resolve()
     resolved = (
-        (Path.cwd() / dataset_root).resolve()
+        (base / dataset_root).resolve()
         if not dataset_root.is_absolute()
         else dataset_root.resolve()
     )
@@ -161,6 +253,79 @@ def _require_gdbs_dataset_root(dataset_root: Path) -> Path:
         raise SyntheticRehearsalScopeError("SYNTHETIC_GDBS_ONLY")
     if not resolved.exists():
         raise SyntheticRehearsalScopeError("SYNTHETIC_GDBS_ONLY")
+    return resolved
+
+
+def _gdbs_deal_dirs(dataset_root: Path) -> list[Path]:
+    deals_root = dataset_root / "deals"
+    if not deals_root.exists():
+        raise SyntheticRehearsalScopeError("SYNTHETIC_GDBS_ONLY")
+    return sorted(path for path in deals_root.iterdir() if path.is_dir())
+
+
+def _format_counts(files: list[Path]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for path in files:
+        suffix = path.suffix.lower() or "<none>"
+        counts[suffix] = counts.get(suffix, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _summarize_selected_artifacts(dataset_root: Path, selected_cases: list[Any]) -> dict[str, Any]:
+    artifact_types: set[str] = set()
+    artifact_formats: set[str] = set()
+    artifact_sha256: set[str] = set()
+    artifact_sha256_mismatches: set[str] = set()
+    artifact_count = 0
+    for case in selected_cases:
+        artifacts_path = dataset_root / case.directory / "artifacts.json"
+        artifacts = _load_artifact_manifest(artifacts_path)
+        for artifact in artifacts:
+            resolved_path = _resolve_gdbs_artifact_uri(
+                dataset_root,
+                str(artifact.get("storage_uri") or ""),
+            )
+            if not resolved_path.exists():
+                raise SyntheticRehearsalScopeError("SYNTHETIC_ARTIFACT_NOT_FOUND")
+            artifact_count += 1
+            artifact_type = str(artifact.get("artifact_type") or "DATA_ROOM_FILE")
+            artifact_format = resolved_path.suffix.lower()
+            artifact_types.add(artifact_type)
+            artifact_formats.add(artifact_format)
+            actual_sha256 = hashlib.sha256(resolved_path.read_bytes()).hexdigest()
+            artifact_sha256.add(actual_sha256)
+            expected_sha256 = str(artifact.get("sha256") or "")
+            if expected_sha256 and expected_sha256 != actual_sha256:
+                artifact_sha256_mismatches.add(f"{artifact_type}:{artifact_format}")
+    return {
+        "artifact_count": artifact_count,
+        "artifact_types": sorted(artifact_types),
+        "artifact_formats": sorted(artifact_formats),
+        "artifact_sha256": sorted(artifact_sha256),
+        "artifact_sha256_mismatches": sorted(artifact_sha256_mismatches),
+    }
+
+
+def _load_artifact_manifest(path: Path) -> list[dict[str, Any]]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SyntheticRehearsalScopeError("SYNTHETIC_ARTIFACT_MANIFEST_INVALID") from exc
+    artifacts = data.get("artifacts", [])
+    if not isinstance(artifacts, list):
+        raise SyntheticRehearsalScopeError("SYNTHETIC_ARTIFACT_MANIFEST_INVALID")
+    return [artifact for artifact in artifacts if isinstance(artifact, dict)]
+
+
+def _resolve_gdbs_artifact_uri(dataset_root: Path, uri: str) -> Path:
+    prefix = "file://datasets/gdbs_full/"
+    if not uri.startswith(prefix):
+        raise SyntheticRehearsalScopeError("SYNTHETIC_ARTIFACT_URI_REJECTED")
+    relative = Path(uri.removeprefix(prefix))
+    resolved = (dataset_root / relative).resolve()
+    dataset_root_resolved = dataset_root.resolve()
+    if dataset_root_resolved not in (resolved, *resolved.parents):
+        raise SyntheticRehearsalScopeError("SYNTHETIC_ARTIFACT_URI_REJECTED")
     return resolved
 
 

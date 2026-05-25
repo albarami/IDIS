@@ -389,6 +389,7 @@ class TestRetryDebateStepIdempotentNoDuplicateDebate:
             analysis_context: Any,
             scorecard: Any,
             graph_evidence: dict[str, Any] | None = None,
+            rag_evidence: dict[str, Any] | None = None,
         ) -> dict[str, Any]:
             return {
                 "deliverable_count": 4,

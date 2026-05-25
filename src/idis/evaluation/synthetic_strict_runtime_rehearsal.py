@@ -4,17 +4,27 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
 import httpx
 from fastapi.testclient import TestClient
 
+from idis.api.auth import IDIS_API_KEYS_ENV
+from idis.api.main import create_app
+from idis.api.routes.deals import clear_deals_store
+from idis.api.routes.documents import clear_document_store
+from idis.audit.sink import InMemoryAuditSink
 from idis.deliverables.artifact_catalog import resolve_content_type
 from idis.evaluation.benchmarks.gdbs import load_gdbs_suite
+from idis.idempotency.store import SqliteIdempotencyStore
 from idis.services.runs.strict_full_live import build_strict_full_live_readiness_report
 
 MAX_SYNTHETIC_REHEARSAL_CASES = 20
+SYNTHETIC_API_REHEARSAL_API_KEY = "slice68-synthetic-api-upload-key"
+SYNTHETIC_API_REHEARSAL_TENANT_ID = "11111111-1111-4111-8111-111111111111"
 
 
 class SyntheticRehearsalScopeError(ValueError):
@@ -105,6 +115,76 @@ def build_bounded_synthetic_corpus_inspection(
         ),
         "approval_evidence": False,
     }
+    _assert_no_report_leakage(report)
+    return report
+
+
+def build_bounded_synthetic_api_upload_rehearsal(
+    *,
+    dataset_root: Path,
+    env: dict[str, str],
+    max_cases: int | None,
+    allow_synthetic_api_upload: bool,
+    object_store_base_dir: Path | None = None,
+    repo_root: Path | None = None,
+) -> dict[str, Any]:
+    """Upload a bounded GDBS-F case through the public API upload boundary only."""
+    if max_cases is None or max_cases <= 0:
+        raise SyntheticRehearsalScopeError("SYNTHETIC_MAX_CASES_REQUIRED")
+    if max_cases > MAX_SYNTHETIC_REHEARSAL_CASES:
+        raise SyntheticRehearsalScopeError("SYNTHETIC_MAX_CASES_TOO_LARGE")
+
+    resolved_dataset_root = _require_gdbs_dataset_root(dataset_root, repo_root=repo_root)
+    corpus = _api_rehearsal_corpus_summary(
+        discover_synthetic_corpus(dataset_root=resolved_dataset_root, repo_root=repo_root)
+    )
+    strict_report = build_strict_full_live_readiness_report(env=env)
+    load_result = load_gdbs_suite(resolved_dataset_root, "gdbs-f", strict=True)
+    selected_cases = load_result.cases[:max_cases]
+
+    upload_report: dict[str, Any] = {
+        "enabled": allow_synthetic_api_upload,
+        "requested_case_count": max_cases,
+        "selected_case_ids": [case.case_id for case in selected_cases],
+        "uploaded_case_count": 0,
+        "uploaded_document_count": 0,
+        "artifact_types": [],
+        "artifact_formats": [],
+        "uploaded_documents": [],
+    }
+    report = {
+        "synthetic_rehearsal_only": True,
+        "real_example_not_run": True,
+        "not_vc_ready": True,
+        "runtime_proof_required": True,
+        "real_example_gate_cleared": False,
+        "strict_global_may_proceed": False,
+        "approval_evidence": False,
+        "dataset": corpus,
+        "api_upload_rehearsal": upload_report,
+        "strict_blockers": _safe_strict_blockers(strict_report),
+        "strict_runtime_blocked_reason_code": (
+            "STRICT_FULL_LIVE_BLOCKED" if not strict_report.may_proceed else None
+        ),
+        "run_attempt": {
+            "enabled": False,
+            "status": "not_run",
+            "reason_code": "SYNTHETIC_RUN_NOT_INCLUDED_IN_UPLOAD_REHEARSAL",
+        },
+        "package_surface_verification": {
+            "status": "not_run",
+            "verified": False,
+        },
+    }
+    if not allow_synthetic_api_upload:
+        raise SyntheticRehearsalScopeError("SYNTHETIC_API_UPLOAD_NOT_ALLOWED")
+
+    upload_result = _upload_selected_gdbs_cases_via_api(
+        dataset_root=resolved_dataset_root,
+        selected_cases=selected_cases,
+        object_store_base_dir=object_store_base_dir,
+    )
+    upload_report.update(upload_result)
     _assert_no_report_leakage(report)
     return report
 
@@ -317,6 +397,166 @@ def _load_artifact_manifest(path: Path) -> list[dict[str, Any]]:
     return [artifact for artifact in artifacts if isinstance(artifact, dict)]
 
 
+def _upload_selected_gdbs_cases_via_api(
+    *,
+    dataset_root: Path,
+    selected_cases: list[Any],
+    object_store_base_dir: Path | None,
+) -> dict[str, Any]:
+    if object_store_base_dir is None:
+        with tempfile.TemporaryDirectory(prefix="idis_slice68_upload_") as tmp_dir:
+            return _upload_selected_gdbs_cases_via_api(
+                dataset_root=dataset_root,
+                selected_cases=selected_cases,
+                object_store_base_dir=Path(tmp_dir),
+            )
+
+    previous_api_keys = os.environ.get(IDIS_API_KEYS_ENV)
+    previous_database_url = os.environ.get("IDIS_DATABASE_URL")
+    previous_object_store_backend = os.environ.get("IDIS_OBJECT_STORE_BACKEND")
+    previous_object_store_base = os.environ.get("IDIS_OBJECT_STORE_BASE_DIR")
+    try:
+        os.environ[IDIS_API_KEYS_ENV] = json.dumps(
+            {
+                SYNTHETIC_API_REHEARSAL_API_KEY: {
+                    "tenant_id": SYNTHETIC_API_REHEARSAL_TENANT_ID,
+                    "actor_id": "slice68-synthetic-api-upload",
+                    "name": "Slice68 Synthetic API Upload",
+                    "timezone": "UTC",
+                    "data_region": "me-south-1",
+                    "roles": ["ANALYST", "ADMIN"],
+                }
+            }
+        )
+        os.environ.pop("IDIS_DATABASE_URL", None)
+        os.environ["IDIS_OBJECT_STORE_BACKEND"] = "filesystem"
+        os.environ["IDIS_OBJECT_STORE_BASE_DIR"] = str(object_store_base_dir)
+        clear_deals_store()
+        clear_document_store()
+        app = create_app(
+            audit_sink=InMemoryAuditSink(),
+            idempotency_store=SqliteIdempotencyStore(in_memory=True),
+            service_region="me-south-1",
+        )
+        with TestClient(app, raise_server_exceptions=False) as client:
+            return _upload_selected_gdbs_cases_with_client(
+                client=client,
+                dataset_root=dataset_root,
+                selected_cases=selected_cases,
+            )
+    finally:
+        _restore_env(IDIS_API_KEYS_ENV, previous_api_keys)
+        _restore_env("IDIS_DATABASE_URL", previous_database_url)
+        _restore_env("IDIS_OBJECT_STORE_BACKEND", previous_object_store_backend)
+        _restore_env("IDIS_OBJECT_STORE_BASE_DIR", previous_object_store_base)
+
+
+def _upload_selected_gdbs_cases_with_client(
+    *,
+    client: TestClient,
+    dataset_root: Path,
+    selected_cases: list[Any],
+) -> dict[str, Any]:
+    artifact_types: set[str] = set()
+    artifact_formats: set[str] = set()
+    uploaded_documents: list[dict[str, Any]] = []
+    headers = {"X-IDIS-API-Key": SYNTHETIC_API_REHEARSAL_API_KEY}
+    for case in selected_cases:
+        deal_response = client.post(
+            "/v1/deals",
+            headers=headers,
+            json={"name": case.case_id, "company_name": case.case_id},
+        )
+        _raise_safe_api_error(deal_response, reason_code="SYNTHETIC_API_DEAL_CREATE_FAILED")
+        deal_id = str(deal_response.json()["deal_id"])
+        for artifact in _load_artifact_manifest(dataset_root / case.directory / "artifacts.json"):
+            artifact_type = str(artifact.get("artifact_type") or "DATA_ROOM_FILE")
+            resolved_path = _resolve_gdbs_artifact_uri(
+                dataset_root,
+                str(artifact.get("storage_uri") or ""),
+            )
+            if not resolved_path.exists():
+                raise SyntheticRehearsalScopeError("SYNTHETIC_ARTIFACT_NOT_FOUND")
+            artifact_format = resolved_path.suffix.lower()
+            artifact_types.add(artifact_type)
+            artifact_formats.add(artifact_format)
+            data = resolved_path.read_bytes()
+            sha256 = hashlib.sha256(data).hexdigest()
+            try:
+                response = client.post(
+                    f"/v1/deals/{deal_id}/documents/upload",
+                    headers={**headers, "Content-Type": "application/octet-stream"},
+                    params={
+                        "filename": _safe_upload_filename(artifact_type, artifact_format),
+                        "doc_type": _api_doc_type_for_artifact(artifact_type),
+                        "sha256": sha256,
+                        "source_system": "slice68-synthetic-api-upload",
+                    },
+                    content=data,
+                )
+            except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code if exc.response is not None else 0
+                raise SyntheticRehearsalScopeError(
+                    f"SYNTHETIC_API_UPLOAD_FAILED:status_code={status_code}"
+                ) from None
+            _raise_safe_api_error(response, reason_code="SYNTHETIC_API_UPLOAD_FAILED")
+            body = response.json()
+            uploaded_documents.append(
+                {
+                    "document_id": str(body["document_id"]),
+                    "doc_type": str(body["doc_type"]),
+                    "format": artifact_format,
+                    "sha256": str(body["sha256"]),
+                    "status": str(body.get("parse_status") or "UNKNOWN"),
+                }
+            )
+    return {
+        "uploaded_case_count": len(selected_cases),
+        "uploaded_document_count": len(uploaded_documents),
+        "artifact_types": sorted(artifact_types),
+        "artifact_formats": sorted(artifact_formats),
+        "uploaded_documents": uploaded_documents,
+    }
+
+
+def _api_rehearsal_corpus_summary(corpus: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in corpus.items() if key not in {"dataset_root"}}
+
+
+def _raise_safe_api_error(response: httpx.Response, *, reason_code: str) -> None:
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError:
+        raise SyntheticRehearsalScopeError(
+            f"{reason_code}:status_code={response.status_code}"
+        ) from None
+
+
+def _api_doc_type_for_artifact(artifact_type: str) -> str:
+    mapping = {
+        "PITCH_DECK": "PITCH_DECK",
+        "FIN_MODEL": "FINANCIAL_MODEL",
+        "FINANCIAL_MODEL": "FINANCIAL_MODEL",
+        "TRANSCRIPT": "TRANSCRIPT",
+        "TERM_SHEET": "TERM_SHEET",
+    }
+    return mapping.get(artifact_type, "DATA_ROOM_FILE")
+
+
+def _safe_upload_filename(artifact_type: str, artifact_format: str) -> str:
+    normalized_format = (
+        artifact_format if artifact_format.startswith(".") else f".{artifact_format}"
+    )
+    return f"{artifact_type.lower()}{normalized_format}"
+
+
+def _restore_env(key: str, previous_value: str | None) -> None:
+    if previous_value is None:
+        os.environ.pop(key, None)
+        return
+    os.environ[key] = previous_value
+
+
 def _resolve_gdbs_artifact_uri(dataset_root: Path, uri: str) -> Path:
     prefix = "file://datasets/gdbs_full/"
     if not uri.startswith(prefix):
@@ -380,6 +620,12 @@ def _assert_no_report_leakage(report: dict[str, Any]) -> None:
         "prompt_transcript",
         "embedding",
         "vector",
+        "file://datasets/gdbs_full",
+        "datasets/gdbs_full/deals",
+        "pitch_deck.pdf",
+        "financials.xlsx",
+        "filename",
+        "secret",
         "c:\\projects",
         ".local_reports",
     )

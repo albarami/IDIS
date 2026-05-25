@@ -86,6 +86,7 @@ class ProductBundleExporter:
         export_timestamp: str,
         graph_evidence: dict[str, Any] | None = None,
         rag_evidence: dict[str, Any] | None = None,
+        layer2_evidence: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Persist a product bundle and return a safe run-step summary."""
         artifacts: list[_StoredArtifact] = []
@@ -96,6 +97,7 @@ class ProductBundleExporter:
             export_timestamp=export_timestamp,
             graph_evidence=graph_evidence,
             rag_evidence=rag_evidence,
+            layer2_evidence=layer2_evidence,
         ):
             artifacts.append(
                 self._store_artifact(
@@ -142,10 +144,12 @@ class ProductBundleExporter:
         export_timestamp: str,
         graph_evidence: dict[str, Any] | None,
         rag_evidence: dict[str, Any] | None,
+        layer2_evidence: dict[str, Any] | None,
     ) -> list[_ArtifactDraft]:
         calc_package = self._calc_package(analysis_context)
         graph_package = _graph_package(graph_evidence)
         rag_package = _rag_package(rag_evidence)
+        layer2_package = _layer2_package(layer2_evidence)
         screening_snapshot = self._safe_text_export_deliverable(bundle.screening_snapshot)
         ic_memo = self._safe_text_export_deliverable(bundle.ic_memo)
         screening_pdf = self._deliverable_exporter.export_to_pdf(
@@ -204,6 +208,7 @@ class ProductBundleExporter:
                 "risk_register",
                 bundle.ic_memo.risks_and_mitigations.model_dump(mode="json"),
             ),
+            self._json_draft("layer2_ic_challenge", layer2_package),
             self._json_draft(
                 "evidence_index",
                 self._evidence_index(
@@ -211,6 +216,7 @@ class ProductBundleExporter:
                     calc_package=calc_package,
                     graph_package=graph_package,
                     rag_package=rag_package,
+                    layer2_package=layer2_package,
                 ),
             ),
             self._json_draft(
@@ -253,6 +259,10 @@ class ProductBundleExporter:
                     "rag_indexed_span_count": rag_package["indexing"].get("indexed_span_count", 0),
                     "rag_probe_count": rag_package["retrieval"].get("probe_count", 0),
                     "rag_match_count": rag_package["retrieval"].get("match_count", 0),
+                    "layer2_status": layer2_package["status"],
+                    "layer2_challenge_ids": layer2_package["layer2_challenge_ids"],
+                    "layer2_finding_count": layer2_package["finding_count"],
+                    "layer2_unresolved_question_count": layer2_package["unresolved_question_count"],
                 },
             ),
         ]
@@ -433,6 +443,7 @@ class ProductBundleExporter:
         calc_package: dict[str, Any],
         graph_package: dict[str, Any],
         rag_package: dict[str, Any],
+        layer2_package: dict[str, Any],
     ) -> dict[str, Any]:
         entries: list[dict[str, Any]] = []
         for deliverable in (
@@ -463,6 +474,7 @@ class ProductBundleExporter:
             "calc_entries": calc_entries,
             "graph_evidence": graph_package,
             "rag_evidence": rag_package,
+            "layer2_evidence": layer2_package,
         }
 
 
@@ -581,6 +593,39 @@ def _rag_package(rag_evidence: dict[str, Any] | None) -> dict[str, Any]:
     return {"status": status, "indexing": indexing, "retrieval": retrieval}
 
 
+def _layer2_package(layer2_evidence: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(layer2_evidence, dict):
+        return _empty_layer2_package()
+    status = str(layer2_evidence.get("status") or "skipped")
+    if status not in {"completed", "blocked", "skipped"}:
+        status = "skipped"
+    return {
+        "status": status,
+        "layer2_challenge_ids": _safe_string_ids(layer2_evidence.get("layer2_challenge_ids")),
+        "source_debate_ids": _safe_string_ids(layer2_evidence.get("source_debate_ids")),
+        "claim_ids": _safe_string_ids(layer2_evidence.get("claim_ids")),
+        "calc_ids": _safe_string_ids(layer2_evidence.get("calc_ids")),
+        "finding_count": _safe_non_negative_int(layer2_evidence.get("finding_count")),
+        "unresolved_question_count": _safe_non_negative_int(
+            layer2_evidence.get("unresolved_question_count")
+        ),
+        "muhasabah_passed": bool(layer2_evidence.get("muhasabah_passed")),
+    }
+
+
+def _empty_layer2_package() -> dict[str, Any]:
+    return {
+        "status": "skipped",
+        "layer2_challenge_ids": [],
+        "source_debate_ids": [],
+        "claim_ids": [],
+        "calc_ids": [],
+        "finding_count": 0,
+        "unresolved_question_count": 0,
+        "muhasabah_passed": False,
+    }
+
+
 def _empty_rag_package() -> dict[str, Any]:
     return {
         "status": "skipped",
@@ -659,3 +704,9 @@ def _safe_non_negative_int(value: object) -> int:
     if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
         return value
     return 0
+
+
+def _safe_string_ids(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return sorted({str(item).strip() for item in value if str(item).strip()})

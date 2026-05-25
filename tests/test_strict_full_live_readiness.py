@@ -160,7 +160,7 @@ def test_strict_report_lists_ocr_media_rag_graph_and_layer2_blockers() -> None:
         StrictComponentStatus.MISSING_CREDENTIALS
     )
     assert report.component("debate_layer_2_ic_challenge").status == (
-        StrictComponentStatus.NOT_IMPLEMENTED
+        StrictComponentStatus.MISSING_CREDENTIALS
     )
     assert "OCR-required documents" in report.component("ocr").blocker_message
     assert "MP4 files are present" in report.component("mp4_stt").blocker_message

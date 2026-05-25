@@ -101,6 +101,7 @@ def build_run_context(
         _run_full_deliverables,
         _run_full_enrichment,
         _run_full_graph_evidence,
+        _run_full_layer2_ic_challenge,
         _run_full_rag_evidence,
         _run_full_scoring,
         _run_snapshot_auto_grade,
@@ -140,6 +141,7 @@ def build_run_context(
         rag_fn=partial(_run_full_rag_evidence, db_conn=db_conn) if is_full else None,
         enrich_fn=partial(_run_full_enrichment, db_conn=db_conn) if is_full else None,
         debate_fn=partial(_run_full_debate, db_conn=db_conn) if is_full else None,
+        layer2_ic_challenge_fn=_run_full_layer2_ic_challenge if is_full else None,
         analysis_fn=(
             partial(_run_full_analysis, db_conn=db_conn, deal_metadata=deal_metadata)
             if is_full

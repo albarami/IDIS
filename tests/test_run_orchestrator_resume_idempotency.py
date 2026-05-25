@@ -390,6 +390,7 @@ class TestRetryDebateStepIdempotentNoDuplicateDebate:
             scorecard: Any,
             graph_evidence: dict[str, Any] | None = None,
             rag_evidence: dict[str, Any] | None = None,
+            layer2_evidence: dict[str, Any] | None = None,
         ) -> dict[str, Any]:
             return {
                 "deliverable_count": 4,
@@ -414,6 +415,16 @@ class TestRetryDebateStepIdempotentNoDuplicateDebate:
             calc_fn=_stub_calc,
             enrich_fn=stub_enrichment,
             debate_fn=counting_debate,
+            layer2_ic_challenge_fn=lambda **_kwargs: {
+                "status": "completed",
+                "layer2_challenge_ids": ["layer2-001"],
+                "source_debate_ids": ["debate-001"],
+                "claim_ids": ["claim-001"],
+                "calc_ids": ["calc-001"],
+                "finding_count": 1,
+                "unresolved_question_count": 1,
+                "muhasabah_passed": True,
+            },
             analysis_fn=stub_analysis,
             scoring_fn=stub_scoring,
             deliverables_fn=stub_deliverables,

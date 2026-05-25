@@ -264,11 +264,7 @@ def build_strict_full_live_readiness_report(
         _live_llm_model_clients(values),
         _analysis(values),
         _debate_layer_1(values),
-        _not_implemented(
-            "debate_layer_2_ic_challenge",
-            "Distinct Layer 2 / IC challenge debate is not implemented.",
-            "docs/architecture/strict_full_live_readiness.md; src/idis/api/routes/runs.py",
-        ),
+        _debate_layer_2_ic_challenge(values),
         _live("muhasabah_nff", "src/idis/debate/orchestrator.py; src/idis/deliverables/"),
         _scoring(values),
         _rag_foundation_layer(values, embedding_health, pgvector_health),
@@ -599,6 +595,52 @@ def _debate_layer_1(env: Mapping[str, str]) -> StrictComponentReadiness:
             may_proceed=False,
         )
     return _live("debate_layer_1", "src/idis/debate/orchestrator.py")
+
+
+def _debate_layer_2_ic_challenge(env: Mapping[str, str]) -> StrictComponentReadiness:
+    missing = _missing_layer2_ic_challenge_env(env)
+    if missing:
+        return StrictComponentReadiness(
+            component_name="debate_layer_2_ic_challenge",
+            status=StrictComponentStatus.MISSING_CREDENTIALS,
+            blocker_message=(
+                "Layer 2 IC challenge is wired, but strict mode requires Anthropic-backed "
+                "IC challenger and arbiter live runner construction."
+            ),
+            required_env_vars=missing,
+            evidence=(
+                "src/idis/services/runs/layer2_ic_challenge.py; "
+                "src/idis/api/routes/runs.py:_run_full_layer2_ic_challenge"
+            ),
+            may_proceed=False,
+        )
+    if not _layer2_ic_challenge_code_path_wired():
+        return StrictComponentReadiness(
+            component_name="debate_layer_2_ic_challenge",
+            status=StrictComponentStatus.CODE_EXISTS_BUT_NOT_WIRED,
+            blocker_message=(
+                "Layer 2 IC challenge code exists but is not fully wired as a FULL step "
+                "with product-bundle visibility."
+            ),
+            required_env_vars=[],
+            evidence="src/idis/services/runs/layer2_ic_challenge.py",
+            may_proceed=False,
+        )
+    return StrictComponentReadiness(
+        component_name="debate_layer_2_ic_challenge",
+        status=StrictComponentStatus.CODE_EXISTS_BUT_NOT_WIRED,
+        blocker_message=(
+            "Layer 2 IC challenge has live runner construction, but strict readiness requires "
+            "runtime proof that challenger and arbiter model calls executed successfully."
+        ),
+        required_env_vars=[],
+        required_services=["Anthropic Messages API"],
+        evidence=(
+            "src/idis/services/runs/layer2_ic_challenge.py:Layer2ICLLMRunner; "
+            "src/idis/api/routes/runs.py:_run_full_layer2_ic_challenge"
+        ),
+        may_proceed=False,
+    )
 
 
 def _scoring(env: Mapping[str, str]) -> StrictComponentReadiness:
@@ -1169,14 +1211,32 @@ def _build_component_inventory(
         ),
         _inventory_item(
             "Layer 2 IC challenge",
-            exists=False,
-            full_wired=False,
-            config_present=False,
-            health="not_implemented",
-            output_visible=False,
-            blocker="Only Layer 2 readiness package exists; no distinct IC challenge debate loop.",
-            slice_name="Slice 63",
-            evidence=["src/idis/services/runs/methodology_layer2_readiness_package.py"],
+            exists=True,
+            full_wired=_layer2_ic_challenge_code_path_wired(),
+            config_present=_has_value(env, "IDIS_DEBATE_BACKEND"),
+            health="runtime_proof_required"
+            if _layer2_ic_challenge_ready(env)
+            else "missing_config"
+            if _missing_layer2_ic_challenge_env(env)
+            else "not_wired",
+            output_visible=_layer2_ic_challenge_code_path_wired(),
+            blocker=(
+                "Layer 2 IC challenge has code/env wiring, but strict readiness still requires "
+                "runtime proof that challenger and arbiter live calls executed and passed "
+                "No-Free-Facts validation."
+            )
+            if _layer2_ic_challenge_ready(env)
+            else (
+                "Layer 2 IC challenge exists, but strict mode requires Anthropic debate "
+                "configuration, FULL step wiring, and product-bundle visibility."
+            ),
+            slice_name="Slice 65",
+            evidence=[
+                "src/idis/services/runs/layer2_ic_challenge.py",
+                "src/idis/models/layer2_ic_challenge.py",
+                "src/idis/api/routes/runs.py:_run_full_layer2_ic_challenge",
+                "src/idis/deliverables/product_bundle.py:_layer2_package",
+            ],
         ),
         _inventory_item(
             "deliverable generation",
@@ -1579,6 +1639,109 @@ def _rag_full_wired_ready(
 ) -> bool:
     _ = env
     return _rag_foundation_ready(embedding_health, pgvector_health) and _rag_code_path_wired()
+
+
+def _missing_layer2_ic_challenge_env(env: Mapping[str, str]) -> list[str]:
+    return _missing_model_env(
+        env=env,
+        backend_key="IDIS_DEBATE_BACKEND",
+        model_keys=[
+            "IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT",
+            "IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER",
+        ],
+    )
+
+
+def _layer2_ic_challenge_ready(env: Mapping[str, str]) -> bool:
+    return not _missing_layer2_ic_challenge_env(env) and _layer2_ic_challenge_code_path_wired()
+
+
+def _layer2_ic_challenge_code_path_wired() -> bool:
+    """Return True when Layer 2 is a real FULL step with safe product visibility."""
+    try:
+        import dataclasses
+        import inspect
+        from importlib import import_module
+        from pathlib import Path
+
+        from idis.models.run_step import FULL_STEPS, StepName
+        from idis.services.runs.orchestrator import RunContext
+
+        debate_idx = FULL_STEPS.index(StepName.DEBATE)
+        layer2_idx = FULL_STEPS.index(StepName.LAYER2_IC_CHALLENGE)
+        analysis_idx = FULL_STEPS.index(StepName.ANALYSIS)
+        if not (debate_idx < layer2_idx < analysis_idx):
+            return False
+
+        if "layer2_ic_challenge_fn" not in {field.name for field in dataclasses.fields(RunContext)}:
+            return False
+
+        service_module = import_module("idis.services.runs.layer2_ic_challenge")
+        if not hasattr(service_module, "RunLayer2ICChallengeService"):
+            return False
+        if not hasattr(service_module, "build_live_layer2_ic_runners"):
+            return False
+        if not hasattr(service_module, "Layer2ICLLMRunner"):
+            return False
+        model_module = import_module("idis.models.layer2_ic_challenge")
+        if not hasattr(model_module, "Layer2ICChallengeRecord"):
+            return False
+
+        runs_module = import_module("idis.api.routes.runs")
+        if not hasattr(runs_module, "_run_full_layer2_ic_challenge"):
+            return False
+        orchestrator_module = import_module("idis.services.runs.orchestrator")
+        dispatch_source = inspect.getsource(orchestrator_module.RunOrchestrator._dispatch_step)
+        execute_source = inspect.getsource(
+            orchestrator_module.RunOrchestrator._execute_layer2_ic_challenge
+        )
+        if "StepName.LAYER2_IC_CHALLENGE" not in dispatch_source:
+            return False
+        if "layer2_ic_challenge_fn" not in execute_source:
+            return False
+
+        repo_root = Path(__file__).resolve().parents[4]
+        challenger_prompt = repo_root / "prompts" / "layer2_ic_challenger" / "1.0.0" / "prompt.md"
+        arbiter_prompt = repo_root / "prompts" / "layer2_ic_arbiter" / "1.0.0" / "prompt.md"
+        if not challenger_prompt.exists() or not arbiter_prompt.exists():
+            return False
+
+        product_bundle_text = (
+            Path(__file__).resolve().parents[2] / "deliverables" / "product_bundle.py"
+        ).read_text(encoding="utf-8")
+        return (
+            "_layer2_package" in product_bundle_text
+            and "layer2_evidence" in product_bundle_text
+            and _layer2_live_runner_construction_wired()
+        )
+    except (AttributeError, ImportError, OSError, TypeError, ValueError):
+        return False
+
+
+def _layer2_live_runner_construction_wired() -> bool:
+    """Return True only when strict Layer 2 constructs injected live LLM runners."""
+    try:
+        import inspect
+        from importlib import import_module
+
+        runs_module = import_module("idis.api.routes.runs")
+        route_source = inspect.getsource(runs_module._run_full_layer2_ic_challenge)
+        service_module = import_module("idis.services.runs.layer2_ic_challenge")
+        service_source = inspect.getsource(service_module.RunLayer2ICChallengeService.run)
+        strict_source = inspect.getsource(
+            service_module.RunLayer2ICChallengeService._run_strict_live
+        )
+        return (
+            "build_live_layer2_ic_runners" in route_source
+            and "AnthropicLLMClient" in route_source
+            and "challenger_runner=" in route_source
+            and "arbiter_runner=" in route_source
+            and "_run_strict_live" in service_source
+            and "self._challenger_runner.run" in strict_source
+            and "self._arbiter_runner.run" in strict_source
+        )
+    except (AttributeError, ImportError, OSError, TypeError):
+        return False
 
 
 def _rag_code_path_wired() -> bool:

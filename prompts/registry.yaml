@@ -306,6 +306,52 @@ prompts:
       - GATE_2
       - GATE_3
 
+  LAYER2_IC_CHALLENGER_V1:
+    id: "LAYER2_IC_CHALLENGER_V1"
+    name: "Layer 2 IC Challenger"
+    version: "1.0.0"
+    status: DRAFT
+    risk_class: HIGH
+    owner:
+      team: "debate"
+      person: "TBD"
+    model_requirements:
+      model_class: reasoning
+      min_context_window: 32000
+      json_mode: strict
+      tool_calling: false
+    input_schema: "schemas/debate/layer2_ic_challenger_input.json"
+    output_schema: "schemas/debate/layer2_ic_challenge_output.json"
+    file_path: "prompts/layer2_ic_challenger/1.0.0/prompt.md"
+    metadata_path: "prompts/layer2_ic_challenger/1.0.0/metadata.json"
+    validation_gates:
+      - GATE_1
+      - GATE_2
+      - GATE_3
+
+  LAYER2_IC_ARBITER_V1:
+    id: "LAYER2_IC_ARBITER_V1"
+    name: "Layer 2 IC Arbiter"
+    version: "1.0.0"
+    status: DRAFT
+    risk_class: HIGH
+    owner:
+      team: "debate"
+      person: "TBD"
+    model_requirements:
+      model_class: reasoning
+      min_context_window: 32000
+      json_mode: strict
+      tool_calling: false
+    input_schema: "schemas/debate/layer2_ic_arbiter_input.json"
+    output_schema: "schemas/debate/layer2_ic_challenge_output.json"
+    file_path: "prompts/layer2_ic_arbiter/1.0.0/prompt.md"
+    metadata_path: "prompts/layer2_ic_arbiter/1.0.0/metadata.json"
+    validation_gates:
+      - GATE_1
+      - GATE_2
+      - GATE_3
+
   # ============================================
   # Validator Prompts
   # ============================================

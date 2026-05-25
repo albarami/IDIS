@@ -3518,27 +3518,32 @@ def _debate_layer_1(files: dict[str, str]) -> WiringItem:
 
 
 def _debate_layer_2(root: Path) -> WiringItem:
-    excluded_review_paths = {
-        "deliverables/manifest_review.py",
-    }
-
-    def _debate_layer_2_candidate(path: Path) -> bool:
-        rel = path.relative_to(root / "src/idis").as_posix()
-        if rel in excluded_review_paths:
-            return False
-        name = path.name.lower()
-        return "challenge" in name or "review" in name
-
-    found = any(
-        _debate_layer_2_candidate(path) for path in (root / "src/idis").rglob("*.py")
+    src_root = root / "src/idis"
+    model = src_root / "models" / "layer2_ic_challenge.py"
+    service = src_root / "services" / "runs" / "layer2_ic_challenge.py"
+    run_step = (src_root / "models" / "run_step.py").read_text(encoding="utf-8")
+    orchestrator = (src_root / "services" / "runs" / "orchestrator.py").read_text(encoding="utf-8")
+    product_bundle = (src_root / "deliverables" / "product_bundle.py").read_text(encoding="utf-8")
+    wired = (
+        model.exists()
+        and service.exists()
+        and "LAYER2_IC_CHALLENGE" in run_step
+        and "layer2_ic_challenge_fn" in orchestrator
+        and "_layer2_package" in product_bundle
     )
     return WiringItem(
         key="debate_layer_2",
         label="Second challenge/review debate layer",
-        status="NOT_FOUND" if not found else "PARTIAL",
-        summary="No distinct second-layer challenge/review debate orchestrator is present.",
-        evidence=["Search found no separate second debate orchestrator."],
-        gaps=["Must be designed before Phase 2.8."],
+        status="WIRED" if wired else "PARTIAL",
+        summary="Distinct Layer 2 IC challenge is wired as its own FULL step.",
+        evidence=[
+            "`LAYER2_IC_CHALLENGE` is present in `FULL_STEPS`.",
+            "`RunLayer2ICChallengeService` builds safe Layer 2 output visibility.",
+            "`ProductBundleExporter` includes `layer2_ic_challenge` JSON.",
+        ],
+        gaps=[
+            "Strict mode still requires live Anthropic configuration before may_proceed can clear."
+        ],
     )
 
 

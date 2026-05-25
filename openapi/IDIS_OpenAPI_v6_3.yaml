@@ -1234,6 +1234,64 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /v1/deliverables/{deliverableId}/content:
+    get:
+      tags: [Deliverables]
+      summary: Download one completed deliverable artifact
+      operationId: downloadDeliverableContent
+      parameters:
+        - name: deliverableId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Deliverable artifact bytes
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+            application/json:
+              schema:
+                type: string
+                format: binary
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/deals/{dealId}/runs/{runId}/product-bundle/manifest:
+    get:
+      tags: [Deliverables]
+      summary: Review a sanitized product bundle manifest for a run
+      operationId: getProductBundleManifest
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+        - name: runId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Sanitized product bundle manifest
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductBundleManifestReview"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
   /v1/audit/events:
     get:
       tags: [Audit]
@@ -1974,6 +2032,23 @@ components:
         status: { type: string }
         uri: { type: string, nullable: true }
         created_at: { type: string, format: date-time }
+        run_id: { type: string, format: uuid, nullable: true }
+        format: { type: string, nullable: true }
+
+    ProductBundleManifestReview:
+      type: object
+      required: [tenant_id, deal_id, run_id, artifact_count, artifacts]
+      properties:
+        tenant_id: { type: string, format: uuid }
+        deal_id: { type: string, format: uuid }
+        run_id: { type: string, format: uuid }
+        generated_at: { type: string, format: date-time, nullable: true }
+        artifact_count: { type: integer, minimum: 0 }
+        artifacts:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
 
     AuditEvent:
       type: object

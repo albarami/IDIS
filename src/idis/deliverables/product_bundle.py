@@ -10,6 +10,14 @@ from typing import Any
 
 from idis.analysis.models import AnalysisContext
 from idis.analysis.scoring.models import Scorecard
+from idis.deliverables.artifact_catalog import (
+    JSON_CONTENT_TYPE,
+    MANIFEST_ARTIFACT_TYPE,
+    MANIFEST_FILENAME,
+    ArtifactCatalogEntry,
+    build_product_bundle_object_key,
+    resolve_artifact_entry,
+)
 from idis.deliverables.export import DeliverableExporter
 from idis.models.deliverables import DeliverablesBundle, ICMemo, ScreeningSnapshot
 from idis.persistence.repositories.deliverables import (
@@ -19,9 +27,6 @@ from idis.persistence.repositories.deliverables import (
 from idis.storage.models import StoredObjectMetadata
 from idis.storage.object_store import ObjectStore
 
-JSON_CONTENT_TYPE = "application/json"
-PDF_CONTENT_TYPE = "application/pdf"
-DOCX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 SENSITIVE_ARTIFACT_KEY_PARTS = frozenset(
     {"local_path", "raw_text", "text_excerpt", "query_text", "embedding"}
 )
@@ -113,9 +118,9 @@ class ProductBundleExporter:
             deal_id=deal_id,
             run_id=run_id,
             draft=_ArtifactDraft(
-                artifact_type="product_bundle_manifest",
+                artifact_type=MANIFEST_ARTIFACT_TYPE,
                 format="JSON",
-                filename="manifest.json",
+                filename=MANIFEST_FILENAME,
                 content_bytes=manifest_bytes,
                 content_type=JSON_CONTENT_TYPE,
             ),
@@ -160,52 +165,24 @@ class ProductBundleExporter:
             export_timestamp=export_timestamp,
         )
         return [
-            _ArtifactDraft(
-                artifact_type="screening_snapshot",
-                format="PDF",
-                filename="screening_snapshot.pdf",
-                content_bytes=screening_pdf.content_bytes,
-                content_type=PDF_CONTENT_TYPE,
-            ),
-            _ArtifactDraft(
-                artifact_type="screening_snapshot",
-                format="DOCX",
-                filename="screening_snapshot.docx",
-                content_bytes=screening_docx.content_bytes,
-                content_type=DOCX_CONTENT_TYPE,
-            ),
-            _ArtifactDraft(
-                artifact_type="ic_memo",
-                format="PDF",
-                filename="ic_memo.pdf",
-                content_bytes=memo_pdf.content_bytes,
-                content_type=PDF_CONTENT_TYPE,
-            ),
-            _ArtifactDraft(
-                artifact_type="ic_memo",
-                format="DOCX",
-                filename="ic_memo.docx",
-                content_bytes=memo_docx.content_bytes,
-                content_type=DOCX_CONTENT_TYPE,
-            ),
+            self._binary_draft("screening_snapshot", "PDF", screening_pdf.content_bytes),
+            self._binary_draft("screening_snapshot", "DOCX", screening_docx.content_bytes),
+            self._binary_draft("ic_memo", "PDF", memo_pdf.content_bytes),
+            self._binary_draft("ic_memo", "DOCX", memo_docx.content_bytes),
             self._json_draft(
                 "truth_dashboard",
-                "truth_dashboard.json",
                 bundle.truth_dashboard.model_dump(mode="json"),
             ),
             self._json_draft(
                 "qa_brief",
-                "qa_brief.json",
                 bundle.qa_brief.model_dump(mode="json"),
             ),
             self._json_draft(
                 "executive_summary",
-                "executive_summary.json",
                 bundle.ic_memo.executive_summary.model_dump(mode="json"),
             ),
             self._json_draft(
                 "commercial_diligence",
-                "commercial_diligence.json",
                 {
                     "company_overview": bundle.ic_memo.company_overview.model_dump(mode="json"),
                     "market_analysis": bundle.ic_memo.market_analysis.model_dump(mode="json"),
@@ -214,7 +191,6 @@ class ProductBundleExporter:
             ),
             self._json_draft(
                 "financial_diligence",
-                "financial_diligence.json",
                 {
                     "financials": bundle.ic_memo.financials.model_dump(mode="json"),
                     "scenario_analysis": bundle.ic_memo.scenario_analysis.model_dump(mode="json")
@@ -226,12 +202,10 @@ class ProductBundleExporter:
             ),
             self._json_draft(
                 "risk_register",
-                "risk_register.json",
                 bundle.ic_memo.risks_and_mitigations.model_dump(mode="json"),
             ),
             self._json_draft(
                 "evidence_index",
-                "evidence_index.json",
                 self._evidence_index(
                     bundle,
                     calc_package=calc_package,
@@ -241,7 +215,6 @@ class ProductBundleExporter:
             ),
             self._json_draft(
                 "run_summary",
-                "run_summary.json",
                 {
                     "tenant_id": analysis_context.tenant_id,
                     "deal_id": analysis_context.deal_id,
@@ -284,23 +257,45 @@ class ProductBundleExporter:
             ),
         ]
 
+    def _catalog_entry(self, artifact_type: str, format_: str) -> ArtifactCatalogEntry:
+        entry = resolve_artifact_entry(artifact_type, format_)
+        if entry is None:
+            msg = f"Unknown product bundle artifact: {artifact_type}:{format_}"
+            raise ValueError(msg)
+        return entry
+
+    def _binary_draft(
+        self,
+        artifact_type: str,
+        format_: str,
+        content_bytes: bytes,
+    ) -> _ArtifactDraft:
+        entry = self._catalog_entry(artifact_type, format_)
+        return _ArtifactDraft(
+            artifact_type=entry.deliverable_type,
+            format=entry.format,
+            filename=entry.filename,
+            content_bytes=content_bytes,
+            content_type=entry.content_type,
+        )
+
     def _json_draft(
         self,
         artifact_type: str,
-        filename: str,
         payload: dict[str, Any],
     ) -> _ArtifactDraft:
+        entry = self._catalog_entry(artifact_type, "JSON")
         data = json.dumps(
             self._safe_json_artifact_payload(payload),
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
         return _ArtifactDraft(
-            artifact_type=artifact_type,
-            format="JSON",
-            filename=filename,
+            artifact_type=entry.deliverable_type,
+            format=entry.format,
+            filename=entry.filename,
             content_bytes=data,
-            content_type=JSON_CONTENT_TYPE,
+            content_type=entry.content_type,
         )
 
     def _safe_json_artifact_payload(self, value: Any) -> Any:
@@ -335,7 +330,7 @@ class ProductBundleExporter:
         run_id: str,
         draft: _ArtifactDraft,
     ) -> _StoredArtifact:
-        object_key = f"runs/{run_id}/product_bundle/{draft.filename}"
+        object_key = build_product_bundle_object_key(run_id, draft.filename)
         metadata = self._object_store.put(
             tenant_id=tenant_id,
             key=object_key,

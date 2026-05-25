@@ -522,14 +522,13 @@ def test_strict_inventory_pgvector_rag_exists_but_not_full_wired() -> None:
 
     rag = inventory["pgvector/RAG"]
     assert rag.exists_in_code is True
-    assert rag.full_wired is False
-    assert rag.output_visible is False
+    assert rag.full_wired is True
+    assert rag.output_visible is True
     assert rag.health_check_status == "healthy"
-    assert "FULL" in rag.blocker or "index" in rag.blocker.lower()
 
     rag_component = report.component("rag_evidence_retrieval")
-    assert rag_component.status.value == "code-exists-but-not-wired"
-    assert rag_component.may_proceed is False
+    assert rag_component.status.value == "live-wired-and-used"
+    assert rag_component.may_proceed is True
 
 
 def test_strict_inventory_rejects_non_schema_embedding_dimensions() -> None:
@@ -573,7 +572,7 @@ def test_strict_inventory_supabase_vectors_uses_postgres_not_sdk() -> None:
     assert "present-label-only" not in dumped
 
 
-def test_audit_rag_vector_retrieval_reports_foundation_gap() -> None:
+def test_audit_rag_vector_retrieval_reports_full_wiring() -> None:
     from pathlib import Path
 
     from scripts.audit_full_system_wiring import collect_wiring_inventory
@@ -581,6 +580,9 @@ def test_audit_rag_vector_retrieval_reports_foundation_gap() -> None:
     inventory = collect_wiring_inventory(Path(__file__).resolve().parents[1])
     item = inventory["rag_vector_retrieval"]
 
-    assert item.status == "PARTIAL"
+    assert item.status == "WIRED"
     assert any("0017" in evidence or "vector_embeddings" in evidence for evidence in item.evidence)
-    assert any("FULL" in gap or "index" in gap.lower() for gap in item.gaps)
+    assert any(
+        "RAG_EVIDENCE" in evidence or "probe" in evidence.lower() for evidence in item.evidence
+    )
+    assert item.gaps == []

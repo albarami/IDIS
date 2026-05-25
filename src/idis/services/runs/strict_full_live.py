@@ -627,6 +627,14 @@ def _rag_foundation_layer(
     embedding_health: EmbeddingHealthCheck,
     pgvector_health: PgvectorHealthCheck,
 ) -> StrictComponentReadiness:
+    if _rag_full_wired_ready(env, embedding_health, pgvector_health):
+        return _live(
+            "rag_evidence_retrieval",
+            "src/idis/services/rag/indexing.py; src/idis/services/rag/retrieval.py; "
+            "src/idis/api/routes/runs.py:_run_full_rag_evidence; "
+            "src/idis/services/runs/steps.py:rag_fn; "
+            "src/idis/deliverables/product_bundle.py:_rag_package",
+        )
     foundation_ready = _rag_foundation_ready(embedding_health, pgvector_health)
     if foundation_ready:
         return StrictComponentReadiness(
@@ -818,6 +826,7 @@ def _build_component_inventory(
     graph_ready = _graph_visibility_ready(env, graph_health)
     graph_health_status = _graph_inventory_health(graph_health)
     rag_foundation_ready = _rag_foundation_ready(embedding_health, pgvector_health)
+    rag_ready = _rag_full_wired_ready(env, embedding_health, pgvector_health)
     rag_health_status = _rag_inventory_health(embedding_health, pgvector_health)
     inventory = [
         _inventory_item(
@@ -1121,22 +1130,30 @@ def _build_component_inventory(
         _inventory_item(
             "pgvector/RAG",
             exists=True,
-            full_wired=False,
+            full_wired=rag_ready,
             config_present=_rag_config_present(env),
             health=rag_health_status,
-            output_visible=False,
+            output_visible=rag_ready,
             blocker=(
-                "Vector foundation is healthy, but FULL indexing, retrieval, run provenance, "
-                "and product bundle visibility are not wired."
-                if rag_foundation_ready
-                else _rag_inventory_blocker(embedding_health, pgvector_health)
+                ""
+                if rag_ready
+                else (
+                    "Vector foundation is healthy, but strict readiness requires FULL "
+                    "indexing/probe retrieval wiring and product bundle visibility."
+                    if rag_foundation_ready
+                    else _rag_inventory_blocker(embedding_health, pgvector_health)
+                )
             ),
-            slice_name="Slice 62",
+            slice_name="Slice 63",
             evidence=[
                 "src/idis/persistence/migrations/versions/0017_vector_embeddings.py",
                 "src/idis/persistence/repositories/vector_embeddings.py",
+                "src/idis/services/rag/indexing.py",
+                "src/idis/services/rag/retrieval.py",
                 "src/idis/services/rag/embedding_health.py",
                 "src/idis/services/rag/pgvector_health.py",
+                "src/idis/api/routes/runs.py:_run_full_rag_evidence",
+                "src/idis/deliverables/product_bundle.py:_rag_package",
             ],
         ),
         _inventory_item(
@@ -1544,8 +1561,75 @@ def _rag_inventory_blocker(
         return embedding_health.error or "Live embedding provider health check failed."
     return (
         "Vector foundation exists, but strict readiness requires pgvector health, live embedding "
-        "health, and later FULL indexing/retrieval wiring."
+        "health, FULL RAG_EVIDENCE wiring, probe retrieval, and product bundle visibility."
     )
+
+
+def _rag_full_wired_ready(
+    env: Mapping[str, str],
+    embedding_health: EmbeddingHealthCheck,
+    pgvector_health: PgvectorHealthCheck,
+) -> bool:
+    _ = env
+    return _rag_foundation_ready(embedding_health, pgvector_health) and _rag_code_path_wired()
+
+
+def _rag_code_path_wired() -> bool:
+    """Return True when FULL RAG indexing/probe retrieval code paths are present."""
+    try:
+        import dataclasses
+        import inspect
+        from importlib import import_module
+        from pathlib import Path
+
+        from idis.models.run_step import FULL_STEPS, StepName
+        from idis.services.runs.orchestrator import RunContext
+
+        try:
+            graph_idx = FULL_STEPS.index(StepName.GRAPH_EVIDENCE)
+            rag_idx = FULL_STEPS.index(StepName.RAG_EVIDENCE)
+            enrich_idx = FULL_STEPS.index(StepName.ENRICHMENT)
+        except ValueError:
+            return False
+        if not (graph_idx < rag_idx < enrich_idx):
+            return False
+
+        if "rag_fn" not in {field.name for field in dataclasses.fields(RunContext)}:
+            return False
+
+        steps_module = import_module("idis.services.runs.steps")
+        steps_source = inspect.getsource(steps_module.build_run_context)
+        if "_run_full_rag_evidence" not in steps_source or "rag_fn=" not in steps_source:
+            return False
+
+        runs_module = import_module("idis.api.routes.runs")
+        if not hasattr(runs_module, "_run_full_rag_evidence"):
+            return False
+
+        orchestrator_module = import_module("idis.services.runs.orchestrator")
+        dispatch_source = inspect.getsource(orchestrator_module.RunOrchestrator._dispatch_step)
+        rag_execute_source = inspect.getsource(
+            orchestrator_module.RunOrchestrator._execute_rag_evidence
+        )
+        if "StepName.RAG_EVIDENCE" not in dispatch_source or "rag_fn" not in rag_execute_source:
+            return False
+
+        rag_dir = Path(__file__).resolve().parents[1] / "rag"
+        indexing_text = (rag_dir / "indexing.py").read_text(encoding="utf-8")
+        retrieval_text = (rag_dir / "retrieval.py").read_text(encoding="utf-8")
+        if "PostgresVectorEmbeddingsRepository" not in indexing_text:
+            return False
+        if "upsert_embedding" not in indexing_text:
+            return False
+        if "similarity_search" not in retrieval_text or "probe" not in retrieval_text.lower():
+            return False
+
+        product_bundle_text = (
+            Path(__file__).resolve().parents[2] / "deliverables" / "product_bundle.py"
+        ).read_text(encoding="utf-8")
+        return "_rag_package" in product_bundle_text and "rag_evidence" in product_bundle_text
+    except (AttributeError, ImportError, OSError, TypeError):
+        return False
 
 
 def _supabase_vectors_inventory(

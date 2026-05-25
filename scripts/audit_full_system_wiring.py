@@ -599,6 +599,9 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/services/rag/embedding_health.py",
         "src/idis/services/rag/pgvector_health.py",
         "src/idis/services/rag/constants.py",
+        "src/idis/services/rag/indexing.py",
+        "src/idis/services/rag/retrieval.py",
+        "src/idis/deliverables/product_bundle.py",
         "src/idis/storage/filesystem_store.py",
         "src/idis/storage/__init__.py",
         "src/idis/services/enrichment/service.py",
@@ -3652,6 +3655,9 @@ def _rag_vector_retrieval(root: Path, files: dict[str, str]) -> WiringItem:
     has_repo = "src/idis/persistence/repositories/vector_embeddings.py" in files
     has_migration = "src/idis/persistence/migrations/versions/0017_vector_embeddings.py" in files
     has_embedding_health = "src/idis/services/rag/embedding_health.py" in files
+    has_indexing = "src/idis/services/rag/indexing.py" in files
+    has_retrieval = "src/idis/services/rag/retrieval.py" in files
+    has_full_wiring = _rag_full_run_wiring_present(files)
     evidence = [
         "`CREATE EXTENSION IF NOT EXISTS vector` exists in DB init scripts.",
     ]
@@ -3665,19 +3671,69 @@ def _rag_vector_retrieval(root: Path, files: dict[str, str]) -> WiringItem:
         )
     if has_embedding_health:
         evidence.append("`check_embedding_health()` performs live OpenAI embedding health checks.")
+    if has_indexing:
+        evidence.append(
+            "`index_document_spans_for_deal()` indexes persisted `document_spans.text_excerpt`."
+        )
+    if has_retrieval:
+        evidence.append(
+            "`retrieve_rag_probe_evidence()` performs bounded probe retrieval "
+            "using indexed vectors."
+        )
+    if has_full_wiring:
+        evidence.append(
+            "`RAG_EVIDENCE` FULL step wires indexing/probe retrieval and product bundle visibility."
+        )
+    gaps: list[str] = []
+    if not has_full_wiring:
+        gaps.append(
+            "no FULL run indexing step, retrieval step, run provenance, or product bundle "
+            "visibility is implemented."
+        )
+    if has_full_wiring and has_repo and has_migration and has_embedding_health:
+        status = "WIRED"
+    elif has_repo and has_migration and has_embedding_health:
+        status = "PARTIAL"
+    else:
+        status = "CONFIG_ONLY"
     return WiringItem(
         key="rag_vector_retrieval",
         label="RAG / vector retrieval",
-        status="PARTIAL" if has_repo and has_migration and has_embedding_health else "CONFIG_ONLY",
+        status=status,
         summary=(
-            "pgvector repository and live embedding health exist, but FULL indexing/retrieval "
-            "is not wired."
+            "FULL run indexes persisted document spans and performs bounded probe retrieval "
+            "with safe product-bundle visibility."
+            if has_full_wiring
+            else (
+                "pgvector repository and live embedding health exist, but FULL indexing/retrieval "
+                "is not wired."
+            )
         ),
         evidence=evidence,
-        gaps=[
-            "no FULL run indexing step, retrieval step, run provenance, or product bundle "
-            "visibility is implemented."
-        ],
+        gaps=gaps,
+    )
+
+
+def _rag_full_run_wiring_present(files: dict[str, str]) -> bool:
+    run_step = files.get("src/idis/models/run_step.py", "")
+    steps = files.get("src/idis/services/runs/steps.py", "")
+    runs = files.get("src/idis/api/routes/runs.py", "")
+    orchestrator = files.get("src/idis/services/runs/orchestrator.py", "")
+    product_bundle = files.get("src/idis/deliverables/product_bundle.py", "")
+    indexing = files.get("src/idis/services/rag/indexing.py", "")
+    retrieval = files.get("src/idis/services/rag/retrieval.py", "")
+    return all(
+        [
+            "RAG_EVIDENCE" in run_step,
+            run_step.find("RAG_EVIDENCE") > run_step.find("GRAPH_EVIDENCE"),
+            run_step.find("ENRICHMENT") > run_step.find("RAG_EVIDENCE"),
+            "_run_full_rag_evidence" in runs,
+            "rag_fn=" in steps,
+            "_execute_rag_evidence" in orchestrator,
+            "_rag_package" in product_bundle,
+            "upsert_embedding" in indexing,
+            "retrieve_rag_probe_evidence" in retrieval,
+        ]
     )
 
 

@@ -174,6 +174,12 @@ POLICY_RULES: dict[str, PolicyRule] = {
     "generateDeliverable": PolicyRule(
         allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=True
     ),
+    "downloadDeliverableContent": PolicyRule(
+        allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=False
+    ),
+    "getProductBundleManifest": PolicyRule(
+        allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=True
+    ),
     "listAuditEvents": PolicyRule(
         allowed_roles=AUDIT_READERS, is_mutation=False, is_deal_scoped=False
     ),

@@ -41,6 +41,12 @@ class DeliverablesRepository(Protocol):
         cursor: str | None = None,
     ) -> tuple[list[dict[str, Any]], str | None]: ...
 
+    def get_by_id(
+        self,
+        *,
+        deliverable_id: str,
+    ) -> dict[str, Any] | None: ...
+
 
 def deterministic_deliverable_row_id(
     *,
@@ -134,8 +140,8 @@ class PostgresDeliverablesRepository:
     ) -> tuple[list[dict[str, Any]], str | None]:
         """List deliverable rows for a deal in reverse creation order."""
         query = """
-            SELECT deliverable_id, tenant_id, deal_id, deliverable_type, format, status, uri,
-                   created_at
+            SELECT deliverable_id, tenant_id, deal_id, run_id, deliverable_type, format,
+                   status, uri, created_at
             FROM deliverables
             WHERE deal_id = :deal_id
         """
@@ -156,6 +162,7 @@ class PostgresDeliverablesRepository:
                     "deliverable_id": str(row.deliverable_id),
                     "tenant_id": str(row.tenant_id),
                     "deal_id": str(row.deal_id),
+                    "run_id": str(row.run_id) if row.run_id else None,
                     "deliverable_type": row.deliverable_type,
                     "format": row.format,
                     "status": row.status,
@@ -166,3 +173,36 @@ class PostgresDeliverablesRepository:
                 }
             )
         return items, next_cursor
+
+    def get_by_id(
+        self,
+        *,
+        deliverable_id: str,
+    ) -> dict[str, Any] | None:
+        """Return one tenant-scoped deliverable row by ID."""
+        row = self._conn.execute(
+            text(
+                """
+                SELECT deliverable_id, tenant_id, deal_id, run_id, deliverable_type, format,
+                       status, uri, created_at
+                FROM deliverables
+                WHERE deliverable_id = :deliverable_id
+                """
+            ),
+            {"deliverable_id": deliverable_id},
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "deliverable_id": str(row.deliverable_id),
+            "tenant_id": str(row.tenant_id),
+            "deal_id": str(row.deal_id),
+            "run_id": str(row.run_id) if row.run_id else None,
+            "deliverable_type": row.deliverable_type,
+            "format": row.format,
+            "status": row.status,
+            "uri": safe_public_deliverable_uri(row.uri),
+            "created_at": row.created_at.isoformat().replace("+00:00", "Z")
+            if row.created_at
+            else None,
+        }

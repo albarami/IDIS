@@ -81,7 +81,25 @@ async function proxyHandler(
       body,
     });
 
-    // Get response body
+    const contentType = response.headers.get("Content-Type") || "application/json";
+    const isJsonResponse = contentType.includes("application/json");
+    const responseHeaders = new Headers();
+    responseHeaders.set("Content-Type", contentType);
+    responseHeaders.set("X-Request-Id", requestId);
+
+    const contentDisposition = response.headers.get("Content-Disposition");
+    if (contentDisposition) {
+      responseHeaders.set("Content-Disposition", contentDisposition);
+    }
+
+    if (!isJsonResponse) {
+      const buffer = await response.arrayBuffer();
+      return new NextResponse(buffer, {
+        status: response.status,
+        headers: responseHeaders,
+      });
+    }
+
     const responseText = await response.text();
     let responseData: unknown;
     try {
@@ -89,11 +107,6 @@ async function proxyHandler(
     } catch {
       responseData = responseText;
     }
-
-    // Build response with same status and headers
-    const responseHeaders = new Headers();
-    responseHeaders.set("Content-Type", response.headers.get("Content-Type") || "application/json");
-    responseHeaders.set("X-Request-Id", requestId);
 
     // If error response, ensure request_id is in body
     if (!response.ok && typeof responseData === "object" && responseData !== null) {

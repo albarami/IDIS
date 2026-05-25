@@ -3518,8 +3518,19 @@ def _debate_layer_1(files: dict[str, str]) -> WiringItem:
 
 
 def _debate_layer_2(root: Path) -> WiringItem:
-    found = any((root / "src/idis").rglob("*challenge*")) or any(
-        (root / "src/idis").rglob("*review*")
+    excluded_review_paths = {
+        "deliverables/manifest_review.py",
+    }
+
+    def _debate_layer_2_candidate(path: Path) -> bool:
+        rel = path.relative_to(root / "src/idis").as_posix()
+        if rel in excluded_review_paths:
+            return False
+        name = path.name.lower()
+        return "challenge" in name or "review" in name
+
+    found = any(
+        _debate_layer_2_candidate(path) for path in (root / "src/idis").rglob("*.py")
     )
     return WiringItem(
         key="debate_layer_2",

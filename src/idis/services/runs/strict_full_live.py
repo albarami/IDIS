@@ -1214,18 +1214,25 @@ def _build_component_inventory(
         _inventory_item(
             "UI/API download",
             exists=True,
-            full_wired=False,
-            config_present=True,
-            health="not_wired",
-            output_visible=False,
+            full_wired=_ui_api_download_ready(env),
+            config_present=_product_export_config_present(env),
+            health="healthy" if _ui_api_download_ready(env) else "not_wired",
+            output_visible=_ui_api_download_ready(env),
             blocker=(
-                "Deliverables API/UI can list metadata, but strict bundle download "
-                "URIs are not produced."
+                ""
+                if _ui_api_download_ready(env)
+                else (
+                    "Final package download/review requires object-store config, resolver, "
+                    "download/manifest routes, and UI visibility wiring."
+                )
             ),
             slice_name="Slice 64",
             evidence=[
                 "src/idis/api/routes/deliverables.py",
+                "src/idis/deliverables/artifact_resolver.py",
+                "src/idis/deliverables/manifest_review.py",
                 "ui/src/app/deals/[dealId]/deliverables/page.tsx",
+                "ui/src/app/api/idis/[...path]/route.ts",
             ],
         ),
         _inventory_item(
@@ -1628,6 +1635,55 @@ def _rag_code_path_wired() -> bool:
             Path(__file__).resolve().parents[2] / "deliverables" / "product_bundle.py"
         ).read_text(encoding="utf-8")
         return "_rag_package" in product_bundle_text and "rag_evidence" in product_bundle_text
+    except (AttributeError, ImportError, OSError, TypeError):
+        return False
+
+
+def _ui_api_download_ready(env: Mapping[str, str]) -> bool:
+    """Return True when download/review routes, resolver, store, and UI are wired."""
+    return _product_export_object_store_ready(env) and _ui_api_download_code_path_wired()
+
+
+def _ui_api_download_code_path_wired() -> bool:
+    """Return True when final package download and manifest review code paths exist."""
+    try:
+        import inspect
+        from importlib import import_module
+        from pathlib import Path
+
+        deliverables_module = import_module("idis.api.routes.deliverables")
+        if not hasattr(deliverables_module, "download_deliverable_content"):
+            return False
+        if not hasattr(deliverables_module, "get_product_bundle_manifest"):
+            return False
+
+        resolver_module = import_module("idis.deliverables.artifact_resolver")
+        if not hasattr(resolver_module, "resolve_object_key"):
+            return False
+
+        manifest_module = import_module("idis.deliverables.manifest_review")
+        if not hasattr(manifest_module, "sanitize_product_bundle_manifest"):
+            return False
+
+        catalog_module = import_module("idis.deliverables.artifact_catalog")
+        catalog_source = inspect.getsource(catalog_module.build_product_bundle_object_key)
+        if "product_bundle" not in catalog_source:
+            return False
+
+        repo_root = Path(__file__).resolve().parents[4]
+        ui_page = (
+            repo_root / "ui" / "src" / "app" / "deals" / "[dealId]" / "deliverables" / "page.tsx"
+        )
+        ui_client = repo_root / "ui" / "src" / "lib" / "idis.ts"
+        proxy_route = repo_root / "ui" / "src" / "app" / "api" / "idis" / "[...path]" / "route.ts"
+        ui_text = ui_page.read_text(encoding="utf-8")
+        client_text = ui_client.read_text(encoding="utf-8")
+        proxy_text = proxy_route.read_text(encoding="utf-8")
+        if "/content" not in client_text or "product-bundle/manifest" not in client_text:
+            return False
+        if "Review package" not in ui_text and "getManifest" not in ui_text:
+            return False
+        return "arrayBuffer()" in proxy_text
     except (AttributeError, ImportError, OSError, TypeError):
         return False
 

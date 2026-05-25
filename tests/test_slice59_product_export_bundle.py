@@ -421,6 +421,8 @@ def test_api_list_returns_completed_deliverable_rows_with_safe_uris(
             "status": "COMPLETED",
             "uri": None,
             "created_at": "2026-05-25T00:00:00Z",
+            "run_id": None,
+            "format": "JSON",
         },
         {
             "deliverable_id": "manifest-row",
@@ -429,6 +431,8 @@ def test_api_list_returns_completed_deliverable_rows_with_safe_uris(
             "status": "COMPLETED",
             "uri": "object:filesystem:0123456789abcdef:fedcba9876543210",
             "created_at": "2026-05-24T00:00:00Z",
+            "run_id": None,
+            "format": "JSON",
         },
     ]
 

@@ -137,6 +137,17 @@ export interface Deliverable {
   status: string;
   created_at: string;
   uri?: string | null;
+  run_id?: string | null;
+  format?: string | null;
+}
+
+export interface ProductBundleManifestReview {
+  tenant_id: string;
+  deal_id: string;
+  run_id: string;
+  generated_at?: string | null;
+  artifact_count: number;
+  artifacts: Array<Record<string, unknown>>;
 }
 
 export interface HumanGate {
@@ -320,6 +331,14 @@ export const idis = {
         body: data,
         idempotencyKey,
       }),
+
+    downloadContentUrl: (deliverableId: string) =>
+      `/api/idis/v1/deliverables/${deliverableId}/content`,
+
+    getManifest: (dealId: string, runId: string) =>
+      request<ProductBundleManifestReview>(
+        `/v1/deals/${dealId}/runs/${runId}/product-bundle/manifest`
+      ),
   },
 
   // Runs

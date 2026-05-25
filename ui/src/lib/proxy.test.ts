@@ -94,6 +94,17 @@ describe("Proxy Security Requirements", () => {
     });
   });
 
+  describe("Binary-safe proxy passthrough", () => {
+    it("uses arrayBuffer for non-JSON proxy responses", async () => {
+      const { readFileSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      const routePath = join(process.cwd(), "src/app/api/idis/[...path]/route.ts");
+      const source = readFileSync(routePath, "utf-8");
+      expect(source).toContain("arrayBuffer()");
+      expect(source).toContain("Content-Disposition");
+    });
+  });
+
   describe("No browser storage usage", () => {
     it("confirms no Web Storage APIs in codebase", () => {
       // This is verified by scanning for Web Storage API usage

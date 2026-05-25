@@ -3724,15 +3724,37 @@ def _anthropic_llm(files: dict[str, str]) -> WiringItem:
 
 def _openai_llm(root: Path, files: dict[str, str]) -> WiringItem:
     has_openai_dependency = "openai" in files.get("pyproject.toml", "").lower()
+    has_llm_runtime = _has_openai_llm_runtime_wiring(root)
+    evidence = ["`OPENAI_API_KEY` appears in env examples/local configuration names."]
+    gaps = ["no OpenAI LLM runtime client is wired."]
+    if has_openai_dependency and not has_llm_runtime:
+        evidence.append(
+            "`openai` package is used for embedding health only "
+            "(`src/idis/services/rag/embedding_health.py`)."
+        )
+        gaps.append("OpenAI SDK usage is limited to embedding health, not LLM runtime.")
     return WiringItem(
         key="openai_llm",
         label="OpenAI LLM",
-        status="PARTIAL" if has_openai_dependency else "CONFIG_ONLY",
+        status="PARTIAL" if has_llm_runtime else "CONFIG_ONLY",
         summary="OpenAI is present only as env/docs placeholder in current runtime.",
-        evidence=["`OPENAI_API_KEY` appears in env examples/local configuration names."],
-        gaps=["no runtime client or OpenAI SDK integration found."],
+        evidence=evidence,
+        gaps=gaps,
         metadata={"live_calls_performed": False},
     )
+
+
+def _has_openai_llm_runtime_wiring(root: Path) -> bool:
+    """Return True only when OpenAI SDK is referenced outside embedding-only RAG code."""
+    rag_dir = (root / "src/idis/services/rag").resolve()
+    needles = ("from openai import", "import openai", "OpenAI(")
+    for path in (root / "src/idis").rglob("*.py"):
+        if rag_dir in path.parents:
+            continue
+        text = _read(path)
+        if any(needle in text for needle in needles):
+            return True
+    return False
 
 
 def _source_references(root: Path, needle: str, *, exclude_paths: set[str]) -> list[Path]:

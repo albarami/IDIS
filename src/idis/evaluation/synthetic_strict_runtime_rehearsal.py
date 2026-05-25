@@ -189,6 +189,71 @@ def build_bounded_synthetic_api_upload_rehearsal(
     return report
 
 
+def build_bounded_synthetic_api_run_rehearsal(
+    *,
+    dataset_root: Path,
+    env: dict[str, str],
+    max_cases: int | None,
+    allow_synthetic_api_upload: bool,
+    allow_synthetic_run: bool,
+    object_store_base_dir: Path | None = None,
+    repo_root: Path | None = None,
+) -> dict[str, Any]:
+    """Attempt a bounded GDBS-F FULL run only to prove strict blocking."""
+    if not allow_synthetic_run:
+        raise SyntheticRehearsalScopeError("SYNTHETIC_RUN_NOT_ALLOWED")
+
+    resolved_dataset_root = _require_gdbs_dataset_root(dataset_root, repo_root=repo_root)
+    corpus = _api_rehearsal_corpus_summary(
+        discover_synthetic_corpus(dataset_root=resolved_dataset_root, repo_root=repo_root)
+    )
+    strict_report = build_strict_full_live_readiness_report(env=env)
+    selected_cases = load_gdbs_suite(resolved_dataset_root, "gdbs-f", strict=True).cases[
+        : max_cases or 0
+    ]
+    if max_cases is None or max_cases <= 0:
+        raise SyntheticRehearsalScopeError("SYNTHETIC_MAX_CASES_REQUIRED")
+    if max_cases > MAX_SYNTHETIC_REHEARSAL_CASES:
+        raise SyntheticRehearsalScopeError("SYNTHETIC_MAX_CASES_TOO_LARGE")
+    if not allow_synthetic_api_upload:
+        raise SyntheticRehearsalScopeError("SYNTHETIC_API_UPLOAD_NOT_ALLOWED")
+
+    upload_result, run_attempt = _upload_and_attempt_strict_blocked_run_via_api(
+        dataset_root=resolved_dataset_root,
+        selected_cases=selected_cases,
+        object_store_base_dir=object_store_base_dir,
+    )
+    report = {
+        "synthetic_rehearsal_only": True,
+        "real_example_not_run": True,
+        "not_vc_ready": True,
+        "runtime_proof_required": True,
+        "real_example_gate_cleared": False,
+        "strict_global_may_proceed": False,
+        "approval_evidence": False,
+        "dataset": corpus,
+        "api_upload_rehearsal": {
+            "enabled": True,
+            "requested_case_count": max_cases,
+            "selected_case_ids": [case.case_id for case in selected_cases],
+            **upload_result,
+        },
+        "strict_blockers": _safe_strict_blockers(strict_report),
+        "run_attempt": run_attempt,
+        "package_surface_verification": {
+            "status": "not_run",
+            "verified": False,
+        },
+    }
+    if (
+        run_attempt.get("status") == "blocked"
+        and run_attempt.get("reason_code") == "STRICT_FULL_LIVE_BLOCKED"
+    ):
+        report["strict_runtime_blocked_reason_code"] = "STRICT_FULL_LIVE_BLOCKED"
+    _assert_no_report_leakage(report)
+    return report
+
+
 def build_synthetic_rehearsal_status(
     *,
     dataset_root: Path,
@@ -451,15 +516,96 @@ def _upload_selected_gdbs_cases_via_api(
         _restore_env("IDIS_OBJECT_STORE_BASE_DIR", previous_object_store_base)
 
 
+def _upload_and_attempt_strict_blocked_run_via_api(
+    *,
+    dataset_root: Path,
+    selected_cases: list[Any],
+    object_store_base_dir: Path | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if object_store_base_dir is None:
+        with tempfile.TemporaryDirectory(prefix="idis_slice69_run_") as tmp_dir:
+            return _upload_and_attempt_strict_blocked_run_via_api(
+                dataset_root=dataset_root,
+                selected_cases=selected_cases,
+                object_store_base_dir=Path(tmp_dir),
+            )
+
+    previous_api_keys = os.environ.get(IDIS_API_KEYS_ENV)
+    previous_database_url = os.environ.get("IDIS_DATABASE_URL")
+    previous_require_full_live = os.environ.get("IDIS_REQUIRE_FULL_LIVE")
+    previous_strict_dotenv_path = os.environ.get("IDIS_STRICT_DOTENV_PATH")
+    previous_object_store_backend = os.environ.get("IDIS_OBJECT_STORE_BACKEND")
+    previous_object_store_base = os.environ.get("IDIS_OBJECT_STORE_BASE_DIR")
+    try:
+        os.environ[IDIS_API_KEYS_ENV] = json.dumps(
+            {
+                SYNTHETIC_API_REHEARSAL_API_KEY: {
+                    "tenant_id": SYNTHETIC_API_REHEARSAL_TENANT_ID,
+                    "actor_id": "slice69-synthetic-api-run",
+                    "name": "Slice69 Synthetic API Run",
+                    "timezone": "UTC",
+                    "data_region": "me-south-1",
+                    "roles": ["ANALYST", "ADMIN"],
+                }
+            }
+        )
+        os.environ.pop("IDIS_DATABASE_URL", None)
+        os.environ["IDIS_REQUIRE_FULL_LIVE"] = "1"
+        os.environ.pop("IDIS_STRICT_DOTENV_PATH", None)
+        os.environ["IDIS_OBJECT_STORE_BACKEND"] = "filesystem"
+        os.environ["IDIS_OBJECT_STORE_BASE_DIR"] = str(object_store_base_dir)
+        clear_deals_store()
+        clear_document_store()
+        app = create_app(
+            audit_sink=InMemoryAuditSink(),
+            idempotency_store=SqliteIdempotencyStore(in_memory=True),
+            service_region="me-south-1",
+        )
+        with TestClient(app, raise_server_exceptions=False) as client:
+            upload_result, deal_id = _upload_selected_gdbs_cases_for_run_with_client(
+                client=client,
+                dataset_root=dataset_root,
+                selected_cases=selected_cases,
+            )
+            run_attempt = _attempt_strict_blocked_run_with_client(
+                client=client,
+                deal_id=deal_id,
+                document_ids=[item["document_id"] for item in upload_result["uploaded_documents"]],
+            )
+            return upload_result, run_attempt
+    finally:
+        _restore_env(IDIS_API_KEYS_ENV, previous_api_keys)
+        _restore_env("IDIS_DATABASE_URL", previous_database_url)
+        _restore_env("IDIS_REQUIRE_FULL_LIVE", previous_require_full_live)
+        _restore_env("IDIS_STRICT_DOTENV_PATH", previous_strict_dotenv_path)
+        _restore_env("IDIS_OBJECT_STORE_BACKEND", previous_object_store_backend)
+        _restore_env("IDIS_OBJECT_STORE_BASE_DIR", previous_object_store_base)
+
+
 def _upload_selected_gdbs_cases_with_client(
     *,
     client: TestClient,
     dataset_root: Path,
     selected_cases: list[Any],
 ) -> dict[str, Any]:
+    upload_result, _deal_ids = _upload_selected_gdbs_cases_core_with_client(
+        client=client,
+        dataset_root=dataset_root,
+        selected_cases=selected_cases,
+    )
+    return upload_result
+
+
+def _upload_selected_gdbs_cases_core_with_client(
+    *,
+    client: TestClient,
+    dataset_root: Path,
+    selected_cases: list[Any],
+) -> tuple[dict[str, Any], list[str]]:
     artifact_types: set[str] = set()
     artifact_formats: set[str] = set()
     uploaded_documents: list[dict[str, Any]] = []
+    deal_ids: list[str] = []
     headers = {"X-IDIS-API-Key": SYNTHETIC_API_REHEARSAL_API_KEY}
     for case in selected_cases:
         deal_response = client.post(
@@ -469,6 +615,7 @@ def _upload_selected_gdbs_cases_with_client(
         )
         _raise_safe_api_error(deal_response, reason_code="SYNTHETIC_API_DEAL_CREATE_FAILED")
         deal_id = str(deal_response.json()["deal_id"])
+        deal_ids.append(deal_id)
         for artifact in _load_artifact_manifest(dataset_root / case.directory / "artifacts.json"):
             artifact_type = str(artifact.get("artifact_type") or "DATA_ROOM_FILE")
             resolved_path = _resolve_gdbs_artifact_uri(
@@ -510,12 +657,77 @@ def _upload_selected_gdbs_cases_with_client(
                     "status": str(body.get("parse_status") or "UNKNOWN"),
                 }
             )
-    return {
+    upload_result = {
         "uploaded_case_count": len(selected_cases),
         "uploaded_document_count": len(uploaded_documents),
         "artifact_types": sorted(artifact_types),
         "artifact_formats": sorted(artifact_formats),
         "uploaded_documents": uploaded_documents,
+    }
+    return upload_result, deal_ids
+
+
+def _upload_selected_gdbs_cases_for_run_with_client(
+    *,
+    client: TestClient,
+    dataset_root: Path,
+    selected_cases: list[Any],
+) -> tuple[dict[str, Any], str]:
+    if len(selected_cases) != 1:
+        raise SyntheticRehearsalScopeError("SYNTHETIC_RUN_SINGLE_CASE_ONLY")
+    upload_result, deal_ids = _upload_selected_gdbs_cases_core_with_client(
+        client=client,
+        dataset_root=dataset_root,
+        selected_cases=selected_cases,
+    )
+    if len(deal_ids) != 1:
+        raise SyntheticRehearsalScopeError("SYNTHETIC_RUN_DEAL_SELECTION_INVALID")
+    return upload_result, deal_ids[0]
+
+
+def _attempt_strict_blocked_run_with_client(
+    *,
+    client: TestClient,
+    deal_id: str,
+    document_ids: list[str],
+) -> dict[str, Any]:
+    response = client.post(
+        f"/v1/deals/{deal_id}/runs",
+        headers={"X-IDIS-API-Key": SYNTHETIC_API_REHEARSAL_API_KEY},
+        json={
+            "mode": "FULL",
+            "source": {
+                "type": "deal_documents",
+                "document_ids": document_ids,
+            },
+        },
+    )
+    try:
+        response_body = response.json()
+    except ValueError:
+        response_body = {}
+    if response.status_code == 409 and response_body.get("code") == "STRICT_FULL_LIVE_BLOCKED":
+        return {
+            "enabled": True,
+            "status": "blocked",
+            "reason_code": "STRICT_FULL_LIVE_BLOCKED",
+            "http_status_code": response.status_code,
+            "run_created": False,
+        }
+    if response.status_code == 202:
+        return {
+            "enabled": True,
+            "status": "failed_safe",
+            "reason_code": "SYNTHETIC_RUN_UNEXPECTEDLY_ACCEPTED",
+            "http_status_code": response.status_code,
+            "run_created": True,
+        }
+    return {
+        "enabled": True,
+        "status": "failed_safe",
+        "reason_code": str(response_body.get("code") or "SYNTHETIC_RUN_FAILED"),
+        "http_status_code": response.status_code,
+        "run_created": False,
     }
 
 

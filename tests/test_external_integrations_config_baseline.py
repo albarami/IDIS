@@ -33,7 +33,18 @@ def test_anthropic_is_config_validated_only_and_openai_is_placeholder() -> None:
 
     openai = inventory["openai_llm"]
     assert openai.status == "CONFIG_ONLY"
-    assert any("no runtime client" in item for item in openai.gaps)
+    assert any("no OpenAI LLM runtime client" in item for item in openai.gaps)
+    assert any("embedding health" in item for item in openai.gaps)
+
+
+def test_openai_sdk_for_embeddings_does_not_mark_llm_partial() -> None:
+    """Embedding-only OpenAI SDK use must not upgrade openai_llm to PARTIAL."""
+    pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    inventory = collect_wiring_inventory(REPO_ROOT)
+
+    assert "openai" in pyproject.lower()
+    assert inventory["openai_llm"].status == "CONFIG_ONLY"
+    assert inventory["rag_vector_retrieval"].status in {"PARTIAL", "CONFIG_ONLY"}
 
 
 def test_report_generation_records_validation_commands_as_pending_until_run() -> None:

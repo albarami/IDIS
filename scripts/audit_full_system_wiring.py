@@ -594,6 +594,11 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/persistence/neo4j_driver.py",
         "src/idis/persistence/graph_repo.py",
         "src/idis/persistence/graph_consistency.py",
+        "src/idis/persistence/repositories/vector_embeddings.py",
+        "src/idis/persistence/migrations/versions/0017_vector_embeddings.py",
+        "src/idis/services/rag/embedding_health.py",
+        "src/idis/services/rag/pgvector_health.py",
+        "src/idis/services/rag/constants.py",
         "src/idis/storage/filesystem_store.py",
         "src/idis/storage/__init__.py",
         "src/idis/services/enrichment/service.py",
@@ -3644,13 +3649,35 @@ def _redis(files: dict[str, str]) -> WiringItem:
 
 
 def _rag_vector_retrieval(root: Path, files: dict[str, str]) -> WiringItem:
+    has_repo = "src/idis/persistence/repositories/vector_embeddings.py" in files
+    has_migration = "src/idis/persistence/migrations/versions/0017_vector_embeddings.py" in files
+    has_embedding_health = "src/idis/services/rag/embedding_health.py" in files
+    evidence = [
+        "`CREATE EXTENSION IF NOT EXISTS vector` exists in DB init scripts.",
+    ]
+    if has_migration:
+        evidence.append(
+            "`0017_vector_embeddings.py` creates tenant-scoped `vector_embeddings` with pgvector."
+        )
+    if has_repo:
+        evidence.append(
+            "`PostgresVectorEmbeddingsRepository` provides tenant-scoped upsert/search."
+        )
+    if has_embedding_health:
+        evidence.append("`check_embedding_health()` performs live OpenAI embedding health checks.")
     return WiringItem(
         key="rag_vector_retrieval",
         label="RAG / vector retrieval",
-        status="CONFIG_ONLY",
-        summary="pgvector is provisioned, but no app-level embedding/index/query path exists.",
-        evidence=["`CREATE EXTENSION IF NOT EXISTS vector` exists in DB init scripts."],
-        gaps=["no embedding/index/query path or retrieval API is implemented."],
+        status="PARTIAL" if has_repo and has_migration and has_embedding_health else "CONFIG_ONLY",
+        summary=(
+            "pgvector repository and live embedding health exist, but FULL indexing/retrieval "
+            "is not wired."
+        ),
+        evidence=evidence,
+        gaps=[
+            "no FULL run indexing step, retrieval step, run provenance, or product bundle "
+            "visibility is implemented."
+        ],
     )
 
 
@@ -3697,15 +3724,37 @@ def _anthropic_llm(files: dict[str, str]) -> WiringItem:
 
 def _openai_llm(root: Path, files: dict[str, str]) -> WiringItem:
     has_openai_dependency = "openai" in files.get("pyproject.toml", "").lower()
+    has_llm_runtime = _has_openai_llm_runtime_wiring(root)
+    evidence = ["`OPENAI_API_KEY` appears in env examples/local configuration names."]
+    gaps = ["no OpenAI LLM runtime client is wired."]
+    if has_openai_dependency and not has_llm_runtime:
+        evidence.append(
+            "`openai` package is used for embedding health only "
+            "(`src/idis/services/rag/embedding_health.py`)."
+        )
+        gaps.append("OpenAI SDK usage is limited to embedding health, not LLM runtime.")
     return WiringItem(
         key="openai_llm",
         label="OpenAI LLM",
-        status="PARTIAL" if has_openai_dependency else "CONFIG_ONLY",
+        status="PARTIAL" if has_llm_runtime else "CONFIG_ONLY",
         summary="OpenAI is present only as env/docs placeholder in current runtime.",
-        evidence=["`OPENAI_API_KEY` appears in env examples/local configuration names."],
-        gaps=["no runtime client or OpenAI SDK integration found."],
+        evidence=evidence,
+        gaps=gaps,
         metadata={"live_calls_performed": False},
     )
+
+
+def _has_openai_llm_runtime_wiring(root: Path) -> bool:
+    """Return True only when OpenAI SDK is referenced outside embedding-only RAG code."""
+    rag_dir = (root / "src/idis/services/rag").resolve()
+    needles = ("from openai import", "import openai", "OpenAI(")
+    for path in (root / "src/idis").rglob("*.py"):
+        if rag_dir in path.parents:
+            continue
+        text = _read(path)
+        if any(needle in text for needle in needles):
+            return True
+    return False
 
 
 def _source_references(root: Path, needle: str, *, exclude_paths: set[str]) -> list[Path]:

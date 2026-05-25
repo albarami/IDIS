@@ -153,7 +153,8 @@ def test_strict_report_lists_ocr_media_rag_graph_and_layer2_blockers() -> None:
     assert report.component("ocr").status == StrictComponentStatus.MISSING_INFRASTRUCTURE
     assert report.component("mp4_stt").status == StrictComponentStatus.MISSING_INFRASTRUCTURE
     assert (
-        report.component("rag_evidence_retrieval").status == StrictComponentStatus.NOT_IMPLEMENTED
+        report.component("rag_evidence_retrieval").status
+        == StrictComponentStatus.MISSING_CREDENTIALS
     )
     assert report.component("graph_evidence_layer").status == (
         StrictComponentStatus.MISSING_CREDENTIALS

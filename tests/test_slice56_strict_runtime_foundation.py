@@ -268,7 +268,8 @@ def test_current_slice56_blockers_are_truthful() -> None:
     assert inventory["MP4/STT"].full_wired is False
     assert inventory["enrichment BYOL providers"].full_wired is False
     assert inventory["Neo4j graph projection"].full_wired is False
-    assert inventory["pgvector/RAG"].exists_in_code is False
+    assert inventory["pgvector/RAG"].exists_in_code is True
+    assert inventory["pgvector/RAG"].full_wired is False
     assert inventory["product export"].full_wired is False
 
 

@@ -28,6 +28,17 @@ from idis.services.enrichment.byol_credentials import (
     build_enrichment_provider_matrix,
     byol_all_health_passed,
 )
+from idis.services.rag.embedding_health import (
+    EmbeddingHealthCheck,
+    EmbeddingHealthStatus,
+    check_embedding_health,
+    is_vector_search_enabled,
+)
+from idis.services.rag.pgvector_health import (
+    PgvectorHealthCheck,
+    PgvectorHealthStatus,
+    check_pgvector_health,
+)
 
 IDIS_REQUIRE_FULL_LIVE_ENV = "IDIS_REQUIRE_FULL_LIVE"
 IDIS_STRICT_DOTENV_PATH_ENV = "IDIS_STRICT_DOTENV_PATH"
@@ -106,6 +117,11 @@ TRACKED_ENV_VARS: tuple[str, ...] = (
     "NEO4J_CLIENT_SECRET",
     "AURA_INSTANCEID",
     "AURA_INSTANCENAME",
+    "IDIS_ENABLE_VECTOR_SEARCH",
+    "IDIS_EMBEDDING_BACKEND",
+    "IDIS_EMBEDDING_MODEL",
+    "IDIS_EMBEDDING_DIMENSIONS",
+    "OPENAI_API_KEY",
 )
 
 
@@ -201,6 +217,8 @@ def build_strict_full_live_readiness_report(
     load_byol_env_credentials: bool = True,
     byol_health_checker: ByolProviderHealthChecker | None = None,
     neo4j_health_checker: Callable[[Mapping[str, str]], Neo4jHealthCheck] | None = None,
+    embedding_health_checker: Callable[[Mapping[str, str]], EmbeddingHealthCheck] | None = None,
+    pgvector_health_checker: Callable[[Mapping[str, str]], PgvectorHealthCheck] | None = None,
 ) -> StrictFullLiveReadinessReport:
     """Build a safe strict full-live readiness report without executing a run."""
     env_source = _build_strict_env_source(
@@ -230,6 +248,8 @@ def build_strict_full_live_readiness_report(
     byol_credentials_durable = _byol_credentials_durable(byol_credential_repo)
     enrichment_provider_matrix = _build_enrichment_provider_matrix(byol_providers)
     graph_health = _neo4j_health(values, neo4j_health_checker)
+    embedding_health = _embedding_health(values, embedding_health_checker)
+    pgvector_health = _pgvector_health(values, pgvector_health_checker)
     components = [
         _supported_parsers_extraction(values),
         _durable_runtime(values),
@@ -251,11 +271,7 @@ def build_strict_full_live_readiness_report(
         ),
         _live("muhasabah_nff", "src/idis/debate/orchestrator.py; src/idis/deliverables/"),
         _scoring(values),
-        _not_implemented(
-            "rag_evidence_retrieval",
-            "RAG/vector retrieval has no production embedding, index, query, or FULL wiring.",
-            "migrations/*pgvector*; src/idis/debate/graph.py",
-        ),
+        _rag_foundation_layer(values, embedding_health, pgvector_health),
         _graph_evidence_layer(values, graph_health),
         _live("deliverable_generation", "src/idis/deliverables/generator.py"),
         _product_export_bundle(values),
@@ -269,6 +285,8 @@ def build_strict_full_live_readiness_report(
         byol_providers=byol_providers,
         byol_credentials_durable=byol_credentials_durable,
         graph_health=graph_health,
+        embedding_health=embedding_health,
+        pgvector_health=pgvector_health,
     )
     blocking_components = [
         component.component_name for component in components if not component.may_proceed
@@ -604,6 +622,53 @@ def _scoring(env: Mapping[str, str]) -> StrictComponentReadiness:
     return _live("scoring", "src/idis/scoring/engine.py")
 
 
+def _rag_foundation_layer(
+    env: Mapping[str, str],
+    embedding_health: EmbeddingHealthCheck,
+    pgvector_health: PgvectorHealthCheck,
+) -> StrictComponentReadiness:
+    foundation_ready = _rag_foundation_ready(embedding_health, pgvector_health)
+    if foundation_ready:
+        return StrictComponentReadiness(
+            component_name="rag_evidence_retrieval",
+            status=StrictComponentStatus.CODE_EXISTS_BUT_NOT_WIRED,
+            blocker_message=(
+                "pgvector repository and live embedding health exist, but FULL indexing, "
+                "retrieval, run provenance, and product bundle visibility are not wired."
+            ),
+            required_env_vars=_rag_required_env_vars(env),
+            required_services=["Postgres/pgvector", "OpenAI embeddings"],
+            evidence=(
+                "src/idis/persistence/repositories/vector_embeddings.py; "
+                "src/idis/services/rag/embedding_health.py; "
+                "src/idis/services/rag/pgvector_health.py"
+            ),
+            may_proceed=False,
+        )
+    status = (
+        StrictComponentStatus.CONFIGURED_BUT_FAILED_HEALTH_CHECK
+        if embedding_health.status == EmbeddingHealthStatus.FAILED
+        or pgvector_health.status == PgvectorHealthStatus.FAILED
+        else StrictComponentStatus.MISSING_CREDENTIALS
+        if embedding_health.status == EmbeddingHealthStatus.MISSING_CREDENTIALS
+        or pgvector_health.status == PgvectorHealthStatus.MISSING_CREDENTIALS
+        else StrictComponentStatus.CODE_EXISTS_BUT_NOT_WIRED
+    )
+    return StrictComponentReadiness(
+        component_name="rag_evidence_retrieval",
+        status=status,
+        blocker_message=_rag_inventory_blocker(embedding_health, pgvector_health),
+        required_env_vars=_rag_required_env_vars(env),
+        required_services=["Postgres/pgvector", "OpenAI embeddings"],
+        evidence=(
+            "src/idis/persistence/migrations/versions/0017_vector_embeddings.py; "
+            "src/idis/services/rag/embedding_health.py; "
+            "src/idis/services/rag/pgvector_health.py"
+        ),
+        may_proceed=False,
+    )
+
+
 def _graph_evidence_layer(
     env: Mapping[str, str],
     graph_health: Neo4jHealthCheck,
@@ -744,12 +809,16 @@ def _build_component_inventory(
     byol_providers: list[ByolProviderReadiness],
     byol_credentials_durable: bool,
     graph_health: Neo4jHealthCheck,
+    embedding_health: EmbeddingHealthCheck,
+    pgvector_health: PgvectorHealthCheck,
 ) -> list[StrictComponentInventory]:
     env = env_source.effective_env
     ocr_ready = _ocr_runtime_ready(env=env, binary_resolver=binary_resolver)
     media_ready = _media_runtime_ready(env=env, binary_resolver=binary_resolver)
     graph_ready = _graph_visibility_ready(env, graph_health)
     graph_health_status = _graph_inventory_health(graph_health)
+    rag_foundation_ready = _rag_foundation_ready(embedding_health, pgvector_health)
+    rag_health_status = _rag_inventory_health(embedding_health, pgvector_health)
     inventory = [
         _inventory_item(
             "API FULL path",
@@ -929,7 +998,7 @@ def _build_component_inventory(
         ),
         _not_implemented_inventory("Supabase Auth", "Slice TBD"),
         _not_implemented_inventory("Supabase Storage", "Slice 59"),
-        _not_implemented_inventory("Supabase Vectors/RAG", "Slice 62"),
+        _supabase_vectors_inventory(env, rag_health_status),
         _inventory_item(
             "Postgres/RLS",
             exists=True,
@@ -1051,14 +1120,24 @@ def _build_component_inventory(
         ),
         _inventory_item(
             "pgvector/RAG",
-            exists=False,
+            exists=True,
             full_wired=False,
-            config_present=_has_value(env, "IDIS_ENABLE_VECTOR_SEARCH"),
-            health="not_implemented",
+            config_present=_rag_config_present(env),
+            health=rag_health_status,
             output_visible=False,
-            blocker="No production embedding/index/query/retriever path exists.",
+            blocker=(
+                "Vector foundation is healthy, but FULL indexing, retrieval, run provenance, "
+                "and product bundle visibility are not wired."
+                if rag_foundation_ready
+                else _rag_inventory_blocker(embedding_health, pgvector_health)
+            ),
             slice_name="Slice 62",
-            evidence=["scripts/pg_init.sql", "docker-compose.yml"],
+            evidence=[
+                "src/idis/persistence/migrations/versions/0017_vector_embeddings.py",
+                "src/idis/persistence/repositories/vector_embeddings.py",
+                "src/idis/services/rag/embedding_health.py",
+                "src/idis/services/rag/pgvector_health.py",
+            ],
         ),
         _inventory_item(
             "Layer 1 debate",
@@ -1381,6 +1460,123 @@ def _graph_inventory_health(graph_health: Neo4jHealthCheck) -> str:
     if graph_health.status == Neo4jHealthStatus.FAILED:
         return "configured_failed"
     return "missing_config"
+
+
+def _embedding_health(
+    env: Mapping[str, str],
+    embedding_health_checker: Callable[[Mapping[str, str]], EmbeddingHealthCheck] | None,
+) -> EmbeddingHealthCheck:
+    if embedding_health_checker is not None:
+        return embedding_health_checker(env)
+    return check_embedding_health(env=env)
+
+
+def _pgvector_health(
+    env: Mapping[str, str],
+    pgvector_health_checker: Callable[[Mapping[str, str]], PgvectorHealthCheck] | None,
+) -> PgvectorHealthCheck:
+    if pgvector_health_checker is not None:
+        return pgvector_health_checker(env)
+    return check_pgvector_health(env=env)
+
+
+def _rag_config_present(env: Mapping[str, str]) -> bool:
+    return _has_value(env, "IDIS_DATABASE_URL") and is_vector_search_enabled(env)
+
+
+def _rag_required_env_vars(env: Mapping[str, str]) -> list[str]:
+    required = ["IDIS_DATABASE_URL", "IDIS_ENABLE_VECTOR_SEARCH"]
+    if is_vector_search_enabled(env):
+        required.extend(
+            [
+                "IDIS_EMBEDDING_BACKEND",
+                "OPENAI_API_KEY",
+                "IDIS_EMBEDDING_MODEL",
+                "IDIS_EMBEDDING_DIMENSIONS",
+            ]
+        )
+    return required
+
+
+def _rag_foundation_ready(
+    embedding_health: EmbeddingHealthCheck,
+    pgvector_health: PgvectorHealthCheck,
+) -> bool:
+    return (
+        embedding_health.status == EmbeddingHealthStatus.HEALTHY
+        and pgvector_health.status == PgvectorHealthStatus.HEALTHY
+    )
+
+
+def _rag_inventory_health(
+    embedding_health: EmbeddingHealthCheck,
+    pgvector_health: PgvectorHealthCheck,
+) -> str:
+    if _rag_foundation_ready(embedding_health, pgvector_health):
+        return "healthy"
+    if (
+        embedding_health.status == EmbeddingHealthStatus.FAILED
+        or pgvector_health.status == PgvectorHealthStatus.FAILED
+    ):
+        return "configured_failed"
+    if (
+        embedding_health.status == EmbeddingHealthStatus.MISSING_CREDENTIALS
+        or pgvector_health.status == PgvectorHealthStatus.MISSING_CREDENTIALS
+    ):
+        return "missing_config"
+    return "contract_only"
+
+
+def _rag_inventory_blocker(
+    embedding_health: EmbeddingHealthCheck,
+    pgvector_health: PgvectorHealthCheck,
+) -> str:
+    if pgvector_health.status == PgvectorHealthStatus.MISSING_CREDENTIALS:
+        return "Postgres pgvector requires IDIS_DATABASE_URL."
+    if embedding_health.status == EmbeddingHealthStatus.MISSING_CREDENTIALS:
+        return (
+            "Live embedding provider requires IDIS_ENABLE_VECTOR_SEARCH, OPENAI_API_KEY, "
+            "IDIS_EMBEDDING_BACKEND=openai, IDIS_EMBEDDING_MODEL, and IDIS_EMBEDDING_DIMENSIONS."
+        )
+    if pgvector_health.status == PgvectorHealthStatus.FAILED:
+        return "pgvector extension is not available on the configured Postgres database."
+    if embedding_health.status == EmbeddingHealthStatus.FAILED:
+        return embedding_health.error or "Live embedding provider health check failed."
+    return (
+        "Vector foundation exists, but strict readiness requires pgvector health, live embedding "
+        "health, and later FULL indexing/retrieval wiring."
+    )
+
+
+def _supabase_vectors_inventory(
+    env: Mapping[str, str],
+    rag_health_status: str,
+) -> StrictComponentInventory:
+    supabase_labels_present = _any_env_present(
+        env,
+        ("SUPABASE_URL", "SUPABASE_KEY", "SUPABASE_SECRET_KEY"),
+    )
+    postgres_configured = _has_value(env, "IDIS_DATABASE_URL")
+    return _inventory_item(
+        "Supabase Vectors/RAG",
+        exists=True,
+        full_wired=False,
+        config_present=postgres_configured or supabase_labels_present,
+        health=rag_health_status if postgres_configured else "missing_config",
+        output_visible=False,
+        blocker=(
+            "Supabase Vector SDK/API is not product-wired. pgvector uses Postgres via "
+            "IDIS_DATABASE_URL, which may target Supabase-hosted Postgres."
+            if postgres_configured or supabase_labels_present
+            else "Configure Postgres via IDIS_DATABASE_URL for pgvector-backed RAG foundation."
+        ),
+        slice_name="Slice 62",
+        evidence=[
+            "src/idis/persistence/db.py",
+            "src/idis/persistence/migrations/versions/0017_vector_embeddings.py",
+            "src/idis/services/rag/pgvector_health.py",
+        ],
+    )
 
 
 def _product_export_config_present(env: Mapping[str, str]) -> bool:

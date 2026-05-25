@@ -23,7 +23,7 @@ def test_full_system_inventory_marks_core_run_wiring_truthfully() -> None:
     assert inventory["full_steps"].status == "PARTIAL"
     assert inventory["calc_step"].status == "WIRED"
     assert inventory["debate_layer_1"].status == "WIRED"
-    assert inventory["debate_layer_2"].status == "NOT_FOUND"
+    assert inventory["debate_layer_2"].status == "WIRED"
 
 
 def test_full_system_inventory_includes_report_required_sections() -> None:

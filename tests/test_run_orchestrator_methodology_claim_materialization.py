@@ -203,6 +203,7 @@ def _ctx(run_id: str) -> RunContext:
         calc_fn=_stub_calc,
         enrich_fn=_empty_stub,
         debate_fn=_empty_stub,
+        layer2_ic_challenge_fn=_empty_stub,
         analysis_fn=_empty_stub,
         scoring_fn=_empty_stub,
         deliverables_fn=_empty_stub,

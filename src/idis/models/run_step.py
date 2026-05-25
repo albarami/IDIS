@@ -42,6 +42,7 @@ class StepName(StrEnum):
     RAG_EVIDENCE = "RAG_EVIDENCE"
     ENRICHMENT = "ENRICHMENT"
     DEBATE = "DEBATE"
+    LAYER2_IC_CHALLENGE = "LAYER2_IC_CHALLENGE"
     ANALYSIS = "ANALYSIS"
     SCORING = "SCORING"
     DELIVERABLES = "DELIVERABLES"
@@ -82,9 +83,10 @@ STEP_ORDER: dict[StepName, int] = {
     StepName.RAG_EVIDENCE: 21,
     StepName.ENRICHMENT: 22,
     StepName.DEBATE: 23,
-    StepName.ANALYSIS: 24,
-    StepName.SCORING: 25,
-    StepName.DELIVERABLES: 26,
+    StepName.LAYER2_IC_CHALLENGE: 24,
+    StepName.ANALYSIS: 25,
+    StepName.SCORING: 26,
+    StepName.DELIVERABLES: 27,
 }
 """Canonical ordering for deterministic step iteration."""
 
@@ -125,6 +127,7 @@ FULL_STEPS: list[StepName] = [
     StepName.RAG_EVIDENCE,
     StepName.ENRICHMENT,
     StepName.DEBATE,
+    StepName.LAYER2_IC_CHALLENGE,
     StepName.ANALYSIS,
     StepName.SCORING,
     StepName.DELIVERABLES,
@@ -147,6 +150,7 @@ FULL_ONLY_STEPS: frozenset[StepName] = frozenset(
         StepName.METHODOLOGY_LAYER2_READINESS_PACKAGE,
         StepName.ENRICHMENT,
         StepName.DEBATE,
+        StepName.LAYER2_IC_CHALLENGE,
         StepName.ANALYSIS,
         StepName.SCORING,
         StepName.DELIVERABLES,
@@ -182,6 +186,7 @@ IMPLEMENTED_STEPS: frozenset[StepName] = frozenset(
         StepName.RAG_EVIDENCE,
         StepName.ENRICHMENT,
         StepName.DEBATE,
+        StepName.LAYER2_IC_CHALLENGE,
         StepName.ANALYSIS,
         StepName.SCORING,
         StepName.DELIVERABLES,

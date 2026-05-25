@@ -553,6 +553,7 @@ class TestSnapshotStepErrorsPersistedAndReturned:
             calc_fn=_stub_calc,
             enrich_fn=_stub_enrichment,
             debate_fn=_stub_debate,
+            layer2_ic_challenge_fn=_stub_layer2_ic_challenge,
             analysis_fn=_stub_analysis,
             scoring_fn=_stub_scoring,
             deliverables_fn=_stub_deliverables,
@@ -582,6 +583,7 @@ class TestSnapshotStepErrorsPersistedAndReturned:
             calc_fn=_stub_calc,
             enrich_fn=_stub_enrichment,
             debate_fn=_stub_debate,
+            layer2_ic_challenge_fn=_stub_layer2_ic_challenge,
             analysis_fn=_stub_analysis,
             scoring_fn=_stub_scoring,
             deliverables_fn=_stub_deliverables,
@@ -625,6 +627,7 @@ class TestSnapshotStepErrorsPersistedAndReturned:
             calc_fn=_stub_calc,
             enrich_fn=_stub_enrichment,
             debate_fn=_stub_debate,
+            layer2_ic_challenge_fn=_stub_layer2_ic_challenge,
             analysis_fn=_stub_analysis,
             scoring_fn=_stub_scoring,
             deliverables_fn=_stub_deliverables,
@@ -674,6 +677,34 @@ def _stub_debate(
     }
 
 
+def _stub_layer2_ic_challenge(
+    *,
+    run_id: str,
+    tenant_id: str,
+    deal_id: str,
+    debate_summary: dict[str, Any],
+    created_claim_ids: list[str],
+    calc_ids: list[str],
+    graph_evidence: dict[str, Any] | None = None,
+    rag_evidence: dict[str, Any] | None = None,
+    enrichment_refs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Deterministic Layer 2 IC challenge stub returning safe refs only."""
+    return {
+        "status": "completed",
+        "layer2_challenge_ids": [f"layer2-{run_id[:8]}"],
+        "source_debate_ids": [str(debate_summary["debate_id"])],
+        "claim_ids": sorted(created_claim_ids),
+        "calc_ids": sorted(calc_ids),
+        "graph_ref_ids": sorted((graph_evidence or {}).get("retrieval_ids", [])),
+        "rag_ref_ids": sorted((rag_evidence or {}).get("match_ids", [])),
+        "enrichment_ref_ids": sorted((enrichment_refs or {}).keys()),
+        "finding_count": 1,
+        "unresolved_question_count": 1,
+        "muhasabah_passed": True,
+    }
+
+
 def _stub_analysis(
     *,
     run_id: str,
@@ -717,6 +748,7 @@ def _stub_deliverables(
     scorecard: Any,
     graph_evidence: dict[str, Any] | None = None,
     rag_evidence: dict[str, Any] | None = None,
+    layer2_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Deterministic deliverables stub."""
     return {
@@ -730,7 +762,7 @@ class TestFullCompletesAllSteps:
     """test_full_completes_all_nine_steps."""
 
     def test_full_completes_all_twenty_seven_steps(self) -> None:
-        """FULL run completes all 27 steps in canonical order."""
+        """FULL run completes all 28 steps in canonical order."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -747,6 +779,7 @@ class TestFullCompletesAllSteps:
             calc_fn=_stub_calc,
             enrich_fn=_stub_enrichment,
             debate_fn=_stub_debate,
+            layer2_ic_challenge_fn=_stub_layer2_ic_challenge,
             analysis_fn=_stub_analysis,
             scoring_fn=_stub_scoring,
             deliverables_fn=_stub_deliverables,
@@ -758,7 +791,7 @@ class TestFullCompletesAllSteps:
         assert result.block_reason is None
 
         completed = [s for s in result.steps if s.status == StepStatus.COMPLETED]
-        assert len(completed) == 27
+        assert len(completed) == 28
         assert [s.step_name for s in completed] == [
             StepName.DATA_ROOM_INVENTORY_PACKAGE,
             StepName.DATA_ROOM_INGESTION_HANDOFF,
@@ -784,6 +817,7 @@ class TestFullCompletesAllSteps:
             StepName.RAG_EVIDENCE,
             StepName.ENRICHMENT,
             StepName.DEBATE,
+            StepName.LAYER2_IC_CHALLENGE,
             StepName.ANALYSIS,
             StepName.SCORING,
             StepName.DELIVERABLES,
@@ -795,6 +829,11 @@ class TestFullCompletesAllSteps:
         )
         assert planning_step.result_summary["task_ids"]
         assert ctx.methodology_extraction_tasks
+        layer2_step = next(
+            step for step in completed if step.step_name == StepName.LAYER2_IC_CHALLENGE
+        )
+        assert layer2_step.result_summary["source_debate_ids"]
+        assert "raw_text" not in json.dumps(layer2_step.result_summary, sort_keys=True)
 
 
 class TestCrossTenantRunStepReadReturns404:

@@ -130,7 +130,7 @@ def test_rag_evidence_step_order_and_registry() -> None:
     assert STEP_ORDER[StepName.RAG_EVIDENCE] == rag_idx
     assert StepName.RAG_EVIDENCE in IMPLEMENTED_STEPS
     assert StepName.RAG_EVIDENCE in FULL_STEPS
-    assert len(FULL_STEPS) == 27
+    assert len(FULL_STEPS) == 28
 
 
 def test_orchestrator_calls_injected_rag_fn() -> None:
@@ -166,7 +166,17 @@ def test_orchestrator_calls_injected_rag_fn() -> None:
         graph_fn=lambda **_kwargs: {"graph_status": "skipped"},
         rag_fn=rag_fn,
         enrich_fn=lambda **_kwargs: {},
-        debate_fn=lambda **_kwargs: {"stop_reason": "complete"},
+        debate_fn=lambda **_kwargs: {"debate_id": RUN_ID, "muhasabah_passed": True},
+        layer2_ic_challenge_fn=lambda **_kwargs: {
+            "status": "completed",
+            "layer2_challenge_ids": ["layer2-001"],
+            "source_debate_ids": [RUN_ID],
+            "claim_ids": ["claim-001"],
+            "calc_ids": ["calc-001"],
+            "finding_count": 1,
+            "unresolved_question_count": 1,
+            "muhasabah_passed": True,
+        },
         analysis_fn=lambda **_kwargs: {"_analysis_bundle": {}, "_analysis_context": {}},
         scoring_fn=lambda **_kwargs: {"_scorecard": {}},
         deliverables_fn=lambda **_kwargs: {"deliverable_count": 1},

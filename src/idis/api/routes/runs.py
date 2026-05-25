@@ -1177,6 +1177,62 @@ def _run_full_enrichment(
     }
 
 
+def _run_full_layer2_ic_challenge(
+    *,
+    run_id: str,
+    tenant_id: str,
+    deal_id: str,
+    debate_summary: dict[str, Any],
+    created_claim_ids: list[str],
+    calc_ids: list[str],
+    graph_evidence: dict[str, Any] | None = None,
+    rag_evidence: dict[str, Any] | None = None,
+    enrichment_refs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Run the distinct Layer 2 IC challenge for a FULL pipeline run."""
+    from idis.services.runs.layer2_ic_challenge import (
+        RunLayer2ICChallengeService,
+        build_live_layer2_ic_runners,
+    )
+
+    strict_dotenv_path = os.environ.get(IDIS_STRICT_DOTENV_PATH_ENV)
+    strict_full_live = is_strict_full_live_required(dotenv_path=strict_dotenv_path)
+    challenger_runner = None
+    arbiter_runner = None
+    if strict_full_live:
+        from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
+
+        default_model = os.environ.get(
+            "IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT",
+            "claude-sonnet-4-20250514",
+        )
+        arbiter_model = os.environ.get(
+            "IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER",
+            "claude-opus-4-20250514",
+        )
+        challenger_runner, arbiter_runner = build_live_layer2_ic_runners(
+            challenger_client=AnthropicLLMClient(model=default_model, max_tokens=8192),
+            arbiter_client=AnthropicLLMClient(model=arbiter_model, max_tokens=8192),
+        )
+    service = RunLayer2ICChallengeService(
+        strict_full_live=strict_full_live,
+        env=os.environ,
+        challenger_runner=challenger_runner,
+        arbiter_runner=arbiter_runner,
+    )
+    return service.run(
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        run_id=run_id,
+        debate_summary=debate_summary,
+        created_claim_ids=created_claim_ids,
+        calc_ids=calc_ids,
+        graph_evidence=graph_evidence,
+        rag_evidence=rag_evidence,
+        enrichment_refs=enrichment_refs,
+    )
+
+
 def _run_full_analysis(
     *,
     run_id: str,
@@ -1462,6 +1518,7 @@ def _run_full_deliverables(
     scorecard: Any,
     graph_evidence: dict[str, Any] | None = None,
     rag_evidence: dict[str, Any] | None = None,
+    layer2_evidence: dict[str, Any] | None = None,
     db_conn: Any = None,
     object_store: Any = None,
 ) -> dict[str, Any]:
@@ -1533,6 +1590,7 @@ def _run_full_deliverables(
             export_timestamp=generated_at,
             graph_evidence=graph_evidence,
             rag_evidence=rag_evidence,
+            layer2_evidence=layer2_evidence,
         )
 
     return {

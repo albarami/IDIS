@@ -118,6 +118,20 @@ def _stub_debate(
     }
 
 
+def _stub_layer2_ic_challenge(**kwargs: Any) -> dict[str, Any]:
+    """Deterministic Layer 2 IC challenge stub."""
+    return {
+        "status": "completed",
+        "layer2_challenge_ids": ["layer2-001"],
+        "source_debate_ids": [str(kwargs["debate_summary"]["debate_id"])],
+        "claim_ids": sorted(kwargs["created_claim_ids"]),
+        "calc_ids": sorted(kwargs["calc_ids"]),
+        "finding_count": 1,
+        "unresolved_question_count": 1,
+        "muhasabah_passed": True,
+    }
+
+
 def _stub_analysis(
     *,
     run_id: str,
@@ -161,6 +175,7 @@ def _stub_deliverables(
     scorecard: Any,
     graph_evidence: dict[str, Any] | None = None,
     rag_evidence: dict[str, Any] | None = None,
+    layer2_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Deterministic deliverables stub."""
     return {
@@ -206,6 +221,7 @@ def _make_full_ctx(**overrides: Any) -> RunContext:
         "calc_fn": _stub_calc,
         "enrich_fn": _stub_enrichment,
         "debate_fn": _stub_debate,
+        "layer2_ic_challenge_fn": _stub_layer2_ic_challenge,
         "analysis_fn": _stub_analysis,
         "scoring_fn": _stub_scoring,
         "deliverables_fn": _stub_deliverables,
@@ -256,6 +272,7 @@ class TestStepOrderingConstants:
             StepName.RAG_EVIDENCE,
             StepName.ENRICHMENT,
             StepName.DEBATE,
+            StepName.LAYER2_IC_CHALLENGE,
             StepName.ANALYSIS,
             StepName.SCORING,
             StepName.DELIVERABLES,
@@ -282,6 +299,7 @@ class TestStepOrderingConstants:
             StepName.GRAPH_EVIDENCE,
             StepName.RAG_EVIDENCE,
             StepName.ENRICHMENT,
+            StepName.LAYER2_IC_CHALLENGE,
             StepName.ANALYSIS,
             StepName.SCORING,
             StepName.DELIVERABLES,
@@ -322,8 +340,8 @@ class TestFullVsSnapshotEnforcement:
         for full_only in FULL_ONLY_STEPS:
             assert full_only not in step_names
 
-    def test_full_has_twenty_seven_steps(self) -> None:
-        """FULL mode completes with all 27 steps."""
+    def test_full_has_twenty_eight_steps(self) -> None:
+        """FULL mode completes with all 28 steps."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -332,7 +350,7 @@ class TestFullVsSnapshotEnforcement:
         result = orchestrator.execute(ctx)
 
         assert result.status == "SUCCEEDED"
-        assert len(result.steps) == 27
+        assert len(result.steps) == 28
         step_names = [step.step_name for step in result.steps]
         assert step_names.index(StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING) < (
             step_names.index(StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION)
@@ -373,6 +391,8 @@ class TestFullVsSnapshotEnforcement:
         assert step_names.index(StepName.METHODOLOGY_LAYER2_READINESS_PACKAGE) < (
             step_names.index(StepName.EXTRACT)
         )
+        assert step_names.index(StepName.DEBATE) < step_names.index(StepName.LAYER2_IC_CHALLENGE)
+        assert step_names.index(StepName.LAYER2_IC_CHALLENGE) < step_names.index(StepName.ANALYSIS)
 
 
 class TestMissingCallableFailClosed:
@@ -458,7 +478,7 @@ class TestResumeSkipsCompletedSteps:
 
         result1 = orchestrator.execute(ctx)
         assert result1.status == "SUCCEEDED"
-        assert len(result1.steps) == 27
+        assert len(result1.steps) == 28
 
         call_count = {"enrichment": 0}
         original_enrich = _stub_enrichment

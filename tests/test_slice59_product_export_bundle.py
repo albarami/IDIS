@@ -197,10 +197,10 @@ def test_product_bundle_export_persists_rows_artifacts_and_manifest(tmp_path: Pa
         export_timestamp=_TIMESTAMP,
     )
 
-    assert summary["artifact_count"] == 13
+    assert summary["artifact_count"] == 14
     assert summary["manifest_uri"].startswith("object:filesystem:")
     assert "product_bundle_manifest" in summary["types"]
-    assert len(repository.rows) == 13
+    assert len(repository.rows) == 14
     manifest_rows = [
         row for row in repository.rows if row["deliverable_type"] == "product_bundle_manifest"
     ]
@@ -213,7 +213,7 @@ def test_product_bundle_export_persists_rows_artifacts_and_manifest(tmp_path: Pa
         key=f"runs/{RUN_ID}/product_bundle/manifest.json",
     )
     manifest_body = json.loads(manifest.body.decode("utf-8"))
-    assert manifest_body["artifact_count"] == 12
+    assert manifest_body["artifact_count"] == 13
     assert {artifact["type"] for artifact in manifest_body["artifacts"]} == {
         "screening_snapshot",
         "ic_memo",
@@ -223,6 +223,7 @@ def test_product_bundle_export_persists_rows_artifacts_and_manifest(tmp_path: Pa
         "commercial_diligence",
         "financial_diligence",
         "risk_register",
+        "layer2_ic_challenge",
         "evidence_index",
         "run_summary",
     }

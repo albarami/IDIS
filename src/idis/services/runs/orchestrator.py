@@ -415,6 +415,7 @@ class RunContext:
     rag_fn: Callable[..., dict[str, Any]] | None = None
     enrich_fn: Callable[..., dict[str, Any]] | None = None
     debate_fn: Callable[..., dict[str, Any]] | None = None
+    layer2_ic_challenge_fn: Callable[..., dict[str, Any]] | None = None
     analysis_fn: Callable[..., dict[str, Any]] | None = None
     scoring_fn: Callable[..., dict[str, Any]] | None = None
     deliverables_fn: Callable[..., dict[str, Any]] | None = None
@@ -633,6 +634,8 @@ class RunOrchestrator:
             return self._execute_enrichment(ctx, accumulated)
         if step_name == StepName.DEBATE:
             return self._execute_debate(ctx, accumulated)
+        if step_name == StepName.LAYER2_IC_CHALLENGE:
+            return self._execute_layer2_ic_challenge(ctx, accumulated)
         if step_name == StepName.ANALYSIS:
             return self._execute_analysis(ctx, accumulated)
         if step_name == StepName.SCORING:
@@ -1909,6 +1912,44 @@ class RunOrchestrator:
             calc_ids=calc_ids,
         )
 
+    def _execute_layer2_ic_challenge(
+        self,
+        ctx: RunContext,
+        accumulated: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Run the distinct Layer 2 IC challenge via injected callable."""
+        if ctx.layer2_ic_challenge_fn is None:
+            raise ValueError("layer2_ic_challenge_fn not provided")
+
+        created_claim_ids = accumulated.get("created_claim_ids", [])
+        calc_ids = accumulated.get("calc_ids", [])
+        debate_summary = {
+            "debate_id": accumulated.get("debate_id"),
+            "stop_reason": accumulated.get("stop_reason"),
+            "round_number": accumulated.get("round_number"),
+            "muhasabah_passed": accumulated.get("muhasabah_passed"),
+            "agent_output_count": accumulated.get("agent_output_count"),
+        }
+        return ctx.layer2_ic_challenge_fn(
+            run_id=ctx.run_id,
+            tenant_id=ctx.tenant_id,
+            deal_id=ctx.deal_id,
+            debate_summary=debate_summary,
+            created_claim_ids=created_claim_ids,
+            calc_ids=calc_ids,
+            graph_evidence={
+                "graph_status": accumulated.get("graph_status"),
+                "graph_projection": accumulated.get("graph_projection"),
+                "graph_retrieval": accumulated.get("graph_retrieval"),
+            },
+            rag_evidence={
+                "rag_status": accumulated.get("rag_status"),
+                "rag_indexing": accumulated.get("rag_indexing"),
+                "rag_retrieval": accumulated.get("rag_retrieval"),
+            },
+            enrichment_refs=accumulated.get("enrichment_refs", {}),
+        )
+
     def _execute_analysis(
         self,
         ctx: RunContext,
@@ -2011,6 +2052,16 @@ class RunOrchestrator:
                 "rag_status": accumulated.get("rag_status"),
                 "rag_indexing": accumulated.get("rag_indexing"),
                 "rag_retrieval": accumulated.get("rag_retrieval"),
+            },
+            layer2_evidence={
+                "status": accumulated.get("status"),
+                "layer2_challenge_ids": accumulated.get("layer2_challenge_ids"),
+                "source_debate_ids": accumulated.get("source_debate_ids"),
+                "claim_ids": accumulated.get("claim_ids"),
+                "calc_ids": accumulated.get("calc_ids"),
+                "finding_count": accumulated.get("finding_count"),
+                "unresolved_question_count": accumulated.get("unresolved_question_count"),
+                "muhasabah_passed": accumulated.get("muhasabah_passed"),
             },
         )
 

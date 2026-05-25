@@ -304,7 +304,17 @@ def test_full_run_calls_graph_step_after_calc_and_before_enrichment() -> None:
         calc_fn=calc_fn,
         graph_fn=graph_fn,
         enrich_fn=enrichment_fn,
-        debate_fn=lambda **_kwargs: {"debate_id": RUN_ID},
+        debate_fn=lambda **_kwargs: {"debate_id": RUN_ID, "muhasabah_passed": True},
+        layer2_ic_challenge_fn=lambda **_kwargs: {
+            "status": "completed",
+            "layer2_challenge_ids": ["layer2-001"],
+            "source_debate_ids": [RUN_ID],
+            "claim_ids": ["claim-001"],
+            "calc_ids": ["calc-001"],
+            "finding_count": 1,
+            "unresolved_question_count": 1,
+            "muhasabah_passed": True,
+        },
         analysis_fn=lambda **_kwargs: {
             "_analysis_bundle": _make_bundle(),
             "_analysis_context": _make_context(),

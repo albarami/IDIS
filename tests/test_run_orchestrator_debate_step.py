@@ -109,6 +109,20 @@ def _stub_debate(
     }
 
 
+def _stub_layer2_ic_challenge(**kwargs: Any) -> dict[str, Any]:
+    """Deterministic Layer 2 IC challenge stub."""
+    return {
+        "status": "completed",
+        "layer2_challenge_ids": ["layer2-001"],
+        "source_debate_ids": [str(kwargs["debate_summary"]["debate_id"])],
+        "claim_ids": sorted(kwargs["created_claim_ids"]),
+        "calc_ids": sorted(kwargs["calc_ids"]),
+        "finding_count": 1,
+        "unresolved_question_count": 1,
+        "muhasabah_passed": True,
+    }
+
+
 def _stub_analysis(
     *,
     run_id: str,
@@ -152,6 +166,7 @@ def _stub_deliverables(
     scorecard: Any,
     graph_evidence: dict[str, Any] | None = None,
     rag_evidence: dict[str, Any] | None = None,
+    layer2_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Deterministic deliverables stub."""
     return {
@@ -190,7 +205,7 @@ class TestDebateStepHappyPath:
     """DEBATE step completes when debate_fn is provided and returns valid output."""
 
     def test_full_run_with_debate_fn_completes_all_twenty_six_steps(self) -> None:
-        """FULL run completes all 27 steps including DEBATE."""
+        """FULL run completes all 28 steps including DEBATE and LAYER2_IC_CHALLENGE."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -207,6 +222,7 @@ class TestDebateStepHappyPath:
             calc_fn=_stub_calc,
             enrich_fn=_stub_enrichment,
             debate_fn=_stub_debate,
+            layer2_ic_challenge_fn=_stub_layer2_ic_challenge,
             analysis_fn=_stub_analysis,
             scoring_fn=_stub_scoring,
             deliverables_fn=_stub_deliverables,
@@ -215,7 +231,7 @@ class TestDebateStepHappyPath:
         result = orchestrator.execute(ctx)
 
         assert result.status == "SUCCEEDED"
-        assert len(result.steps) == 27
+        assert len(result.steps) == 28
 
         expected_names = [
             StepName.DATA_ROOM_INVENTORY_PACKAGE,
@@ -242,6 +258,7 @@ class TestDebateStepHappyPath:
             StepName.RAG_EVIDENCE,
             StepName.ENRICHMENT,
             StepName.DEBATE,
+            StepName.LAYER2_IC_CHALLENGE,
             StepName.ANALYSIS,
             StepName.SCORING,
             StepName.DELIVERABLES,
@@ -271,6 +288,7 @@ class TestDebateStepHappyPath:
             calc_fn=_stub_calc,
             enrich_fn=_stub_enrichment,
             debate_fn=_stub_debate,
+            layer2_ic_challenge_fn=_stub_layer2_ic_challenge,
             analysis_fn=_stub_analysis,
             scoring_fn=_stub_scoring,
             deliverables_fn=_stub_deliverables,
@@ -325,6 +343,7 @@ class TestDebateStepHappyPath:
             calc_fn=_stub_calc,
             enrich_fn=_stub_enrichment,
             debate_fn=capturing_debate,
+            layer2_ic_challenge_fn=_stub_layer2_ic_challenge,
             analysis_fn=_stub_analysis,
             scoring_fn=_stub_scoring,
             deliverables_fn=_stub_deliverables,

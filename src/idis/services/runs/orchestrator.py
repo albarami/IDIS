@@ -7,8 +7,8 @@ fail-closed semantics on audit failures.
 SNAPSHOT: INGEST_CHECK -> DOCUMENT_PREFLIGHT -> METHODOLOGY_COVERAGE_INIT -> EXTRACT
           -> GRADE -> CALC.
 FULL: INGEST_CHECK -> DOCUMENT_PREFLIGHT -> METHODOLOGY_COVERAGE_INIT -> EXTRACT
-      -> GRADE -> CALC -> GRAPH_EVIDENCE -> ENRICHMENT -> DEBATE -> ANALYSIS
-      -> SCORING -> DELIVERABLES.
+      -> GRADE -> CALC -> GRAPH_EVIDENCE -> RAG_EVIDENCE -> ENRICHMENT -> DEBATE
+      -> ANALYSIS -> SCORING -> DELIVERABLES.
 
 No FastAPI globals. All dependencies injected via constructor or execute().
 """
@@ -412,6 +412,7 @@ class RunContext:
     calc_fn: Callable[..., dict[str, Any]] | None = None
     calc_types: list[CalcType] | None = None
     graph_fn: Callable[..., dict[str, Any]] | None = None
+    rag_fn: Callable[..., dict[str, Any]] | None = None
     enrich_fn: Callable[..., dict[str, Any]] | None = None
     debate_fn: Callable[..., dict[str, Any]] | None = None
     analysis_fn: Callable[..., dict[str, Any]] | None = None
@@ -626,6 +627,8 @@ class RunOrchestrator:
             return self._execute_calc(ctx, accumulated)
         if step_name == StepName.GRAPH_EVIDENCE:
             return self._execute_graph_evidence(ctx, accumulated)
+        if step_name == StepName.RAG_EVIDENCE:
+            return self._execute_rag_evidence(ctx, accumulated)
         if step_name == StepName.ENRICHMENT:
             return self._execute_enrichment(ctx, accumulated)
         if step_name == StepName.DEBATE:
@@ -1848,6 +1851,32 @@ class RunOrchestrator:
             calc_ids=accumulated.get("calc_ids", []),
         )
 
+    def _execute_rag_evidence(
+        self,
+        ctx: RunContext,
+        accumulated: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Run pgvector indexing/probe retrieval visibility via injected callable."""
+        if ctx.rag_fn is None:
+            return {
+                "rag_status": "skipped",
+                "rag_indexing": {"status": "skipped", "indexed_span_count": 0},
+                "rag_retrieval": {
+                    "status": "skipped",
+                    "retrieval_mode": "probe",
+                    "probe_count": 0,
+                    "match_count": 0,
+                    "matches": [],
+                },
+            }
+
+        return ctx.rag_fn(
+            run_id=ctx.run_id,
+            tenant_id=ctx.tenant_id,
+            deal_id=ctx.deal_id,
+            documents=ctx.documents,
+        )
+
     def _execute_debate(
         self,
         ctx: RunContext,
@@ -1977,6 +2006,11 @@ class RunOrchestrator:
                 "graph_status": accumulated.get("graph_status"),
                 "graph_projection": accumulated.get("graph_projection"),
                 "graph_retrieval": accumulated.get("graph_retrieval"),
+            },
+            rag_evidence={
+                "rag_status": accumulated.get("rag_status"),
+                "rag_indexing": accumulated.get("rag_indexing"),
+                "rag_retrieval": accumulated.get("rag_retrieval"),
             },
         )
 

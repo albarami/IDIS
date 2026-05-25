@@ -101,6 +101,7 @@ def build_run_context(
         _run_full_deliverables,
         _run_full_enrichment,
         _run_full_graph_evidence,
+        _run_full_rag_evidence,
         _run_full_scoring,
         _run_snapshot_auto_grade,
         _run_snapshot_calc,
@@ -136,6 +137,7 @@ def build_run_context(
         grade_fn=partial(_run_snapshot_auto_grade, db_conn=db_conn),
         calc_fn=partial(_run_snapshot_calc, db_conn=db_conn),
         graph_fn=partial(_run_full_graph_evidence, db_conn=db_conn) if is_full else None,
+        rag_fn=partial(_run_full_rag_evidence, db_conn=db_conn) if is_full else None,
         enrich_fn=partial(_run_full_enrichment, db_conn=db_conn) if is_full else None,
         debate_fn=partial(_run_full_debate, db_conn=db_conn) if is_full else None,
         analysis_fn=(

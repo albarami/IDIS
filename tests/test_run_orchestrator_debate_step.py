@@ -151,6 +151,7 @@ def _stub_deliverables(
     analysis_context: Any,
     scorecard: Any,
     graph_evidence: dict[str, Any] | None = None,
+    rag_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Deterministic deliverables stub."""
     return {
@@ -189,7 +190,7 @@ class TestDebateStepHappyPath:
     """DEBATE step completes when debate_fn is provided and returns valid output."""
 
     def test_full_run_with_debate_fn_completes_all_twenty_six_steps(self) -> None:
-        """FULL run completes all 26 steps including DEBATE."""
+        """FULL run completes all 27 steps including DEBATE."""
         audit_sink = InMemoryAuditSink()
         repo = InMemoryRunStepsRepository(TENANT_A)
         orchestrator = RunOrchestrator(audit_sink=audit_sink, run_steps_repo=repo)
@@ -214,7 +215,7 @@ class TestDebateStepHappyPath:
         result = orchestrator.execute(ctx)
 
         assert result.status == "SUCCEEDED"
-        assert len(result.steps) == 26
+        assert len(result.steps) == 27
 
         expected_names = [
             StepName.DATA_ROOM_INVENTORY_PACKAGE,
@@ -238,6 +239,7 @@ class TestDebateStepHappyPath:
             StepName.GRADE,
             StepName.CALC,
             StepName.GRAPH_EVIDENCE,
+            StepName.RAG_EVIDENCE,
             StepName.ENRICHMENT,
             StepName.DEBATE,
             StepName.ANALYSIS,
@@ -364,7 +366,7 @@ class TestDebateStepFailClosed:
         assert "debate_fn not provided" in (result.error_message or "")
 
         completed = [s for s in result.steps if s.status == StepStatus.COMPLETED]
-        assert len(completed) == 22
+        assert len(completed) == 23
         assert [s.step_name for s in completed] == [
             StepName.DATA_ROOM_INVENTORY_PACKAGE,
             StepName.DATA_ROOM_INGESTION_HANDOFF,
@@ -387,6 +389,7 @@ class TestDebateStepFailClosed:
             StepName.GRADE,
             StepName.CALC,
             StepName.GRAPH_EVIDENCE,
+            StepName.RAG_EVIDENCE,
             StepName.ENRICHMENT,
         ]
 

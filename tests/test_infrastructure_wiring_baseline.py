@@ -30,16 +30,13 @@ def test_neo4j_projection_is_partially_full_wired_but_health_gated() -> None:
 
 
 def test_redis_and_pgvector_are_configured_without_runtime_use() -> None:
-    """Redis is config-only; pgvector foundation exists but FULL RAG is not wired."""
+    """Redis is config-only; pgvector FULL probe retrieval is wired in code."""
     inventory = collect_wiring_inventory(REPO_ROOT)
 
     assert inventory["redis"].status == "CONFIG_ONLY"
     assert any("not consumed by runtime code" in item for item in inventory["redis"].gaps)
-    assert inventory["rag_vector_retrieval"].status == "PARTIAL"
-    assert any(
-        "FULL run indexing step" in item or "product bundle" in item
-        for item in inventory["rag_vector_retrieval"].gaps
-    )
+    assert inventory["rag_vector_retrieval"].status == "WIRED"
+    assert inventory["rag_vector_retrieval"].gaps == []
 
 
 def test_object_storage_is_filesystem_wired_only() -> None:

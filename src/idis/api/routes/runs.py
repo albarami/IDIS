@@ -5,8 +5,8 @@ Provides POST /v1/deals/{dealId}/runs and GET /v1/runs/{runId} per OpenAPI spec.
 Supports both Postgres persistence (when configured) and in-memory fallback.
 
 SNAPSHOT mode: INGEST_CHECK -> EXTRACT -> GRADE -> CALC.
-FULL mode: INGEST_CHECK -> EXTRACT -> GRADE -> CALC -> ENRICHMENT -> DEBATE
-           -> ANALYSIS -> SCORING -> DELIVERABLES.
+FULL mode: INGEST_CHECK -> EXTRACT -> GRADE -> CALC -> GRAPH_EVIDENCE -> RAG_EVIDENCE
+           -> ENRICHMENT -> DEBATE -> ANALYSIS -> SCORING -> DELIVERABLES.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import os
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -1461,6 +1461,7 @@ def _run_full_deliverables(
     analysis_context: Any,
     scorecard: Any,
     graph_evidence: dict[str, Any] | None = None,
+    rag_evidence: dict[str, Any] | None = None,
     db_conn: Any = None,
     object_store: Any = None,
 ) -> dict[str, Any]:
@@ -1531,6 +1532,7 @@ def _run_full_deliverables(
             scorecard=scorecard,
             export_timestamp=generated_at,
             graph_evidence=graph_evidence,
+            rag_evidence=rag_evidence,
         )
 
     return {
@@ -1637,6 +1639,197 @@ def _run_full_graph_evidence(
         "graph_status": "available",
         "graph_projection": projection_summary,
         "graph_retrieval": retrieval_summary,
+    }
+
+
+def _run_full_rag_evidence(
+    *,
+    run_id: str,
+    tenant_id: str,
+    deal_id: str,
+    documents: list[dict[str, Any]],
+    db_conn: Any = None,
+    strict_full_live: bool | None = None,
+    pgvector_health_checker: Any = None,
+    embedding_health_checker: Any = None,
+    indexing_service: Any = None,
+    retrieval_service: Any = None,
+    vector_repository_factory: Any = None,
+) -> dict[str, Any]:
+    """Index persisted spans and run bounded probe retrieval for product visibility."""
+    from idis.services.rag.embedding_health import (
+        EmbeddingHealthStatus,
+        check_embedding_health,
+        is_vector_search_enabled,
+    )
+    from idis.services.rag.indexing import (
+        VectorEmbeddingsRepository,
+        build_postgres_vector_repository,
+        create_openai_embed_batch,
+        index_document_spans_for_deal,
+    )
+    from idis.services.rag.pgvector_health import PgvectorHealthStatus, check_pgvector_health
+    from idis.services.rag.retrieval import retrieve_rag_probe_evidence
+    from idis.services.runs.orchestrator import RunStepBlockedError
+
+    env = os.environ
+    strict = (
+        strict_full_live
+        if strict_full_live is not None
+        else is_strict_full_live_required(
+            dotenv_path=os.environ.get(IDIS_STRICT_DOTENV_PATH_ENV),
+        )
+    )
+    skipped_summary = {
+        "rag_status": "skipped",
+        "rag_indexing": {"status": "skipped", "indexed_span_count": 0, "skipped_span_count": 0},
+        "rag_retrieval": {
+            "status": "skipped",
+            "retrieval_mode": "probe",
+            "probe_count": 0,
+            "match_count": 0,
+            "matches": [],
+        },
+    }
+
+    if not is_vector_search_enabled(env):
+        if strict:
+            raise RunStepBlockedError(
+                "RAG_CONFIG_BLOCKED",
+                "Vector search is disabled for strict FULL runs",
+                result_summary=skipped_summary,
+            )
+        return skipped_summary
+
+    pgvector_health = (
+        pgvector_health_checker(env)
+        if pgvector_health_checker is not None
+        else check_pgvector_health(env=env)
+    )
+    embedding_health = (
+        embedding_health_checker(env)
+        if embedding_health_checker is not None
+        else check_embedding_health(env=env)
+    )
+
+    if (
+        pgvector_health.status != PgvectorHealthStatus.HEALTHY
+        or embedding_health.status != EmbeddingHealthStatus.HEALTHY
+    ):
+        summary = {
+            **skipped_summary,
+            "pgvector_health_status": pgvector_health.status.value,
+            "embedding_health_status": embedding_health.status.value,
+            "missing_env_vars": sorted(
+                set(pgvector_health.missing_env_vars) | set(embedding_health.missing_env_vars)
+            ),
+        }
+        if strict:
+            raise RunStepBlockedError(
+                "RAG_HEALTH_BLOCKED",
+                "pgvector/RAG evidence is not health-check ready",
+                result_summary=summary,
+            )
+        return summary
+
+    if db_conn is None:
+        if strict:
+            raise RunStepBlockedError(
+                "RAG_DATABASE_BLOCKED",
+                "pgvector indexing requires Postgres run persistence",
+                result_summary=skipped_summary,
+            )
+        return skipped_summary
+
+    repository_factory = vector_repository_factory or build_postgres_vector_repository
+    repository = cast(
+        VectorEmbeddingsRepository,
+        repository_factory(db_conn, tenant_id),
+    )
+    embedding_model = embedding_health.model or "text-embedding-3-small"
+    embedding_dimensions = embedding_health.dimensions or 1536
+
+    if indexing_service is not None:
+        indexing_summary, probe_embeddings = indexing_service(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            run_id=run_id,
+            documents=documents,
+            repository=repository,
+            embedding_model=embedding_model,
+            embedding_dimensions=embedding_dimensions,
+        )
+    else:
+        indexing_summary, probe_embeddings = index_document_spans_for_deal(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            run_id=run_id,
+            documents=documents,
+            repository=repository,
+            embed_batch=create_openai_embed_batch(env=env),
+            embedding_model=embedding_model,
+            embedding_dimensions=embedding_dimensions,
+        )
+
+    indexing_status = indexing_summary["status"]
+    if indexing_status != "indexed":
+        summary = {
+            "rag_status": "skipped" if indexing_status == "skipped" else "blocked",
+            "rag_indexing": indexing_summary,
+            "rag_retrieval": {
+                "status": "not_attempted",
+                "retrieval_mode": "probe",
+                "probe_count": 0,
+                "match_count": 0,
+                "matches": [],
+            },
+            "pgvector_health_status": pgvector_health.status.value,
+            "embedding_health_status": embedding_health.status.value,
+        }
+        if strict:
+            raise RunStepBlockedError(
+                "RAG_INDEXING_BLOCKED",
+                "pgvector span indexing did not complete",
+                result_summary=summary,
+            )
+        return summary
+
+    if retrieval_service is not None:
+        retrieval_summary = retrieval_service(
+            deal_id=deal_id,
+            probe_embeddings=probe_embeddings,
+            repository=repository,
+        )
+    else:
+        retrieval_summary = retrieve_rag_probe_evidence(
+            deal_id=deal_id,
+            probe_embeddings=probe_embeddings,
+            repository=repository,
+        )
+
+    retrieval_status = retrieval_summary["status"]
+    if retrieval_status != "probed":
+        summary = {
+            "rag_status": "blocked",
+            "rag_indexing": indexing_summary,
+            "rag_retrieval": retrieval_summary,
+            "pgvector_health_status": pgvector_health.status.value,
+            "embedding_health_status": embedding_health.status.value,
+        }
+        if strict:
+            raise RunStepBlockedError(
+                "RAG_PROBE_RETRIEVAL_BLOCKED",
+                "pgvector probe retrieval did not complete",
+                result_summary=summary,
+            )
+        return summary
+
+    return {
+        "rag_status": "available",
+        "rag_indexing": indexing_summary,
+        "rag_retrieval": retrieval_summary,
+        "pgvector_health_status": pgvector_health.status.value,
+        "embedding_health_status": embedding_health.status.value,
     }
 
 

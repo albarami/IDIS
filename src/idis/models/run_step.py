@@ -39,6 +39,7 @@ class StepName(StrEnum):
     GRADE = "GRADE"
     CALC = "CALC"
     GRAPH_EVIDENCE = "GRAPH_EVIDENCE"
+    RAG_EVIDENCE = "RAG_EVIDENCE"
     ENRICHMENT = "ENRICHMENT"
     DEBATE = "DEBATE"
     ANALYSIS = "ANALYSIS"
@@ -78,11 +79,12 @@ STEP_ORDER: dict[StepName, int] = {
     StepName.GRADE: 18,
     StepName.CALC: 19,
     StepName.GRAPH_EVIDENCE: 20,
-    StepName.ENRICHMENT: 21,
-    StepName.DEBATE: 22,
-    StepName.ANALYSIS: 23,
-    StepName.SCORING: 24,
-    StepName.DELIVERABLES: 25,
+    StepName.RAG_EVIDENCE: 21,
+    StepName.ENRICHMENT: 22,
+    StepName.DEBATE: 23,
+    StepName.ANALYSIS: 24,
+    StepName.SCORING: 25,
+    StepName.DELIVERABLES: 26,
 }
 """Canonical ordering for deterministic step iteration."""
 
@@ -120,6 +122,7 @@ FULL_STEPS: list[StepName] = [
     StepName.GRADE,
     StepName.CALC,
     StepName.GRAPH_EVIDENCE,
+    StepName.RAG_EVIDENCE,
     StepName.ENRICHMENT,
     StepName.DEBATE,
     StepName.ANALYSIS,
@@ -148,6 +151,7 @@ FULL_ONLY_STEPS: frozenset[StepName] = frozenset(
         StepName.SCORING,
         StepName.DELIVERABLES,
         StepName.GRAPH_EVIDENCE,
+        StepName.RAG_EVIDENCE,
     }
 )
 """Steps that execute only in FULL mode, never in SNAPSHOT."""
@@ -175,6 +179,7 @@ IMPLEMENTED_STEPS: frozenset[StepName] = frozenset(
         StepName.GRADE,
         StepName.CALC,
         StepName.GRAPH_EVIDENCE,
+        StepName.RAG_EVIDENCE,
         StepName.ENRICHMENT,
         StepName.DEBATE,
         StepName.ANALYSIS,

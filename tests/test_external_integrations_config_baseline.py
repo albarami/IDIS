@@ -44,7 +44,7 @@ def test_openai_sdk_for_embeddings_does_not_mark_llm_partial() -> None:
 
     assert "openai" in pyproject.lower()
     assert inventory["openai_llm"].status == "CONFIG_ONLY"
-    assert inventory["rag_vector_retrieval"].status in {"PARTIAL", "CONFIG_ONLY"}
+    assert inventory["rag_vector_retrieval"].status == "WIRED"
 
 
 def test_report_generation_records_validation_commands_as_pending_until_run() -> None:

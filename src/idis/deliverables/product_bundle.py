@@ -22,7 +22,9 @@ from idis.storage.object_store import ObjectStore
 JSON_CONTENT_TYPE = "application/json"
 PDF_CONTENT_TYPE = "application/pdf"
 DOCX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-SENSITIVE_ARTIFACT_KEY_PARTS = frozenset({"local_path", "raw_text"})
+SENSITIVE_ARTIFACT_KEY_PARTS = frozenset(
+    {"local_path", "raw_text", "text_excerpt", "query_text", "embedding"}
+)
 SENSITIVE_ARTIFACT_VALUE_PARTS = frozenset(
     {".local_reports", "c:\\projects", "confidential marker", "raw_text"}
 )
@@ -78,6 +80,7 @@ class ProductBundleExporter:
         scorecard: Scorecard,
         export_timestamp: str,
         graph_evidence: dict[str, Any] | None = None,
+        rag_evidence: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Persist a product bundle and return a safe run-step summary."""
         artifacts: list[_StoredArtifact] = []
@@ -87,6 +90,7 @@ class ProductBundleExporter:
             scorecard=scorecard,
             export_timestamp=export_timestamp,
             graph_evidence=graph_evidence,
+            rag_evidence=rag_evidence,
         ):
             artifacts.append(
                 self._store_artifact(
@@ -132,9 +136,11 @@ class ProductBundleExporter:
         scorecard: Scorecard,
         export_timestamp: str,
         graph_evidence: dict[str, Any] | None,
+        rag_evidence: dict[str, Any] | None,
     ) -> list[_ArtifactDraft]:
         calc_package = self._calc_package(analysis_context)
         graph_package = _graph_package(graph_evidence)
+        rag_package = _rag_package(rag_evidence)
         screening_snapshot = self._safe_text_export_deliverable(bundle.screening_snapshot)
         ic_memo = self._safe_text_export_deliverable(bundle.ic_memo)
         screening_pdf = self._deliverable_exporter.export_to_pdf(
@@ -230,6 +236,7 @@ class ProductBundleExporter:
                     bundle,
                     calc_package=calc_package,
                     graph_package=graph_package,
+                    rag_package=rag_package,
                 ),
             ),
             self._json_draft(
@@ -267,6 +274,12 @@ class ProductBundleExporter:
                         "retrieval_count",
                         0,
                     ),
+                    "rag_status": rag_package["status"],
+                    "rag_indexing_status": rag_package["indexing"]["status"],
+                    "rag_retrieval_status": rag_package["retrieval"]["status"],
+                    "rag_indexed_span_count": rag_package["indexing"].get("indexed_span_count", 0),
+                    "rag_probe_count": rag_package["retrieval"].get("probe_count", 0),
+                    "rag_match_count": rag_package["retrieval"].get("match_count", 0),
                 },
             ),
         ]
@@ -424,6 +437,7 @@ class ProductBundleExporter:
         *,
         calc_package: dict[str, Any],
         graph_package: dict[str, Any],
+        rag_package: dict[str, Any],
     ) -> dict[str, Any]:
         entries: list[dict[str, Any]] = []
         for deliverable in (
@@ -449,7 +463,12 @@ class ProductBundleExporter:
             }
             for item in calc_package["calculations"]
         ]
-        return {"entries": entries, "calc_entries": calc_entries, "graph_evidence": graph_package}
+        return {
+            "entries": entries,
+            "calc_entries": calc_entries,
+            "graph_evidence": graph_package,
+            "rag_evidence": rag_package,
+        }
 
 
 def _is_sensitive_artifact_key(key: str) -> bool:
@@ -553,6 +572,91 @@ def _safe_graph_retrieval(value: object) -> dict[str, Any]:
         "status": status,
         "retrieval_count": _safe_non_negative_int(value.get("retrieval_count")),
         "query_summaries": query_summaries,
+    }
+
+
+def _rag_package(rag_evidence: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(rag_evidence, dict):
+        return _empty_rag_package()
+    indexing = _safe_rag_indexing(rag_evidence.get("rag_indexing"))
+    retrieval = _safe_rag_retrieval(rag_evidence.get("rag_retrieval"))
+    status = str(rag_evidence.get("rag_status") or "")
+    if status not in {"available", "blocked", "skipped"}:
+        status = "available" if indexing["status"] == "indexed" else "skipped"
+    return {"status": status, "indexing": indexing, "retrieval": retrieval}
+
+
+def _empty_rag_package() -> dict[str, Any]:
+    return {
+        "status": "skipped",
+        "indexing": _empty_rag_indexing(),
+        "retrieval": _empty_rag_retrieval(),
+    }
+
+
+def _empty_rag_indexing() -> dict[str, Any]:
+    return {
+        "status": "skipped",
+        "indexed_span_count": 0,
+        "skipped_span_count": 0,
+    }
+
+
+def _empty_rag_retrieval() -> dict[str, Any]:
+    return {
+        "status": "skipped",
+        "retrieval_mode": "probe",
+        "probe_count": 0,
+        "match_count": 0,
+        "matches": [],
+    }
+
+
+def _safe_rag_indexing(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return _empty_rag_indexing()
+    status = str(value.get("status") or "skipped")
+    if status not in {"indexed", "failed", "skipped", "not_attempted"}:
+        status = "skipped"
+    return {
+        "status": status,
+        "indexed_span_count": _safe_non_negative_int(value.get("indexed_span_count")),
+        "skipped_span_count": _safe_non_negative_int(value.get("skipped_span_count")),
+    }
+
+
+def _safe_rag_retrieval(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return _empty_rag_retrieval()
+    status = str(value.get("status") or "skipped")
+    if status not in {"probed", "failed", "skipped", "not_attempted"}:
+        status = "skipped"
+    retrieval_mode = str(value.get("retrieval_mode") or "probe")
+    if retrieval_mode != "probe":
+        retrieval_mode = "probe"
+    matches: list[dict[str, Any]] = []
+    raw_matches = value.get("matches")
+    if isinstance(raw_matches, list):
+        for item in raw_matches:
+            if not isinstance(item, dict):
+                continue
+            source_type = str(item.get("source_type") or "")
+            source_id = str(item.get("source_id") or "")
+            if not source_type or not source_id:
+                continue
+            matches.append(
+                {
+                    "source_type": source_type,
+                    "source_id": source_id,
+                    "score": float(item.get("score") or 0.0),
+                }
+            )
+    return {
+        "status": status,
+        "retrieval_mode": retrieval_mode,
+        "probe_count": _safe_non_negative_int(value.get("probe_count")),
+        "match_count": _safe_non_negative_int(value.get("match_count")),
+        "matches": matches,
     }
 
 

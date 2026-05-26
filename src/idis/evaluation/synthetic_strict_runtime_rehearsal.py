@@ -11,6 +11,8 @@ from typing import Any
 
 import httpx
 from fastapi.testclient import TestClient
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 from idis.api.auth import IDIS_API_KEYS_ENV
 from idis.api.main import create_app
@@ -23,6 +25,7 @@ from idis.deliverables.artifact_catalog import resolve_content_type
 from idis.evaluation.benchmarks.gdbs import load_gdbs_suite
 from idis.idempotency.store import SqliteIdempotencyStore
 from idis.models.run_step import FULL_STEPS
+from idis.persistence.db import get_app_engine
 from idis.persistence.repositories.run_steps import clear_run_steps_store
 from idis.services.runs.strict_full_live import build_strict_full_live_readiness_report
 
@@ -301,6 +304,74 @@ def build_bounded_synthetic_full_execution_rehearsal(
         dataset_root=resolved_dataset_root,
         selected_cases=selected_cases,
         object_store_base_dir=object_store_base_dir,
+    )
+    report = {
+        "synthetic_rehearsal_only": True,
+        "real_example_not_run": True,
+        "not_vc_ready": True,
+        "runtime_proof_required": True,
+        "real_example_gate_cleared": False,
+        "strict_global_may_proceed": False,
+        "approval_evidence": False,
+        "dataset": corpus,
+        "api_upload_rehearsal": {
+            "enabled": True,
+            "requested_case_count": max_cases,
+            "selected_case_ids": [case.case_id for case in selected_cases],
+            **upload_result,
+        },
+        "strict_blockers": _safe_strict_blockers(strict_report),
+        "full_execution_rehearsal": execution_result,
+        "package_surface_status": package_surface["status"],
+        "package_surface_verification": package_surface,
+    }
+    _assert_no_report_leakage(report)
+    return report
+
+
+def build_bounded_synthetic_package_surface_rehearsal(
+    *,
+    dataset_root: Path,
+    env: dict[str, str],
+    max_cases: int | None,
+    allow_synthetic_api_upload: bool,
+    allow_synthetic_execution: bool,
+    allow_synthetic_package_surface_verification: bool,
+    object_store_base_dir: Path | None = None,
+    repo_root: Path | None = None,
+) -> dict[str, Any]:
+    """Prove one synthetic FULL run creates same-run durable package surfaces."""
+    if not allow_synthetic_package_surface_verification:
+        raise SyntheticRehearsalScopeError("SYNTHETIC_PACKAGE_SURFACE_VERIFICATION_NOT_ALLOWED")
+    if not allow_synthetic_execution:
+        raise SyntheticRehearsalScopeError("SYNTHETIC_EXECUTION_NOT_ALLOWED")
+
+    resolved_dataset_root = _require_gdbs_dataset_root(dataset_root, repo_root=repo_root)
+    corpus = _api_rehearsal_corpus_summary(
+        discover_synthetic_corpus(dataset_root=resolved_dataset_root, repo_root=repo_root)
+    )
+    strict_report = build_strict_full_live_readiness_report(env=env)
+    selected_cases = load_gdbs_suite(resolved_dataset_root, "gdbs-f", strict=True).cases[
+        : max_cases or 0
+    ]
+    if max_cases is None or max_cases <= 0:
+        raise SyntheticRehearsalScopeError("SYNTHETIC_MAX_CASES_REQUIRED")
+    if max_cases > MAX_SYNTHETIC_REHEARSAL_CASES:
+        raise SyntheticRehearsalScopeError("SYNTHETIC_MAX_CASES_TOO_LARGE")
+    if max_cases != 1:
+        raise SyntheticRehearsalScopeError("SYNTHETIC_EXECUTION_SINGLE_CASE_ONLY")
+    if not allow_synthetic_api_upload:
+        raise SyntheticRehearsalScopeError("SYNTHETIC_API_UPLOAD_NOT_ALLOWED")
+    if not os.environ.get("IDIS_DATABASE_URL"):
+        raise SyntheticRehearsalScopeError("SYNTHETIC_POSTGRES_REQUIRED")
+    _require_available_postgres_for_synthetic_package_surface()
+
+    upload_result, execution_result, package_surface = (
+        _upload_execute_and_verify_package_surfaces_via_api(
+            dataset_root=resolved_dataset_root,
+            selected_cases=selected_cases,
+            object_store_base_dir=object_store_base_dir,
+        )
     )
     report = {
         "synthetic_rehearsal_only": True,
@@ -738,6 +809,87 @@ def _upload_and_execute_non_strict_full_via_api(
             _restore_env(key, previous_value)
 
 
+def _upload_execute_and_verify_package_surfaces_via_api(
+    *,
+    dataset_root: Path,
+    selected_cases: list[Any],
+    object_store_base_dir: Path | None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    if object_store_base_dir is None:
+        with tempfile.TemporaryDirectory(prefix="idis_slice71_package_") as tmp_dir:
+            return _upload_execute_and_verify_package_surfaces_via_api(
+                dataset_root=dataset_root,
+                selected_cases=selected_cases,
+                object_store_base_dir=Path(tmp_dir),
+            )
+
+    previous_api_keys = os.environ.get(IDIS_API_KEYS_ENV)
+    previous_require_full_live = os.environ.get("IDIS_REQUIRE_FULL_LIVE")
+    previous_strict_dotenv_path = os.environ.get("IDIS_STRICT_DOTENV_PATH")
+    previous_object_store_backend = os.environ.get("IDIS_OBJECT_STORE_BACKEND")
+    previous_object_store_base = os.environ.get("IDIS_OBJECT_STORE_BASE_DIR")
+    previous_vector_search = os.environ.get("IDIS_ENABLE_VECTOR_SEARCH")
+    previous_live_provider_env = {
+        key: os.environ.get(key) for key in SYNTHETIC_FULL_EXECUTION_LIVE_PROVIDER_ENV_KEYS
+    }
+    try:
+        os.environ[IDIS_API_KEYS_ENV] = json.dumps(
+            {
+                SYNTHETIC_API_REHEARSAL_API_KEY: {
+                    "tenant_id": SYNTHETIC_API_REHEARSAL_TENANT_ID,
+                    "actor_id": "slice71-synthetic-package-surface",
+                    "name": "Slice71 Synthetic Package Surface",
+                    "timezone": "UTC",
+                    "data_region": "me-south-1",
+                    "roles": ["ANALYST", "ADMIN"],
+                }
+            }
+        )
+        os.environ["IDIS_REQUIRE_FULL_LIVE"] = "0"
+        os.environ.pop("IDIS_STRICT_DOTENV_PATH", None)
+        os.environ["IDIS_OBJECT_STORE_BACKEND"] = "filesystem"
+        os.environ["IDIS_OBJECT_STORE_BASE_DIR"] = str(object_store_base_dir)
+        os.environ["IDIS_ENABLE_VECTOR_SEARCH"] = "0"
+        for key in SYNTHETIC_FULL_EXECUTION_LIVE_PROVIDER_ENV_KEYS:
+            os.environ.pop(key, None)
+        clear_deals_store()
+        clear_document_store()
+        clear_runs_store()
+        clear_run_steps_store()
+        clear_deliverables_store()
+        app = create_app(
+            audit_sink=InMemoryAuditSink(),
+            idempotency_store=SqliteIdempotencyStore(in_memory=True),
+            service_region="me-south-1",
+        )
+        with TestClient(app, raise_server_exceptions=False) as client:
+            upload_result, deal_id = _upload_selected_gdbs_cases_for_run_with_client(
+                client=client,
+                dataset_root=dataset_root,
+                selected_cases=selected_cases,
+            )
+            execution_result = _execute_non_strict_full_run_with_client(
+                client=client,
+                deal_id=deal_id,
+                document_ids=[item["document_id"] for item in upload_result["uploaded_documents"]],
+            )
+            package_surface = _verified_same_run_package_surface_status(
+                client=client,
+                deal_id=deal_id,
+                run_id=str(execution_result.get("run_id") or ""),
+            )
+            return upload_result, execution_result, package_surface
+    finally:
+        _restore_env(IDIS_API_KEYS_ENV, previous_api_keys)
+        _restore_env("IDIS_REQUIRE_FULL_LIVE", previous_require_full_live)
+        _restore_env("IDIS_STRICT_DOTENV_PATH", previous_strict_dotenv_path)
+        _restore_env("IDIS_OBJECT_STORE_BACKEND", previous_object_store_backend)
+        _restore_env("IDIS_OBJECT_STORE_BASE_DIR", previous_object_store_base)
+        _restore_env("IDIS_ENABLE_VECTOR_SEARCH", previous_vector_search)
+        for key, previous_value in previous_live_provider_env.items():
+            _restore_env(key, previous_value)
+
+
 def _upload_selected_gdbs_cases_with_client(
     *,
     client: TestClient,
@@ -947,6 +1099,11 @@ def _execute_non_strict_full_run_with_client(
         if step.get("status") == "FAILED"
     ]
     run_status = str(status_body.get("status") or response_body.get("status") or "UNKNOWN")
+    step_summaries = {
+        str(step.get("step_name")): step.get("summary")
+        for step in status_body.get("steps", [])
+        if isinstance(step, dict)
+    }
     return {
         "enabled": True,
         "status": "completed" if run_status == "SUCCEEDED" else "failed_safe",
@@ -965,6 +1122,7 @@ def _execute_non_strict_full_run_with_client(
         "expected_completed_step_count": len(FULL_STEPS),
         "expected_completed_step_names": [step.value for step in FULL_STEPS],
         "failed_step_names": failed_step_names,
+        "deliverables_step_summary": step_summaries.get("DELIVERABLES") or {},
     }
 
 
@@ -1015,8 +1173,129 @@ def _same_run_package_surface_status(
     }
 
 
+def _verified_same_run_package_surface_status(
+    *,
+    client: TestClient,
+    deal_id: str,
+    run_id: str,
+) -> dict[str, Any]:
+    headers = {"X-IDIS-API-Key": SYNTHETIC_API_REHEARSAL_API_KEY}
+    listed_response = client.get(f"/v1/deals/{deal_id}/deliverables", headers=headers)
+    _raise_safe_api_error(listed_response, reason_code="SYNTHETIC_PACKAGE_LIST_FAILED")
+    listed = [
+        item
+        for item in listed_response.json().get("items", [])
+        if str(item.get("run_id") or "") == run_id
+    ]
+    manifest_response = client.get(
+        f"/v1/deals/{deal_id}/runs/{run_id}/product-bundle/manifest",
+        headers=headers,
+    )
+    _raise_safe_api_error(manifest_response, reason_code="SYNTHETIC_PACKAGE_MANIFEST_FAILED")
+    manifest = manifest_response.json()
+    artifacts = [
+        artifact for artifact in manifest.get("artifacts", []) if isinstance(artifact, dict)
+    ]
+    manifest_run_id = str(manifest.get("run_id") or "")
+    manifest_deal_id = str(manifest.get("deal_id") or "")
+    manifest_identity_mismatch = manifest_run_id != run_id or manifest_deal_id != deal_id
+    listed_ids = {str(row.get("deliverable_id") or "") for row in listed}
+    manifest_artifact_ids = {
+        str(artifact.get("deliverable_id") or "")
+        for artifact in artifacts
+        if artifact.get("deliverable_id")
+    }
+    missing_manifest_deliverable_id_artifacts = [
+        f"{str(artifact.get('type') or '')}:{str(artifact.get('format') or '')}"
+        for artifact in artifacts
+        if not artifact.get("deliverable_id")
+    ]
+    missing_manifest_deliverable_ids = sorted(manifest_artifact_ids - listed_ids)
+    rows_by_id = {str(row.get("deliverable_id") or ""): row for row in listed}
+
+    downloaded: list[dict[str, Any]] = []
+    sha_mismatches: list[str] = []
+    content_type_mismatches: list[str] = []
+    missing_listed_artifacts: list[str] = []
+    download_failures: list[dict[str, Any]] = []
+    for artifact in artifacts:
+        artifact_type = str(artifact.get("type") or "")
+        artifact_format = str(artifact.get("format") or "")
+        artifact_key = f"{artifact_type}:{artifact_format}"
+        artifact_deliverable_id = str(artifact.get("deliverable_id") or "")
+        row = rows_by_id.get(artifact_deliverable_id)
+        if row is None:
+            missing_listed_artifacts.append(artifact_key)
+            continue
+        response = client.get(f"/v1/deliverables/{row['deliverable_id']}/content", headers=headers)
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError:
+            download_failures.append(
+                {"artifact": artifact_key, "status_code": response.status_code}
+            )
+            continue
+        actual_sha = hashlib.sha256(response.content).hexdigest()
+        expected_sha = str(artifact.get("sha256") or "")
+        if actual_sha != expected_sha:
+            sha_mismatches.append(artifact_key)
+        expected_content_type = resolve_content_type(artifact_type, artifact_format)
+        actual_content_type = response.headers.get("content-type", "").split(";")[0]
+        if actual_content_type != expected_content_type:
+            content_type_mismatches.append(artifact_key)
+        downloaded.append(
+            {
+                "type": artifact_type,
+                "format": artifact_format,
+                "content_type": actual_content_type,
+                "sha256": actual_sha,
+                "manifest_sha256": expected_sha,
+                "size_bytes": len(response.content),
+            }
+        )
+
+    verified = not (
+        sha_mismatches
+        or content_type_mismatches
+        or missing_listed_artifacts
+        or missing_manifest_deliverable_id_artifacts
+        or missing_manifest_deliverable_ids
+        or download_failures
+        or manifest_identity_mismatch
+        or not downloaded
+    )
+    return {
+        "status": "verified" if verified else "failed_safe",
+        "verified": verified,
+        "same_run_id": run_id,
+        "listed_deliverable_count_for_run": len(listed),
+        "listed_types": sorted({str(item["deliverable_type"]) for item in listed}),
+        "manifest_http_status_code": manifest_response.status_code,
+        "manifest_run_id": manifest_run_id,
+        "manifest_artifact_count": len(artifacts),
+        "manifest_identity_mismatch": manifest_identity_mismatch,
+        "missing_manifest_deliverable_id_artifacts": missing_manifest_deliverable_id_artifacts,
+        "missing_manifest_deliverable_ids": missing_manifest_deliverable_ids,
+        "downloaded_artifact_count": len(downloaded),
+        "downloaded_artifacts": downloaded,
+        "download_sha256_mismatches": sha_mismatches,
+        "content_type_mismatches": content_type_mismatches,
+        "missing_listed_artifacts": missing_listed_artifacts,
+        "download_failures": download_failures,
+    }
+
+
 def _api_rehearsal_corpus_summary(corpus: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in corpus.items() if key not in {"dataset_root"}}
+
+
+def _require_available_postgres_for_synthetic_package_surface() -> None:
+    try:
+        engine = get_app_engine()
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except SQLAlchemyError as exc:
+        raise SyntheticRehearsalScopeError("SYNTHETIC_POSTGRES_UNAVAILABLE") from exc
 
 
 def _raise_safe_api_error(response: httpx.Response, *, reason_code: str) -> None:

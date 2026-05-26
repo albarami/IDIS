@@ -15,16 +15,28 @@ from fastapi.testclient import TestClient
 from idis.api.auth import IDIS_API_KEYS_ENV
 from idis.api.main import create_app
 from idis.api.routes.deals import clear_deals_store
+from idis.api.routes.deliverables import clear_deliverables_store
 from idis.api.routes.documents import clear_document_store
+from idis.api.routes.runs import clear_runs_store
 from idis.audit.sink import InMemoryAuditSink
 from idis.deliverables.artifact_catalog import resolve_content_type
 from idis.evaluation.benchmarks.gdbs import load_gdbs_suite
 from idis.idempotency.store import SqliteIdempotencyStore
+from idis.models.run_step import FULL_STEPS
+from idis.persistence.repositories.run_steps import clear_run_steps_store
 from idis.services.runs.strict_full_live import build_strict_full_live_readiness_report
 
 MAX_SYNTHETIC_REHEARSAL_CASES = 20
 SYNTHETIC_API_REHEARSAL_API_KEY = "slice68-synthetic-api-upload-key"
 SYNTHETIC_API_REHEARSAL_TENANT_ID = "11111111-1111-4111-8111-111111111111"
+SYNTHETIC_FULL_EXECUTION_LIVE_PROVIDER_ENV_KEYS = (
+    "ANTHROPIC_API_KEY",
+    "IDIS_EXTRACT_BACKEND",
+    "IDIS_DEBATE_BACKEND",
+    "OPENAI_API_KEY",
+    "FINNHUB_API_KEY",
+    "FMP_API_KEY",
+)
 
 
 class SyntheticRehearsalScopeError(ValueError):
@@ -250,6 +262,66 @@ def build_bounded_synthetic_api_run_rehearsal(
         and run_attempt.get("reason_code") == "STRICT_FULL_LIVE_BLOCKED"
     ):
         report["strict_runtime_blocked_reason_code"] = "STRICT_FULL_LIVE_BLOCKED"
+    _assert_no_report_leakage(report)
+    return report
+
+
+def build_bounded_synthetic_full_execution_rehearsal(
+    *,
+    dataset_root: Path,
+    env: dict[str, str],
+    max_cases: int | None,
+    allow_synthetic_api_upload: bool,
+    allow_synthetic_execution: bool,
+    object_store_base_dir: Path | None = None,
+    repo_root: Path | None = None,
+) -> dict[str, Any]:
+    """Execute one bounded GDBS-F FULL run as a non-approval synthetic rehearsal."""
+    if not allow_synthetic_execution:
+        raise SyntheticRehearsalScopeError("SYNTHETIC_EXECUTION_NOT_ALLOWED")
+
+    resolved_dataset_root = _require_gdbs_dataset_root(dataset_root, repo_root=repo_root)
+    corpus = _api_rehearsal_corpus_summary(
+        discover_synthetic_corpus(dataset_root=resolved_dataset_root, repo_root=repo_root)
+    )
+    strict_report = build_strict_full_live_readiness_report(env=env)
+    selected_cases = load_gdbs_suite(resolved_dataset_root, "gdbs-f", strict=True).cases[
+        : max_cases or 0
+    ]
+    if max_cases is None or max_cases <= 0:
+        raise SyntheticRehearsalScopeError("SYNTHETIC_MAX_CASES_REQUIRED")
+    if max_cases > MAX_SYNTHETIC_REHEARSAL_CASES:
+        raise SyntheticRehearsalScopeError("SYNTHETIC_MAX_CASES_TOO_LARGE")
+    if max_cases != 1:
+        raise SyntheticRehearsalScopeError("SYNTHETIC_EXECUTION_SINGLE_CASE_ONLY")
+    if not allow_synthetic_api_upload:
+        raise SyntheticRehearsalScopeError("SYNTHETIC_API_UPLOAD_NOT_ALLOWED")
+
+    upload_result, execution_result, package_surface = _upload_and_execute_non_strict_full_via_api(
+        dataset_root=resolved_dataset_root,
+        selected_cases=selected_cases,
+        object_store_base_dir=object_store_base_dir,
+    )
+    report = {
+        "synthetic_rehearsal_only": True,
+        "real_example_not_run": True,
+        "not_vc_ready": True,
+        "runtime_proof_required": True,
+        "real_example_gate_cleared": False,
+        "strict_global_may_proceed": False,
+        "approval_evidence": False,
+        "dataset": corpus,
+        "api_upload_rehearsal": {
+            "enabled": True,
+            "requested_case_count": max_cases,
+            "selected_case_ids": [case.case_id for case in selected_cases],
+            **upload_result,
+        },
+        "strict_blockers": _safe_strict_blockers(strict_report),
+        "full_execution_rehearsal": execution_result,
+        "package_surface_status": package_surface["status"],
+        "package_surface_verification": package_surface,
+    }
     _assert_no_report_leakage(report)
     return report
 
@@ -582,6 +654,90 @@ def _upload_and_attempt_strict_blocked_run_via_api(
         _restore_env("IDIS_OBJECT_STORE_BASE_DIR", previous_object_store_base)
 
 
+def _upload_and_execute_non_strict_full_via_api(
+    *,
+    dataset_root: Path,
+    selected_cases: list[Any],
+    object_store_base_dir: Path | None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    if object_store_base_dir is None:
+        with tempfile.TemporaryDirectory(prefix="idis_slice70_full_run_") as tmp_dir:
+            return _upload_and_execute_non_strict_full_via_api(
+                dataset_root=dataset_root,
+                selected_cases=selected_cases,
+                object_store_base_dir=Path(tmp_dir),
+            )
+
+    previous_api_keys = os.environ.get(IDIS_API_KEYS_ENV)
+    previous_database_url = os.environ.get("IDIS_DATABASE_URL")
+    previous_require_full_live = os.environ.get("IDIS_REQUIRE_FULL_LIVE")
+    previous_strict_dotenv_path = os.environ.get("IDIS_STRICT_DOTENV_PATH")
+    previous_object_store_backend = os.environ.get("IDIS_OBJECT_STORE_BACKEND")
+    previous_object_store_base = os.environ.get("IDIS_OBJECT_STORE_BASE_DIR")
+    previous_vector_search = os.environ.get("IDIS_ENABLE_VECTOR_SEARCH")
+    previous_live_provider_env = {
+        key: os.environ.get(key) for key in SYNTHETIC_FULL_EXECUTION_LIVE_PROVIDER_ENV_KEYS
+    }
+    try:
+        os.environ[IDIS_API_KEYS_ENV] = json.dumps(
+            {
+                SYNTHETIC_API_REHEARSAL_API_KEY: {
+                    "tenant_id": SYNTHETIC_API_REHEARSAL_TENANT_ID,
+                    "actor_id": "slice70-synthetic-full-execution",
+                    "name": "Slice70 Synthetic FULL Execution",
+                    "timezone": "UTC",
+                    "data_region": "me-south-1",
+                    "roles": ["ANALYST", "ADMIN"],
+                }
+            }
+        )
+        os.environ.pop("IDIS_DATABASE_URL", None)
+        os.environ["IDIS_REQUIRE_FULL_LIVE"] = "0"
+        os.environ.pop("IDIS_STRICT_DOTENV_PATH", None)
+        os.environ["IDIS_OBJECT_STORE_BACKEND"] = "filesystem"
+        os.environ["IDIS_OBJECT_STORE_BASE_DIR"] = str(object_store_base_dir)
+        os.environ["IDIS_ENABLE_VECTOR_SEARCH"] = "0"
+        for key in SYNTHETIC_FULL_EXECUTION_LIVE_PROVIDER_ENV_KEYS:
+            os.environ.pop(key, None)
+        clear_deals_store()
+        clear_document_store()
+        clear_runs_store()
+        clear_run_steps_store()
+        clear_deliverables_store()
+        app = create_app(
+            audit_sink=InMemoryAuditSink(),
+            idempotency_store=SqliteIdempotencyStore(in_memory=True),
+            service_region="me-south-1",
+        )
+        with TestClient(app, raise_server_exceptions=False) as client:
+            upload_result, deal_id = _upload_selected_gdbs_cases_for_run_with_client(
+                client=client,
+                dataset_root=dataset_root,
+                selected_cases=selected_cases,
+            )
+            execution_result = _execute_non_strict_full_run_with_client(
+                client=client,
+                deal_id=deal_id,
+                document_ids=[item["document_id"] for item in upload_result["uploaded_documents"]],
+            )
+            package_surface = _same_run_package_surface_status(
+                client=client,
+                deal_id=deal_id,
+                run_id=str(execution_result.get("run_id") or ""),
+            )
+            return upload_result, execution_result, package_surface
+    finally:
+        _restore_env(IDIS_API_KEYS_ENV, previous_api_keys)
+        _restore_env("IDIS_DATABASE_URL", previous_database_url)
+        _restore_env("IDIS_REQUIRE_FULL_LIVE", previous_require_full_live)
+        _restore_env("IDIS_STRICT_DOTENV_PATH", previous_strict_dotenv_path)
+        _restore_env("IDIS_OBJECT_STORE_BACKEND", previous_object_store_backend)
+        _restore_env("IDIS_OBJECT_STORE_BASE_DIR", previous_object_store_base)
+        _restore_env("IDIS_ENABLE_VECTOR_SEARCH", previous_vector_search)
+        for key, previous_value in previous_live_provider_env.items():
+            _restore_env(key, previous_value)
+
+
 def _upload_selected_gdbs_cases_with_client(
     *,
     client: TestClient,
@@ -731,6 +887,134 @@ def _attempt_strict_blocked_run_with_client(
     }
 
 
+def _execute_non_strict_full_run_with_client(
+    *,
+    client: TestClient,
+    deal_id: str,
+    document_ids: list[str],
+) -> dict[str, Any]:
+    response = client.post(
+        f"/v1/deals/{deal_id}/runs",
+        headers={"X-IDIS-API-Key": SYNTHETIC_API_REHEARSAL_API_KEY},
+        json={
+            "mode": "FULL",
+            "source": {
+                "type": "deal_documents",
+                "document_ids": document_ids,
+            },
+        },
+    )
+    try:
+        response_body = response.json()
+    except ValueError:
+        response_body = {}
+    if response.status_code != 202:
+        return {
+            "enabled": True,
+            "status": "failed_safe",
+            "reason_code": str(response_body.get("code") or "SYNTHETIC_FULL_EXECUTION_FAILED"),
+            "http_status_code": response.status_code,
+            "run_created": False,
+            "strict_full_live_required": False,
+            "terminal": False,
+            "run_status": "FAILED",
+            "status_run_status": "FAILED",
+            "completed_step_count": 0,
+            "completed_step_names": [],
+            "failed_step_names": [],
+        }
+
+    run_id = str(response_body.get("run_id") or "")
+    status_body = response_body
+    if run_id:
+        status_response = client.get(
+            f"/v1/runs/{run_id}",
+            headers={"X-IDIS-API-Key": SYNTHETIC_API_REHEARSAL_API_KEY},
+        )
+        _raise_safe_api_error(
+            status_response,
+            reason_code="SYNTHETIC_FULL_EXECUTION_STATUS_FAILED",
+        )
+        status_body = status_response.json()
+    completed_step_names = [
+        str(step.get("step_name"))
+        for step in status_body.get("steps", [])
+        if step.get("status") == "COMPLETED"
+    ]
+    failed_step_names = [
+        str(step.get("step_name"))
+        for step in status_body.get("steps", [])
+        if step.get("status") == "FAILED"
+    ]
+    run_status = str(status_body.get("status") or response_body.get("status") or "UNKNOWN")
+    return {
+        "enabled": True,
+        "status": "completed" if run_status == "SUCCEEDED" else "failed_safe",
+        "reason_code": None
+        if run_status == "SUCCEEDED"
+        else "SYNTHETIC_FULL_EXECUTION_NOT_SUCCEEDED",
+        "http_status_code": response.status_code,
+        "run_created": True,
+        "run_id": run_id,
+        "strict_full_live_required": False,
+        "terminal": run_status in {"SUCCEEDED", "FAILED", "BLOCKED", "CANCELLED"},
+        "run_status": run_status,
+        "status_run_status": run_status,
+        "completed_step_count": len(completed_step_names),
+        "completed_step_names": completed_step_names,
+        "expected_completed_step_count": len(FULL_STEPS),
+        "expected_completed_step_names": [step.value for step in FULL_STEPS],
+        "failed_step_names": failed_step_names,
+    }
+
+
+def _same_run_package_surface_status(
+    *,
+    client: TestClient,
+    deal_id: str,
+    run_id: str,
+) -> dict[str, Any]:
+    listed_response = client.get(
+        f"/v1/deals/{deal_id}/deliverables",
+        headers={"X-IDIS-API-Key": SYNTHETIC_API_REHEARSAL_API_KEY},
+    )
+    listed_count = 0
+    if listed_response.status_code == 200:
+        try:
+            listed_body = listed_response.json()
+        except ValueError:
+            listed_body = {}
+        listed_count = len(
+            [
+                item
+                for item in listed_body.get("items", [])
+                if str(item.get("run_id") or "") == run_id
+            ]
+        )
+
+    manifest_response = client.get(
+        f"/v1/deals/{deal_id}/runs/{run_id}/product-bundle/manifest",
+        headers={"X-IDIS-API-Key": SYNTHETIC_API_REHEARSAL_API_KEY},
+    )
+    if listed_count == 0 or manifest_response.status_code == 404:
+        return {
+            "status": "not_created",
+            "verified": False,
+            "reason_code": "SAME_RUN_PACKAGE_SURFACES_NOT_CREATED",
+            "listed_deliverable_count_for_run": listed_count,
+            "manifest_http_status_code": manifest_response.status_code,
+            "downloaded_artifact_count": 0,
+        }
+    return {
+        "status": "not_verified",
+        "verified": False,
+        "reason_code": "SAME_RUN_PACKAGE_SURFACES_PRESENT_BUT_NOT_VERIFIED_IN_SLICE70",
+        "listed_deliverable_count_for_run": listed_count,
+        "manifest_http_status_code": manifest_response.status_code,
+        "downloaded_artifact_count": 0,
+    }
+
+
 def _api_rehearsal_corpus_summary(corpus: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in corpus.items() if key not in {"dataset_root"}}
 
@@ -814,6 +1098,10 @@ def _safe_component_label(value: str) -> str:
     label = value.lower().replace("/", "_").replace(" ", "_")
     replacements = {
         "real_example": "private_gate",
+        "anthropic": "live_model",
+        "openai": "live_model",
+        "finnhub": "byol_market_data",
+        "fmp": "byol_market_data",
         "vectors": "rag",
         "vector": "rag",
         "embedding": "retrieval_model",

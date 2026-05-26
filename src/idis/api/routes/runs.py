@@ -1580,7 +1580,7 @@ def _run_full_deliverables(
             object_store=object_store,
             object_store_backend=object_store.backend_name,
         )
-        return exporter.export_bundle(
+        export_summary = exporter.export_bundle(
             tenant_id=tenant_id,
             deal_id=deal_id,
             run_id=run_id,
@@ -1592,6 +1592,8 @@ def _run_full_deliverables(
             rag_evidence=rag_evidence,
             layer2_evidence=layer2_evidence,
         )
+        export_summary["durable_export"] = True
+        return export_summary
 
     return {
         "deliverable_count": len(types),

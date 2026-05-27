@@ -197,6 +197,10 @@ def build_strict_provisioning_truth_report(
     preflight_corpus: Sequence[Mapping[str, Any]] | None = None,
     data_room_file_extensions: Sequence[str] | None = None,
     binary_resolver: Callable[[str], str | None] | None = None,
+    allow_local_strict_health_probes: bool = False,
+    neo4j_health_checker: Callable[[Mapping[str, str]], Neo4jHealthCheck] | None = None,
+    pgvector_health_checker: Callable[[Mapping[str, str]], PgvectorHealthCheck] | None = None,
+    object_store_probe_base_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Build a redacted inventory/provisioning report without live runtime probes."""
     from idis.services.runs.strict_provisioning_truth import (
@@ -209,6 +213,10 @@ def build_strict_provisioning_truth_report(
         preflight_corpus=preflight_corpus,
         data_room_file_extensions=data_room_file_extensions,
         binary_resolver=binary_resolver,
+        allow_local_strict_health_probes=allow_local_strict_health_probes,
+        neo4j_health_checker=neo4j_health_checker,
+        pgvector_health_checker=pgvector_health_checker,
+        object_store_probe_base_dir=object_store_probe_base_dir,
     )
 
 

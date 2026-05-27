@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
-from idis.persistence.neo4j_driver import Neo4jHealthCheck
+from idis.persistence.neo4j_driver import Neo4jHealthCheck, Neo4jHealthStatus
 from idis.services.rag.embedding_health import EmbeddingHealthCheck
-from idis.services.rag.pgvector_health import PgvectorHealthCheck
+from idis.services.rag.pgvector_health import PgvectorHealthCheck, PgvectorHealthStatus
 from idis.services.runs.strict_full_live import (
     StrictComponentInventory,
     StrictComponentReadiness,
@@ -22,6 +25,11 @@ SLICE72_CLAIM_LANGUAGE = (
     "strict readiness inventory, canonical env/service requirements, and "
     "runtime-proof status without clearing strict readiness."
 )
+SLICE73_CLAIM_LANGUAGE = (
+    "Slice73 adds opt-in redacted local health probes for safe strict provisioning "
+    "dependencies only. It does not run live providers, external enrichment, "
+    "real_example, strict FULL, or clear strict readiness."
+)
 
 _STATIC_NOT_PROBED_COMPONENTS = frozenset(
     {
@@ -32,6 +40,8 @@ _STATIC_NOT_PROBED_COMPONENTS = frozenset(
         "enrichment public providers",
         "enrichment BYOL providers",
         "object storage",
+        "product export",
+        "UI/API download",
         "Neo4j graph projection",
         "graph retrieval",
         "pgvector/RAG",
@@ -41,6 +51,16 @@ _STATIC_NOT_PROBED_COMPONENTS = frozenset(
 )
 
 
+@dataclass(frozen=True)
+class _LocalProbeStatus:
+    label: str
+    claim: str
+    attempted: bool
+    passed: bool
+    health_check_status: str
+    blocker: str | None = None
+
+
 def build_strict_provisioning_truth_report(
     *,
     env: Mapping[str, str] | None = None,
@@ -48,6 +68,10 @@ def build_strict_provisioning_truth_report(
     preflight_corpus: Sequence[Mapping[str, Any]] | None = None,
     data_room_file_extensions: Sequence[str] | None = None,
     binary_resolver: Callable[[str], str | None] | None = None,
+    allow_local_strict_health_probes: bool = False,
+    neo4j_health_checker: Callable[[Mapping[str, str]], Neo4jHealthCheck] | None = None,
+    pgvector_health_checker: Callable[[Mapping[str, str]], PgvectorHealthCheck] | None = None,
+    object_store_probe_base_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Build a redacted inventory/provisioning report without live runtime probes."""
     values = os.environ if env is None else env
@@ -63,20 +87,31 @@ def build_strict_provisioning_truth_report(
         pgvector_health_checker=lambda checked_env: _static_pgvector_health(checked_env),
         probe_object_store=False,
     )
+    local_probe_statuses = _build_local_probe_statuses(
+        env=values,
+        allow_local_strict_health_probes=allow_local_strict_health_probes,
+        neo4j_health_checker=neo4j_health_checker,
+        pgvector_health_checker=pgvector_health_checker,
+        object_store_probe_base_dir=object_store_probe_base_dir,
+    )
     readiness_by_inventory_name = _readiness_by_inventory_name(readiness.components)
     components = [
         _strict_provisioning_component(
             inventory_item=inventory_item,
             readiness_component=readiness_by_inventory_name.get(inventory_item.component_name),
+            local_probe_status=local_probe_statuses.get(inventory_item.component_name),
         )
         for inventory_item in readiness.component_inventory
     ]
     report = {
-        "claim_language": SLICE72_CLAIM_LANGUAGE,
+        "claim_language": (
+            SLICE73_CLAIM_LANGUAGE if allow_local_strict_health_probes else SLICE72_CLAIM_LANGUAGE
+        ),
         "source_of_truth": "strict_full_live.REQUIRED_STRICT_COMPONENTS",
         "component_count": len(components),
         "strict_global_may_proceed": False,
         "readiness_may_proceed": readiness.may_proceed,
+        "local_strict_health_probes_allowed": allow_local_strict_health_probes,
         "env_canonicalization": _strict_env_canonicalization(),
         "components": components,
         "real_example_not_run": True,
@@ -127,6 +162,7 @@ def _strict_provisioning_component(
     *,
     inventory_item: StrictComponentInventory,
     readiness_component: StrictComponentReadiness | None,
+    local_probe_status: _LocalProbeStatus | None,
 ) -> dict[str, Any]:
     required_env_names = (
         _canonical_env_names(readiness_component.required_env_vars)
@@ -140,18 +176,30 @@ def _strict_provisioning_component(
     )
     if inventory_item.component_name == "Postgres/RLS":
         required_service_names = sorted({*required_service_names, "Postgres"})
-    health_check_status = _slice72_health_check_status(inventory_item)
+    health_check_status = _slice73_health_check_status(
+        inventory_item=inventory_item,
+        local_probe_status=local_probe_status,
+    )
     return {
         "component_name": inventory_item.component_name,
         "declared": True,
         "configured": inventory_item.config_present,
-        "health_checked": health_check_status == "healthy",
+        "health_checked": bool(local_probe_status and local_probe_status.attempted)
+        and health_check_status in {"healthy", "configured_failed"},
         "runtime_call_proven": False,
         "full_run_used": False,
         "required_env_names": required_env_names,
         "required_service_names": required_service_names,
         "health_check_status": health_check_status,
-        "blocker": inventory_item.blocker,
+        "local_probe_label": local_probe_status.label if local_probe_status else None,
+        "local_probe_claim": local_probe_status.claim if local_probe_status else None,
+        "local_probe_attempted": bool(local_probe_status and local_probe_status.attempted),
+        "local_probe_passed": bool(local_probe_status and local_probe_status.passed),
+        "local_probe_blocker": local_probe_status.blocker if local_probe_status else None,
+        "blocker": _slice73_component_blocker(
+            inventory_item=inventory_item,
+            local_probe_status=local_probe_status,
+        ),
         "evidence_files": inventory_item.evidence_files,
     }
 
@@ -166,12 +214,213 @@ def _canonical_env_names(values: list[str]) -> list[str]:
     return sorted(set(names))
 
 
-def _slice72_health_check_status(inventory_item: StrictComponentInventory) -> str:
+def _slice73_health_check_status(
+    *,
+    inventory_item: StrictComponentInventory,
+    local_probe_status: _LocalProbeStatus | None,
+) -> str:
+    if local_probe_status is not None:
+        return local_probe_status.health_check_status
     if inventory_item.component_name in _STATIC_NOT_PROBED_COMPONENTS:
         return "configured_not_checked" if inventory_item.config_present else "not_run"
     if inventory_item.health_check_status == "healthy":
         return "healthy"
     return "not_run"
+
+
+def _slice73_component_blocker(
+    *,
+    inventory_item: StrictComponentInventory,
+    local_probe_status: _LocalProbeStatus | None,
+) -> str:
+    if inventory_item.component_name in {"product export", "UI/API download"}:
+        return (
+            f"{inventory_item.component_name} is not runtime-proven because Slice73 does not run "
+            "product export, download APIs, package review, or strict FULL."
+        )
+    if local_probe_status is None or not local_probe_status.passed:
+        return inventory_item.blocker
+    if inventory_item.component_name in {"Neo4j graph projection", "graph retrieval"}:
+        return (
+            "Local Neo4j health passed, but graph runtime is not proven because Slice73 "
+            "does not run graph projection, graph retrieval, or strict FULL."
+        )
+    if inventory_item.component_name == "pgvector/RAG":
+        return (
+            "Local pgvector extension/connectivity passed, but RAG runtime is not proven "
+            "because Slice73 does not run embedding providers, indexing, retrieval, or strict FULL."
+        )
+    if inventory_item.component_name == "object storage":
+        return (
+            "Local filesystem object-store temp write/delete passed, but product export and "
+            "download runtime are not proven because Slice73 does not run strict FULL."
+        )
+    return inventory_item.blocker
+
+
+def _build_local_probe_statuses(
+    *,
+    env: Mapping[str, str],
+    allow_local_strict_health_probes: bool,
+    neo4j_health_checker: Callable[[Mapping[str, str]], Neo4jHealthCheck] | None,
+    pgvector_health_checker: Callable[[Mapping[str, str]], PgvectorHealthCheck] | None,
+    object_store_probe_base_dir: str | Path | None,
+) -> dict[str, _LocalProbeStatus]:
+    if not allow_local_strict_health_probes:
+        return {
+            "pgvector/RAG": _not_attempted_probe(
+                label="pgvector_extension_connectivity",
+                claim="pgvector extension/connectivity only",
+                blocker="explicit_opt_in_required",
+            ),
+            "Neo4j graph projection": _not_attempted_probe(
+                label="neo4j_local_health",
+                claim="Neo4j local health only",
+                blocker="explicit_opt_in_required",
+            ),
+            "graph retrieval": _not_attempted_probe(
+                label="neo4j_local_health",
+                claim="Neo4j local health only",
+                blocker="explicit_opt_in_required",
+            ),
+            "object storage": _not_attempted_probe(
+                label="filesystem_object_store_temp_write_delete",
+                claim="filesystem object-store temp write/delete only",
+                blocker="explicit_opt_in_required",
+            ),
+        }
+
+    statuses: dict[str, _LocalProbeStatus] = {}
+    neo4j_status = _neo4j_local_probe_status(env, neo4j_health_checker)
+    statuses["Neo4j graph projection"] = neo4j_status
+    statuses["graph retrieval"] = neo4j_status
+    pgvector_status = _pgvector_local_probe_status(env, pgvector_health_checker)
+    statuses["pgvector/RAG"] = pgvector_status
+    statuses["object storage"] = _object_store_local_probe_status(
+        env=env,
+        object_store_probe_base_dir=object_store_probe_base_dir,
+    )
+    return statuses
+
+
+def _pgvector_local_probe_status(
+    env: Mapping[str, str],
+    health_checker: Callable[[Mapping[str, str]], PgvectorHealthCheck] | None,
+) -> _LocalProbeStatus:
+    if not _is_local_url(str(env.get("IDIS_DATABASE_URL", ""))):
+        return _not_attempted_probe(
+            label="pgvector_extension_connectivity",
+            claim="pgvector extension/connectivity only",
+            blocker="not_local_probe_target",
+        )
+    if health_checker is not None:
+        result = health_checker(env)
+    else:
+        from idis.services.rag.pgvector_health import check_pgvector_health
+
+        result = check_pgvector_health(env=env)
+    return _probe_status_from_bool(
+        label="pgvector_extension_connectivity",
+        claim="pgvector extension/connectivity only",
+        passed=result.status == PgvectorHealthStatus.HEALTHY,
+    )
+
+
+def _neo4j_local_probe_status(
+    env: Mapping[str, str],
+    health_checker: Callable[[Mapping[str, str]], Neo4jHealthCheck] | None,
+) -> _LocalProbeStatus:
+    if not _is_local_url(str(env.get("NEO4J_URI", ""))):
+        return _not_attempted_probe(
+            label="neo4j_local_health",
+            claim="Neo4j local health only",
+            blocker="not_local_probe_target",
+        )
+    if health_checker is not None:
+        result = health_checker(env)
+    else:
+        from idis.persistence.neo4j_driver import check_neo4j_health
+
+        result = check_neo4j_health(env=env)
+    return _probe_status_from_bool(
+        label="neo4j_local_health",
+        claim="Neo4j local health only",
+        passed=result.status == Neo4jHealthStatus.HEALTHY,
+    )
+
+
+def _object_store_local_probe_status(
+    *,
+    env: Mapping[str, str],
+    object_store_probe_base_dir: str | Path | None,
+) -> _LocalProbeStatus:
+    label = "filesystem_object_store_temp_write_delete"
+    claim = "filesystem object-store temp write/delete only"
+    probe_base_dir = _safe_object_store_probe_base_dir(object_store_probe_base_dir)
+    if probe_base_dir is None:
+        return _not_attempted_probe(
+            label=label,
+            claim=claim,
+            blocker="explicit_temp_local_probe_base_required",
+        )
+    from idis.services.runs.strict_full_live import _product_export_object_store_ready
+
+    probe_env = {
+        **env,
+        "IDIS_OBJECT_STORE_BACKEND": "filesystem",
+        "IDIS_OBJECT_STORE_BASE_DIR": str(probe_base_dir),
+    }
+    return _probe_status_from_bool(
+        label=label,
+        claim=claim,
+        passed=_product_export_object_store_ready(probe_env, probe=True),
+    )
+
+
+def _not_attempted_probe(*, label: str, claim: str, blocker: str) -> _LocalProbeStatus:
+    return _LocalProbeStatus(
+        label=label,
+        claim=claim,
+        attempted=False,
+        passed=False,
+        health_check_status="configured_not_checked",
+        blocker=blocker,
+    )
+
+
+def _probe_status_from_bool(*, label: str, claim: str, passed: bool) -> _LocalProbeStatus:
+    return _LocalProbeStatus(
+        label=label,
+        claim=claim,
+        attempted=True,
+        passed=passed,
+        health_check_status="healthy" if passed else "configured_failed",
+    )
+
+
+def _safe_object_store_probe_base_dir(value: str | Path | None) -> Path | None:
+    if value is None:
+        return None
+    try:
+        resolved = Path(value).expanduser().resolve()
+        temp_root = Path(tempfile.gettempdir()).resolve()
+        resolved.relative_to(temp_root)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return resolved
+
+
+def _is_local_url(value: str) -> bool:
+    if not value.strip():
+        return False
+    parsed = urlparse(value)
+    hostname = (parsed.hostname or "").lower()
+    return hostname in {
+        "localhost",
+        "127.0.0.1",
+        "::1",
+        "host.docker.internal",
+    } or hostname.startswith("127.")
 
 
 def _strict_env_canonicalization() -> dict[str, dict[str, Any]]:
@@ -198,7 +447,9 @@ def _static_embedding_health(env: Mapping[str, str]) -> EmbeddingHealthCheck:
     missing = [key for key in required if not _has_value(env, key)]
     if missing:
         return EmbeddingHealthCheck.missing(missing_env_vars=missing)
-    return EmbeddingHealthCheck.failed(error="Embedding runtime probe not executed in Slice72.")
+    return EmbeddingHealthCheck.failed(
+        error="Embedding runtime probe not executed in strict provisioning truth report."
+    )
 
 
 def _static_pgvector_health(env: Mapping[str, str]) -> PgvectorHealthCheck:

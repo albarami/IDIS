@@ -297,6 +297,31 @@ def is_strict_full_live_required(
     return value in {"1", "true", "yes", "on"}
 
 
+def build_strict_full_live_admission_report(
+    *,
+    db_conn: Any,
+    tenant_id: str,
+    preflight_corpus: Sequence[Mapping[str, Any]] | None,
+    strict_dotenv_path: str | Path | None,
+) -> StrictFullLiveReadinessReport:
+    """Build strict readiness report for API/worker admission parity."""
+    from idis.persistence.repositories.enrichment_credentials import (
+        get_enrichment_credentials_repository,
+    )
+    from idis.services.enrichment.byol_credentials import SafeByolProviderHealthChecker
+
+    return build_strict_full_live_readiness_report(
+        preflight_corpus=preflight_corpus,
+        dotenv_path=strict_dotenv_path,
+        tenant_id=tenant_id,
+        byol_credential_repo=get_enrichment_credentials_repository(
+            db_conn,
+            tenant_id,
+        ),
+        byol_health_checker=SafeByolProviderHealthChecker(),
+    )
+
+
 def build_strict_runtime_profile_report(
     *,
     env: Mapping[str, str] | None = None,

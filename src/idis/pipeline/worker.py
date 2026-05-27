@@ -6,22 +6,44 @@ import asyncio
 import contextlib
 import logging
 import os
+import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from idis.audit.sink import InMemoryAuditSink
+from pydantic import ValidationError
+
+from idis.models.run_source import RunSource
+from idis.models.run_step import RunStep, StepName, StepStatus
 from idis.persistence.db import get_app_engine, set_tenant_local
 from idis.persistence.repositories.run_steps import get_run_steps_repository
 from idis.persistence.repositories.runs import get_runs_repository
 from idis.services.runs.execution import RunExecutionService
 from idis.services.runs.orchestrator import RunContext
+from idis.services.runs.strict_full_live import (
+    IDIS_STRICT_DOTENV_PATH_ENV,
+    STRICT_FULL_LIVE_BLOCKED,
+    build_strict_full_live_admission_report,
+    is_strict_full_live_required,
+)
 
 logger = logging.getLogger(__name__)
 
 ExecutionServiceFactory = Callable[..., RunExecutionService]
 RunContextFactory = Callable[..., RunContext]
+
+
+class InvalidRunSourceMetadataError(ValueError):
+    """Stored run source metadata failed schema validation."""
+
+
+class InvalidRunSourceSelectionError(ValueError):
+    """Stored run source selected documents absent from persisted corpus."""
+
+
+class WorkerAuditConfigurationError(RuntimeError):
+    """Durable worker audit sink could not be configured."""
 
 
 class PipelineWorker:
@@ -111,6 +133,61 @@ class PipelineWorker:
                     processed_count += 1
 
                     try:
+                        if str(run_data.get("mode", "")).upper() == "FULL":
+                            strict_dotenv_path = os.environ.get(IDIS_STRICT_DOTENV_PATH_ENV)
+                            if is_strict_full_live_required(dotenv_path=strict_dotenv_path):
+                                try:
+                                    preflight_corpus = _load_worker_preflight_corpus(
+                                        db_conn=conn,
+                                        tenant_id=tenant_id,
+                                        run_data=run_data,
+                                    )
+                                except (
+                                    InvalidRunSourceMetadataError,
+                                    InvalidRunSourceSelectionError,
+                                ):
+                                    self._persist_worker_preflight_block(
+                                        conn=conn,
+                                        tenant_id=tenant_id,
+                                        run_id=run_id,
+                                        reason_code="INVALID_RUN_SOURCE",
+                                        message=(
+                                            "Queued FULL run has invalid or missing run-source "
+                                            "document selection"
+                                        ),
+                                    )
+                                    conn.commit()
+                                    logger.warning(
+                                        (
+                                            "Queued FULL run %s failed closed before strict "
+                                            "preflight due to invalid source selection metadata"
+                                        ),
+                                        run_id,
+                                    )
+                                    continue
+                                strict_report = build_strict_full_live_admission_report(
+                                    db_conn=conn,
+                                    tenant_id=tenant_id,
+                                    preflight_corpus=preflight_corpus,
+                                    strict_dotenv_path=strict_dotenv_path,
+                                )
+                                if not strict_report.may_proceed:
+                                    self._persist_worker_preflight_block(
+                                        conn=conn,
+                                        tenant_id=tenant_id,
+                                        run_id=run_id,
+                                        reason_code=STRICT_FULL_LIVE_BLOCKED,
+                                        message=(
+                                            "Strict full-live preflight blocked queued FULL run "
+                                            "before execution"
+                                        ),
+                                    )
+                                    conn.commit()
+                                    logger.info(
+                                        "Strict full-live blocked queued FULL run %s", run_id
+                                    )
+                                    continue
+
                         service = self._execution_service_factory(
                             db_conn=conn,
                             tenant_id=tenant_id,
@@ -159,6 +236,37 @@ class PipelineWorker:
                 exc_info=True,
             )
 
+    def _persist_worker_preflight_block(
+        self,
+        *,
+        conn: Any,
+        tenant_id: str,
+        run_id: str,
+        reason_code: str,
+        message: str,
+    ) -> None:
+        """Persist a safe preflight blocker using existing status and ledger surfaces."""
+        set_tenant_local(conn, tenant_id)
+        runs_repo = get_runs_repository(conn, tenant_id)
+        run_steps_repo = get_run_steps_repository(conn, tenant_id)
+        finished_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        runs_repo.complete(run_id, status="FAILED", finished_at=finished_at)
+
+        strict_step = RunStep(
+            step_id=str(uuid.uuid4()),
+            run_id=run_id,
+            tenant_id=tenant_id,
+            step_name=StepName.DOCUMENT_PREFLIGHT,
+            step_order=3,
+            status=StepStatus.FAILED,
+            started_at=finished_at,
+            finished_at=finished_at,
+            result_summary={"reason_code": reason_code},
+            error_code=reason_code,
+            error_message=message,
+        )
+        run_steps_repo.create(strict_step)
+
 
 def get_worker_tenant_ids() -> list[str]:
     """Return tenant IDs the worker is allowed to poll.
@@ -192,12 +300,53 @@ def _default_execution_service_factory(
     db_conn: Any,
     tenant_id: str,
 ) -> RunExecutionService:
-    audit_sink = InMemoryAuditSink()
+    audit_sink = _default_worker_audit_sink()
     return RunExecutionService(
         audit_sink=audit_sink,
         runs_repo=get_runs_repository(db_conn, tenant_id),
         run_steps_repo=get_run_steps_repository(db_conn, tenant_id),
     )
+
+
+def _default_worker_audit_sink() -> Any:
+    """Build the durable worker audit sink, failing closed if unavailable."""
+    try:
+        from idis.audit.postgres_sink import PostgresAuditSink
+
+        return PostgresAuditSink()
+    except Exception as exc:
+        raise WorkerAuditConfigurationError("WORKER_AUDIT_SINK_UNAVAILABLE") from exc
+
+
+def _load_worker_preflight_corpus(
+    *,
+    db_conn: Any,
+    tenant_id: str,
+    run_data: dict[str, Any],
+) -> list[dict[str, Any]]:
+    from idis.services.runs.steps import (
+        filter_preflight_corpus_by_run_source,
+        load_document_preflight_corpus_for_deal,
+        missing_document_ids_for_run_source,
+    )
+
+    deal_id = str(run_data["deal_id"])
+    preflight_corpus = load_document_preflight_corpus_for_deal(
+        db_conn=db_conn,
+        deal_id=deal_id,
+        tenant_id=tenant_id,
+    )
+    source: dict[str, Any] | RunSource | None = run_data.get("source")
+    if source is not None and not isinstance(source, RunSource):
+        try:
+            source = RunSource.model_validate(source)
+        except ValidationError as exc:
+            raise InvalidRunSourceMetadataError("invalid run source metadata") from exc
+    if isinstance(source, RunSource):
+        missing = missing_document_ids_for_run_source(preflight_corpus, source)
+        if missing:
+            raise InvalidRunSourceSelectionError("run source selected missing documents")
+    return filter_preflight_corpus_by_run_source(preflight_corpus, source)
 
 
 def _default_run_context_factory(
@@ -211,19 +360,13 @@ def _default_run_context_factory(
     from idis.services.runs.steps import (
         build_run_context,
         extraction_ready_documents_from_preflight_corpus,
-        filter_preflight_corpus_by_run_source,
-        load_document_preflight_corpus_for_deal,
     )
 
     deal_id = str(run_data["deal_id"])
-    preflight_corpus = load_document_preflight_corpus_for_deal(
+    preflight_corpus = _load_worker_preflight_corpus(
         db_conn=db_conn,
-        deal_id=deal_id,
         tenant_id=tenant_id,
-    )
-    preflight_corpus = filter_preflight_corpus_by_run_source(
-        preflight_corpus,
-        run_data.get("source"),
+        run_data=run_data,
     )
 
     return build_run_context(

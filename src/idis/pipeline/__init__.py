@@ -1,5 +1,7 @@
-"""Pipeline execution components for IDIS."""
+"""Pipeline package.
 
-from idis.pipeline.executor import PipelineExecutor
+Legacy ``PipelineExecutor`` remains in ``idis.pipeline.executor`` for migration
+compatibility, but is intentionally not re-exported as a production entrypoint.
+"""
 
-__all__ = ["PipelineExecutor"]
+__all__: list[str] = []

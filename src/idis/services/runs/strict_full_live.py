@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import shutil
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -19,6 +21,7 @@ from idis.parsers.media import (
 )
 from idis.persistence.neo4j_driver import Neo4jHealthCheck, Neo4jHealthStatus, check_neo4j_health
 from idis.services.enrichment.byol_credentials import (
+    BYOL_PROVIDER_ENV_SPECS,
     ByolCredentialRepository,
     ByolProviderHealthChecker,
     ByolProviderReadiness,
@@ -83,6 +86,8 @@ REQUIRED_STRICT_COMPONENTS: tuple[str, ...] = (
 )
 
 TRACKED_ENV_VARS: tuple[str, ...] = (
+    "IDIS_REQUIRE_FULL_LIVE",
+    "IDIS_STRICT_DOTENV_PATH",
     "ANTHROPIC_API_KEY",
     "IDIS_EXTRACT_BACKEND",
     "IDIS_DEBATE_BACKEND",
@@ -123,6 +128,64 @@ TRACKED_ENV_VARS: tuple[str, ...] = (
     "IDIS_EMBEDDING_DIMENSIONS",
     "OPENAI_API_KEY",
 )
+
+STRICT_MODEL_ENV_VARS: tuple[str, ...] = (
+    "IDIS_EXTRACT_BACKEND",
+    "IDIS_DEBATE_BACKEND",
+    "ANTHROPIC_API_KEY",
+    "IDIS_ANTHROPIC_MODEL_EXTRACT",
+    "IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT",
+    "IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER",
+)
+
+STRICT_PROVIDER_ENV_VARS: tuple[str, ...] = (
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    *tuple(spec.env_var for spec in BYOL_PROVIDER_ENV_SPECS.values()),
+)
+
+STRICT_ENV_EXAMPLE_REQUIRED_NAMES: tuple[str, ...] = (
+    "IDIS_REQUIRE_FULL_LIVE",
+    "IDIS_STRICT_DOTENV_PATH",
+    "IDIS_DATABASE_URL",
+    "IDIS_DATABASE_ADMIN_URL",
+    "IDIS_API_KEYS_JSON",
+    "IDIS_OBJECT_STORE_BACKEND",
+    "IDIS_OBJECT_STORE_BASE_DIR",
+    "ANTHROPIC_API_KEY",
+    "IDIS_EXTRACT_BACKEND",
+    "IDIS_DEBATE_BACKEND",
+    "IDIS_ANTHROPIC_MODEL_EXTRACT",
+    "IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT",
+    "IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER",
+    "IDIS_ENABLE_VECTOR_SEARCH",
+    "IDIS_EMBEDDING_BACKEND",
+    "IDIS_EMBEDDING_MODEL",
+    "IDIS_EMBEDDING_DIMENSIONS",
+    "OPENAI_API_KEY",
+    "IDIS_ENRICHMENT_ENCRYPTION_KEY",
+    "COMPANIES_HOUSE_API_KEY",
+    "GITHUB_API_TOKEN",
+    "FRED_API_KEY",
+    "FINNHUB_API_KEY",
+    "FMP_API_KEY",
+    "NEO4J_URI",
+    "NEO4J_USERNAME",
+    "NEO4J_PASSWORD",
+    "IDIS_OCR_ENABLED",
+    "IDIS_OCR_ADAPTER",
+    "IDIS_MEDIA_ADAPTER",
+    "IDIS_MEDIA_STT_MODEL_PATH",
+    "IDIS_MEDIA_STT_MODEL_NAME",
+)
+
+SLICE74_CLAIM_LANGUAGE = (
+    "Slice74 provides a secret-safe strict runtime profile for canonical env loading, "
+    "redacted validation, and documented strict readiness execution. It does not call "
+    "providers, run external enrichment, run real_example, execute strict FULL, clear "
+    "readiness, or claim VC-ready output."
+)
+DOTENV_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class StrictComponentStatus(StrEnum):
@@ -232,6 +295,73 @@ def is_strict_full_live_required(
     )
     value = str(env_source.effective_env.get(IDIS_REQUIRE_FULL_LIVE_ENV, "")).strip().lower()
     return value in {"1", "true", "yes", "on"}
+
+
+def build_strict_runtime_profile_report(
+    *,
+    env: Mapping[str, str] | None = None,
+    dotenv_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Build a secret-safe strict runtime profile without live provider calls."""
+    process_env = os.environ if env is None else env
+    resolved_dotenv_path = _resolve_strict_dotenv_path(
+        process_env=process_env,
+        dotenv_path=dotenv_path,
+    )
+    env_source = _build_strict_env_source(
+        process_env=process_env,
+        dotenv_path=resolved_dotenv_path,
+    )
+    from idis.api.auth import validate_api_key_registry_config
+
+    report: dict[str, Any] = {
+        "claim_language": SLICE74_CLAIM_LANGUAGE,
+        "source_of_truth": {
+            "env_inventory": "strict_full_live.TRACKED_ENV_VARS",
+            "api_keys": "idis.api.auth.IDIS_API_KEYS_ENV",
+            "model_env_inventory": "strict_full_live.STRICT_MODEL_ENV_VARS",
+            "provider_env_inventory": "strict_full_live.STRICT_PROVIDER_ENV_VARS",
+        },
+        "strict_global_may_proceed": False,
+        "readiness_cleared": False,
+        "real_example_not_run": True,
+        "strict_full_run_executed": False,
+        "live_provider_calls_made": False,
+        "external_enrichment_calls_made": False,
+        "vc_ready_claim": False,
+        "documented_command": {
+            "module": "idis.services.runs.strict_provisioning_truth",
+            "example": (
+                "python -m idis.services.runs.strict_provisioning_truth "
+                "--strict-runtime-profile --dotenv <path>"
+            ),
+        },
+        "dotenv_profile": _strict_dotenv_profile(
+            env_source=env_source,
+            explicit_dotenv_path=dotenv_path,
+        ),
+        "env_inventory": [
+            _runtime_profile_env_item(env_source=env_source, name=name) for name in TRACKED_ENV_VARS
+        ],
+        "api_key_registry": validate_api_key_registry_config(
+            env=env_source.effective_env
+        ).model_dump(mode="json"),
+        "model_env_inventory": [
+            _runtime_profile_model_env_item(env_source=env_source, name=name)
+            for name in STRICT_MODEL_ENV_VARS
+        ],
+        "provider_env_inventory": [
+            _runtime_profile_env_item(env_source=env_source, name=name)
+            for name in STRICT_PROVIDER_ENV_VARS
+        ],
+        "env_example_required_names": list(STRICT_ENV_EXAMPLE_REQUIRED_NAMES),
+    }
+    _assert_strict_runtime_profile_safe(
+        report=report,
+        env_values=env_source.effective_env,
+        process_env=process_env,
+    )
+    return report
 
 
 def build_strict_full_live_readiness_report(
@@ -853,6 +983,8 @@ class _StrictEnvSource:
     effective_env: dict[str, str]
     process_keys: frozenset[str]
     dotenv_keys: frozenset[str]
+    dotenv_load_status: str
+    dotenv_reason_codes: tuple[str, ...]
 
 
 def _build_strict_env_source(
@@ -860,32 +992,60 @@ def _build_strict_env_source(
     process_env: Mapping[str, str],
     dotenv_path: str | Path | None,
 ) -> _StrictEnvSource:
-    dotenv_values = _parse_dotenv_values(dotenv_path)
+    dotenv_values, dotenv_load_status, dotenv_reason_codes = _parse_dotenv_values_with_diagnostics(
+        dotenv_path
+    )
     effective_env = dict(dotenv_values)
     effective_env.update({key: str(value) for key, value in process_env.items()})
     return _StrictEnvSource(
         effective_env=effective_env,
         process_keys=frozenset(process_env.keys()),
         dotenv_keys=frozenset(dotenv_values.keys()),
+        dotenv_load_status=dotenv_load_status,
+        dotenv_reason_codes=tuple(dotenv_reason_codes),
     )
 
 
 def _parse_dotenv_values(dotenv_path: str | Path | None) -> dict[str, str]:
-    if dotenv_path is None:
-        return {}
-    path = Path(dotenv_path)
-    if not path.exists() or not path.is_file():
-        return {}
-    values: dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        parsed = _parse_dotenv_line(line)
-        if parsed is not None:
-            key, value = parsed
-            values[key] = value
+    values, _status, _reason_codes = _parse_dotenv_values_with_diagnostics(dotenv_path)
     return values
 
 
+def _parse_dotenv_values_with_diagnostics(
+    dotenv_path: str | Path | None,
+) -> tuple[dict[str, str], str, list[str]]:
+    if dotenv_path is None:
+        return {}, "not_configured", []
+    path = Path(dotenv_path)
+    if not path.exists():
+        return {}, "missing", ["DOTENV_PATH_MISSING"]
+    if not path.is_file():
+        return {}, "not_file", ["DOTENV_PATH_NOT_FILE"]
+    values: dict[str, str] = {}
+    reason_codes: list[str] = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except UnicodeDecodeError:
+        return {}, "invalid_encoding", ["DOTENV_INVALID_ENCODING"]
+    except OSError:
+        return {}, "read_error", ["DOTENV_READ_ERROR"]
+    for line in lines:
+        parsed = _parse_dotenv_line_with_status(line)
+        if parsed is not None:
+            key, value = parsed
+            values[key] = value
+        elif _is_malformed_dotenv_line(line):
+            reason_codes.append("DOTENV_LINE_MALFORMED")
+    if reason_codes:
+        return values, "loaded_with_warnings", sorted(set(reason_codes))
+    return values, "loaded", []
+
+
 def _parse_dotenv_line(line: str) -> tuple[str, str] | None:
+    return _parse_dotenv_line_with_status(line)
+
+
+def _parse_dotenv_line_with_status(line: str) -> tuple[str, str] | None:
     stripped = line.strip()
     if not stripped or stripped.startswith("#") or "=" not in stripped:
         return None
@@ -893,9 +1053,21 @@ def _parse_dotenv_line(line: str) -> tuple[str, str] | None:
     key = key.strip()
     if key.startswith("export "):
         key = key.removeprefix("export ").strip()
-    if not key:
+    if not key or DOTENV_KEY_PATTERN.fullmatch(key) is None:
         return None
     return key, _strip_dotenv_value(value.strip())
+
+
+def _is_malformed_dotenv_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return False
+    if "=" not in stripped:
+        return True
+    key = stripped.split("=", 1)[0].strip()
+    if key.startswith("export "):
+        key = key.removeprefix("export ").strip()
+    return not key or DOTENV_KEY_PATTERN.fullmatch(key) is None
 
 
 def _strip_dotenv_value(value: str) -> str:
@@ -916,6 +1088,119 @@ def _env_source_for_key(env_source: _StrictEnvSource, key: str) -> str:
     if key in env_source.dotenv_keys:
         return DOTENV_ENV_SOURCE
     return MISSING_ENV_SOURCE
+
+
+def _resolve_strict_dotenv_path(
+    *,
+    process_env: Mapping[str, str],
+    dotenv_path: str | Path | None,
+) -> str | Path | None:
+    if dotenv_path is not None:
+        return dotenv_path
+    value = str(process_env.get(IDIS_STRICT_DOTENV_PATH_ENV, "")).strip()
+    return value or None
+
+
+def _strict_dotenv_profile(
+    *,
+    env_source: _StrictEnvSource,
+    explicit_dotenv_path: str | Path | None,
+) -> dict[str, Any]:
+    source = (
+        "argument"
+        if explicit_dotenv_path is not None
+        else _env_source_for_key(
+            env_source,
+            IDIS_STRICT_DOTENV_PATH_ENV,
+        )
+    )
+    return {
+        "env_name": IDIS_STRICT_DOTENV_PATH_ENV,
+        "configured": env_source.dotenv_load_status != "not_configured",
+        "source": source,
+        "load_status": env_source.dotenv_load_status,
+        "reason_codes": list(env_source.dotenv_reason_codes),
+    }
+
+
+def _runtime_profile_env_item(
+    *,
+    env_source: _StrictEnvSource,
+    name: str,
+) -> dict[str, Any]:
+    present = _has_value(env_source.effective_env, name)
+    return {
+        "name": name,
+        "present": present,
+        "source": _env_source_for_key(env_source, name),
+        "validation_status": "present" if present else "missing",
+    }
+
+
+def _runtime_profile_model_env_item(
+    *,
+    env_source: _StrictEnvSource,
+    name: str,
+) -> dict[str, Any]:
+    item = _runtime_profile_env_item(env_source=env_source, name=name)
+    value = str(env_source.effective_env.get(name, "")).strip()
+    if name in {"IDIS_EXTRACT_BACKEND", "IDIS_DEBATE_BACKEND"}:
+        item["validation_status"] = (
+            "valid" if value == "anthropic" else "missing" if not value else "invalid"
+        )
+        item["required_value"] = "anthropic"
+        return item
+    item["validation_status"] = "valid" if value else "missing"
+    return item
+
+
+def _assert_strict_runtime_profile_safe(
+    *,
+    report: Mapping[str, Any],
+    env_values: Mapping[str, str],
+    process_env: Mapping[str, str],
+) -> None:
+    serialized = json.dumps(report, sort_keys=True).lower()
+    forbidden_tokens = (
+        "postgresql://",
+        "object_key",
+        "prompt_transcript",
+        "raw_text",
+        "embedding_payload",
+        "vector_payload",
+    )
+    leaked = [token for token in forbidden_tokens if token in serialized]
+    for values in (env_values, process_env):
+        for key, value in values.items():
+            sanitized_value = str(value).strip().lower()
+            if (
+                _is_sensitive_runtime_profile_value(key=key, value=sanitized_value)
+                and sanitized_value
+                and sanitized_value in serialized
+            ):
+                leaked.append(sanitized_value)
+    if leaked:
+        raise ValueError(
+            f"STRICT_RUNTIME_PROFILE_REPORT_LEAKAGE: leaked_token_count={len(set(leaked))}"
+        )
+
+
+def _is_sensitive_runtime_profile_value(*, key: str, value: str) -> bool:
+    if len(value) < 8:
+        return False
+    sensitive_key_markers = (
+        "KEY",
+        "TOKEN",
+        "SECRET",
+        "PASSWORD",
+        "URL",
+        "URI",
+        "PATH",
+        "MODEL",
+    )
+    if any(marker in key.upper() for marker in sensitive_key_markers):
+        return True
+    return "://" in value or ":\\" in value or "/" in value or "\\" in value
 
 
 def _build_component_inventory(

@@ -12,10 +12,11 @@ import hmac
 import json
 import logging
 import os
+from collections.abc import Mapping
 from typing import Annotated
 
 from fastapi import Depends, Request
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from idis.api.errors import IdisHttpError
 from idis.api.policy import ALL_ROLES
@@ -59,6 +60,20 @@ class ApiKeyRecord(BaseModel):
     roles: list[str] = []
 
 
+class ApiKeyRegistryValidationReport(BaseModel):
+    """Secret-free API-key registry shape validation result."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    canonical: str = IDIS_API_KEYS_ENV
+    aliases: list[str] = Field(default_factory=lambda: ["IDIS_API_KEYS"])
+    status: str
+    valid_entry_count: int
+    malformed_entry_count: int
+    legacy_alias_status: str
+    reason_codes: list[str] = Field(default_factory=list)
+
+
 def _load_api_key_registry() -> dict[str, ApiKeyRecord]:
     """Load API key registry from environment variable.
 
@@ -93,13 +108,12 @@ def _load_api_key_registry() -> dict[str, ApiKeyRecord]:
             continue
         try:
             registry[key] = ApiKeyRecord.model_validate(value)
-        except ValidationError as exc:
+        except ValidationError:
             malformed_count += 1
             logger.warning(
-                "Malformed %s entry at index %d; skipping: %s",
+                "Malformed %s entry at index %d; skipping validation errors",
                 IDIS_API_KEYS_ENV,
                 index,
-                exc.errors(),
             )
             continue
 
@@ -113,9 +127,89 @@ def _load_api_key_registry() -> dict[str, ApiKeyRecord]:
     return registry
 
 
-def validate_api_key_registry_config() -> None:
+def validate_api_key_registry_config(
+    env: Mapping[str, str] | None = None,
+) -> ApiKeyRegistryValidationReport:
     """Validate API-key registry shape during application startup diagnostics."""
-    _load_api_key_registry()
+    values = os.environ if env is None else env
+    raw = str(values.get(IDIS_API_KEYS_ENV, "")).strip()
+    legacy_alias_status = (
+        "present_ignored" if str(values.get("IDIS_API_KEYS", "")).strip() else "missing"
+    )
+    if not raw:
+        return ApiKeyRegistryValidationReport(
+            status="missing",
+            valid_entry_count=0,
+            malformed_entry_count=0,
+            legacy_alias_status=legacy_alias_status,
+            reason_codes=[f"{IDIS_API_KEYS_ENV}_MISSING"],
+        )
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return ApiKeyRegistryValidationReport(
+            status="invalid_json",
+            valid_entry_count=0,
+            malformed_entry_count=0,
+            legacy_alias_status=legacy_alias_status,
+            reason_codes=[f"{IDIS_API_KEYS_ENV}_INVALID_JSON"],
+        )
+
+    if not isinstance(parsed, dict):
+        return ApiKeyRegistryValidationReport(
+            status="not_object",
+            valid_entry_count=0,
+            malformed_entry_count=0,
+            legacy_alias_status=legacy_alias_status,
+            reason_codes=[f"{IDIS_API_KEYS_ENV}_NOT_OBJECT"],
+        )
+
+    valid_entry_count = 0
+    malformed_entry_count = 0
+    for key, value in parsed.items():
+        if not isinstance(key, str) or not key.strip() or not isinstance(value, dict):
+            malformed_entry_count += 1
+            continue
+        try:
+            record = ApiKeyRecord.model_validate(value)
+            _validate_api_key_record_roles(record)
+        except ValidationError:
+            malformed_entry_count += 1
+            continue
+        except ValueError:
+            malformed_entry_count += 1
+            continue
+        valid_entry_count += 1
+
+    reason_codes: list[str] = []
+    if not parsed:
+        status = "empty"
+        reason_codes.append("API_KEY_REGISTRY_EMPTY")
+    elif malformed_entry_count:
+        status = "malformed_entries"
+        reason_codes.append("MALFORMED_API_KEY_ENTRY")
+        logger.warning(
+            "Malformed %s entry count during startup diagnostics: %d",
+            IDIS_API_KEYS_ENV,
+            malformed_entry_count,
+        )
+    else:
+        status = "valid"
+
+    return ApiKeyRegistryValidationReport(
+        status=status,
+        valid_entry_count=valid_entry_count,
+        malformed_entry_count=malformed_entry_count,
+        legacy_alias_status=legacy_alias_status,
+        reason_codes=reason_codes,
+    )
+
+
+def _validate_api_key_record_roles(record: ApiKeyRecord) -> None:
+    for role in record.roles:
+        if role.upper().strip() not in ALL_ROLES:
+            raise ValueError("unknown API key role")
 
 
 def _constant_time_lookup(

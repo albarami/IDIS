@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
+import sys
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -18,6 +20,7 @@ from idis.services.runs.strict_full_live import (
     StrictComponentInventory,
     StrictComponentReadiness,
     build_strict_full_live_readiness_report,
+    build_strict_runtime_profile_report,
 )
 
 SLICE72_CLAIM_LANGUAGE = (
@@ -481,7 +484,9 @@ def _assert_strict_provisioning_truth_safe(
     leaked = [token for token in forbidden if token in serialized]
     leaked.extend(value for value in env_values if value and value in serialized)
     if leaked:
-        raise ValueError(f"STRICT_PROVISIONING_TRUTH_REPORT_LEAKAGE: {sorted(leaked)}")
+        raise ValueError(
+            f"STRICT_PROVISIONING_TRUTH_REPORT_LEAKAGE: leaked_token_count={len(set(leaked))}"
+        )
 
 
 def _is_sensitive_report_value(*, key: str, value: str) -> bool:
@@ -495,3 +500,30 @@ def _is_sensitive_report_value(*, key: str, value: str) -> bool:
 
 def _has_value(env: Mapping[str, str], key: str) -> bool:
     return bool(str(env.get(key, "")).strip())
+
+
+def _main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Emit secret-safe strict provisioning/runtime reports."
+    )
+    parser.add_argument(
+        "--strict-runtime-profile",
+        action="store_true",
+        help="Emit the Slice74 secret-safe strict runtime profile JSON.",
+    )
+    parser.add_argument(
+        "--dotenv",
+        default=None,
+        help="Optional strict dotenv path. Values are loaded but never printed.",
+    )
+    args = parser.parse_args(argv)
+    if args.strict_runtime_profile:
+        report = build_strict_runtime_profile_report(dotenv_path=args.dotenv)
+        print(json.dumps(report, sort_keys=True, indent=2))
+        return 0
+    parser.error("--strict-runtime-profile is required")
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main(sys.argv[1:]))

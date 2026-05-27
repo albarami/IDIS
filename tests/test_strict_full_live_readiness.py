@@ -121,10 +121,31 @@ def test_strict_report_blocks_missing_durable_runtime_env() -> None:
     assert runtime.status == StrictComponentStatus.MISSING_INFRASTRUCTURE
     assert runtime.required_env_vars == [
         "IDIS_DATABASE_URL",
-        "IDIS_API_KEYS",
+        "IDIS_API_KEYS_JSON",
         "IDIS_OBJECT_STORE_BACKEND",
     ]
     assert runtime.may_proceed is False
+
+
+def test_strict_report_treats_api_keys_json_as_canonical_runtime_config() -> None:
+    """Strict runtime config should follow auth's canonical API key registry env."""
+    from idis.services.runs.strict_full_live import (
+        StrictComponentStatus,
+        build_strict_full_live_readiness_report,
+    )
+
+    report = build_strict_full_live_readiness_report(
+        env={
+            "IDIS_DATABASE_URL": "postgresql://configured/db",
+            "IDIS_API_KEYS_JSON": "{}",
+            "IDIS_OBJECT_STORE_BACKEND": "filesystem",
+        }
+    )
+    runtime = report.component("durable_runtime")
+
+    assert runtime.status == StrictComponentStatus.LIVE_WIRED_AND_USED
+    assert runtime.required_env_vars == []
+    assert runtime.may_proceed is True
 
 
 def test_strict_report_lists_ocr_media_rag_graph_and_layer2_blockers() -> None:

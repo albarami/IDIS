@@ -190,6 +190,28 @@ class StrictFullLiveReadinessReport(BaseModel):
         raise KeyError(msg)
 
 
+def build_strict_provisioning_truth_report(
+    *,
+    env: Mapping[str, str] | None = None,
+    dotenv_path: str | Path | None = None,
+    preflight_corpus: Sequence[Mapping[str, Any]] | None = None,
+    data_room_file_extensions: Sequence[str] | None = None,
+    binary_resolver: Callable[[str], str | None] | None = None,
+) -> dict[str, Any]:
+    """Build a redacted inventory/provisioning report without live runtime probes."""
+    from idis.services.runs.strict_provisioning_truth import (
+        build_strict_provisioning_truth_report as build_report,
+    )
+
+    return build_report(
+        env=env,
+        dotenv_path=dotenv_path,
+        preflight_corpus=preflight_corpus,
+        data_room_file_extensions=data_room_file_extensions,
+        binary_resolver=binary_resolver,
+    )
+
+
 def is_strict_full_live_required(
     env: Mapping[str, str] | None = None,
     *,
@@ -219,6 +241,7 @@ def build_strict_full_live_readiness_report(
     neo4j_health_checker: Callable[[Mapping[str, str]], Neo4jHealthCheck] | None = None,
     embedding_health_checker: Callable[[Mapping[str, str]], EmbeddingHealthCheck] | None = None,
     pgvector_health_checker: Callable[[Mapping[str, str]], PgvectorHealthCheck] | None = None,
+    probe_object_store: bool = True,
 ) -> StrictFullLiveReadinessReport:
     """Build a safe strict full-live readiness report without executing a run."""
     env_source = _build_strict_env_source(
@@ -250,13 +273,25 @@ def build_strict_full_live_readiness_report(
     graph_health = _neo4j_health(values, neo4j_health_checker)
     embedding_health = _embedding_health(values, embedding_health_checker)
     pgvector_health = _pgvector_health(values, pgvector_health_checker)
+    product_export_ready = _product_export_ready(
+        values,
+        probe_object_store=probe_object_store,
+    )
+    product_export_config_present = _product_export_config_present(
+        values,
+        probe_object_store=probe_object_store,
+    )
+    ui_api_download_ready = _ui_api_download_ready(
+        values,
+        probe_object_store=probe_object_store,
+    )
     components = [
         _supported_parsers_extraction(values),
         _durable_runtime(values),
         _ocr(has_ocr_evidence=has_ocr_evidence, env=values, binary_resolver=resolver),
         _mp4_stt(has_media=has_media, env=values, binary_resolver=resolver),
-        _calculation_engine(values),
-        _calc_sanad(values),
+        _calculation_engine(env=values, product_export_ready=product_export_ready),
+        _calc_sanad(env=values, product_export_ready=product_export_ready),
         _external_enrichment_apis(
             byol_providers=byol_providers,
             byol_credentials_durable=byol_credentials_durable,
@@ -268,9 +303,13 @@ def build_strict_full_live_readiness_report(
         _live("muhasabah_nff", "src/idis/debate/orchestrator.py; src/idis/deliverables/"),
         _scoring(values),
         _rag_foundation_layer(values, embedding_health, pgvector_health),
-        _graph_evidence_layer(values, graph_health),
+        _graph_evidence_layer(
+            values,
+            graph_health,
+            product_export_ready=product_export_ready,
+        ),
         _live("deliverable_generation", "src/idis/deliverables/generator.py"),
-        _product_export_bundle(values),
+        _product_export_bundle(env=values, product_export_ready=product_export_ready),
     ]
     component_inventory = _build_component_inventory(
         env_source=env_source,
@@ -283,6 +322,10 @@ def build_strict_full_live_readiness_report(
         graph_health=graph_health,
         embedding_health=embedding_health,
         pgvector_health=pgvector_health,
+        product_export_ready=product_export_ready,
+        product_export_config_present=product_export_config_present,
+        ui_api_download_ready=ui_api_download_ready,
+        object_store_config_present=_product_export_object_store_config_present(values),
     )
     blocking_components = [
         component.component_name for component in components if not component.may_proceed
@@ -418,7 +461,7 @@ def _mp4_stt(
 def _durable_runtime(env: Mapping[str, str]) -> StrictComponentReadiness:
     required_env_vars = [
         "IDIS_DATABASE_URL",
-        "IDIS_API_KEYS",
+        "IDIS_API_KEYS_JSON",
         "IDIS_OBJECT_STORE_BACKEND",
     ]
     missing = [key for key in required_env_vars if not _has_value(env, key)]
@@ -473,12 +516,16 @@ def _external_enrichment_apis(
     )
 
 
-def _calculation_engine(env: Mapping[str, str]) -> StrictComponentReadiness:
+def _calculation_engine(
+    *,
+    env: Mapping[str, str],
+    product_export_ready: bool,
+) -> StrictComponentReadiness:
     evidence = (
         "src/idis/services/calc/runner.py; src/idis/calc/engine.py; "
         "src/idis/deliverables/product_bundle.py"
     )
-    if _calculation_visibility_ready(env):
+    if product_export_ready:
         return _live("deterministic_calculations", evidence)
     return StrictComponentReadiness(
         component_name="deterministic_calculations",
@@ -494,13 +541,17 @@ def _calculation_engine(env: Mapping[str, str]) -> StrictComponentReadiness:
     )
 
 
-def _calc_sanad(env: Mapping[str, str]) -> StrictComponentReadiness:
+def _calc_sanad(
+    *,
+    env: Mapping[str, str],
+    product_export_ready: bool,
+) -> StrictComponentReadiness:
     evidence = (
         "src/idis/models/calc_sanad.py; "
         "src/idis/persistence/repositories/calculations.py; "
         "src/idis/deliverables/product_bundle.py"
     )
-    if _calculation_visibility_ready(env):
+    if product_export_ready:
         return _live("calc_sanad", evidence)
     return StrictComponentReadiness(
         component_name="calc_sanad",
@@ -722,8 +773,14 @@ def _rag_foundation_layer(
 def _graph_evidence_layer(
     env: Mapping[str, str],
     graph_health: Neo4jHealthCheck,
+    *,
+    product_export_ready: bool,
 ) -> StrictComponentReadiness:
-    graph_ready = _graph_visibility_ready(env, graph_health)
+    graph_ready = _graph_visibility_ready(
+        env,
+        graph_health,
+        product_export_ready=product_export_ready,
+    )
     if graph_ready:
         return _live(
             "graph_evidence_layer",
@@ -756,8 +813,12 @@ def _graph_evidence_layer(
     )
 
 
-def _product_export_bundle(env: Mapping[str, str]) -> StrictComponentReadiness:
-    if _product_export_ready(env):
+def _product_export_bundle(
+    *,
+    env: Mapping[str, str],
+    product_export_ready: bool,
+) -> StrictComponentReadiness:
+    if product_export_ready:
         return _live(
             "product_export_bundle",
             "src/idis/deliverables/product_bundle.py; src/idis/services/runs/steps.py",
@@ -861,11 +922,19 @@ def _build_component_inventory(
     graph_health: Neo4jHealthCheck,
     embedding_health: EmbeddingHealthCheck,
     pgvector_health: PgvectorHealthCheck,
+    product_export_ready: bool,
+    product_export_config_present: bool,
+    ui_api_download_ready: bool,
+    object_store_config_present: bool,
 ) -> list[StrictComponentInventory]:
     env = env_source.effective_env
     ocr_ready = _ocr_runtime_ready(env=env, binary_resolver=binary_resolver)
     media_ready = _media_runtime_ready(env=env, binary_resolver=binary_resolver)
-    graph_ready = _graph_visibility_ready(env, graph_health)
+    graph_ready = _graph_visibility_ready(
+        env,
+        graph_health,
+        product_export_ready=product_export_ready,
+    )
     graph_health_status = _graph_inventory_health(graph_health)
     rag_foundation_ready = _rag_foundation_ready(embedding_health, pgvector_health)
     rag_ready = _rag_full_wired_ready(env, embedding_health, pgvector_health)
@@ -1066,11 +1135,11 @@ def _build_component_inventory(
             exists=True,
             full_wired=True,
             config_present=_has_value(env, "IDIS_OBJECT_STORE_BACKEND"),
-            health="healthy" if _product_export_object_store_ready(env) else "missing_config",
-            output_visible=_product_export_object_store_ready(env),
+            health="healthy" if object_store_config_present else "missing_config",
+            output_visible=object_store_config_present,
             blocker=(
                 ""
-                if _product_export_object_store_ready(env)
+                if object_store_config_present
                 else (
                     "Object storage exists, but explicit filesystem product export "
                     "config is missing."
@@ -1099,10 +1168,10 @@ def _build_component_inventory(
             exists=True,
             full_wired=True,
             config_present=True,
-            health="healthy" if _calculation_visibility_ready(env) else "contract_only",
-            output_visible=_calculation_visibility_ready(env),
+            health="healthy" if product_export_ready else "contract_only",
+            output_visible=product_export_ready,
             blocker=""
-            if _calculation_visibility_ready(env)
+            if product_export_ready
             else "Calculation outputs are not yet final-package-visible.",
             slice_name="Slice 60",
             evidence=["src/idis/services/calc/runner.py", "src/idis/calc/engine.py"],
@@ -1112,10 +1181,10 @@ def _build_component_inventory(
             exists=True,
             full_wired=True,
             config_present=True,
-            health="healthy" if _calculation_visibility_ready(env) else "contract_only",
-            output_visible=_calculation_visibility_ready(env),
+            health="healthy" if product_export_ready else "contract_only",
+            output_visible=product_export_ready,
             blocker=""
-            if _calculation_visibility_ready(env)
+            if product_export_ready
             else "CalcSanad persistence exists, but final-package visibility is not proven.",
             slice_name="Slice 60",
             evidence=[
@@ -1252,13 +1321,13 @@ def _build_component_inventory(
         _inventory_item(
             "product export",
             exists=True,
-            full_wired=_product_export_ready(env),
-            config_present=_product_export_config_present(env),
-            health="healthy" if _product_export_ready(env) else "missing_config",
-            output_visible=_product_export_ready(env),
+            full_wired=product_export_ready,
+            config_present=product_export_config_present,
+            health="healthy" if product_export_ready else "missing_config",
+            output_visible=product_export_ready,
             blocker=(
                 ""
-                if _product_export_ready(env)
+                if product_export_ready
                 else (
                     "Durable product bundle export is missing DB/object-store config "
                     "or FULL/API wiring."
@@ -1274,13 +1343,13 @@ def _build_component_inventory(
         _inventory_item(
             "UI/API download",
             exists=True,
-            full_wired=_ui_api_download_ready(env),
-            config_present=_product_export_config_present(env),
-            health="healthy" if _ui_api_download_ready(env) else "not_wired",
-            output_visible=_ui_api_download_ready(env),
+            full_wired=ui_api_download_ready,
+            config_present=product_export_config_present,
+            health="healthy" if ui_api_download_ready else "not_wired",
+            output_visible=ui_api_download_ready,
             blocker=(
                 ""
-                if _ui_api_download_ready(env)
+                if ui_api_download_ready
                 else (
                     "Final package download/review requires object-store config, resolver, "
                     "download/manifest routes, and UI visibility wiring."
@@ -1517,12 +1586,15 @@ def _any_env_present(env: Mapping[str, str], keys: Sequence[str]) -> bool:
     return any(_has_value(env, key) for key in keys)
 
 
-def _product_export_ready(env: Mapping[str, str]) -> bool:
-    return _has_value(env, "IDIS_DATABASE_URL") and _product_export_object_store_ready(env)
-
-
-def _calculation_visibility_ready(env: Mapping[str, str]) -> bool:
-    return _product_export_ready(env)
+def _product_export_ready(
+    env: Mapping[str, str],
+    *,
+    probe_object_store: bool = True,
+) -> bool:
+    return _has_value(env, "IDIS_DATABASE_URL") and _product_export_object_store_ready(
+        env,
+        probe=probe_object_store,
+    )
 
 
 def _neo4j_health(
@@ -1534,8 +1606,17 @@ def _neo4j_health(
     return check_neo4j_health(env=env)
 
 
-def _graph_visibility_ready(env: Mapping[str, str], graph_health: Neo4jHealthCheck) -> bool:
-    return graph_health.status == Neo4jHealthStatus.HEALTHY and _product_export_ready(env)
+def _graph_visibility_ready(
+    env: Mapping[str, str],
+    graph_health: Neo4jHealthCheck,
+    *,
+    product_export_ready: bool,
+) -> bool:
+    return (
+        graph_health.status == Neo4jHealthStatus.HEALTHY
+        and _has_value(env, "IDIS_DATABASE_URL")
+        and product_export_ready
+    )
 
 
 def _graph_inventory_health(graph_health: Neo4jHealthCheck) -> str:
@@ -1802,9 +1883,19 @@ def _rag_code_path_wired() -> bool:
         return False
 
 
-def _ui_api_download_ready(env: Mapping[str, str]) -> bool:
+def _ui_api_download_ready(
+    env: Mapping[str, str],
+    *,
+    probe_object_store: bool = True,
+) -> bool:
     """Return True when download/review routes, resolver, store, and UI are wired."""
-    return _product_export_object_store_ready(env) and _ui_api_download_code_path_wired()
+    return (
+        _product_export_object_store_ready(
+            env,
+            probe=probe_object_store,
+        )
+        and _ui_api_download_code_path_wired()
+    )
 
 
 def _ui_api_download_code_path_wired() -> bool:
@@ -1882,15 +1973,28 @@ def _supabase_vectors_inventory(
     )
 
 
-def _product_export_config_present(env: Mapping[str, str]) -> bool:
-    return _has_value(env, "IDIS_DATABASE_URL") or _product_export_object_store_ready(env)
+def _product_export_config_present(
+    env: Mapping[str, str],
+    *,
+    probe_object_store: bool = True,
+) -> bool:
+    return _has_value(env, "IDIS_DATABASE_URL") or _product_export_object_store_ready(
+        env,
+        probe=probe_object_store,
+    )
 
 
-def _product_export_object_store_ready(env: Mapping[str, str]) -> bool:
+def _product_export_object_store_ready(
+    env: Mapping[str, str],
+    *,
+    probe: bool = True,
+) -> bool:
     if str(
         env.get("IDIS_OBJECT_STORE_BACKEND", "")
     ).strip().lower() != "filesystem" or not _has_value(env, "IDIS_OBJECT_STORE_BASE_DIR"):
         return False
+    if not probe:
+        return True
     from idis.storage.defaults import build_configured_product_export_object_store
     from idis.storage.errors import ObjectStorageError
 
@@ -1910,6 +2014,12 @@ def _product_export_object_store_ready(env: Mapping[str, str]) -> bool:
     except (ObjectStorageError, OSError, ValueError):
         return False
     return True
+
+
+def _product_export_object_store_config_present(env: Mapping[str, str]) -> bool:
+    return str(
+        env.get("IDIS_OBJECT_STORE_BACKEND", "")
+    ).strip().lower() == "filesystem" and _has_value(env, "IDIS_OBJECT_STORE_BASE_DIR")
 
 
 def _missing_product_export_env(env: Mapping[str, str]) -> list[str]:

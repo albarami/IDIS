@@ -22,7 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from pydantic import BaseModel
 
@@ -419,6 +419,14 @@ class RunContext:
     analysis_fn: Callable[..., dict[str, Any]] | None = None
     scoring_fn: Callable[..., dict[str, Any]] | None = None
     deliverables_fn: Callable[..., dict[str, Any]] | None = None
+    is_cancellation_requested_fn: Callable[[str, str], bool] | None = None
+
+
+class CancellationRunsRepository(Protocol):
+    """Repository surface for cancellation checks during orchestration."""
+
+    def get(self, run_id: str) -> dict[str, object] | None:
+        """Return persisted run row for cancellation/status checks."""
 
 
 class RunOrchestrator:
@@ -438,6 +446,7 @@ class RunOrchestrator:
         *,
         audit_sink: AuditSink,
         run_steps_repo: RunStepsRepo,
+        runs_repo: CancellationRunsRepository | None = None,
     ) -> None:
         """Initialize the orchestrator.
 
@@ -447,6 +456,7 @@ class RunOrchestrator:
         """
         self._audit = audit_sink
         self._steps_repo = run_steps_repo
+        self._runs_repo = runs_repo
 
     def execute(self, ctx: RunContext) -> OrchestratorResult:
         """Execute all pipeline steps for the given run context.
@@ -473,6 +483,9 @@ class RunOrchestrator:
         accumulated: dict[str, Any] = {}
 
         for step_name in step_sequence:
+            if self._is_cancellation_requested(ctx):
+                return self._cancelled_result(ctx)
+
             if step_name not in IMPLEMENTED_STEPS:
                 self._create_blocked_step(ctx, step_name)
                 self._emit_audit_event(
@@ -546,6 +559,8 @@ class RunOrchestrator:
             except AuditSinkError:
                 raise
             except Exception as exc:
+                if self._is_cancellation_requested(ctx):
+                    return self._cancelled_result(ctx)
                 self._fail_step(step, exc)
                 all_steps = self._steps_repo.get_by_run_id(ctx.run_id)
                 block_reason = step.error_code if isinstance(exc, RunStepBlockedError) else None
@@ -559,10 +574,43 @@ class RunOrchestrator:
 
             self._complete_step(step, result)
             accumulated.update(result)
+            if self._is_cancellation_requested(ctx):
+                return self._cancelled_result(ctx)
 
         all_steps = self._steps_repo.get_by_run_id(ctx.run_id)
         final_status = self._compute_final_status(all_steps)
         return OrchestratorResult(status=final_status, steps=all_steps)
+
+    def _cancelled_result(self, ctx: RunContext) -> OrchestratorResult:
+        """Return a safe cancellation result without overwriting terminal state."""
+        all_steps = self._steps_repo.get_by_run_id(ctx.run_id)
+        return OrchestratorResult(
+            status="CANCELLED",
+            steps=all_steps,
+            block_reason="RUN_CANCELLED",
+            error_code="RUN_CANCELLED",
+            error_message="Run cancelled by lifecycle request",
+        )
+
+    def _is_cancellation_requested(self, ctx: RunContext) -> bool:
+        """Check whether run cancellation has been requested between steps."""
+        if ctx.is_cancellation_requested_fn is not None:
+            return bool(ctx.is_cancellation_requested_fn(ctx.run_id, ctx.tenant_id))
+
+        if self._runs_repo is not None:
+            get_run = getattr(self._runs_repo, "get", None)
+            if callable(get_run):
+                run_data = get_run(ctx.run_id)
+                return bool(run_data is not None and str(run_data.get("status")) == "CANCELLED")
+
+        from idis.persistence.repositories.runs import _in_memory_runs_store
+
+        run_data = _in_memory_runs_store.get(ctx.run_id)
+        return bool(
+            run_data is not None
+            and str(run_data.get("tenant_id")) == ctx.tenant_id
+            and str(run_data.get("status")) == "CANCELLED"
+        )
 
     def _dispatch_step(
         self,
@@ -2269,10 +2317,11 @@ class RunOrchestrator:
         Returns:
             SUCCEEDED if all steps completed, FAILED otherwise (fail-closed).
         """
-        if not steps:
+        executable_steps = [step for step in steps if step.step_name != StepName.RUN_LIFECYCLE]
+        if not executable_steps:
             return "FAILED"
 
-        has_failed = any(s.status == StepStatus.FAILED for s in steps)
+        has_failed = any(step.status == StepStatus.FAILED for step in executable_steps)
 
         if has_failed:
             return "FAILED"

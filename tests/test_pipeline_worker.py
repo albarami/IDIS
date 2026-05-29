@@ -137,6 +137,383 @@ def test_worker_persists_failed_status_after_execution_exception() -> None:
     assert runs_repo.completed[0][2] is not None
 
 
+class _RecoveryRunsRepository:
+    """Runs repo fake exposing guarded and unconditional completion for recovery tests."""
+
+    def __init__(self, status: str) -> None:
+        self.status = status
+        self.guarded_calls: list[str] = []
+        self.unconditional_calls: list[str] = []
+
+    def try_complete_running(self, run_id: str, *, status: str, finished_at: str | None) -> bool:
+        self.guarded_calls.append(status)
+        if self.status != "RUNNING":
+            return False
+        self.status = status
+        return True
+
+    def complete(self, run_id: str, *, status: str, finished_at: str | None) -> None:
+        self.unconditional_calls.append(status)
+        self.status = status
+
+
+def test_worker_exception_recovery_does_not_overwrite_cancelled_run() -> None:
+    """Post-exception recovery must not overwrite a CANCELLED run with FAILED."""
+    conn = MagicMock()
+    runs_repo = _RecoveryRunsRepository(status="CANCELLED")
+
+    worker = PipelineWorker(poll_interval=0, tenant_ids=[TENANT_ID])
+
+    with (
+        patch("idis.pipeline.worker.get_runs_repository", return_value=runs_repo),
+        patch("idis.pipeline.worker.set_tenant_local", create=True),
+    ):
+        worker._mark_run_failed_after_exception(conn, TENANT_ID, "run-1")
+
+    assert runs_repo.status == "CANCELLED"
+    assert runs_repo.guarded_calls == ["FAILED"]
+    assert runs_repo.unconditional_calls == []
+
+
+def test_worker_exception_recovery_marks_running_run_failed() -> None:
+    """Post-exception recovery must still mark a still-RUNNING run FAILED via the guard."""
+    conn = MagicMock()
+    runs_repo = _RecoveryRunsRepository(status="RUNNING")
+
+    worker = PipelineWorker(poll_interval=0, tenant_ids=[TENANT_ID])
+
+    with (
+        patch("idis.pipeline.worker.get_runs_repository", return_value=runs_repo),
+        patch("idis.pipeline.worker.set_tenant_local", create=True),
+    ):
+        worker._mark_run_failed_after_exception(conn, TENANT_ID, "run-1")
+
+    assert runs_repo.status == "FAILED"
+    assert runs_repo.guarded_calls == ["FAILED"]
+    assert runs_repo.unconditional_calls == []
+
+
+class _PreflightBlockRunsRepository:
+    """Runs repo fake exposing guarded active-completion for preflight-block tests."""
+
+    def __init__(self, status: str) -> None:
+        self.status = status
+        self.active_complete_calls: list[str] = []
+        self.unconditional_calls: list[str] = []
+
+    def try_complete_active(self, run_id: str, *, status: str, finished_at: str | None) -> bool:
+        self.active_complete_calls.append(status)
+        if self.status not in ("QUEUED", "RUNNING"):
+            return False
+        self.status = status
+        return True
+
+    def complete(self, run_id: str, *, status: str, finished_at: str | None) -> None:
+        self.unconditional_calls.append(status)
+        self.status = status
+
+
+class _RecordingRunStepsRepository:
+    """Run-steps repo fake recording created ledger steps."""
+
+    def __init__(self) -> None:
+        self.created: list[object] = []
+
+    def create(self, step: object) -> None:
+        self.created.append(step)
+
+
+def test_worker_preflight_block_does_not_overwrite_cancelled_run() -> None:
+    """Strict preflight block must not overwrite a run cancelled after batch locks released."""
+    conn = MagicMock()
+    runs_repo = _PreflightBlockRunsRepository(status="CANCELLED")
+    steps_repo = _RecordingRunStepsRepository()
+    worker = PipelineWorker(poll_interval=0, tenant_ids=[TENANT_ID])
+
+    with (
+        patch("idis.pipeline.worker.get_runs_repository", return_value=runs_repo),
+        patch("idis.pipeline.worker.get_run_steps_repository", return_value=steps_repo),
+        patch("idis.pipeline.worker.set_tenant_local", create=True),
+    ):
+        worker._persist_worker_preflight_block(
+            conn=conn,
+            tenant_id=TENANT_ID,
+            run_id="run-1",
+            reason_code="STRICT_FULL_LIVE_BLOCKED",
+            message="blocked",
+        )
+
+    assert runs_repo.status == "CANCELLED"
+    assert runs_repo.unconditional_calls == []
+    assert steps_repo.created == []
+
+
+def test_worker_preflight_block_marks_queued_run_failed_with_ledger() -> None:
+    """Strict preflight block must still mark a QUEUED run FAILED and write the ledger step."""
+    from idis.models.run_step import StepName
+
+    conn = MagicMock()
+    runs_repo = _PreflightBlockRunsRepository(status="QUEUED")
+    steps_repo = _RecordingRunStepsRepository()
+    worker = PipelineWorker(poll_interval=0, tenant_ids=[TENANT_ID])
+
+    with (
+        patch("idis.pipeline.worker.get_runs_repository", return_value=runs_repo),
+        patch("idis.pipeline.worker.get_run_steps_repository", return_value=steps_repo),
+        patch("idis.pipeline.worker.set_tenant_local", create=True),
+    ):
+        worker._persist_worker_preflight_block(
+            conn=conn,
+            tenant_id=TENANT_ID,
+            run_id="run-1",
+            reason_code="INVALID_RUN_SOURCE",
+            message="invalid source",
+        )
+
+    assert runs_repo.status == "FAILED"
+    assert runs_repo.active_complete_calls == ["FAILED"]
+    assert runs_repo.unconditional_calls == []
+    assert len(steps_repo.created) == 1
+    assert steps_repo.created[0].step_name == StepName.DOCUMENT_PREFLIGHT
+    assert steps_repo.created[0].error_code == "INVALID_RUN_SOURCE"
+
+
+def test_worker_commits_running_claim_before_orchestration(monkeypatch) -> None:
+    """Worker must release the RUNNING row before long-running orchestration."""
+    from idis.persistence.repositories.runs import InMemoryRunsRepository
+    from idis.services.runs.orchestrator import OrchestratorResult, RunContext
+
+    monkeypatch.setenv("IDIS_REQUIRE_FULL_LIVE", "0")
+    events: list[str] = []
+    cancel_results: list[bool] = []
+
+    class RecordingConnection:
+        def commit(self) -> None:
+            events.append("commit")
+
+        def rollback(self) -> None:
+            events.append("rollback")
+
+    class RecordingRunsRepository(InMemoryRunsRepository):
+        def __init__(self) -> None:
+            super().__init__(TENANT_ID)
+            self.status = "QUEUED"
+
+        def claim_queued_runs(self, *, limit: int) -> list[dict[str, str]]:
+            events.append("claim_queued_runs")
+            return [
+                {
+                    "run_id": "run-1",
+                    "deal_id": "deal-1",
+                    "mode": "SNAPSHOT",
+                    "tenant_id": TENANT_ID,
+                }
+            ]
+
+        def try_mark_running(self, run_id: str) -> bool:
+            events.append("mark_running")
+            if self.status != "QUEUED":
+                return False
+            self.status = "RUNNING"
+            return True
+
+        def get(self, run_id: str) -> dict[str, str]:
+            return {
+                "run_id": run_id,
+                "tenant_id": TENANT_ID,
+                "deal_id": "deal-1",
+                "status": self.status,
+            }
+
+        def try_cancel_active(self, run_id: str) -> bool:
+            events.append("cancel_during_orchestration")
+            if self.status != "RUNNING" or "commit" not in events:
+                return False
+            self.status = "CANCELLED"
+            return True
+
+        def complete(
+            self,
+            run_id: str,
+            *,
+            status: str,
+            finished_at: str | None,
+        ) -> None:
+            events.append(f"complete_{status}")
+            self.status = status
+
+    conn = RecordingConnection()
+    engine = MagicMock()
+    engine.connect.return_value.__enter__.return_value = conn
+    runs_repo = RecordingRunsRepository()
+    run_steps_repo = InMemoryRunStepsRepository(TENANT_ID)
+
+    def context_factory(
+        *,
+        db_conn: object,
+        tenant_id: str,
+        run_data: dict[str, str],
+        audit_sink: object,
+    ) -> RunContext:
+        return RunContext(
+            run_id=run_data["run_id"],
+            tenant_id=tenant_id,
+            deal_id=run_data["deal_id"],
+            mode=run_data["mode"],
+            documents=[],
+            extract_fn=lambda **_kwargs: {},
+            grade_fn=lambda **_kwargs: {},
+        )
+
+    def orchestrator_execute(ctx: RunContext) -> OrchestratorResult:
+        events.append("orchestrator_execute")
+        cancel_results.append(runs_repo.try_cancel_active(ctx.run_id))
+        status = "CANCELLED" if cancel_results[-1] else "SUCCEEDED"
+        return OrchestratorResult(status=status, steps=[])
+
+    worker = PipelineWorker(
+        poll_interval=0,
+        tenant_ids=[TENANT_ID],
+        run_context_factory=context_factory,
+    )
+
+    with (
+        patch("idis.pipeline.worker.get_app_engine", return_value=engine),
+        patch("idis.pipeline.worker.get_runs_repository", return_value=runs_repo),
+        patch("idis.pipeline.worker.get_run_steps_repository", return_value=run_steps_repo),
+        patch("idis.pipeline.worker._default_worker_audit_sink", return_value=InMemoryAuditSink()),
+        patch("idis.pipeline.worker.set_tenant_local", create=True),
+        patch("idis.services.runs.execution.RunOrchestrator") as orch_class_mock,
+    ):
+        orch_instance = MagicMock()
+        orch_instance.execute.side_effect = orchestrator_execute
+        orch_class_mock.return_value = orch_instance
+        processed = asyncio.run(worker._process_queued_runs())
+
+    assert processed == 1
+    assert cancel_results == [True]
+    assert events.index("commit") < events.index("orchestrator_execute")
+    assert orch_class_mock.call_count == 1
+
+
+def test_worker_default_execution_restores_tenant_context_after_claim_commit(monkeypatch) -> None:
+    """Worker must re-establish RLS tenant context after the claim commit.
+
+    set_tenant_local() uses SET LOCAL idis.tenant_id, which is transaction-scoped.
+    The claim commit (added to release the RUNNING row lock for cancellation) clears
+    it, so orchestration must not run without tenant RLS context on Postgres.
+    """
+    from idis.persistence.repositories.runs import InMemoryRunsRepository
+    from idis.services.runs.orchestrator import OrchestratorResult, RunContext
+
+    monkeypatch.setenv("IDIS_REQUIRE_FULL_LIVE", "0")
+    tenant_context_at_orchestration: list[bool] = []
+
+    class RecordingConnection:
+        def __init__(self) -> None:
+            self.tenant_context_active = True
+
+        def commit(self) -> None:
+            self.tenant_context_active = False
+
+        def rollback(self) -> None:
+            self.tenant_context_active = False
+
+    class SimpleRunsRepository(InMemoryRunsRepository):
+        def __init__(self) -> None:
+            super().__init__(TENANT_ID)
+            self.status = "QUEUED"
+
+        def claim_queued_runs(self, *, limit: int) -> list[dict[str, str]]:
+            return [
+                {
+                    "run_id": "run-1",
+                    "deal_id": "deal-1",
+                    "mode": "SNAPSHOT",
+                    "tenant_id": TENANT_ID,
+                }
+            ]
+
+        def try_mark_running(self, run_id: str) -> bool:
+            if self.status != "QUEUED":
+                return False
+            self.status = "RUNNING"
+            return True
+
+        def get(self, run_id: str) -> dict[str, str]:
+            return {
+                "run_id": run_id,
+                "tenant_id": TENANT_ID,
+                "deal_id": "deal-1",
+                "status": self.status,
+            }
+
+        def complete(
+            self,
+            run_id: str,
+            *,
+            status: str,
+            finished_at: str | None,
+        ) -> None:
+            self.status = status
+
+    conn = RecordingConnection()
+    engine = MagicMock()
+    engine.connect.return_value.__enter__.return_value = conn
+    runs_repo = SimpleRunsRepository()
+    run_steps_repo = InMemoryRunStepsRepository(TENANT_ID)
+
+    def context_factory(
+        *,
+        db_conn: object,
+        tenant_id: str,
+        run_data: dict[str, str],
+        audit_sink: object,
+    ) -> RunContext:
+        return RunContext(
+            run_id=run_data["run_id"],
+            tenant_id=tenant_id,
+            deal_id=run_data["deal_id"],
+            mode=run_data["mode"],
+            documents=[],
+            extract_fn=lambda **_kwargs: {},
+            grade_fn=lambda **_kwargs: {},
+        )
+
+    def fake_set_tenant_local(db_conn: RecordingConnection, tenant_id: str) -> None:
+        db_conn.tenant_context_active = True
+
+    def orchestrator_execute(ctx: RunContext) -> OrchestratorResult:
+        tenant_context_at_orchestration.append(conn.tenant_context_active)
+        return OrchestratorResult(status="SUCCEEDED", steps=[])
+
+    worker = PipelineWorker(
+        poll_interval=0,
+        tenant_ids=[TENANT_ID],
+        run_context_factory=context_factory,
+    )
+
+    with (
+        patch("idis.pipeline.worker.get_app_engine", return_value=engine),
+        patch("idis.pipeline.worker.get_runs_repository", return_value=runs_repo),
+        patch("idis.pipeline.worker.get_run_steps_repository", return_value=run_steps_repo),
+        patch("idis.pipeline.worker._default_worker_audit_sink", return_value=InMemoryAuditSink()),
+        patch(
+            "idis.pipeline.worker.set_tenant_local",
+            side_effect=fake_set_tenant_local,
+            create=True,
+        ),
+        patch("idis.services.runs.execution.RunOrchestrator") as orch_class_mock,
+    ):
+        orch_instance = MagicMock()
+        orch_instance.execute.side_effect = orchestrator_execute
+        orch_class_mock.return_value = orch_instance
+        processed = asyncio.run(worker._process_queued_runs())
+
+    assert processed == 1
+    assert tenant_context_at_orchestration == [True]
+
+
 def test_worker_empty_persisted_corpus_preserves_no_ingested_documents_code() -> None:
     """Worker no-document failures must not collapse into VALUEERROR."""
     conn = MagicMock()

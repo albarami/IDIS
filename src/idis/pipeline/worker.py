@@ -217,15 +217,23 @@ class PipelineWorker:
         return processed_count
 
     def _mark_run_failed_after_exception(self, conn: Any, tenant_id: str, run_id: str) -> None:
-        """Persist a terminal FAILED status after rollback clears the failed transaction."""
+        """Persist a terminal FAILED status after rollback clears the failed transaction.
+
+        Uses the guarded completion so a cancellation that won the row-lock race after
+        the claim commit is not overwritten: it only marks FAILED while the run is still
+        RUNNING, leaving a CANCELLED/terminal status untouched.
+        """
         try:
             set_tenant_local(conn, tenant_id)
             runs_repo = get_runs_repository(conn, tenant_id)
-            runs_repo.complete(
-                run_id,
-                status="FAILED",
-                finished_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-            )
+            finished_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+            guarded = getattr(runs_repo, "try_complete_running", None)
+            if callable(guarded):
+                # Do not fall back to unconditional complete(): if the run is no longer
+                # RUNNING (e.g. CANCELLED), the existing terminal status must be preserved.
+                guarded(run_id, status="FAILED", finished_at=finished_at)
+            else:
+                runs_repo.complete(run_id, status="FAILED", finished_at=finished_at)
             conn.commit()
         except Exception:
             conn.rollback()
@@ -245,12 +253,27 @@ class PipelineWorker:
         reason_code: str,
         message: str,
     ) -> None:
-        """Persist a safe preflight blocker using existing status and ledger surfaces."""
+        """Persist a safe preflight blocker using existing status and ledger surfaces.
+
+        Fails the run only while it is still QUEUED/RUNNING. If the run was cancelled
+        after the claim batch released its row lock, the guarded completion returns
+        False: the existing terminal status is preserved and no preflight ledger step
+        is written.
+        """
         set_tenant_local(conn, tenant_id)
         runs_repo = get_runs_repository(conn, tenant_id)
         run_steps_repo = get_run_steps_repository(conn, tenant_id)
         finished_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-        runs_repo.complete(run_id, status="FAILED", finished_at=finished_at)
+        guarded = getattr(runs_repo, "try_complete_active", None)
+        if callable(guarded):
+            if not guarded(run_id, status="FAILED", finished_at=finished_at):
+                # Run is no longer QUEUED/RUNNING (e.g. cancelled after the claim batch
+                # released its row lock): preserve the terminal status and skip the
+                # preflight ledger step.
+                return
+        else:
+            # Minimal legacy repositories without the guard keep prior behavior.
+            runs_repo.complete(run_id, status="FAILED", finished_at=finished_at)
 
         strict_step = RunStep(
             step_id=str(uuid.uuid4()),
@@ -295,6 +318,18 @@ def get_gdbs_path() -> str | None:
     return None
 
 
+def _commit_claim_and_restore_tenant_context(db_conn: Any, tenant_id: str) -> None:
+    """Commit the QUEUED->RUNNING claim, then re-establish RLS tenant context.
+
+    The claim commit releases the run row lock so a concurrent cancel can proceed.
+    Tenant context is set via ``SET LOCAL idis.tenant_id`` which is transaction-scoped,
+    so committing clears it; orchestration must run with tenant RLS context, so it is
+    immediately re-applied before RunOrchestrator executes.
+    """
+    db_conn.commit()
+    set_tenant_local(db_conn, tenant_id)
+
+
 def _default_execution_service_factory(
     *,
     db_conn: Any,
@@ -305,6 +340,7 @@ def _default_execution_service_factory(
         audit_sink=audit_sink,
         runs_repo=get_runs_repository(db_conn, tenant_id),
         run_steps_repo=get_run_steps_repository(db_conn, tenant_id),
+        after_claim_commit=lambda: _commit_claim_and_restore_tenant_context(db_conn, tenant_id),
     )
 
 

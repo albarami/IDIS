@@ -9,7 +9,7 @@ Design requirements (v6.3 API Contracts §4.1):
 - Replay: same key + same payload → return stored 2xx response
 - Collision: same key + different payload → 409 IDEMPOTENCY_KEY_CONFLICT
 - Fail closed: store unavailable + header present → 500 IDEMPOTENCY_STORE_FAILED
-- Only store 2xx responses
+- Only store 2xx responses and explicit side-effecting lifecycle 409s
 - Add X-IDIS-Idempotency-Replay: true header on replayed responses
 """
 
@@ -104,7 +104,7 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
     - Replays stored response if key matches and payload hash matches
     - Returns 409 if key matches but payload hash differs
     - Returns 500 if store is unavailable (fail closed)
-    - Only stores 2xx responses
+    - Only stores 2xx responses and explicit side-effecting lifecycle 409s
     - Uses Postgres store when db_conn is available, else SQLite
 
     Ordering:
@@ -263,7 +263,7 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
 
         response = await call_next(request)
 
-        if 200 <= response.status_code < 300:
+        if _should_store_response(request, response):
             try:
                 body_iterator = getattr(response, "body_iterator", None)
                 if body_iterator is None:
@@ -320,3 +320,13 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
                 return response
 
         return response
+
+
+def _should_store_response(request: Request, response: Response) -> bool:
+    """Return whether this response is safe and useful to replay."""
+    if 200 <= response.status_code < 300:
+        return True
+    return (
+        response.status_code == 409
+        and getattr(request.state, "audit_mutation_occurred_on_error", False) is True
+    )

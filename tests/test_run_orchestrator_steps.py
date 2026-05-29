@@ -27,7 +27,7 @@ from idis.api.routes.deals import clear_deals_store
 from idis.api.routes.runs import clear_runs_store
 from idis.audit.sink import AuditSinkError, InMemoryAuditSink
 from idis.models.extraction_task import ExtractionTaskPlanningRunResult
-from idis.models.run_step import STEP_ORDER, StepName, StepStatus
+from idis.models.run_step import STEP_ORDER, RunStep, StepName, StepStatus
 from idis.persistence.repositories.run_steps import (
     InMemoryRunStepsRepository,
     clear_run_steps_store,
@@ -109,6 +109,57 @@ def _stub_calc(
         "calc_ids": ["calc-001", "calc-002"],
         "reproducibility_hashes": ["hash-aaa", "hash-bbb"],
     }
+
+
+def test_compute_final_status_ignores_failed_run_lifecycle_step() -> None:
+    """Lifecycle ledger failures are not executable pipeline failures."""
+    steps = [
+        RunStep(
+            step_id=str(uuid.uuid4()),
+            run_id="run-status",
+            tenant_id=TENANT_A,
+            step_name=StepName.RUN_LIFECYCLE,
+            step_order=STEP_ORDER[StepName.RUN_LIFECYCLE],
+            status=StepStatus.FAILED,
+            error_code="STRICT_FULL_LIVE_BLOCKED",
+        ),
+        RunStep(
+            step_id=str(uuid.uuid4()),
+            run_id="run-status",
+            tenant_id=TENANT_A,
+            step_name=StepName.EXTRACT,
+            step_order=STEP_ORDER[StepName.EXTRACT],
+            status=StepStatus.COMPLETED,
+        ),
+    ]
+
+    assert RunOrchestrator._compute_final_status(steps) == "SUCCEEDED"
+
+
+def test_compute_final_status_still_fails_on_failed_executable_step() -> None:
+    """Executable step failures must remain fail-closed."""
+    steps = [
+        RunStep(
+            step_id=str(uuid.uuid4()),
+            run_id="run-status",
+            tenant_id=TENANT_A,
+            step_name=StepName.RUN_LIFECYCLE,
+            step_order=STEP_ORDER[StepName.RUN_LIFECYCLE],
+            status=StepStatus.FAILED,
+            error_code="STRICT_FULL_LIVE_BLOCKED",
+        ),
+        RunStep(
+            step_id=str(uuid.uuid4()),
+            run_id="run-status",
+            tenant_id=TENANT_A,
+            step_name=StepName.EXTRACT,
+            step_order=STEP_ORDER[StepName.EXTRACT],
+            status=StepStatus.FAILED,
+            error_code="EXTRACT_FAILED",
+        ),
+    ]
+
+    assert RunOrchestrator._compute_final_status(steps) == "FAILED"
 
 
 def _stub_extract_failing(**kwargs: Any) -> dict[str, Any]:

@@ -117,7 +117,7 @@ class PostgresAuditSink:
 
         request_info = event.get("request", {})
         request_id = request_info.get("request_id")
-        idempotency_key = request_info.get("idempotency_key")
+        idempotency_key = request_info.get("idempotency_key_sha256")
 
         occurred_at_dt: datetime
         if isinstance(occurred_at, str):

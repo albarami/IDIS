@@ -258,6 +258,20 @@ class IngestionContext:
     idempotency_key: str | None = None
 
 
+def _audit_request_metadata(
+    *,
+    request_id: str,
+    idempotency_key: str | None,
+) -> dict[str, str]:
+    """Build audit request metadata without raw idempotency keys."""
+    request_metadata = {"request_id": request_id}
+    if idempotency_key:
+        request_metadata["idempotency_key_sha256"] = hashlib.sha256(
+            idempotency_key.encode("utf-8")
+        ).hexdigest()
+    return request_metadata
+
+
 _ROUTE_VALIDATED_SHA256_TOKEN = object()
 
 
@@ -1337,10 +1351,10 @@ class IngestionService:
                 "actor_type": "HUMAN" if ctx.actor_id != "system" else "SERVICE",
                 "actor_id": ctx.actor_id,
             },
-            "request": {
-                "request_id": ctx.request_id,
-                "idempotency_key": ctx.idempotency_key,
-            },
+            "request": _audit_request_metadata(
+                request_id=ctx.request_id,
+                idempotency_key=ctx.idempotency_key,
+            ),
             "resource": {
                 "resource_type": "document",
                 "resource_id": str(artifact.doc_id),
@@ -1373,10 +1387,10 @@ class IngestionService:
                 "actor_type": "HUMAN" if ctx.actor_id != "system" else "SERVICE",
                 "actor_id": ctx.actor_id,
             },
-            "request": {
-                "request_id": ctx.request_id,
-                "idempotency_key": ctx.idempotency_key,
-            },
+            "request": _audit_request_metadata(
+                request_id=ctx.request_id,
+                idempotency_key=ctx.idempotency_key,
+            ),
             "resource": {
                 "resource_type": "document",
                 "resource_id": str(document.document_id),
@@ -1411,10 +1425,10 @@ class IngestionService:
                 "actor_type": "HUMAN" if ctx.actor_id != "system" else "SERVICE",
                 "actor_id": ctx.actor_id,
             },
-            "request": {
-                "request_id": ctx.request_id,
-                "idempotency_key": ctx.idempotency_key,
-            },
+            "request": _audit_request_metadata(
+                request_id=ctx.request_id,
+                idempotency_key=ctx.idempotency_key,
+            ),
             "resource": {
                 "resource_type": "document",
                 "resource_id": str(document.document_id),

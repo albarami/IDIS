@@ -28,7 +28,9 @@ from idis.audit.sink import AuditSink, AuditSinkError
 from idis.models.run_source import RunSource
 from idis.persistence.repositories.run_steps import get_run_steps_repository
 from idis.persistence.repositories.runs import get_runs_repository
+from idis.services.runs import strict_full_live as strict_full_live_module
 from idis.services.runs.execution import RunExecutionService
+from idis.services.runs.lifecycle import RunLifecycleService
 from idis.services.runs.steps import build_run_context
 from idis.services.runs.strict_full_live import (
     IDIS_STRICT_DOTENV_PATH_ENV,
@@ -358,6 +360,145 @@ def get_run(
         source=_run_source_from_storage(run_data.get("source")),
         steps=step_responses,
         block_reason=run_data.get("block_reason") or _derive_block_reason(steps),
+    )
+
+
+@router.post("/runs/{run_id}/retry", response_model=RunRef, status_code=202)
+def retry_run(
+    run_id: str,
+    request: Request,
+    tenant_ctx: RequireTenantContext,
+) -> RunRef:
+    """Requeue a failed run after validating strict admission constraints."""
+    return _retry_or_resume_run(run_id=run_id, request=request, tenant_ctx=tenant_ctx)
+
+
+@router.post("/runs/{run_id}/resume", response_model=RunRef, status_code=202)
+def resume_run(
+    run_id: str,
+    request: Request,
+    tenant_ctx: RequireTenantContext,
+) -> RunRef:
+    """Alias retry for a failed run."""
+    return _retry_or_resume_run(run_id=run_id, request=request, tenant_ctx=tenant_ctx)
+
+
+@router.post("/runs/{run_id}/cancel", response_model=RunRef, status_code=202)
+def cancel_run(
+    run_id: str,
+    request: Request,
+    tenant_ctx: RequireTenantContext,
+) -> RunRef:
+    """Cancel a queued or running run without invoking execution admission."""
+    request.state.audit_resource_id = run_id
+    db_conn = getattr(request.state, "db_conn", None)
+    runs_repo = get_runs_repository(db_conn, tenant_ctx.tenant_id)
+    run_steps_repo = get_run_steps_repository(db_conn, tenant_ctx.tenant_id)
+    lifecycle = RunLifecycleService(runs_repo=runs_repo, run_steps_repo=run_steps_repo)
+
+    run_data = runs_repo.get(run_id)
+    if run_data is None:
+        raise IdisHttpError(status_code=404, code="NOT_FOUND", message="Run not found")
+    if str(run_data.get("status")) not in {"QUEUED", "RUNNING"}:
+        raise IdisHttpError(
+            status_code=409,
+            code="RUN_NOT_CANCELABLE",
+            message="Only queued or running runs can be cancelled",
+        )
+    if not lifecycle.request_cancel(run_id=run_id, tenant_id=tenant_ctx.tenant_id):
+        raise IdisHttpError(
+            status_code=409,
+            code="RUN_NOT_CANCELABLE",
+            message="Only queued or running runs can be cancelled",
+        )
+    return RunRef(run_id=run_id, status="CANCELLED", steps=[], block_reason=None)
+
+
+def _retry_or_resume_run(
+    *,
+    run_id: str,
+    request: Request,
+    tenant_ctx: RequireTenantContext,
+) -> RunRef:
+    request.state.audit_resource_id = run_id
+    db_conn = getattr(request.state, "db_conn", None)
+    runs_repo = get_runs_repository(db_conn, tenant_ctx.tenant_id)
+    run_steps_repo = get_run_steps_repository(db_conn, tenant_ctx.tenant_id)
+    lifecycle = RunLifecycleService(runs_repo=runs_repo, run_steps_repo=run_steps_repo)
+
+    run_data = runs_repo.get(run_id)
+    if run_data is None:
+        raise IdisHttpError(status_code=404, code="NOT_FOUND", message="Run not found")
+    if str(run_data.get("status")) != "FAILED":
+        raise IdisHttpError(
+            status_code=409,
+            code="RUN_NOT_RETRYABLE",
+            message="Only failed runs can be retried",
+        )
+
+    run_source = _run_source_from_storage(run_data.get("source"))
+    strict_dotenv_path = os.getenv(IDIS_STRICT_DOTENV_PATH_ENV)
+    if str(run_data.get("mode", "")).upper() == "FULL" and is_strict_full_live_required(
+        dotenv_path=strict_dotenv_path
+    ):
+        preflight_corpus = _gather_preflight_corpus(
+            request=request,
+            tenant_id=tenant_ctx.tenant_id,
+            deal_id=str(run_data["deal_id"]),
+        )
+        try:
+            preflight_corpus = _apply_run_source_to_preflight_corpus(
+                preflight_corpus=preflight_corpus,
+                source=run_source,
+            )
+        except IdisHttpError as exc:
+            if exc.code == "INVALID_RUN_SOURCE":
+                lifecycle.persist_failed_block(
+                    run_id=run_id,
+                    tenant_id=tenant_ctx.tenant_id,
+                    reason_code="INVALID_RUN_SOURCE",
+                    message="Persisted run source is invalid for strict retry",
+                )
+                request.state.audit_mutation_occurred_on_error = True
+                raise IdisHttpError(
+                    status_code=409,
+                    code="INVALID_RUN_SOURCE",
+                    message="Persisted run source is invalid for strict retry",
+                    details=exc.details,
+                ) from exc
+            raise
+
+        strict_report = strict_full_live_module.build_strict_full_live_admission_report(
+            db_conn=db_conn,
+            tenant_id=tenant_ctx.tenant_id,
+            preflight_corpus=preflight_corpus,
+            strict_dotenv_path=strict_dotenv_path,
+        )
+        if not strict_report.may_proceed:
+            lifecycle.persist_failed_block(
+                run_id=run_id,
+                tenant_id=tenant_ctx.tenant_id,
+                reason_code=STRICT_FULL_LIVE_BLOCKED,
+                message="Strict full live retry admission blocked",
+            )
+            request.state.audit_mutation_occurred_on_error = True
+            raise IdisHttpError(
+                status_code=409,
+                code=STRICT_FULL_LIVE_BLOCKED,
+                message="Strict full live admission blocked retry",
+            )
+
+    if not lifecycle.request_retry(run_id=run_id):
+        raise IdisHttpError(
+            status_code=409,
+            code="RUN_NOT_RETRYABLE",
+            message="Only failed runs can be retried",
+        )
+    return RunRef(
+        run_id=run_id,
+        status="QUEUED",
+        steps=[],
+        block_reason=None,
     )
 
 

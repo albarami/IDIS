@@ -1058,6 +1058,69 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /v1/runs/{runId}/retry:
+    post:
+      tags: [Runs]
+      summary: Retry a failed run
+      operationId: retryRun
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "202":
+          description: Run requeued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunRef"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /v1/runs/{runId}/resume:
+    post:
+      tags: [Runs]
+      summary: Resume a failed run
+      operationId: resumeRun
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "202":
+          description: Run requeued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunRef"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /v1/runs/{runId}/cancel:
+    post:
+      tags: [Runs]
+      summary: Cancel a queued or running run
+      operationId: cancelRun
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "202":
+          description: Run cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunRef"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
   /v1/deals/{dealId}/debate:
     post:
       tags: [Debate]
@@ -1894,7 +1957,7 @@ components:
       required: [run_id, status]
       properties:
         run_id: { type: string, format: uuid }
-        status: { type: string, enum: [QUEUED, RUNNING, SUCCEEDED, FAILED] }
+        status: { type: string, enum: [QUEUED, RUNNING, SUCCEEDED, FAILED, CANCELLED] }
         document_id:
           type: string
           format: uuid
@@ -1930,7 +1993,7 @@ components:
       required: [run_id, status, mode, started_at]
       properties:
         run_id: { type: string, format: uuid }
-        status: { type: string, enum: [QUEUED, RUNNING, SUCCEEDED, FAILED] }
+        status: { type: string, enum: [QUEUED, RUNNING, SUCCEEDED, FAILED, CANCELLED] }
         mode: { type: string, enum: [SNAPSHOT, FULL] }
         started_at: { type: string, format: date-time }
         finished_at: { type: string, format: date-time, nullable: true }

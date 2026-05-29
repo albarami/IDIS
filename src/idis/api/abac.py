@@ -78,6 +78,22 @@ class ClaimDealResolver(Protocol):
         ...
 
 
+class RunDealResolver(Protocol):
+    """Protocol for resolving run_id to deal_id.
+
+    Implementations must be tenant-scoped and return None for unknown or
+    inaccessible runs to avoid existence leaks.
+    """
+
+    def resolve_deal_id_for_run(
+        self,
+        tenant_id: str,
+        run_id: str,
+    ) -> str | None:
+        """Resolve run_id to its parent deal_id."""
+        ...
+
+
 class DealAssignmentStore(Protocol):
     """Protocol for deal assignment persistence.
 
@@ -342,6 +358,55 @@ def resolve_deal_id_for_claim(
         resolver = get_claim_deal_resolver()
 
     return resolver.resolve_deal_id_for_claim(tenant_id, claim_id)
+
+
+def resolve_deal_id_for_run(
+    tenant_id: str,
+    run_id: str,
+    request: Request | None = None,
+) -> str | None:
+    """Resolve a run_id to its parent deal_id under tenant scope.
+
+    Uses the existing runs repository surface so in-memory and Postgres paths
+    preserve the same RLS/no-existence-leak behavior as route lookups.
+    """
+    if not tenant_id or not run_id:
+        return None
+
+    import os
+
+    db_conn = getattr(request.state, "db_conn", None) if request is not None else None
+    if request is not None and db_conn is None and os.environ.get("IDIS_DATABASE_URL"):
+        logger.warning(
+            "Run resolution unavailable: db_conn missing but DATABASE_URL set",
+            extra={"tenant_id": tenant_id, "run_id": run_id},
+        )
+        raise IdisHttpError(
+            status_code=403,
+            code="ABAC_RESOLUTION_FAILED",
+            message="Access denied.",
+        )
+
+    try:
+        from idis.persistence.repositories.runs import get_runs_repository
+
+        run = get_runs_repository(db_conn, tenant_id).get(run_id)
+    except Exception as e:
+        logger.error(
+            "Run deal resolution failed: %s",
+            str(e),
+            extra={"tenant_id": tenant_id, "run_id": run_id},
+        )
+        raise IdisHttpError(
+            status_code=403,
+            code="ABAC_RESOLUTION_FAILED",
+            message="Access denied.",
+        ) from e
+
+    if run is None:
+        return None
+    deal_id = run.get("deal_id")
+    return str(deal_id) if deal_id else None
 
 
 def get_deal_assignment_store() -> DealAssignmentStore:

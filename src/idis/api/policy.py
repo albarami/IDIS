@@ -67,6 +67,17 @@ ABAC_CLAIM_SCOPED_OPS: frozenset[str] = frozenset(
     }
 )
 
+# Operations that require ABAC enforcement via run->deal resolution.
+# These operations mutate run/deal lifecycle state but don't have deal_id in URL path.
+# RBAC middleware must resolve deal_id from run_id and enforce ABAC.
+ABAC_RUN_SCOPED_OPS: frozenset[str] = frozenset(
+    {
+        "retryRun",
+        "resumeRun",
+        "cancelRun",
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class PolicyRule:
@@ -159,6 +170,9 @@ POLICY_RULES: dict[str, PolicyRule] = {
     "runCalc": PolicyRule(allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=True),
     "startRun": PolicyRule(allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=True),
     "getRun": PolicyRule(allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=False),
+    "retryRun": PolicyRule(allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=False),
+    "resumeRun": PolicyRule(allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=False),
+    "cancelRun": PolicyRule(allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=False),
     "startDebate": PolicyRule(allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=True),
     "getDebate": PolicyRule(allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=False),
     "listHumanGates": PolicyRule(allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=True),

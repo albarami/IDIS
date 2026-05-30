@@ -1975,12 +1975,44 @@ def test_retry_audit_and_ledger_metadata_is_leakage_safe(
     """Retry ledger / audit entries must not contain raw text, DSNs, or payloads."""
     monkeypatch.setenv("IDIS_REQUIRE_FULL_LIVE", "1")
     monkeypatch.setenv("DATABASE_URL", SECRET_DSN)
-    client = _client(monkeypatch)
+    client = _client(monkeypatch, isolate_idempotency_store=True)
     _seed_run(
         run_id=RUN_FAILED_FULL,
         status="FAILED",
         source={"type": "deal_documents", "document_ids": ["doc-strict"]},
     )
+    # Seed the deal preflight corpus so the selected run-source document exists; the
+    # route must execute the real retry path (not rely on idempotency replay) and the
+    # selected document_id must still never leak into ledger/audit metadata.
+    client.app.state.deal_documents = {
+        DEAL_ID: [
+            {
+                "tenant_id": TENANT_A,
+                "deal_id": DEAL_ID,
+                "document_id": "doc-strict",
+                "doc_id": "artifact-doc-strict",
+                "doc_type": "PDF",
+                "parse_status": "PARSED",
+                "document_name": "strict.pdf",
+                "sha256": "a" * 64,
+                "uri": "deals/strict.pdf",
+                "metadata": {},
+                "source_metadata": {},
+                "spans": [
+                    {
+                        "span_id": "span-strict-1",
+                        "tenant_id": TENANT_A,
+                        "deal_id": DEAL_ID,
+                        "document_id": "doc-strict",
+                        "span_type": "PAGE_TEXT",
+                        "locator": {"page": 1},
+                        "text_excerpt": "Revenue was $5M.",
+                        "content_hash": "b" * 64,
+                    }
+                ],
+            }
+        ]
+    }
 
     with _patch_strict_admission(_PassingStrictReport()):
         response = client.post(

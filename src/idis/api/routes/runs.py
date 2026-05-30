@@ -35,6 +35,7 @@ from idis.services.runs.steps import build_run_context
 from idis.services.runs.strict_full_live import (
     IDIS_STRICT_DOTENV_PATH_ENV,
     STRICT_FULL_LIVE_BLOCKED,
+    build_strict_block_operator_safe_details,
     build_strict_full_live_admission_report,
     is_strict_full_live_required,
 )
@@ -235,7 +236,7 @@ async def start_run(
                 status_code=409,
                 code=STRICT_FULL_LIVE_BLOCKED,
                 message=("Strict full-live preflight blocked this FULL run before execution"),
-                details={"strict_full_live": strict_report.model_dump(mode="json")},
+                details=build_strict_block_operator_safe_details(strict_report),
             )
 
     run_data = runs_repo.create(
@@ -244,6 +245,8 @@ async def start_run(
         mode=request_body.mode,
         idempotency_key=idempotency_key,
         source=request_body.source.to_storage_dict() if request_body.source is not None else None,
+        created_by_actor_id=tenant_ctx.actor_id,
+        created_by_actor_type=tenant_ctx.actor_type,
     )
 
     request.state.audit_resource_id = run_id
@@ -475,11 +478,15 @@ def _retry_or_resume_run(
             strict_dotenv_path=strict_dotenv_path,
         )
         if not strict_report.may_proceed:
+            blocking_provenance = strict_full_live_module.build_blocking_step_provenance(
+                strict_report
+            )
             lifecycle.persist_failed_block(
                 run_id=run_id,
                 tenant_id=tenant_ctx.tenant_id,
                 reason_code=STRICT_FULL_LIVE_BLOCKED,
                 message="Strict full live retry admission blocked",
+                provenance_items=[item.model_dump(mode="json") for item in blocking_provenance],
             )
             request.state.audit_mutation_occurred_on_error = True
             raise IdisHttpError(

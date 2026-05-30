@@ -133,6 +133,7 @@ from idis.models.validated_evidence_package_materialization import (
     RunScopedValidatedEvidencePackageSummary,
 )
 from idis.persistence.repositories.run_steps import RunStepsRepo
+from idis.validators.audit_event_validator import validate_audit_event
 
 logger = logging.getLogger(__name__)
 
@@ -218,6 +219,8 @@ class RunContext:
     documents: list[dict[str, Any]]
     extract_fn: Callable[..., dict[str, Any]]
     grade_fn: Callable[..., dict[str, Any]]
+    created_by_actor_id: str | None = None
+    created_by_actor_type: str | None = None
     deal_metadata: dict[str, Any] | None = None
     data_room_root_path: str | Path | None = None
     preflight_corpus: list[dict[str, Any]] = field(default_factory=list)
@@ -457,6 +460,9 @@ class RunOrchestrator:
         self._audit = audit_sink
         self._steps_repo = run_steps_repo
         self._runs_repo = runs_repo
+        self._origin_actor_id: str | None = None
+        self._origin_actor_type: str | None = None
+        self._origin_deal_id: str | None = None
 
     def execute(self, ctx: RunContext) -> OrchestratorResult:
         """Execute all pipeline steps for the given run context.
@@ -479,6 +485,10 @@ class RunOrchestrator:
         Raises:
             AuditSinkError: Propagated when audit emission fails (fail-closed).
         """
+        self._origin_actor_id = ctx.created_by_actor_id
+        self._origin_actor_type = ctx.created_by_actor_type
+        self._origin_deal_id = ctx.deal_id
+
         step_sequence = FULL_STEPS if ctx.mode == "FULL" else SNAPSHOT_STEPS
         accumulated: dict[str, Any] = {}
 
@@ -2286,15 +2296,65 @@ class RunOrchestrator:
 
         Raises:
             AuditSinkError: If audit emission fails (fail-closed).
+
+        The event is shaped to satisfy the v6.3 audit-event validator: a real
+        actor (originating authenticated actor, or the defined service principal
+        for system-only runs — never "unknown"), under the deal.* taxonomy with
+        resource_type=deal and safe-only payload fields.
         """
+        actor_id, actor_type = self._resolve_origin_actor()
+        run_id = str(details.get("run_id") or "")
+        taxonomy_event_type = event_type if event_type.startswith("deal.") else f"deal.{event_type}"
+        severity = "MEDIUM" if event_type.endswith((".failed", ".blocked")) else "LOW"
+        deal_id = self._origin_deal_id
+
         event: dict[str, Any] = {
             "event_id": str(uuid.uuid4()),
-            "event_type": event_type,
+            "occurred_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "tenant_id": tenant_id,
-            "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-            "details": details,
+            "actor": {"actor_type": actor_type, "actor_id": actor_id},
+            "request": {
+                "request_id": run_id or str(uuid.uuid4()),
+                "method": "POST",
+                "path": f"/v1/runs/{run_id}" if run_id else "/v1/runs",
+                "status_code": 200,
+            },
+            "resource": {
+                "resource_type": "deal",
+                "resource_id": deal_id or run_id or "unknown",
+                "deal_id": deal_id,
+            },
+            "event_type": taxonomy_event_type,
+            "severity": severity,
+            "summary": f"{taxonomy_event_type} for run {run_id}" if run_id else taxonomy_event_type,
+            "payload": {"safe": details, "hashes": [], "refs": []},
         }
+
+        validation_result = validate_audit_event(event)
+        if not validation_result.passed:
+            error_codes = [error.code for error in validation_result.errors]
+            raise AuditSinkError(
+                f"Run-step audit event failed validation, refusing to emit: {error_codes}"
+            )
+
         self._audit.emit(event)
+
+    DEFAULT_SERVICE_ACTOR_ID = "idis-worker"
+
+    def _resolve_origin_actor(self) -> tuple[str, str]:
+        """Return the (actor_id, actor_type) for run-step audit events.
+
+        User-originated runs use the persisted originating actor; system-only
+        runs use the defined service principal. Never returns "unknown".
+        """
+        if self._origin_actor_id:
+            actor_type = (
+                self._origin_actor_type
+                if self._origin_actor_type in ("HUMAN", "SERVICE")
+                else "SERVICE"
+            )
+            return self._origin_actor_id, actor_type
+        return self.DEFAULT_SERVICE_ACTOR_ID, "SERVICE"
 
     @staticmethod
     def _safe_audit_result_keys(result: dict[str, Any]) -> list[str]:

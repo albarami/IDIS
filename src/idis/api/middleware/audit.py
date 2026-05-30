@@ -15,6 +15,7 @@ Design requirements (v6.3):
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -28,6 +29,10 @@ from starlette.types import ASGIApp
 
 from idis.api.error_model import make_error_response_no_request
 from idis.audit.sink import AuditSink, AuditSinkError, JsonlFileAuditSink
+from idis.services.runs.strict_full_live import (
+    IDIS_STRICT_DOTENV_PATH_ENV,
+    is_strict_full_live_required,
+)
 from idis.validators.audit_event_validator import validate_audit_event
 
 try:
@@ -317,9 +322,32 @@ class AuditMiddleware(BaseHTTPMiddleware):
             )
 
         db_conn = getattr(request.state, "db_conn", None)
+        durable_available = db_conn is not None and PostgresAuditSink is not None
+
+        # Strict mode requires a durable (Postgres) audit sink. Fail closed before
+        # emitting to a non-durable JSONL file sink. Test/in-memory sinks are not
+        # the production JSONL file sink and are unaffected.
+        if (
+            not durable_available
+            and isinstance(self._sink, JsonlFileAuditSink)
+            and is_strict_full_live_required(
+                dotenv_path=os.environ.get(IDIS_STRICT_DOTENV_PATH_ENV)
+            )
+        ):
+            logger.error(
+                "Strict mode requires a durable audit sink; refusing JSONL-only emission",
+                extra={"request_id": request_id},
+            )
+            return _build_error_response(
+                "AUDIT_EMIT_FAILED",
+                "Strict mode requires a durable audit sink",
+                request_id,
+            )
 
         try:
-            if db_conn is not None and PostgresAuditSink is not None:
+            if durable_available:
+                # durable_available implies db_conn is not None (see above); narrow for mypy.
+                assert db_conn is not None
                 if self._postgres_sink is None:
                     self._postgres_sink = PostgresAuditSink()
                 self._postgres_sink.emit_in_tx(db_conn, audit_event)

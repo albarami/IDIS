@@ -50,6 +50,8 @@ class PostgresRunsRepository:
         mode: str,
         idempotency_key: str | None = None,
         source: dict[str, Any] | None = None,
+        created_by_actor_id: str | None = None,
+        created_by_actor_type: str | None = None,
     ) -> dict[str, Any]:
         """Create a new run record.
 
@@ -58,6 +60,9 @@ class PostgresRunsRepository:
             deal_id: UUID string for the deal.
             mode: Run mode (SNAPSHOT or FULL).
             idempotency_key: Optional idempotency key from request header.
+            source: Optional run-source selection payload.
+            created_by_actor_id: Authenticated actor that created the run.
+            created_by_actor_type: Actor type (HUMAN or SERVICE) of the creator.
 
         Returns:
             Created run as dict.
@@ -68,10 +73,12 @@ class PostgresRunsRepository:
                 """
                 INSERT INTO runs
                     (run_id, tenant_id, deal_id, mode, status, started_at,
-                     idempotency_key, source, created_at)
+                     idempotency_key, source, created_at,
+                     created_by_actor_id, created_by_actor_type)
                 VALUES
                     (:run_id, :tenant_id, :deal_id, :mode, 'QUEUED', :started_at,
-                     :idempotency_key, CAST(:source AS JSONB), :created_at)
+                     :idempotency_key, CAST(:source AS JSONB), :created_at,
+                     :created_by_actor_id, :created_by_actor_type)
                 """
             ),
             {
@@ -83,6 +90,8 @@ class PostgresRunsRepository:
                 "idempotency_key": idempotency_key,
                 "source": json.dumps(source) if source is not None else None,
                 "created_at": now,
+                "created_by_actor_id": created_by_actor_id,
+                "created_by_actor_type": created_by_actor_type,
             },
         )
         return {
@@ -95,6 +104,8 @@ class PostgresRunsRepository:
             "finished_at": None,
             "source": source,
             "created_at": now.isoformat().replace("+00:00", "Z"),
+            "created_by_actor_id": created_by_actor_id,
+            "created_by_actor_type": created_by_actor_type,
         }
 
     def get(self, run_id: str) -> dict[str, Any] | None:
@@ -112,7 +123,8 @@ class PostgresRunsRepository:
             text(
                 """
                 SELECT run_id, tenant_id, deal_id, mode, status,
-                       started_at, finished_at, source, created_at, cancel_requested_at
+                       started_at, finished_at, source, created_at, cancel_requested_at,
+                       created_by_actor_id, created_by_actor_type
                 FROM runs
                 WHERE run_id = :run_id
                 """
@@ -313,7 +325,8 @@ class PostgresRunsRepository:
             text(
                 """
                 SELECT run_id, tenant_id, deal_id, mode, status,
-                       started_at, finished_at, source, created_at, cancel_requested_at
+                       started_at, finished_at, source, created_at, cancel_requested_at,
+                       created_by_actor_id, created_by_actor_type
                 FROM runs
                 WHERE status = 'QUEUED'
                 ORDER BY created_at ASC
@@ -367,6 +380,8 @@ class PostgresRunsRepository:
             "source": _json_value(source),
             "created_at": created_at,
             "cancel_requested_at": _iso_utc(_row_value(row, "cancel_requested_at")),
+            "created_by_actor_id": _row_value(row, "created_by_actor_id"),
+            "created_by_actor_type": _row_value(row, "created_by_actor_type"),
         }
 
 
@@ -400,6 +415,8 @@ class InMemoryRunsRepository:
         mode: str,
         idempotency_key: str | None = None,
         source: dict[str, Any] | None = None,
+        created_by_actor_id: str | None = None,
+        created_by_actor_type: str | None = None,
     ) -> dict[str, Any]:
         """Create a new run record in memory.
 
@@ -408,6 +425,9 @@ class InMemoryRunsRepository:
             deal_id: UUID string for the deal.
             mode: Run mode (SNAPSHOT or FULL).
             idempotency_key: Optional idempotency key (stored but not enforced).
+            source: Optional run-source selection payload.
+            created_by_actor_id: Authenticated actor that created the run.
+            created_by_actor_type: Actor type (HUMAN or SERVICE) of the creator.
 
         Returns:
             Created run as dict.
@@ -424,6 +444,8 @@ class InMemoryRunsRepository:
             "source": dict(source) if source is not None else None,
             "created_at": now,
             "cancel_requested_at": None,
+            "created_by_actor_id": created_by_actor_id,
+            "created_by_actor_type": created_by_actor_type,
         }
         _in_memory_runs_store[run_id] = run
         return run

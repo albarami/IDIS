@@ -14,6 +14,13 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from idis.models.step_provenance import (
+    ComponentMode,
+    EnvSourceClass,
+    OutputVisibilityStatus,
+    RuntimeUseStatus,
+    StepProvenance,
+)
 from idis.parsers.media import (
     FASTER_WHISPER_ADAPTER_NAME,
     FasterWhisperMediaConfig,
@@ -1113,6 +1120,201 @@ def _env_source_for_key(env_source: _StrictEnvSource, key: str) -> str:
     if key in env_source.dotenv_keys:
         return DOTENV_ENV_SOURCE
     return MISSING_ENV_SOURCE
+
+
+_SAFE_PROVENANCE_TOKEN = re.compile(r"^[a-z][a-z0-9_]*$")
+
+_ENV_SOURCE_CLASS_BY_STRICT_SOURCE: dict[str, EnvSourceClass] = {
+    PROCESS_ENV_SOURCE: EnvSourceClass.PROCESS_ENV,
+    DOTENV_ENV_SOURCE: EnvSourceClass.DOTENV,
+    MISSING_ENV_SOURCE: EnvSourceClass.MISSING,
+}
+
+
+def _component_mode_for_status(status: StrictComponentStatus) -> ComponentMode:
+    try:
+        return ComponentMode(status.value)
+    except ValueError:
+        return ComponentMode.UNKNOWN
+
+
+def _env_source_class_for_component(
+    required_env_vars: Sequence[str],
+    env_sources: Mapping[str, str],
+) -> EnvSourceClass:
+    """Reduce a component's env-var source classes to a single safe class.
+
+    Precedence (most-blocking first): missing > dotenv > process_env. Only the
+    source *class* is consulted; raw env values are never read.
+    """
+    classes = {env_sources.get(var) for var in required_env_vars}
+    if MISSING_ENV_SOURCE in classes:
+        return EnvSourceClass.MISSING
+    if DOTENV_ENV_SOURCE in classes:
+        return EnvSourceClass.DOTENV
+    if PROCESS_ENV_SOURCE in classes:
+        return EnvSourceClass.PROCESS_ENV
+    return EnvSourceClass.UNKNOWN
+
+
+def build_step_provenance(
+    *,
+    readiness: StrictComponentReadiness,
+    inventory: StrictComponentInventory,
+    env_sources: Mapping[str, str],
+) -> StepProvenance:
+    """Map existing strict readiness truth into a safe StepProvenance.
+
+    Uses only classes/statuses from the strict readiness models and the
+    env-source class map. Never copies raw env values, secrets, or paths.
+    """
+    runtime_use_status = (
+        RuntimeUseStatus.USED
+        if readiness.status == StrictComponentStatus.LIVE_WIRED_AND_USED
+        else RuntimeUseStatus.NOT_USED
+    )
+    output_visibility_status = (
+        OutputVisibilityStatus.VISIBLE
+        if inventory.output_visible
+        else OutputVisibilityStatus.NOT_VISIBLE
+    )
+    health_status = inventory.health_check_status
+    if not _SAFE_PROVENANCE_TOKEN.match(health_status):
+        health_status = "unknown"
+
+    return StepProvenance(
+        component_name=readiness.component_name,
+        component_mode=_component_mode_for_status(readiness.status),
+        env_source_class=_env_source_class_for_component(
+            readiness.required_env_vars,
+            env_sources,
+        ),
+        health_status=health_status,
+        runtime_use_status=runtime_use_status,
+        output_visibility_status=output_visibility_status,
+    )
+
+
+def build_blocking_step_provenance(report: Any) -> list[StepProvenance]:
+    """Build safe StepProvenance for each blocking component in a strict report.
+
+    Each blocking component yields exactly one provenance item. When a component
+    is present on both the readiness and inventory surfaces, all five dimensions
+    are sourced directly. When it matches only one surface (the readiness and
+    inventory naming schemes differ), the dimensions from the missing surface
+    fall back to safe UNKNOWN values rather than dropping the component, so real
+    strict blockers always carry provenance.
+
+    Defensive by design: a report-like object exposing a name on neither surface
+    (e.g. a lightweight test double) maps nothing for that name and yields an
+    empty list rather than raising.
+    """
+    blocking = list(getattr(report, "blocking_components", []) or [])
+    readiness_by_name = {
+        component.component_name: component for component in getattr(report, "components", []) or []
+    }
+    inventory_by_name = {
+        item.component_name: item for item in getattr(report, "component_inventory", []) or []
+    }
+    env_sources = getattr(report, "env_sources", {}) or {}
+
+    items: list[StepProvenance] = []
+    for name in blocking:
+        readiness = readiness_by_name.get(name)
+        inventory = inventory_by_name.get(name)
+        if readiness is not None and inventory is not None:
+            items.append(
+                build_step_provenance(
+                    readiness=readiness,
+                    inventory=inventory,
+                    env_sources=env_sources,
+                )
+            )
+        elif readiness is not None or inventory is not None:
+            items.append(
+                _partial_blocking_step_provenance(
+                    component_name=name,
+                    readiness=readiness,
+                    inventory=inventory,
+                    env_sources=env_sources,
+                )
+            )
+    return items
+
+
+def _partial_blocking_step_provenance(
+    *,
+    component_name: str,
+    readiness: StrictComponentReadiness | None,
+    inventory: StrictComponentInventory | None,
+    env_sources: Mapping[str, str],
+) -> StepProvenance:
+    """Safe StepProvenance for a component matched on only one strict surface.
+
+    Dimensions from the unavailable surface fall back to UNKNOWN/"unknown" so the
+    component is never dropped. Uses only classes/statuses — never raw env values,
+    paths, evidence strings, or provider payloads.
+    """
+    if readiness is not None:
+        component_mode = _component_mode_for_status(readiness.status)
+        env_source_class = _env_source_class_for_component(readiness.required_env_vars, env_sources)
+        runtime_use_status = (
+            RuntimeUseStatus.USED
+            if readiness.status == StrictComponentStatus.LIVE_WIRED_AND_USED
+            else RuntimeUseStatus.NOT_USED
+        )
+    else:
+        component_mode = ComponentMode.UNKNOWN
+        env_source_class = EnvSourceClass.UNKNOWN
+        runtime_use_status = RuntimeUseStatus.UNKNOWN
+
+    if inventory is not None:
+        health_status = inventory.health_check_status
+        if not _SAFE_PROVENANCE_TOKEN.match(health_status):
+            health_status = "unknown"
+        output_visibility_status = (
+            OutputVisibilityStatus.VISIBLE
+            if inventory.output_visible
+            else OutputVisibilityStatus.NOT_VISIBLE
+        )
+    else:
+        health_status = "unknown"
+        output_visibility_status = OutputVisibilityStatus.UNKNOWN
+
+    return StepProvenance(
+        component_name=component_name,
+        component_mode=component_mode,
+        env_source_class=env_source_class,
+        health_status=health_status,
+        runtime_use_status=runtime_use_status,
+        output_visibility_status=output_visibility_status,
+    )
+
+
+def build_strict_block_operator_safe_details(report: Any) -> dict[str, Any]:
+    """Build operator-safe ``details`` for a strict-blocked FULL run response.
+
+    Surfaces only safe summary fields — ``may_proceed``, ``blocker_count``, the
+    safe blocking component names, and per-component :class:`StepProvenance`
+    classes/statuses (via :func:`build_blocking_step_provenance`). It never copies
+    raw readiness fields such as ``evidence``, ``evidence_files``,
+    ``blocker_message``, ``blocker``, ``implementation_slice``, ``env_sources``,
+    or provider matrices, which can carry source-code paths, internal
+    implementation strings, env var names, DSNs, object keys, or provider
+    payloads.
+    """
+    blocking_components = list(getattr(report, "blocking_components", []) or [])
+    provenance_items = [
+        item.model_dump(mode="json") for item in build_blocking_step_provenance(report)
+    ]
+    return {
+        "strict_full_live": {
+            "may_proceed": bool(getattr(report, "may_proceed", False)),
+            "blocker_count": int(getattr(report, "blocker_count", len(blocking_components))),
+            "blocking_components": blocking_components,
+            "provenance_items": provenance_items,
+        }
+    }
 
 
 def _resolve_strict_dotenv_path(

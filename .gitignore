@@ -70,10 +70,11 @@ var/_tmp_idem_check/
 artifacts/
 .local_reports/
 
-# Local STT model/cache artifacts (never commit)
-models/
-.local_models/
-.local_media_models/
+# Local STT model/cache artifacts (never commit). Leading slash anchors these to
+# the repo root so nested source dirs (e.g. src/idis/models/) are not ignored.
+/models/
+/.local_models/
+/.local_media_models/
 var/media-models/
 .cache/faster-whisper/
 

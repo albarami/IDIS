@@ -317,8 +317,10 @@ def test_strict_api_block_response_includes_inventory_and_no_env_values(
     report = body["details"]["strict_full_live"]
     assert body["code"] == "STRICT_FULL_LIVE_BLOCKED"
     assert "run_id" not in body
-    assert "component_inventory" in report
-    assert "env_sources" in report
+    # Operator-safe shape preserves structured blockers without inventory/env-source leakage.
+    assert report["may_proceed"] is False
+    assert "blocking_components" in report
+    assert "blocker_count" in report
     encoded = json.dumps(body, sort_keys=True)
     assert dotenv_secret not in encoded
     assert process_secret not in encoded

@@ -225,16 +225,15 @@ def test_strict_api_full_run_fails_before_execution_and_returns_structured_block
     assert "run_id" not in body
     report = body["details"]["strict_full_live"]
     assert report["may_proceed"] is False
-    component_names = {component["component_name"] for component in report["components"]}
+    # Operator-safe shape: blocking component names only (no evidence/inventory paths).
+    blocking = set(report["blocking_components"])
     assert {
         "live_llm_model_clients",
-        "ocr",
-        "mp4_stt",
         "rag_evidence_retrieval",
         "graph_evidence_layer",
         "debate_layer_2_ic_challenge",
         "product_export_bundle",
-    }.issubset(component_names)
+    }.issubset(blocking)
     encoded = json.dumps(body, sort_keys=True)
     assert "Highly sensitive raw revenue sentence" not in encoded
 

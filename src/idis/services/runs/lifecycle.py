@@ -62,8 +62,13 @@ class RunLifecycleService:
         tenant_id: str,
         reason_code: str,
         message: str,
+        provenance_items: list[dict[str, Any]] | None = None,
     ) -> None:
-        """Persist a safe failure ledger record without executing a run."""
+        """Persist a safe failure ledger record without executing a run.
+
+        Optional provenance_items (pre-serialized, safe StepProvenance dicts) are
+        attached to the lifecycle step result_summary for operator diagnostics.
+        """
         finished_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         self._runs_repo.complete(run_id, status="FAILED", finished_at=finished_at)
         self._persist_lifecycle_evidence(
@@ -72,6 +77,7 @@ class RunLifecycleService:
             reason_code=reason_code,
             message=message,
             occurred_at=finished_at,
+            provenance_items=provenance_items,
         )
 
     def _persist_lifecycle_evidence(
@@ -82,6 +88,7 @@ class RunLifecycleService:
         reason_code: str,
         message: str,
         occurred_at: str | None = None,
+        provenance_items: list[dict[str, Any]] | None = None,
     ) -> None:
         """Create or update the dedicated lifecycle ledger step."""
         timestamp = occurred_at or datetime.now(UTC).isoformat().replace("+00:00", "Z")
@@ -93,17 +100,27 @@ class RunLifecycleService:
         if existing is not None:
             events = list(existing.result_summary.get("lifecycle_events", []))
             events.append(lifecycle_event)
-            existing.result_summary = {
+            updated_summary = {
                 **existing.result_summary,
                 "reason_code": reason_code,
                 "lifecycle_events": events,
             }
+            if provenance_items:
+                updated_summary["provenance_items"] = provenance_items
+            existing.result_summary = updated_summary
             existing.status = StepStatus.FAILED
             existing.finished_at = timestamp
             existing.error_code = reason_code
             existing.error_message = message
             self._run_steps_repo.update(existing)
             return
+
+        result_summary: dict[str, Any] = {
+            "reason_code": reason_code,
+            "lifecycle_events": [lifecycle_event],
+        }
+        if provenance_items:
+            result_summary["provenance_items"] = provenance_items
 
         step = RunStep(
             step_id=str(uuid.uuid4()),
@@ -114,10 +131,7 @@ class RunLifecycleService:
             status=StepStatus.FAILED,
             started_at=timestamp,
             finished_at=timestamp,
-            result_summary={
-                "reason_code": reason_code,
-                "lifecycle_events": [lifecycle_event],
-            },
+            result_summary=result_summary,
             error_code=reason_code,
             error_message=message,
         )

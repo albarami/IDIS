@@ -181,6 +181,7 @@ class PipelineWorker:
                                             "Strict full-live preflight blocked queued FULL run "
                                             "before execution"
                                         ),
+                                        strict_report=strict_report,
                                     )
                                     conn.commit()
                                     logger.info(
@@ -252,6 +253,7 @@ class PipelineWorker:
         run_id: str,
         reason_code: str,
         message: str,
+        strict_report: Any = None,
     ) -> None:
         """Persist a safe preflight blocker using existing status and ledger surfaces.
 
@@ -259,6 +261,10 @@ class PipelineWorker:
         after the claim batch released its row lock, the guarded completion returns
         False: the existing terminal status is preserved and no preflight ledger step
         is written.
+
+        When a strict readiness report is provided, safe StepProvenance for the
+        blocking components is attached to the step result_summary (classes/statuses
+        only — never raw env values, paths, secrets, or blocker text).
         """
         set_tenant_local(conn, tenant_id)
         runs_repo = get_runs_repository(conn, tenant_id)
@@ -275,6 +281,11 @@ class PipelineWorker:
             # Minimal legacy repositories without the guard keep prior behavior.
             runs_repo.complete(run_id, status="FAILED", finished_at=finished_at)
 
+        result_summary: dict[str, Any] = {"reason_code": reason_code}
+        provenance_items = _safe_provenance_items(strict_report)
+        if provenance_items:
+            result_summary["provenance_items"] = provenance_items
+
         strict_step = RunStep(
             step_id=str(uuid.uuid4()),
             run_id=run_id,
@@ -284,7 +295,7 @@ class PipelineWorker:
             status=StepStatus.FAILED,
             started_at=finished_at,
             finished_at=finished_at,
-            result_summary={"reason_code": reason_code},
+            result_summary=result_summary,
             error_code=reason_code,
             error_message=message,
         )
@@ -385,6 +396,15 @@ def _load_worker_preflight_corpus(
     return filter_preflight_corpus_by_run_source(preflight_corpus, source)
 
 
+def _safe_provenance_items(strict_report: Any) -> list[dict[str, Any]]:
+    """Serialize safe StepProvenance for a strict report's blocking components."""
+    if strict_report is None:
+        return []
+    from idis.services.runs.strict_full_live import build_blocking_step_provenance
+
+    return [item.model_dump(mode="json") for item in build_blocking_step_provenance(strict_report)]
+
+
 def _default_run_context_factory(
     *,
     db_conn: Any,
@@ -418,6 +438,8 @@ def _default_run_context_factory(
             deal_id=deal_id,
         ),
         preflight_corpus=preflight_corpus,
+        created_by_actor_id=run_data.get("created_by_actor_id"),
+        created_by_actor_type=run_data.get("created_by_actor_type"),
         audit_sink=audit_sink,
     )
 

@@ -10,6 +10,8 @@ E) Ingest failure cases: missing uri, unsupported scheme, sha256 mismatch
 
 import json
 import uuid
+from datetime import UTC, datetime
+from hashlib import sha256
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -1033,6 +1035,49 @@ class TestAuditEvents:
         doc_created_events = [e for e in events if e.get("event_type") == "document.created"]
         assert len(doc_created_events) >= 1
 
+    def test_document_audit_events_hash_idempotency_key(
+        self,
+        api_keys_config_single: dict[str, dict[str, str]],
+        api_key_a: str,
+        deal_id: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Document route audit events must not contain raw idempotency keys."""
+        clear_deals_store()
+        clear_document_store()
+        monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys_config_single))
+        raw_idempotency_key = "document-create-raw-idempotency-key"
+        audit_sink = InMemoryAuditSink()
+        app = create_app(
+            audit_sink=audit_sink,
+            idempotency_store=SqliteIdempotencyStore(in_memory=True),
+        )
+        client = TestClient(app)
+
+        response = client.post(
+            f"/v1/deals/{deal_id}/documents",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/json",
+                "Idempotency-Key": raw_idempotency_key,
+            },
+            json={"doc_type": "PITCH_DECK", "title": "Audit Test Doc", "auto_ingest": False},
+        )
+
+        assert response.status_code == 201
+        document_events = [
+            event for event in audit_sink.events if event["resource"]["resource_type"] == "document"
+        ]
+        assert document_events
+        encoded_events = json.dumps(document_events, sort_keys=True)
+        assert raw_idempotency_key not in encoded_events
+        for event in document_events:
+            assert "idempotency_key" not in event["request"]
+            assert (
+                event["request"]["idempotency_key_sha256"]
+                == sha256(raw_idempotency_key.encode("utf-8")).hexdigest()
+            )
+
     def test_ingest_document_emits_audit_event(
         self,
         api_keys_config_single: dict[str, dict[str, str]],
@@ -1081,6 +1126,74 @@ class TestAuditEvents:
             e for e in events if e.get("event_type", "").startswith("document.ingestion")
         ]
         assert len(ingestion_events) >= 1
+
+    def test_ingestion_service_audit_events_hash_idempotency_key(self) -> None:
+        """Ingestion service audit events must not contain raw idempotency keys."""
+        from idis.models.document import Document, DocumentType, ParseStatus
+        from idis.models.document_artifact import DocType, DocumentArtifact
+        from idis.parsers.base import ParseError, ParseErrorCode
+        from idis.services.ingestion import IngestionContext, IngestionService
+
+        audit_sink = InMemoryAuditSink()
+        service = IngestionService(compliant_store=MagicMock(), audit_sink=audit_sink)
+        tenant_id = uuid.uuid4()
+        deal_id = uuid.uuid4()
+        artifact_id = uuid.uuid4()
+        document_id = uuid.uuid4()
+        now = datetime.now(UTC)
+        raw_idempotency_key = "ingestion-service-raw-idempotency-key"
+        ctx = IngestionContext(
+            tenant_id=tenant_id,
+            actor_id="actor-a",
+            request_id="req-ingestion",
+            idempotency_key=raw_idempotency_key,
+        )
+        artifact = DocumentArtifact(
+            doc_id=artifact_id,
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            doc_type=DocType.PITCH_DECK,
+            title="Pitch Deck",
+            source_system="api",
+            version_id="version-1",
+            ingested_at=now,
+            sha256="a" * 64,
+            uri="idis://bucket/pitch.pdf",
+            metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+        document = Document(
+            document_id=document_id,
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            doc_id=artifact_id,
+            doc_type=DocumentType.PDF,
+            parse_status=ParseStatus.PARSED,
+            metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+
+        service._emit_document_created(ctx, artifact, "a" * 64)
+        service._emit_ingestion_completed(ctx, document, span_count=1, sha256="a" * 64)
+        document.parse_status = ParseStatus.FAILED
+        service._emit_ingestion_failed(
+            ctx,
+            document,
+            [ParseError(code=ParseErrorCode.INTERNAL_ERROR, message="parse failed")],
+            "a" * 64,
+        )
+
+        assert len(audit_sink.events) == 3
+        encoded_events = json.dumps(audit_sink.events, sort_keys=True)
+        assert raw_idempotency_key not in encoded_events
+        for event in audit_sink.events:
+            assert "idempotency_key" not in event["request"]
+            assert (
+                event["request"]["idempotency_key_sha256"]
+                == sha256(raw_idempotency_key.encode("utf-8")).hexdigest()
+            )
 
 
 class TestRequestIdHeader:

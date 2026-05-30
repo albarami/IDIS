@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -400,11 +402,48 @@ class TestAuditEventValidation:
             assert "resource_type" in event["resource"]
             assert "resource_id" in event["resource"]
 
-            assert event["request"]["idempotency_key"] == "idem-key-123"
+            encoded = json.dumps(event, sort_keys=True)
+            assert "idem-key-123" not in encoded
+            assert "idempotency_key" not in event["request"]
+            assert re.fullmatch(
+                r"[0-9a-f]{64}",
+                event["request"]["idempotency_key_sha256"],
+            )
+            assert event["request"]["idempotency_key_sha256"] == sha256(b"idem-key-123").hexdigest()
 
         finally:
             os.environ.pop("IDIS_API_KEYS_JSON", None)
             os.environ.pop("IDIS_AUDIT_LOG_PATH", None)
+
+    def test_audit_schema_accepts_hashed_idempotency_key_and_rejects_raw_key(self) -> None:
+        """Audit event request metadata must use idempotency_key_sha256 only."""
+        valid_event: dict[str, Any] = {
+            "event_id": str(uuid.uuid4()),
+            "occurred_at": "2026-01-07T12:00:00Z",
+            "tenant_id": str(uuid.uuid4()),
+            "actor": {"actor_type": "SERVICE", "actor_id": "audit-test"},
+            "request": {
+                "request_id": "req-1",
+                "method": "POST",
+                "path": "/v1/deals",
+                "status_code": 201,
+                "idempotency_key_sha256": sha256(b"raw-key").hexdigest(),
+            },
+            "resource": {"resource_type": "deal", "resource_id": str(uuid.uuid4())},
+            "event_type": "deal.created",
+            "severity": "MEDIUM",
+            "summary": "Deal created",
+        }
+        valid_result = validate_audit_event(valid_event)
+        assert valid_result.passed, valid_result.errors
+
+        invalid_event = json.loads(json.dumps(valid_event))
+        invalid_event["request"].pop("idempotency_key_sha256")
+        invalid_event["request"]["idempotency_key"] = "raw-key"
+
+        invalid_result = validate_audit_event(invalid_event)
+        assert not invalid_result.passed
+        assert any(error.code == "AUDIT_SCHEMA_VIOLATION" for error in invalid_result.errors)
 
 
 class TestAuditSink:
@@ -438,6 +477,43 @@ class TestAuditSink:
 
         assert nested_path.exists()
         assert len(nested_path.read_text().strip().split("\n")) == 1
+
+    def test_postgres_sink_persists_hashed_idempotency_key_reference(self) -> None:
+        """Audit event side column must follow the hashed request metadata contract."""
+        from idis.audit.postgres_sink import PostgresAuditSink
+
+        class FakeConn:
+            def __init__(self) -> None:
+                self.params: dict[str, Any] | None = None
+
+            def execute(self, _statement: object, params: dict[str, Any]) -> None:
+                self.params = params
+
+        key_hash = sha256(b"raw-key").hexdigest()
+        event: dict[str, Any] = {
+            "event_id": str(uuid.uuid4()),
+            "occurred_at": "2026-01-07T12:00:00Z",
+            "tenant_id": str(uuid.uuid4()),
+            "actor": {"actor_type": "SERVICE", "actor_id": "test"},
+            "request": {
+                "request_id": "req-1",
+                "method": "POST",
+                "path": "/test",
+                "status_code": 201,
+                "idempotency_key_sha256": key_hash,
+            },
+            "resource": {"resource_type": "deal", "resource_id": str(uuid.uuid4())},
+            "event_type": "deal.created",
+            "severity": "MEDIUM",
+            "summary": "Test event",
+        }
+        conn = FakeConn()
+
+        PostgresAuditSink()._insert_event(conn, event)  # type: ignore[arg-type]
+
+        assert conn.params is not None
+        assert conn.params["idempotency_key"] == key_hash
+        assert "raw-key" not in conn.params["event"]
 
     def test_sink_appends_to_existing_file(self, tmp_path: Path) -> None:
         """Verify sink appends to existing file (never overwrites)."""

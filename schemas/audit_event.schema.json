@@ -34,12 +34,18 @@
     },
     "actor": {
       "type": "object",
-      "required": ["actor_type", "actor_id"],
+      "required": [
+        "actor_type",
+        "actor_id"
+      ],
       "additionalProperties": false,
       "properties": {
         "actor_type": {
           "type": "string",
-          "enum": ["HUMAN", "SERVICE"],
+          "enum": [
+            "HUMAN",
+            "SERVICE"
+          ],
           "description": "Type of actor"
         },
         "actor_id": {
@@ -55,18 +61,29 @@
           "description": "Roles held by actor at time of action"
         },
         "ip": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "IP address of the actor"
         },
         "user_agent": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "User agent string"
         }
       }
     },
     "request": {
       "type": "object",
-      "required": ["request_id", "method", "path", "status_code"],
+      "required": [
+        "request_id",
+        "method",
+        "path",
+        "status_code"
+      ],
       "additionalProperties": false,
       "properties": {
         "request_id": {
@@ -74,21 +91,37 @@
           "minLength": 1,
           "description": "Unique request identifier for correlation"
         },
-        "idempotency_key": {
-          "type": ["string", "null"],
-          "description": "Idempotency key if provided"
+        "idempotency_key_sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 hash of the idempotency key if provided"
         },
         "trace_id": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "Distributed trace ID"
         },
         "span_id": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "Span ID within the trace"
         },
         "method": {
           "type": "string",
-          "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"],
+          "enum": [
+            "GET",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE"
+          ],
           "description": "HTTP method"
         },
         "path": {
@@ -106,7 +139,10 @@
     },
     "resource": {
       "type": "object",
-      "required": ["resource_type", "resource_id"],
+      "required": [
+        "resource_type",
+        "resource_id"
+      ],
       "additionalProperties": false,
       "properties": {
         "resource_type": {
@@ -133,7 +169,10 @@
           "description": "Identifier of the affected resource"
         },
         "deal_id": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "format": "uuid",
           "description": "Deal context if applicable"
         }
@@ -146,7 +185,12 @@
     },
     "severity": {
       "type": "string",
-      "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"],
+      "enum": [
+        "LOW",
+        "MEDIUM",
+        "HIGH",
+        "CRITICAL"
+      ],
       "description": "Severity level of this event"
     },
     "summary": {
@@ -155,15 +199,24 @@
       "description": "Human-readable summary of the event"
     },
     "diff": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "additionalProperties": false,
       "properties": {
         "before_ref": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "Object store reference to state before change"
         },
         "after_ref": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "Object store reference to state after change"
         },
         "changed_fields": {
@@ -177,11 +230,17 @@
       "description": "Diff information for update operations"
     },
     "payload": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "additionalProperties": false,
       "properties": {
         "safe": {
-          "type": ["object", "null"],
+          "type": [
+            "object",
+            "null"
+          ],
           "additionalProperties": true,
           "description": "Safe fields only (no PII or sensitive data)"
         },

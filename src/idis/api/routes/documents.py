@@ -570,6 +570,19 @@ def _strip_uri_scheme(uri: str) -> str:
     return uri
 
 
+def _audit_request_metadata(
+    *,
+    request_id: str,
+    idempotency_key: str | None,
+) -> dict[str, str]:
+    request_metadata = {"request_id": request_id}
+    if idempotency_key:
+        request_metadata["idempotency_key_sha256"] = hashlib.sha256(
+            idempotency_key.encode("utf-8")
+        ).hexdigest()
+    return request_metadata
+
+
 def _emit_document_created_audit(
     request: Request,
     tenant_id: str,
@@ -593,10 +606,10 @@ def _emit_document_created_audit(
             "actor_type": "HUMAN",
             "actor_id": actor_id_str,
         },
-        "request": {
-            "request_id": request_id,
-            "idempotency_key": idempotency_key,
-        },
+        "request": _audit_request_metadata(
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+        ),
         "resource": {
             "resource_type": "document",
             "resource_id": artifact["doc_id"],
@@ -654,10 +667,10 @@ def _emit_ingestion_audit(
             "actor_type": "HUMAN",
             "actor_id": actor_id_str,
         },
-        "request": {
-            "request_id": request_id,
-            "idempotency_key": idempotency_key,
-        },
+        "request": _audit_request_metadata(
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+        ),
         "resource": {
             "resource_type": "document",
             "resource_id": doc_id,

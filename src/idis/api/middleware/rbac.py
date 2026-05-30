@@ -29,6 +29,7 @@ from idis.api.abac import (
     AbacDecisionCode,
     check_deal_access_with_break_glass,
     resolve_deal_id_for_claim,
+    resolve_deal_id_for_run,
 )
 from idis.api.auth import TenantContext
 from idis.api.break_glass import (
@@ -39,7 +40,7 @@ from idis.api.break_glass import (
 )
 from idis.api.error_model import make_error_response_no_request
 from idis.api.errors import IdisHttpError
-from idis.api.policy import ABAC_CLAIM_SCOPED_OPS, POLICY_RULES, policy_check
+from idis.api.policy import ABAC_CLAIM_SCOPED_OPS, ABAC_RUN_SCOPED_OPS, POLICY_RULES, policy_check
 
 logger = logging.getLogger(__name__)
 
@@ -147,19 +148,22 @@ class RBACMiddleware(BaseHTTPMiddleware):
     ) -> Response | None:
         """Check ABAC for deal-scoped operations.
 
-        For claim endpoints (getClaim, updateClaim, getClaimSanad, listClaimDefects),
-        resolves deal_id from claim_id when deal_id is not in path.
+        For claim/run endpoints without deal_id in path, resolves deal_id from
+        the scoped resource before ABAC.
 
         ABAC is enforced for:
         1. Operations with is_deal_scoped=True and deal_id in path
         2. Operations in ABAC_CLAIM_SCOPED_OPS with claim_id (resolve deal first)
+        3. Operations in ABAC_RUN_SCOPED_OPS with run_id (resolve deal first)
 
         Returns:
             Response if ABAC denied, None if allowed (continue processing).
         """
         deal_id = resource_ctx.get("deal_id")
         claim_id = resource_ctx.get("claim_id")
+        run_id = resource_ctx.get("run_id")
         is_claim_scoped_op = operation_id in ABAC_CLAIM_SCOPED_OPS
+        is_run_scoped_op = operation_id in ABAC_RUN_SCOPED_OPS
 
         # For claim-scoped operations without deal_id in path, resolve deal from claim
         if not deal_id and claim_id and is_claim_scoped_op:
@@ -192,12 +196,41 @@ class RBACMiddleware(BaseHTTPMiddleware):
                 # Do not pre-deny to avoid existence leak (ADR-011)
                 return None
 
+        # For run-scoped lifecycle operations without deal_id in path, resolve deal from run.
+        if not deal_id and run_id and is_run_scoped_op:
+            try:
+                resolved_deal_id = resolve_deal_id_for_run(
+                    tenant_id=tenant_ctx.tenant_id,
+                    run_id=run_id,
+                    request=request,
+                )
+            except IdisHttpError as e:
+                logger.warning(
+                    "Run->deal resolution failed: %s",
+                    str(e),
+                    extra={"request_id": request_id, "run_id": run_id},
+                )
+                return make_error_response_no_request(
+                    code="ABAC_RESOLUTION_FAILED",
+                    message="Access denied.",
+                    http_status=403,
+                    request_id=request_id,
+                    details={"reason": "resolver_unavailable"},
+                )
+
+            if resolved_deal_id:
+                deal_id = resolved_deal_id
+            else:
+                # Run not found or inaccessible - let route return 404.
+                # Do not pre-deny to avoid existence leak (ADR-011).
+                return None
+
         # Determine if ABAC enforcement is required
         rule = POLICY_RULES.get(operation_id)
 
-        # ABAC required if: deal_id present AND (operation is deal-scoped OR claim-scoped)
+        # ABAC required if: deal_id present AND operation is deal-, claim-, or run-scoped.
         requires_abac = deal_id and (
-            (rule is not None and rule.is_deal_scoped) or is_claim_scoped_op
+            (rule is not None and rule.is_deal_scoped) or is_claim_scoped_op or is_run_scoped_op
         )
 
         if not requires_abac:
@@ -207,7 +240,7 @@ class RBACMiddleware(BaseHTTPMiddleware):
         # and rule is guaranteed for claim-scoped ops
         assert deal_id is not None, "deal_id must be set when requires_abac is True"
 
-        # For claim-scoped ops, rule may be None but we default is_mutation to False
+        # For scoped ops, rule may be None but we default is_mutation to False.
         is_mutation = rule.is_mutation if rule is not None else False
 
         break_glass_token_str = extract_break_glass_token(request)
@@ -276,6 +309,21 @@ class RBACMiddleware(BaseHTTPMiddleware):
                             details=None,
                         )
             return None
+
+        if is_run_scoped_op:
+            logger.info(
+                "Run-scoped ABAC denied and masked as not found: actor=%s operation=%s",
+                tenant_ctx.actor_id,
+                operation_id,
+                extra={"request_id": request_id, "decision_code": abac_decision.code.value},
+            )
+            return make_error_response_no_request(
+                code="NOT_FOUND",
+                message="Run not found",
+                http_status=404,
+                request_id=request_id,
+                details=None,
+            )
 
         http_status = 403
         if abac_decision.code == AbacDecisionCode.DENIED_UNKNOWN_DEAL:
@@ -349,18 +397,23 @@ class RBACMiddleware(BaseHTTPMiddleware):
             if value is not None and isinstance(value, str) and value.strip():
                 result[policy_name] = value.strip()
 
-        # Fallback: parse URL path directly for claim_id when not found in path_params
+        # Fallback: parse URL path directly for claim_id/run_id when not found in path_params
         # This is needed because BaseHTTPMiddleware runs before route matching,
-        # and claim-scoped operations need claim_id for the claim→deal resolver.
-        # Note: We only extract claim_id here, not deal_id, to avoid breaking
+        # and scoped operations need resource IDs for the resource→deal resolver.
+        # Note: We only extract claim_id/run_id here, not deal_id, to avoid breaking
         # ABAC enforcement on deal endpoints that rely on path_params being
         # properly populated by the router.
+        path = request.url.path
+        uuid_pattern = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
         if result["claim_id"] is None:
-            path = request.url.path
-            uuid_pattern = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
             # Match /v1/claims/{uuid} or /v1/claims/{uuid}/...
             claim_match = re.search(rf"/v1/claims/({uuid_pattern})", path, re.IGNORECASE)
             if claim_match:
                 result["claim_id"] = claim_match.group(1)
+        if result["run_id"] is None:
+            # Match /v1/runs/{uuid} or /v1/runs/{uuid}/...
+            run_match = re.search(rf"/v1/runs/({uuid_pattern})", path, re.IGNORECASE)
+            if run_match:
+                result["run_id"] = run_match.group(1)
 
         return result

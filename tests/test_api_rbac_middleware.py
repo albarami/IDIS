@@ -15,16 +15,27 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 from fastapi.testclient import TestClient
 
+from idis.api import policy
+from idis.api.abac import InMemoryDealAssignmentStore, set_deal_assignment_store
 from idis.api.main import create_app
 from idis.api.policy import (
     Role,
     get_all_v1_operation_ids,
     policy_check,
 )
-from idis.audit.sink import JsonlFileAuditSink
+from idis.audit.sink import InMemoryAuditSink, JsonlFileAuditSink
+from idis.persistence.repositories.run_steps import (
+    InMemoryRunStepsRepository,
+    clear_run_steps_store,
+)
+from idis.persistence.repositories.runs import (
+    _in_memory_runs_store,
+    clear_in_memory_runs_store,
+)
 
 
 def _make_api_keys_json(
@@ -81,6 +92,39 @@ def _extract_v1_operation_ids(spec: dict[str, Any]) -> set[str]:
                 operation_ids.add(operation["operationId"])
 
     return operation_ids
+
+
+@pytest.fixture(autouse=True)
+def _reset_run_lifecycle_rbac_state() -> None:
+    """Keep run lifecycle RBAC tests isolated from module-level stores."""
+    clear_in_memory_runs_store()
+    clear_run_steps_store()
+    set_deal_assignment_store(InMemoryDealAssignmentStore())
+    yield
+    clear_in_memory_runs_store()
+    clear_run_steps_store()
+    set_deal_assignment_store(InMemoryDealAssignmentStore())
+
+
+def _seed_run_row(
+    *,
+    run_id: str,
+    tenant_id: str,
+    deal_id: str,
+    status: str,
+) -> None:
+    _in_memory_runs_store[run_id] = {
+        "run_id": run_id,
+        "tenant_id": tenant_id,
+        "deal_id": deal_id,
+        "mode": "FULL",
+        "status": status,
+        "started_at": "2026-05-27T00:00:00Z",
+        "finished_at": None,
+        "source": None,
+        "created_at": "2026-05-27T00:00:00Z",
+        "cancel_requested_at": None,
+    }
 
 
 class TestAuditorCannotMutate:
@@ -316,6 +360,163 @@ class TestPolicyMappingNoGaps:
             f"Missing: {sorted(openapi_operation_ids - policy_operation_ids)}, "
             f"Extra: {sorted(policy_operation_ids - openapi_operation_ids)}"
         )
+
+
+class TestRunLifecycleDealScopedPolicy:
+    """Run lifecycle mutations must resolve run_id to deal_id for ABAC."""
+
+    def test_run_lifecycle_operations_are_run_scoped_for_abac(self) -> None:
+        """retry/resume/cancel require run-scoped ABAC despite no deal_id in URL."""
+        run_scoped_ops = getattr(policy, "ABAC_RUN_SCOPED_OPS", frozenset())
+
+        for operation_id in ("retryRun", "resumeRun", "cancelRun"):
+            rule = policy.POLICY_RULES[operation_id]
+            assert rule.is_mutation is True
+            assert rule.is_deal_scoped or operation_id in run_scoped_ops
+
+    @pytest.mark.parametrize(
+        ("action", "initial_status"),
+        [
+            ("retry", "FAILED"),
+            ("resume", "FAILED"),
+            ("cancel", "QUEUED"),
+        ],
+    )
+    def test_run_lifecycle_unassigned_existing_run_is_masked_as_not_found_without_side_effects(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        action: str,
+        initial_status: str,
+    ) -> None:
+        """Unassigned same-tenant actors must not learn whether run IDs exist."""
+        tenant_id = "11111111-1111-1111-1111-111111111111"
+        actor_id = "actor-unassigned"
+        deal_id = "22222222-2222-2222-2222-222222222222"
+        run_id = "33333333-3333-3333-3333-333333333333"
+        missing_run_id = "44444444-4444-4444-4444-444444444444"
+
+        monkeypatch.setenv(
+            "IDIS_API_KEYS_JSON",
+            _make_api_keys_json(
+                tenant_id,
+                actor_id=actor_id,
+                roles=[Role.ANALYST.value],
+            ),
+        )
+        monkeypatch.setenv("IDIS_REQUIRE_FULL_LIVE", "0")
+        _seed_run_row(
+            run_id=run_id,
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            status=initial_status,
+        )
+
+        audit_sink = InMemoryAuditSink()
+        app = create_app(audit_sink=audit_sink, service_region="us-east-1")
+        client = TestClient(app, raise_server_exceptions=False)
+
+        unknown_response = client.post(
+            f"/v1/runs/{missing_run_id}/{action}",
+            headers={"X-IDIS-API-Key": "test-api-key-rbac"},
+        )
+        response = client.post(
+            f"/v1/runs/{run_id}/{action}",
+            headers={"X-IDIS-API-Key": "test-api-key-rbac"},
+        )
+
+        assert unknown_response.status_code == 404
+        assert response.status_code == unknown_response.status_code
+        unknown_body = unknown_response.json()
+        response_body = response.json()
+        assert {k: v for k, v in response_body.items() if k != "request_id"} == {
+            k: v for k, v in unknown_body.items() if k != "request_id"
+        }
+        assert response_body["code"] == "NOT_FOUND"
+        assert _in_memory_runs_store[run_id]["status"] == initial_status
+        assert InMemoryRunStepsRepository(tenant_id).get_by_run_id(run_id) == []
+        assert InMemoryRunStepsRepository(tenant_id).get_by_run_id(missing_run_id) == []
+        assert audit_sink.events == []
+
+    @pytest.mark.parametrize(
+        ("action", "initial_status", "expected_status"),
+        [
+            ("retry", "FAILED", "QUEUED"),
+            ("resume", "FAILED", "QUEUED"),
+            ("cancel", "QUEUED", "CANCELLED"),
+        ],
+    )
+    def test_run_lifecycle_assigned_actor_can_mutate(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        action: str,
+        initial_status: str,
+        expected_status: str,
+    ) -> None:
+        """Assigned same-tenant actors can use run lifecycle operations."""
+        tenant_id = "11111111-1111-1111-1111-111111111111"
+        actor_id = "actor-assigned"
+        deal_id = "22222222-2222-2222-2222-222222222222"
+        run_id = "33333333-3333-3333-3333-333333333333"
+        assignment_store = InMemoryDealAssignmentStore()
+        assignment_store.add_assignment(tenant_id, deal_id, actor_id)
+        set_deal_assignment_store(assignment_store)
+
+        monkeypatch.setenv(
+            "IDIS_API_KEYS_JSON",
+            _make_api_keys_json(
+                tenant_id,
+                actor_id=actor_id,
+                roles=[Role.ANALYST.value],
+            ),
+        )
+        monkeypatch.setenv("IDIS_REQUIRE_FULL_LIVE", "0")
+        _seed_run_row(
+            run_id=run_id,
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            status=initial_status,
+        )
+
+        app = create_app(audit_sink=InMemoryAuditSink(), service_region="us-east-1")
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.post(
+            f"/v1/runs/{run_id}/{action}",
+            headers={"X-IDIS-API-Key": "test-api-key-rbac"},
+        )
+
+        assert response.status_code == 202, response.text
+        assert response.json()["status"] == expected_status
+
+    def test_run_lifecycle_unknown_run_preserves_route_404_without_lifecycle_evidence(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Unknown run resolution must not create a same-tenant existence oracle."""
+        tenant_id = "11111111-1111-1111-1111-111111111111"
+        missing_run_id = "44444444-4444-4444-4444-444444444444"
+
+        monkeypatch.setenv(
+            "IDIS_API_KEYS_JSON",
+            _make_api_keys_json(
+                tenant_id,
+                actor_id="actor-unassigned",
+                roles=[Role.ANALYST.value],
+            ),
+        )
+        monkeypatch.setenv("IDIS_REQUIRE_FULL_LIVE", "0")
+
+        app = create_app(audit_sink=InMemoryAuditSink(), service_region="us-east-1")
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.post(
+            f"/v1/runs/{missing_run_id}/retry",
+            headers={"X-IDIS-API-Key": "test-api-key-rbac"},
+        )
+
+        assert response.status_code == 404
+        assert response.json()["code"] == "NOT_FOUND"
+        assert InMemoryRunStepsRepository(tenant_id).get_by_run_id(missing_run_id) == []
 
 
 class TestAdminOnlyOperations:

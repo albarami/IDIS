@@ -112,7 +112,7 @@ class PostgresRunsRepository:
             text(
                 """
                 SELECT run_id, tenant_id, deal_id, mode, status,
-                       started_at, finished_at, source, created_at
+                       started_at, finished_at, source, created_at, cancel_requested_at
                 FROM runs
                 WHERE run_id = :run_id
                 """
@@ -190,6 +190,119 @@ class PostgresRunsRepository:
         """Set a terminal run status and finished timestamp."""
         self.update_status(run_id, status=status, finished_at=finished_at)
 
+    def try_complete_running(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        finished_at: str | None,
+    ) -> bool:
+        """Atomically set a terminal status only while the run is still RUNNING.
+
+        Guards execution finalization against a cancellation that commits between the
+        pre-complete check and the terminal write. Returns False if the run is no longer
+        RUNNING (e.g. already CANCELLED), leaving the existing status untouched.
+        """
+        if finished_at is not None:
+            result = self._conn.execute(
+                text(
+                    """
+                    UPDATE runs
+                    SET status = :status, finished_at = :finished_at
+                    WHERE run_id = :run_id AND status = 'RUNNING'
+                    RETURNING run_id
+                    """
+                ),
+                {"run_id": run_id, "status": status, "finished_at": finished_at},
+            )
+        else:
+            result = self._conn.execute(
+                text(
+                    """
+                    UPDATE runs
+                    SET status = :status
+                    WHERE run_id = :run_id AND status = 'RUNNING'
+                    RETURNING run_id
+                    """
+                ),
+                {"run_id": run_id, "status": status},
+            )
+        return result.fetchone() is not None
+
+    def try_complete_active(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        finished_at: str | None,
+    ) -> bool:
+        """Atomically set a terminal status only while the run is QUEUED or RUNNING.
+
+        Used by the worker preflight blocker, which fails a run that has not yet been
+        marked RUNNING. Returns False if the run is already terminal (e.g. CANCELLED
+        after the claim batch released its row lock), leaving the status untouched.
+        """
+        if finished_at is not None:
+            result = self._conn.execute(
+                text(
+                    """
+                    UPDATE runs
+                    SET status = :status, finished_at = :finished_at
+                    WHERE run_id = :run_id AND status IN ('QUEUED', 'RUNNING')
+                    RETURNING run_id
+                    """
+                ),
+                {"run_id": run_id, "status": status, "finished_at": finished_at},
+            )
+        else:
+            result = self._conn.execute(
+                text(
+                    """
+                    UPDATE runs
+                    SET status = :status
+                    WHERE run_id = :run_id AND status IN ('QUEUED', 'RUNNING')
+                    RETURNING run_id
+                    """
+                ),
+                {"run_id": run_id, "status": status},
+            )
+        return result.fetchone() is not None
+
+    def try_requeue_failed(self, run_id: str) -> bool:
+        """Atomically transition a failed run back to queued."""
+        result = self._conn.execute(
+            text(
+                """
+                UPDATE runs
+                SET status = 'QUEUED',
+                    finished_at = NULL,
+                    cancel_requested_at = NULL
+                WHERE run_id = :run_id AND status = 'FAILED'
+                RETURNING run_id
+                """
+            ),
+            {"run_id": run_id},
+        )
+        return result.fetchone() is not None
+
+    def try_cancel_active(self, run_id: str) -> bool:
+        """Atomically transition QUEUED/RUNNING -> CANCELLED."""
+        result = self._conn.execute(
+            text(
+                """
+                UPDATE runs
+                SET status = 'CANCELLED',
+                    cancel_requested_at = NOW(),
+                    finished_at = NOW()
+                WHERE run_id = :run_id
+                  AND status IN ('QUEUED', 'RUNNING')
+                RETURNING run_id
+                """
+            ),
+            {"run_id": run_id},
+        )
+        return result.fetchone() is not None
+
     def claim_queued_runs(self, *, limit: int = 10) -> list[dict[str, Any]]:
         """Return tenant-scoped queued run candidates with row locks.
 
@@ -200,7 +313,7 @@ class PostgresRunsRepository:
             text(
                 """
                 SELECT run_id, tenant_id, deal_id, mode, status,
-                       started_at, finished_at, source, created_at
+                       started_at, finished_at, source, created_at, cancel_requested_at
                 FROM runs
                 WHERE status = 'QUEUED'
                 ORDER BY created_at ASC
@@ -253,6 +366,7 @@ class PostgresRunsRepository:
             "finished_at": finished_at,
             "source": _json_value(source),
             "created_at": created_at,
+            "cancel_requested_at": _iso_utc(_row_value(row, "cancel_requested_at")),
         }
 
 
@@ -309,6 +423,7 @@ class InMemoryRunsRepository:
             "finished_at": None,
             "source": dict(source) if source is not None else None,
             "created_at": now,
+            "cancel_requested_at": None,
         }
         _in_memory_runs_store[run_id] = run
         return run
@@ -372,6 +487,79 @@ class InMemoryRunsRepository:
         """Set a terminal in-memory run status."""
         self.update_status(run_id, status=status, finished_at=finished_at)
 
+    def try_complete_running(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        finished_at: str | None,
+    ) -> bool:
+        """Set a terminal status only while the in-memory run is still RUNNING.
+
+        Mirrors the Postgres guard so execution finalization cannot overwrite a
+        cancellation that won the race between the pre-complete check and the write.
+        """
+        run = _in_memory_runs_store.get(run_id)
+        if run is None or run.get("tenant_id") != self._tenant_id:
+            return False
+        if run.get("status") != "RUNNING":
+            return False
+        run["status"] = status
+        if finished_at is not None:
+            run["finished_at"] = finished_at
+        _in_memory_runs_store[run_id] = run
+        return True
+
+    def try_complete_active(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        finished_at: str | None,
+    ) -> bool:
+        """Set a terminal status only while the in-memory run is QUEUED or RUNNING.
+
+        Mirrors the Postgres guard for the worker preflight blocker so a run cancelled
+        after the claim batch released its lock is not overwritten.
+        """
+        run = _in_memory_runs_store.get(run_id)
+        if run is None or run.get("tenant_id") != self._tenant_id:
+            return False
+        if run.get("status") not in {"QUEUED", "RUNNING"}:
+            return False
+        run["status"] = status
+        if finished_at is not None:
+            run["finished_at"] = finished_at
+        _in_memory_runs_store[run_id] = run
+        return True
+
+    def try_requeue_failed(self, run_id: str) -> bool:
+        """Atomically transition a failed in-memory run back to queued."""
+        run = _in_memory_runs_store.get(run_id)
+        if run is None or run.get("tenant_id") != self._tenant_id:
+            return False
+        if run.get("status") != "FAILED":
+            return False
+        run["status"] = "QUEUED"
+        run["finished_at"] = None
+        run["cancel_requested_at"] = None
+        _in_memory_runs_store[run_id] = run
+        return True
+
+    def try_cancel_active(self, run_id: str) -> bool:
+        """Atomically transition queued/running in-memory run to cancelled."""
+        run = _in_memory_runs_store.get(run_id)
+        if run is None or run.get("tenant_id") != self._tenant_id:
+            return False
+        if run.get("status") not in {"QUEUED", "RUNNING"}:
+            return False
+        now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        run["status"] = "CANCELLED"
+        run["cancel_requested_at"] = now
+        run["finished_at"] = now
+        _in_memory_runs_store[run_id] = run
+        return True
+
     def claim_queued_runs(self, *, limit: int = 10) -> list[dict[str, Any]]:
         """Return tenant-scoped queued in-memory run candidates."""
         queued = [
@@ -418,6 +606,16 @@ def _row_value(row: Any, key: str) -> Any:
     if mapping is not None and key in mapping:
         return mapping[key]
     return getattr(row, key, None)
+
+
+def _iso_utc(value: Any) -> str | None:
+    """Convert optional datetime-like values to ISO UTC strings."""
+    if value is None:
+        return None
+    isoformat = getattr(value, "isoformat", None)
+    if callable(isoformat):
+        return str(isoformat()).replace("+00:00", "Z")
+    return str(value)
 
 
 def get_runs_repository(

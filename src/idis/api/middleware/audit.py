@@ -18,6 +18,7 @@ import logging
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from hashlib import sha256
 from typing import Any
 
 from fastapi import Request, Response
@@ -55,6 +56,9 @@ OPERATION_ID_TO_EVENT_TYPE: dict[str, tuple[str, str, str]] = {
     "cureDefect": ("defect.cured", "MEDIUM", "defect"),
     "runCalc": ("calc.started", "LOW", "calc"),
     "startRun": ("deal.run.started", "LOW", "deal"),
+    "retryRun": ("deal.run.requeued", "LOW", "deal"),
+    "resumeRun": ("deal.run.requeued", "LOW", "deal"),
+    "cancelRun": ("deal.run.cancelled", "LOW", "deal"),
     "startDebate": ("debate.started", "LOW", "debate"),
     "submitHumanGateAction": ("human_gate.action.submitted", "MEDIUM", "human_gate"),
     "createOverride": ("override.created", "HIGH", "override"),
@@ -179,7 +183,9 @@ def _build_audit_event(
     }
 
     if idempotency_key:
-        event["request"]["idempotency_key"] = idempotency_key
+        event["request"]["idempotency_key_sha256"] = sha256(
+            idempotency_key.encode("utf-8")
+        ).hexdigest()
 
     return event
 
@@ -269,11 +275,15 @@ class AuditMiddleware(BaseHTTPMiddleware):
 
         event_type, severity, resource_type = OPERATION_ID_TO_EVENT_TYPE[operation_id]
 
-        # For 4xx client error responses, no mutation occurred (request was rejected
-        # due to validation, not found, etc.). Skip audit - nothing to record.
-        # Only audit successful mutations (2xx) and potentially 5xx (where mutation
-        # may have occurred before the error).
-        if 400 <= response.status_code < 500:
+        # For ordinary 4xx client error responses, no mutation occurred (request was
+        # rejected due to validation, not found, etc.). Some routes persist lifecycle
+        # evidence before returning a client-visible conflict; those must opt in after
+        # the side effect succeeds.
+        if 400 <= response.status_code < 500 and not getattr(
+            request.state,
+            "audit_mutation_occurred_on_error",
+            False,
+        ):
             return response
 
         audit_event = _build_audit_event(

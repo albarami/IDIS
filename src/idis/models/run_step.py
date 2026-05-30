@@ -46,6 +46,7 @@ class StepName(StrEnum):
     ANALYSIS = "ANALYSIS"
     SCORING = "SCORING"
     DELIVERABLES = "DELIVERABLES"
+    RUN_LIFECYCLE = "RUN_LIFECYCLE"
 
 
 class StepStatus(StrEnum):
@@ -87,6 +88,7 @@ STEP_ORDER: dict[StepName, int] = {
     StepName.ANALYSIS: 25,
     StepName.SCORING: 26,
     StepName.DELIVERABLES: 27,
+    StepName.RUN_LIFECYCLE: 28,
 }
 """Canonical ordering for deterministic step iteration."""
 

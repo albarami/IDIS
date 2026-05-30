@@ -212,6 +212,16 @@ class TestGetRouteInventory:
 class TestRunObservabilityOpenAPI:
     """OpenAPI contract tests for public run observability."""
 
+    def test_run_lifecycle_schemas_include_cancelled_status(self) -> None:
+        spec = load_openapi_spec()
+        schemas = spec["components"]["schemas"]
+
+        run_ref_status_enum = schemas["RunRef"]["properties"]["status"]["enum"]
+        run_status_status_enum = schemas["RunStatus"]["properties"]["status"]["enum"]
+
+        assert "CANCELLED" in run_ref_status_enum
+        assert "CANCELLED" in run_status_status_enum
+
     def test_run_status_schema_exposes_safe_observability_contract(self) -> None:
         spec = load_openapi_spec()
         schemas = spec["components"]["schemas"]

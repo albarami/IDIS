@@ -108,15 +108,19 @@ def create_data_room_package(
 
     now = datetime.now(UTC)
     package_id = uuid4()
-    package = DataRoomPackage(
-        package_id=package_id,
-        tenant_id=tenant_id,
-        deal_id=deal_id,
-        status=DataRoomPackageStatus.OPEN,
-        created_by_actor_id=created_by_actor_id,
-        created_by_actor_type=created_by_actor_type,
-        created_at=now,
-        updated_at=now,
+    # model_validate (not the direct constructor) so Pydantic keeps str->UUID
+    # runtime coercion while mypy does not see str passed to UUID-typed params.
+    package = DataRoomPackage.model_validate(
+        {
+            "package_id": package_id,
+            "tenant_id": tenant_id,
+            "deal_id": deal_id,
+            "status": DataRoomPackageStatus.OPEN,
+            "created_by_actor_id": created_by_actor_id,
+            "created_by_actor_type": created_by_actor_type,
+            "created_at": now,
+            "updated_at": now,
+        }
     )
     repo.create_package(package)
 
@@ -151,25 +155,29 @@ def _build_file(
     support_status = _to_support_status(metadata.get("parser_support_status"))
     triage_status = _to_triage_status(metadata.get("parser_triage_status"))
     parse_status = _to_parse_status(doc.get("parse_status"))
-    return DataRoomPackageFile(
-        file_entry_id=uuid4(),
-        tenant_id=tenant_id,
-        package_id=package_id,
-        deal_id=deal_id,
-        sequence=sequence,
-        path_hash=_derive_path_hash(doc),
-        extension=_derive_extension(doc),
-        sha256=doc.get("sha256"),
-        file_status=_rollup_file_status(support_status, triage_status, parse_status),
-        support_status=support_status,
-        triage_status=triage_status,
-        parse_status=parse_status,
-        reason_codes=_safe_codes(metadata.get("parser_reason_codes")),
-        error_codes=_safe_codes(metadata.get("parse_error_codes")),
-        doc_id=_opt_str(doc.get("doc_id")),
-        document_id=_opt_str(doc.get("document_id")),
-        storage_uri=None,
-        created_at=created_at,
+    # model_validate keeps str->UUID runtime coercion while satisfying mypy
+    # (str/str|None values into UUID/UUID|None fields are validated, not statically rejected).
+    return DataRoomPackageFile.model_validate(
+        {
+            "file_entry_id": uuid4(),
+            "tenant_id": tenant_id,
+            "package_id": package_id,
+            "deal_id": deal_id,
+            "sequence": sequence,
+            "path_hash": _derive_path_hash(doc),
+            "extension": _derive_extension(doc),
+            "sha256": doc.get("sha256"),
+            "file_status": _rollup_file_status(support_status, triage_status, parse_status),
+            "support_status": support_status,
+            "triage_status": triage_status,
+            "parse_status": parse_status,
+            "reason_codes": _safe_codes(metadata.get("parser_reason_codes")),
+            "error_codes": _safe_codes(metadata.get("parse_error_codes")),
+            "doc_id": _opt_str(doc.get("doc_id")),
+            "document_id": _opt_str(doc.get("document_id")),
+            "storage_uri": None,
+            "created_at": created_at,
+        }
     )
 
 

@@ -44,17 +44,21 @@ def _package_from_data(data: Any) -> DataRoomPackage:
     metadata = _get(data, "metadata")
     if isinstance(metadata, str):
         metadata = json.loads(metadata)
-    return DataRoomPackage(
-        package_id=str(_get(data, "package_id")),
-        tenant_id=str(_get(data, "tenant_id")),
-        deal_id=str(_get(data, "deal_id")),
-        status=_get(data, "status"),
-        created_by_actor_id=_get(data, "created_by_actor_id"),
-        created_by_actor_type=_get(data, "created_by_actor_type"),
-        manifest_uri=_get(data, "manifest_uri"),
-        metadata=metadata or {},
-        created_at=_get(data, "created_at"),
-        updated_at=_get(data, "updated_at"),
+    # model_validate (mirroring _file_from_data) keeps str->UUID runtime coercion
+    # while mypy no longer sees str passed to UUID-typed constructor params.
+    return DataRoomPackage.model_validate(
+        {
+            "package_id": str(_get(data, "package_id")),
+            "tenant_id": str(_get(data, "tenant_id")),
+            "deal_id": str(_get(data, "deal_id")),
+            "status": _get(data, "status"),
+            "created_by_actor_id": _get(data, "created_by_actor_id"),
+            "created_by_actor_type": _get(data, "created_by_actor_type"),
+            "manifest_uri": _get(data, "manifest_uri"),
+            "metadata": metadata or {},
+            "created_at": _get(data, "created_at"),
+            "updated_at": _get(data, "updated_at"),
+        }
     )
 
 

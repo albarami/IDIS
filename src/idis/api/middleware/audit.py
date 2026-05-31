@@ -69,6 +69,7 @@ OPERATION_ID_TO_EVENT_TYPE: dict[str, tuple[str, str, str]] = {
     "createOverride": ("override.created", "HIGH", "override"),
     "generateDeliverable": ("deliverable.requested", "LOW", "deliverable"),
     "createWebhook": ("webhook.created", "MEDIUM", "webhook"),
+    "createDataRoomPackage": ("data_room_package.created", "MEDIUM", "data_room_package"),
 }
 
 

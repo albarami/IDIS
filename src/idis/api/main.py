@@ -27,6 +27,7 @@ from idis.api.middleware.residency import ResidencyMiddleware
 from idis.api.middleware.tracing import TracingEnrichmentMiddleware
 from idis.api.routes.audit import router as audit_router
 from idis.api.routes.claims import router as claims_router
+from idis.api.routes.data_room_packages import router as data_room_packages_router
 from idis.api.routes.deals import router as deals_router
 from idis.api.routes.debate import router as debate_router
 from idis.api.routes.defects import router as defects_router
@@ -165,6 +166,7 @@ def create_app(
     app.include_router(tenancy_router)
     app.include_router(deals_router)
     app.include_router(documents_router)
+    app.include_router(data_room_packages_router)
     app.include_router(claims_router)
     app.include_router(sanad_router)
     app.include_router(defects_router)

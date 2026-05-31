@@ -159,7 +159,8 @@
             "human_gate",
             "override",
             "integration",
-            "webhook"
+            "webhook",
+            "data_room_package"
           ],
           "description": "Type of resource affected"
         },

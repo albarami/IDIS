@@ -250,6 +250,38 @@ def run_real_example_gate(
     return _safe_summary(mode=resolved_mode, records=records, ledger=ledger)
 
 
+def build_data_room_package_inventory_summary(
+    *,
+    root: str | Path = DEFAULT_REAL_EXAMPLE_ROOT,
+    ledger_path: str | Path = DEFAULT_LEDGER_PATH,
+) -> dict[str, object]:
+    """Safe data-room package inventory over a private tree (Slice77 thin hook).
+
+    Runs the private real_example gate in INVENTORY_ONLY mode -- no parsing, OCR,
+    media, provider/network calls, FULL run, or readiness change -- and projects the
+    gate's safe aggregate onto the durable data-room package summary shape. Emits safe
+    aggregates only (``file_count`` + ``counts_by_*`` + ``ledger_entry_count``); never
+    raw paths, filenames, content, object keys, or manifest/storage URIs.
+    """
+    gate_summary = run_real_example_gate(
+        root=root,
+        ledger_path=ledger_path,
+        mode=GateMode.INVENTORY_ONLY,
+        safe_summary=True,
+        emit_progress=False,
+    )
+    return {
+        "safe_summary": gate_summary["safe_summary"],
+        "source": "real_example_private_inventory",
+        "mode": gate_summary["mode"],
+        "file_count": gate_summary["total_files"],
+        "ledger_entry_count": gate_summary["ledger_entry_count"],
+        "counts_by_extension": gate_summary["counts_by_extension"],
+        "counts_by_status": gate_summary["counts_by_status"],
+        "counts_by_reason_code": gate_summary["counts_by_reason_code"],
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entrypoint for the private real_example gate."""
     parser = argparse.ArgumentParser(
@@ -844,6 +876,7 @@ def _media_allow_model_download_default() -> bool:
 __all__ = [
     "GateMode",
     "ParseAttempt",
+    "build_data_room_package_inventory_summary",
     "main",
     "run_real_example_gate",
 ]

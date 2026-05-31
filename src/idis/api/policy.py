@@ -123,6 +123,15 @@ POLICY_RULES: dict[str, PolicyRule] = {
     "listDealDocuments": PolicyRule(
         allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=True
     ),
+    "createDataRoomPackage": PolicyRule(
+        allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=True
+    ),
+    "listDataRoomPackages": PolicyRule(
+        allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=True
+    ),
+    "getDataRoomPackage": PolicyRule(
+        allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=True
+    ),
     "getDealDocumentSummary": PolicyRule(
         allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=True
     ),

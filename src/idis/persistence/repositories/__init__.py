@@ -21,6 +21,12 @@ from idis.persistence.repositories.claims import (
     seed_defect_in_memory,
     seed_sanad_in_memory,
 )
+from idis.persistence.repositories.data_room_packages import (
+    InMemoryDataRoomPackagesRepository,
+    PostgresDataRoomPackagesRepository,
+    clear_data_room_packages_store,
+    get_data_room_packages_repository,
+)
 from idis.persistence.repositories.deals import (
     DealNotFoundError,
     DealsRepository,
@@ -54,6 +60,10 @@ __all__ = [
     "DealNotFoundError",
     "DealsRepository",
     "DefectsRepository",
+    "InMemoryDataRoomPackagesRepository",
+    "PostgresDataRoomPackagesRepository",
+    "clear_data_room_packages_store",
+    "get_data_room_packages_repository",
     "InMemoryClaimsRepository",
     "InMemoryDealsRepository",
     "InMemoryDefectsRepository",

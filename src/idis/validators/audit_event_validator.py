@@ -43,6 +43,7 @@ VALID_EVENT_PREFIXES = {
     "break_glass.",
     "data.",
     "prompt.",
+    "data_room_package.",
 }
 
 VALID_SEVERITIES = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
@@ -61,6 +62,7 @@ VALID_RESOURCE_TYPES = {
     "integration",
     "webhook",
     "prompt",
+    "data_room_package",
 }
 
 VALID_ACTOR_TYPES = {"HUMAN", "SERVICE"}

@@ -229,9 +229,9 @@ def test_strict_readiness_ocr_and_media_can_clear_with_configured_healthy_runtim
             "IDIS_MEDIA_ADAPTER": "faster-whisper",
             "IDIS_MEDIA_STT_MODEL_PATH": str(model_path),
         },
-        binary_resolver=lambda binary: f"synthetic-{binary}"
-        if binary in {"tesseract", "ffmpeg", "ffprobe"}
-        else None,
+        binary_resolver=lambda binary: (
+            f"synthetic-{binary}" if binary in {"tesseract", "ffmpeg", "ffprobe"} else None
+        ),
         load_byol_env_credentials=False,
     )
 

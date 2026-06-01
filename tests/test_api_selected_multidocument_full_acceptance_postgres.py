@@ -35,8 +35,7 @@ SUPPORTED_CONTENT_TOKENS = (
 UNSUPPORTED_CONTENT_TOKENS = (
     "slice27 unsupported binary video confidential marker",
     "slice27 unsupported binary image confidential marker",
-    "slice27 unsupported html confidential marker",
-    "slice27 unsupported txt confidential marker",
+    "slice27 unsupported csv confidential marker",
 )
 FORBIDDEN_PUBLIC_TOKENS = (
     "content_b64",
@@ -247,13 +246,10 @@ def _unsupported_upload_examples() -> list[dict[str, Any]]:
             "filename": "slice27-warehouse-photo.bin",
             "data": b"\x89PNG\r\n\x1a\n" + UNSUPPORTED_CONTENT_TOKENS[1].encode(),
         },
+        # Slice78: HTML/TXT are now canonical-supported (admitted); .csv stays unsupported.
         {
-            "filename": "slice27-exported-page.html",
-            "data": f"<html><body>{UNSUPPORTED_CONTENT_TOKENS[2]}</body></html>".encode(),
-        },
-        {
-            "filename": "slice27-operator-note.txt",
-            "data": UNSUPPORTED_CONTENT_TOKENS[3].encode(),
+            "filename": "slice27-export.csv",
+            "data": f"col1,col2\n{UNSUPPORTED_CONTENT_TOKENS[2]},1\n".encode(),
         },
     ]
 

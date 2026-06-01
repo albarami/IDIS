@@ -5,7 +5,14 @@ from __future__ import annotations
 import hashlib
 
 from idis.parsers.base import ParseError, ParseErrorCode, ParseLimits, ParseResult, SpanDraft
-from idis.parsers.ocr import OcrConfig, OcrError, OcrPageText, OcrTimeoutError, OcrUnavailableError
+from idis.parsers.ocr import (
+    OcrConfig,
+    OcrError,
+    OcrPageText,
+    OcrTimeoutError,
+    OcrUnavailableError,
+    overall_mean_confidence,
+)
 
 
 def parse_image(
@@ -96,6 +103,7 @@ def _parse_image_ocr_pages(pages: list[OcrPageText]) -> ParseResult:
             "total_text_length": total_text_length,
             "ocr_performed": True,
             "ocr_image_count": 1,
+            "ocr_mean_confidence": overall_mean_confidence(pages),
         },
     )
 

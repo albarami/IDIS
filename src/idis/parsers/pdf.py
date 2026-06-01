@@ -29,6 +29,7 @@ from idis.parsers.ocr import (
     OcrPageText,
     OcrTimeoutError,
     OcrUnavailableError,
+    overall_mean_confidence,
 )
 
 if TYPE_CHECKING:
@@ -393,6 +394,8 @@ def _parse_ocr_pages(
             "total_text_length": total_text_length,
             "ocr_performed": True,
             "ocr_page_count": len(pages),
+            "ocr_mean_confidence": overall_mean_confidence(pages),
+            "ocr_confidence_by_page": [page.confidence for page in pages],
         },
         private_diagnostics={PDF_DIAGNOSTIC_REASON_KEY: PDF_DIAGNOSTIC_PARSED_OCR},
     )

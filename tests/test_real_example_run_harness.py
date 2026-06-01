@@ -575,15 +575,39 @@ def test_harness_counts_deferred_files_safely_and_keeps_mp4_unavailable(
         )
     )
 
-    assert summary["uploaded_document_count"] == 1
-    assert summary["skipped_file_count"] == 2
-    assert summary["counts_by_deferred_reason"]["media_transcription_unavailable"] == 1
-    assert summary["counts_by_deferred_reason"]["unsupported_format"] == 1
-    assert summary["counts_by_upload_status"] == {"deferred": 2, "uploaded": 1}
+    # Slice78: .txt is a canonical-supported text class -> uploaded, not deferred.
+    assert summary["uploaded_document_count"] == 2
+    assert summary["skipped_file_count"] == 1
+    assert summary["counts_by_deferred_reason"] == {"media_transcription_unavailable": 1}
+    assert summary["counts_by_upload_status"] == {"deferred": 1, "uploaded": 2}
+    assert "text_parser_available" not in summary["counts_by_deferred_reason"]
     assert "parsed" not in summary["counts_by_deferred_reason"]
     encoded = json.dumps(summary, sort_keys=True)
     assert "founder-call" not in encoded
     assert "PRIVATE TXT CONTENT" not in encoded
+
+
+def test_harness_uploads_supported_html_text_class_without_leak(tmp_path: Path) -> None:
+    root = tmp_path / "real_example"
+    root.mkdir()
+    (root / "site.html").write_text(
+        "<html><head><title>SECRET_HTML_TITLE</title></head>"
+        "<body><p>SECRET_HTML_BODY</p></body></html>",
+        encoding="utf-8",
+    )
+
+    summary = run_real_example_full_run_harness(
+        RealExampleFullRunHarnessOptions(root=root, api_client=_FakeApiClient())
+    )
+
+    # Canonical-supported .html is uploaded/attempted, not deferred.
+    assert summary["uploaded_document_count"] == 1
+    assert summary["skipped_file_count"] == 0
+    assert summary["counts_by_upload_status"] == {"uploaded": 1}
+    assert summary["counts_by_deferred_reason"] == {}
+    encoded = json.dumps(summary, sort_keys=True)
+    for marker in ("SECRET_HTML_TITLE", "SECRET_HTML_BODY", "site.html"):
+        assert marker not in encoded
 
 
 def test_harness_reports_full_run_blocker_as_structured_safe_blocker(

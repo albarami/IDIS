@@ -74,6 +74,28 @@ def test_corrupted_openxml_triages_as_corrupted() -> None:
     assert result.triage_status == DocumentTriageStatus.BLOCKED
 
 
+def test_successful_html_parse_triages_as_supported_ready() -> None:
+    result = triage_document(
+        _descriptor("synthetic_page.html"),
+        parse_result=ParseResult(doc_type="HTML", success=True),  # type: ignore[arg-type]
+    )
+
+    assert result.support_status == DocumentSupportStatus.SUPPORTED
+    assert result.triage_status == DocumentTriageStatus.READY
+    assert "text_parser_available" in result.reason_codes
+
+
+def test_successful_text_parse_triages_as_supported_ready() -> None:
+    result = triage_document(
+        _descriptor("synthetic_notes.txt"),
+        parse_result=ParseResult(doc_type="TEXT", success=True),  # type: ignore[arg-type]
+    )
+
+    assert result.support_status == DocumentSupportStatus.SUPPORTED
+    assert result.triage_status == DocumentTriageStatus.READY
+    assert "text_parser_available" in result.reason_codes
+
+
 def test_unsupported_file_triages_as_unsupported() -> None:
     result = triage_document(_descriptor("synthetic_video.mp4"))
 

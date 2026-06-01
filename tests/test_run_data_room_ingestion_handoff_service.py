@@ -55,12 +55,12 @@ def test_handoff_ingests_only_supported_files_and_keeps_summary_safe(tmp_path: P
 
     assert result.handoff_status == DataRoomIngestionHandoffStatus.DURABLE_INGESTED
     assert summary["handoff_status"] == "durable_ingested"
-    assert summary["supported_file_count"] == 1
-    assert summary["durable_ingested_file_count"] == 1
+    assert summary["supported_file_count"] == 2
+    assert summary["durable_ingested_file_count"] == 2
     assert summary["durable_reused_file_count"] == 0
-    assert summary["deferred_file_count"] == 3
+    assert summary["deferred_file_count"] == 2
     assert summary["blocked_file_count"] == 1
-    assert len(ingest_calls) == 1
+    assert len(ingest_calls) == 2
     assert ingest_calls[0]["file_record"].file_status == DataRoomInventoryFileStatus.SUPPORTED
     assert ingest_calls[0]["metadata"]["inventory_package_id"] == package.inventory_package_id
     assert ingest_calls[0]["metadata"]["inventory_file_id"] == supported_file.file_id
@@ -98,11 +98,11 @@ def test_handoff_reuses_existing_inventory_mapping_before_ingestion(tmp_path: Pa
     assert result.handoff_status == DataRoomIngestionHandoffStatus.DURABLE_REUSED
     assert summary["handoff_status"] == "durable_reused"
     assert summary["durable_ingested_file_count"] == 0
-    assert summary["durable_reused_file_count"] == 1
+    assert summary["durable_reused_file_count"] == 2
     reused_results = [
         file for file in summary["file_results"] if file["handoff_status"] == "durable_reused"
     ]
-    assert len(reused_results) == 1
+    assert len(reused_results) == 2
 
 
 def test_handoff_defers_without_durable_dependencies(tmp_path: Path) -> None:
@@ -147,7 +147,7 @@ def test_handoff_reports_in_memory_fallback_when_reuse_lookup_is_absent(tmp_path
 
     assert result.handoff_status == DataRoomIngestionHandoffStatus.IN_MEMORY_FALLBACK
     assert summary["handoff_status"] == "in_memory_fallback"
-    assert summary["in_memory_fallback_file_count"] == 1
+    assert summary["in_memory_fallback_file_count"] == 2
 
 
 def _inventory_package_for_mixed_room(tmp_path: Path) -> tuple[Any, list[dict[str, Any]]]:

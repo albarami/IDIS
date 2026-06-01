@@ -44,7 +44,7 @@ class ExtractionChunk:
         span_ids: Source span UUIDs (provenance chain).
         content: Combined text for extraction.
         locator: Chunk-level locator (e.g., {page: 3} or {sheet: "P&L"}).
-        doc_type: PDF, XLSX, DOCX, PPTX.
+        doc_type: PDF, XLSX, DOCX, PPTX, HTML, TEXT.
         token_estimate: Approximate token count.
     """
 

@@ -28,10 +28,15 @@ class OcrUnavailableError(OcrError):
 
 @dataclass(frozen=True, slots=True)
 class OcrPageText:
-    """OCR text extracted for one PDF page."""
+    """OCR text extracted for one PDF page.
+
+    ``confidence`` is the page/image mean OCR confidence normalized to 0-1, or None
+    when no valid confidence is available (backward-compatible default).
+    """
 
     page_number: int
     text: str
+    confidence: float | None = None
 
 
 class OcrAdapter(Protocol):
@@ -63,6 +68,36 @@ class OcrConfig:
     adapter: OcrAdapter | None = None
     max_pages: int = 10
     timeout_seconds: float = 30.0
+
+
+def normalize_ocr_confidence(values: Any) -> float | None:
+    """Return the mean of valid Tesseract confidences (0-100) scaled to 0-1.
+
+    Invalid entries (``-1``, non-numeric, empty, out-of-range) are ignored. Returns
+    None when no valid confidence value exists.
+    """
+    if not isinstance(values, (list, tuple)):
+        return None
+    valid: list[float] = []
+    for value in values:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        if numeric < 0.0 or numeric > 100.0:
+            continue
+        valid.append(numeric / 100.0)
+    if not valid:
+        return None
+    return round(sum(valid) / len(valid), 4)
+
+
+def overall_mean_confidence(pages: list[OcrPageText]) -> float | None:
+    """Return the mean of page/image confidences (0-1), ignoring None, else None."""
+    values = [page.confidence for page in pages if page.confidence is not None]
+    if not values:
+        return None
+    return round(sum(values) / len(values), 4)
 
 
 PdfWorkerTarget = Callable[[bytes, int, int, str, float, Any], None]
@@ -157,7 +192,11 @@ def _pages_from_worker_payload(payload: dict[str, object]) -> list[OcrPageText]:
             if not isinstance(page, dict):
                 raise OcrError("OCR worker returned malformed page")
             results.append(
-                OcrPageText(page_number=int(page["page_number"]), text=str(page["text"]))
+                OcrPageText(
+                    page_number=int(page["page_number"]),
+                    text=str(page["text"]),
+                    confidence=normalize_ocr_confidence(page.get("confidences")),
+                )
             )
         return results
     if status == "timeout":
@@ -181,7 +220,13 @@ def _tesseract_ocr_worker(
             try:
                 from pdf2image import convert_from_bytes
                 from pdf2image.exceptions import PDFInfoNotInstalledError, PDFPopplerTimeoutError
-                from pytesseract import TesseractError, TesseractNotFoundError, image_to_string
+                from pytesseract import (
+                    Output,
+                    TesseractError,
+                    TesseractNotFoundError,
+                    image_to_data,
+                    image_to_string,
+                )
             except ImportError:
                 _put_payload(queue, {"status": "unavailable"})
                 return
@@ -231,7 +276,10 @@ def _tesseract_ocr_worker(
                     else:
                         _put_payload(queue, {"status": "failed"})
                     return
-                pages.append({"page_number": page_number, "text": text})
+                confidences = _word_confidences(
+                    image_to_data, Output, image, language, deadline - time.monotonic()
+                )
+                pages.append({"page_number": page_number, "text": text, "confidences": confidences})
             _put_payload(queue, {"status": "success", "pages": pages})
     except Exception:
         _put_payload(queue, {"status": "failed"})
@@ -251,7 +299,13 @@ def _tesseract_image_ocr_worker(
                 from io import BytesIO
 
                 from PIL import Image
-                from pytesseract import TesseractError, TesseractNotFoundError, image_to_string
+                from pytesseract import (
+                    Output,
+                    TesseractError,
+                    TesseractNotFoundError,
+                    image_to_data,
+                    image_to_string,
+                )
             except ImportError:
                 _put_payload(queue, {"status": "unavailable"})
                 return
@@ -265,10 +319,14 @@ def _tesseract_image_ocr_worker(
                     ):
                         _put_payload(queue, {"status": "failed"})
                         return
+                    rgb_image = image.convert("RGB")
                     text = image_to_string(
-                        image.convert("RGB"),
+                        rgb_image,
                         lang=language,
                         timeout=timeout_seconds,
+                    )
+                    confidences = _word_confidences(
+                        image_to_data, Output, rgb_image, language, timeout_seconds
                     )
             except TesseractNotFoundError:
                 _put_payload(queue, {"status": "unavailable"})
@@ -290,7 +348,7 @@ def _tesseract_image_ocr_worker(
                 queue,
                 {
                     "status": "success",
-                    "pages": [{"page_number": 1, "text": text}],
+                    "pages": [{"page_number": 1, "text": text, "confidences": confidences}],
                 },
             )
     except Exception:
@@ -299,6 +357,38 @@ def _tesseract_image_ocr_worker(
 
 def _put_payload(queue: Any, payload: dict[str, object]) -> None:
     queue.put(payload)
+
+
+def _word_confidences(
+    image_to_data: Any,
+    output: Any,
+    image: Any,
+    language: str,
+    timeout: float,
+) -> list[str]:
+    """Best-effort per-word OCR confidences; never raises, returns [] on any failure.
+
+    Confidence is purely additive diagnostics — text extraction via image_to_string is
+    unchanged. Failures here (timeout, missing data) degrade to no confidence, not an
+    OCR failure.
+    """
+    if timeout <= 0:
+        return []
+    try:
+        data = image_to_data(
+            image,
+            lang=language,
+            timeout=max(1, int(timeout)),
+            output_type=output.DICT,
+        )
+    except Exception:
+        return []
+    if not isinstance(data, dict):
+        return []
+    values = data.get("conf", [])
+    if not isinstance(values, (list, tuple)):
+        return []
+    return [str(value) for value in values]
 
 
 def _image_within_resource_bounds(*, width: int, height: int, frame_count: int) -> bool:

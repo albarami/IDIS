@@ -14,6 +14,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from idis.persistence.neo4j_driver import Neo4jHealthCheck, Neo4jHealthStatus
+from idis.services.ocr_health import OcrHealthCheck, OcrHealthStatus, check_ocr_health
 from idis.services.rag.embedding_health import EmbeddingHealthCheck
 from idis.services.rag.pgvector_health import PgvectorHealthCheck, PgvectorHealthStatus
 from idis.services.runs.strict_full_live import (
@@ -74,6 +75,7 @@ def build_strict_provisioning_truth_report(
     allow_local_strict_health_probes: bool = False,
     neo4j_health_checker: Callable[[Mapping[str, str]], Neo4jHealthCheck] | None = None,
     pgvector_health_checker: Callable[[Mapping[str, str]], PgvectorHealthCheck] | None = None,
+    ocr_health_checker: Callable[[Mapping[str, str]], OcrHealthCheck] | None = None,
     object_store_probe_base_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Build a redacted inventory/provisioning report without live runtime probes."""
@@ -88,6 +90,7 @@ def build_strict_provisioning_truth_report(
         neo4j_health_checker=lambda checked_env: _static_neo4j_health(checked_env),
         embedding_health_checker=lambda checked_env: _static_embedding_health(checked_env),
         pgvector_health_checker=lambda checked_env: _static_pgvector_health(checked_env),
+        ocr_health_checker=lambda checked_env: _static_ocr_health(checked_env),
         probe_object_store=False,
     )
     local_probe_statuses = _build_local_probe_statuses(
@@ -95,6 +98,7 @@ def build_strict_provisioning_truth_report(
         allow_local_strict_health_probes=allow_local_strict_health_probes,
         neo4j_health_checker=neo4j_health_checker,
         pgvector_health_checker=pgvector_health_checker,
+        ocr_health_checker=ocr_health_checker,
         object_store_probe_base_dir=object_store_probe_base_dir,
     )
     readiness_by_inventory_name = _readiness_by_inventory_name(readiness.components)
@@ -267,6 +271,7 @@ def _build_local_probe_statuses(
     allow_local_strict_health_probes: bool,
     neo4j_health_checker: Callable[[Mapping[str, str]], Neo4jHealthCheck] | None,
     pgvector_health_checker: Callable[[Mapping[str, str]], PgvectorHealthCheck] | None,
+    ocr_health_checker: Callable[[Mapping[str, str]], OcrHealthCheck] | None,
     object_store_probe_base_dir: str | Path | None,
 ) -> dict[str, _LocalProbeStatus]:
     if not allow_local_strict_health_probes:
@@ -291,6 +296,11 @@ def _build_local_probe_statuses(
                 claim="filesystem object-store temp write/delete only",
                 blocker="explicit_opt_in_required",
             ),
+            "OCR": _not_attempted_probe(
+                label="ocr_local_health",
+                claim="OCR runtime health only",
+                blocker="explicit_opt_in_required",
+            ),
         }
 
     statuses: dict[str, _LocalProbeStatus] = {}
@@ -303,6 +313,7 @@ def _build_local_probe_statuses(
         env=env,
         object_store_probe_base_dir=object_store_probe_base_dir,
     )
+    statuses["OCR"] = _ocr_local_probe_status(env, ocr_health_checker)
     return statuses
 
 
@@ -326,6 +337,22 @@ def _pgvector_local_probe_status(
         label="pgvector_extension_connectivity",
         claim="pgvector extension/connectivity only",
         passed=result.status == PgvectorHealthStatus.HEALTHY,
+    )
+
+
+def _ocr_local_probe_status(
+    env: Mapping[str, str],
+    health_checker: Callable[[Mapping[str, str]], OcrHealthCheck] | None,
+) -> _LocalProbeStatus:
+    label = "ocr_local_health"
+    claim = "OCR runtime health only"
+    result = health_checker(env) if health_checker is not None else check_ocr_health(env=env)
+    if result.status is OcrHealthStatus.DISABLED:
+        return _not_attempted_probe(label=label, claim=claim, blocker="ocr_disabled")
+    return _probe_status_from_bool(
+        label=label,
+        claim=claim,
+        passed=result.status is OcrHealthStatus.HEALTHY,
     )
 
 
@@ -459,6 +486,15 @@ def _static_pgvector_health(env: Mapping[str, str]) -> PgvectorHealthCheck:
     if not _has_value(env, "IDIS_DATABASE_URL"):
         return PgvectorHealthCheck.missing(missing_env_vars=["IDIS_DATABASE_URL"])
     return PgvectorHealthCheck.failed()
+
+
+def _static_ocr_health(env: Mapping[str, str]) -> OcrHealthCheck:
+    enabled = str(env.get("IDIS_OCR_ENABLED", "")).strip().lower() in {"1", "true", "yes", "on"}
+    if not enabled:
+        return OcrHealthCheck.disabled()
+    return OcrHealthCheck.failed(
+        error="OCR runtime probe not executed in strict provisioning truth report."
+    )
 
 
 def _assert_strict_provisioning_truth_safe(

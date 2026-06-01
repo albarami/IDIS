@@ -38,6 +38,11 @@ from idis.services.enrichment.byol_credentials import (
     build_enrichment_provider_matrix,
     byol_all_health_passed,
 )
+from idis.services.ocr_health import (
+    OcrHealthCheck,
+    OcrHealthStatus,
+    check_ocr_health,
+)
 from idis.services.rag.embedding_health import (
     EmbeddingHealthCheck,
     EmbeddingHealthStatus,
@@ -270,6 +275,7 @@ def build_strict_provisioning_truth_report(
     allow_local_strict_health_probes: bool = False,
     neo4j_health_checker: Callable[[Mapping[str, str]], Neo4jHealthCheck] | None = None,
     pgvector_health_checker: Callable[[Mapping[str, str]], PgvectorHealthCheck] | None = None,
+    ocr_health_checker: Callable[[Mapping[str, str]], OcrHealthCheck] | None = None,
     object_store_probe_base_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Build a redacted inventory/provisioning report without live runtime probes."""
@@ -286,6 +292,7 @@ def build_strict_provisioning_truth_report(
         allow_local_strict_health_probes=allow_local_strict_health_probes,
         neo4j_health_checker=neo4j_health_checker,
         pgvector_health_checker=pgvector_health_checker,
+        ocr_health_checker=ocr_health_checker,
         object_store_probe_base_dir=object_store_probe_base_dir,
     )
 
@@ -411,6 +418,7 @@ def build_strict_full_live_readiness_report(
     neo4j_health_checker: Callable[[Mapping[str, str]], Neo4jHealthCheck] | None = None,
     embedding_health_checker: Callable[[Mapping[str, str]], EmbeddingHealthCheck] | None = None,
     pgvector_health_checker: Callable[[Mapping[str, str]], PgvectorHealthCheck] | None = None,
+    ocr_health_checker: Callable[[Mapping[str, str]], OcrHealthCheck] | None = None,
     probe_object_store: bool = True,
 ) -> StrictFullLiveReadinessReport:
     """Build a safe strict full-live readiness report without executing a run."""
@@ -443,6 +451,7 @@ def build_strict_full_live_readiness_report(
     graph_health = _neo4j_health(values, neo4j_health_checker)
     embedding_health = _embedding_health(values, embedding_health_checker)
     pgvector_health = _pgvector_health(values, pgvector_health_checker)
+    ocr_health = _ocr_health(values, ocr_health_checker, resolver)
     product_export_ready = _product_export_ready(
         values,
         probe_object_store=probe_object_store,
@@ -458,7 +467,7 @@ def build_strict_full_live_readiness_report(
     components = [
         _supported_parsers_extraction(values),
         _durable_runtime(values),
-        _ocr(has_ocr_evidence=has_ocr_evidence, env=values, binary_resolver=resolver),
+        _ocr(has_ocr_evidence=has_ocr_evidence, ocr_health=ocr_health),
         _mp4_stt(has_media=has_media, env=values, binary_resolver=resolver),
         _calculation_engine(env=values, product_export_ready=product_export_ready),
         _calc_sanad(env=values, product_export_ready=product_export_ready),
@@ -492,6 +501,7 @@ def build_strict_full_live_readiness_report(
         graph_health=graph_health,
         embedding_health=embedding_health,
         pgvector_health=pgvector_health,
+        ocr_health=ocr_health,
         product_export_ready=product_export_ready,
         product_export_config_present=product_export_config_present,
         ui_api_download_ready=ui_api_download_ready,
@@ -547,12 +557,11 @@ def _supported_parsers_extraction(env: Mapping[str, str]) -> StrictComponentRead
 def _ocr(
     *,
     has_ocr_evidence: bool,
-    env: Mapping[str, str],
-    binary_resolver: Callable[[str], str | None],
+    ocr_health: OcrHealthCheck,
 ) -> StrictComponentReadiness:
     evidence = (
         "src/idis/parsers/pdf.py; src/idis/parsers/image.py; "
-        "src/idis/services/ingestion/defaults.py"
+        "src/idis/services/ingestion/defaults.py; src/idis/services/ocr_health.py"
     )
     if not has_ocr_evidence:
         return StrictComponentReadiness(
@@ -564,24 +573,28 @@ def _ocr(
             evidence=evidence,
             may_proceed=True,
         )
-    if _ocr_runtime_ready(env=env, binary_resolver=binary_resolver):
+    if _ocr_runtime_ready(ocr_health):
         return _live("ocr", evidence)
-    missing_services = []
-    if binary_resolver("tesseract") is None:
-        missing_services.append("tesseract")
-    missing_env = []
-    if not _truthy(env.get("IDIS_OCR_ENABLED")):
-        missing_env.append("IDIS_OCR_ENABLED=1")
+    if ocr_health.status is OcrHealthStatus.DISABLED:
+        required_env = ["IDIS_OCR_ENABLED=1"]
+        required_services = ["Tesseract OCR runtime"]
+    elif ocr_health.status is OcrHealthStatus.MISSING_DEPENDENCIES:
+        required_env = []
+        required_services = list(ocr_health.missing_dependencies) or ["Tesseract OCR runtime"]
+    else:
+        required_env = []
+        required_services = ["Tesseract OCR runtime"]
     return StrictComponentReadiness(
         component_name="ocr",
         status=StrictComponentStatus.MISSING_INFRASTRUCTURE,
         blocker_message=(
-            "OCR-required documents are present and OCR is not full-live ready: "
-            "default ingestion requires enabled OCR config, Tesseract runtime, "
-            "and persisted PAGE_TEXT spans."
+            "OCR-required documents are present but strict OCR health is not full-live "
+            f"ready (status={ocr_health.status.value}): default ingestion requires enabled "
+            "OCR config, the Tesseract/poppler runtime, OCR Python dependencies, and "
+            "language data."
         ),
-        required_env_vars=missing_env or ["IDIS_OCR_ENABLED=1"],
-        required_services=missing_services or ["Tesseract OCR runtime"],
+        required_env_vars=required_env,
+        required_services=required_services,
         evidence=evidence,
         may_proceed=False,
     )
@@ -1442,13 +1455,14 @@ def _build_component_inventory(
     graph_health: Neo4jHealthCheck,
     embedding_health: EmbeddingHealthCheck,
     pgvector_health: PgvectorHealthCheck,
+    ocr_health: OcrHealthCheck,
     product_export_ready: bool,
     product_export_config_present: bool,
     ui_api_download_ready: bool,
     object_store_config_present: bool,
 ) -> list[StrictComponentInventory]:
     env = env_source.effective_env
-    ocr_ready = _ocr_runtime_ready(env=env, binary_resolver=binary_resolver)
+    ocr_ready = _ocr_runtime_ready(ocr_health)
     media_ready = _media_runtime_ready(env=env, binary_resolver=binary_resolver)
     graph_ready = _graph_visibility_ready(
         env,
@@ -1523,14 +1537,8 @@ def _build_component_inventory(
             "OCR",
             exists=True,
             full_wired=ocr_ready or not has_ocr_evidence,
-            config_present=_truthy(env.get("IDIS_OCR_ENABLED")) or not has_ocr_evidence,
-            health=(
-                "healthy"
-                if ocr_ready
-                else "not_applicable"
-                if not has_ocr_evidence
-                else "missing_config"
-            ),
+            config_present=ocr_health.enabled or not has_ocr_evidence,
+            health=_ocr_inventory_health(ocr_health, has_ocr_evidence=has_ocr_evidence),
             output_visible=ocr_ready or not has_ocr_evidence,
             blocker=(
                 "OCR-required documents are present and OCR runtime/config is missing or unhealthy."
@@ -1542,6 +1550,7 @@ def _build_component_inventory(
                 "src/idis/parsers/ocr.py",
                 "src/idis/parsers/image.py",
                 "src/idis/parsers/pdf.py",
+                "src/idis/services/ocr_health.py",
             ],
         ),
         _inventory_item(
@@ -2165,6 +2174,26 @@ def _pgvector_health(
     return check_pgvector_health(env=env)
 
 
+def _ocr_health(
+    env: Mapping[str, str],
+    ocr_health_checker: Callable[[Mapping[str, str]], OcrHealthCheck] | None,
+    binary_resolver: Callable[[str], str | None],
+) -> OcrHealthCheck:
+    if ocr_health_checker is not None:
+        return ocr_health_checker(env)
+    return check_ocr_health(env=env, binary_resolver=binary_resolver)
+
+
+def _ocr_inventory_health(ocr_health: OcrHealthCheck, *, has_ocr_evidence: bool) -> str:
+    if not has_ocr_evidence:
+        return "not_applicable"
+    if ocr_health.status is OcrHealthStatus.HEALTHY:
+        return "healthy"
+    if ocr_health.status is OcrHealthStatus.DISABLED:
+        return "missing_config"
+    return "configured_failed"
+
+
 def _rag_config_present(env: Mapping[str, str]) -> bool:
     return _has_value(env, "IDIS_DATABASE_URL") and is_vector_search_enabled(env)
 
@@ -2560,17 +2589,8 @@ def _media_model_config_present(env: Mapping[str, str]) -> bool:
     )
 
 
-def _ocr_runtime_ready(
-    *,
-    env: Mapping[str, str],
-    binary_resolver: Callable[[str], str | None],
-) -> bool:
-    adapter_name = str(env.get("IDIS_OCR_ADAPTER", "tesseract")).strip().lower()
-    return (
-        _truthy(env.get("IDIS_OCR_ENABLED"))
-        and adapter_name == "tesseract"
-        and binary_resolver("tesseract") is not None
-    )
+def _ocr_runtime_ready(ocr_health: OcrHealthCheck) -> bool:
+    return ocr_health.status is OcrHealthStatus.HEALTHY
 
 
 def _media_runtime_ready(

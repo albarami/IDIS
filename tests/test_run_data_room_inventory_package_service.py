@@ -38,15 +38,20 @@ def test_recursive_scan_classifies_supported_deferred_and_blocked_files(tmp_path
     summary = result.to_run_step_summary()
 
     assert result.construction_status == DataRoomInventoryPackageConstructionStatus.COMPLETED
-    assert package.supported_document_ids == [by_path["Finance/Model.xlsx"].document_id]
-    assert len(corpus) == 1
+    # Slice78: HTML is canonical-supported -> supported alongside the xlsx.
+    assert package.supported_document_ids == [
+        by_path["Finance/Model.xlsx"].document_id,
+        by_path["Notes/overview.html"].document_id,
+    ]
+    assert len(corpus) == 2
     assert {document["document_id"] for document in corpus} == {
         by_path["Finance/Model.xlsx"].document_id,
+        by_path["Notes/overview.html"].document_id,
     }
     assert by_path["Finance/Model.xlsx"].file_status == DataRoomInventoryFileStatus.SUPPORTED
     assert by_path["Media/Demo.mp4"].file_status == DataRoomInventoryFileStatus.DEFERRED
     assert by_path["Scans/screenshot.png"].file_status == DataRoomInventoryFileStatus.DEFERRED
-    assert by_path["Notes/overview.html"].file_status == DataRoomInventoryFileStatus.DEFERRED
+    assert by_path["Notes/overview.html"].file_status == DataRoomInventoryFileStatus.SUPPORTED
     assert by_path["Broken/corrupt.pdf"].file_status == DataRoomInventoryFileStatus.BLOCKED
     assert DataRoomInventoryReason.CONVERSION_REQUIRED.value in (
         by_path["Media/Demo.mp4"].reason_codes
@@ -54,7 +59,7 @@ def test_recursive_scan_classifies_supported_deferred_and_blocked_files(tmp_path
     assert DataRoomInventoryReason.OCR_REQUIRED.value in (
         by_path["Scans/screenshot.png"].reason_codes
     )
-    assert DataRoomInventoryReason.UNSUPPORTED_FORMAT.value in (
+    assert DataRoomInventoryReason.SUPPORTED_PARSER_AVAILABLE.value in (
         by_path["Notes/overview.html"].reason_codes
     )
     assert DataRoomInventoryReason.PARSER_FAILED.value in (

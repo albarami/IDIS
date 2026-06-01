@@ -75,6 +75,32 @@ def create_test_pptx(text: str = "Test content") -> bytes:
     return buffer.getvalue()
 
 
+class TestTextDispatch:
+    """HTML/TXT routed to the text parser by filename/MIME (no magic bytes)."""
+
+    def test_html_filename_parses_as_html(self) -> None:
+        result = parse_bytes(
+            b"<html><body><p>Visible paragraph</p></body></html>", filename="report.html"
+        )
+
+        assert result.doc_type == "HTML"
+        assert result.success is True
+
+    def test_htm_filename_parses_as_html(self) -> None:
+        result = parse_bytes(
+            b"<html><body><p>Visible paragraph</p></body></html>", filename="report.htm"
+        )
+
+        assert result.doc_type == "HTML"
+        assert result.success is True
+
+    def test_txt_filename_parses_as_text(self) -> None:
+        result = parse_bytes(b"First line\nSecond line\n", filename="notes.txt")
+
+        assert result.doc_type == "TEXT"
+        assert result.success is True
+
+
 class TestFormatDetection:
     """Test format detection by magic bytes."""
 

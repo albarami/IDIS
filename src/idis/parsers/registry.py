@@ -22,6 +22,7 @@ from idis.parsers.base import (
     ParseResult,
 )
 from idis.parsers.docx import parse_docx
+from idis.parsers.html_text import parse_html_text
 from idis.parsers.image import parse_image
 from idis.parsers.media import MediaConfig, parse_media
 from idis.parsers.ocr import OcrConfig
@@ -35,6 +36,10 @@ IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"})
 IMAGE_MIME_PREFIX = "image/"
 MEDIA_EXTENSIONS = frozenset({".mp4"})
 MEDIA_MIME_TYPES = frozenset({"video/mp4", "application/mp4"})
+TEXT_EXTENSIONS = frozenset({".html", ".htm", ".txt"})
+HTML_EXTENSIONS = frozenset({".html", ".htm"})
+TEXT_MIME_TYPES = frozenset({"text/plain", "text/html"})
+HTML_MIME_TYPE = "text/html"
 
 
 def _is_pdf(data: bytes) -> bool:
@@ -163,6 +168,13 @@ def parse_bytes(
     if is_media_source(filename=filename, mime_type=mime_type):
         return parse_media(data, limits=limits, media_config=media_config)
 
+    if is_text_source(filename=filename, mime_type=mime_type):
+        return parse_html_text(
+            data,
+            is_html=_is_html_text_source(filename=filename, mime_type=mime_type),
+            limits=limits,
+        )
+
     return ParseResult(
         doc_type="UNKNOWN",
         success=False,
@@ -196,3 +208,23 @@ def is_media_source(*, filename: str | None, mime_type: str | None) -> bool:
         return True
     normalized_mime = str(mime_type or "").split(";", maxsplit=1)[0].strip().lower()
     return normalized_mime in MEDIA_MIME_TYPES
+
+
+def is_text_source(*, filename: str | None, mime_type: str | None) -> bool:
+    """Return whether filename or MIME type requests the HTML/plain-text parser."""
+    extension = PurePath(filename or "").suffix.lower()
+    if extension in TEXT_EXTENSIONS:
+        return True
+    normalized_mime = str(mime_type or "").split(";", maxsplit=1)[0].strip().lower()
+    return normalized_mime in TEXT_MIME_TYPES
+
+
+def _is_html_text_source(*, filename: str | None, mime_type: str | None) -> bool:
+    """Return whether an HTML/text source should be parsed as HTML (vs plain text)."""
+    extension = PurePath(filename or "").suffix.lower()
+    if extension in HTML_EXTENSIONS:
+        return True
+    if extension in TEXT_EXTENSIONS:
+        return False
+    normalized_mime = str(mime_type or "").split(";", maxsplit=1)[0].strip().lower()
+    return normalized_mime == HTML_MIME_TYPE

@@ -610,6 +610,64 @@ def test_supported_deferred_blocked_documents_map_to_deterministic_status() -> N
     assert summary["counts_by_status"] == {"supported": 1, "deferred": 1, "blocked": 1}
 
 
+def test_text_parser_supported_document_rolls_up_to_supported_ledger() -> None:
+    """Slice78 Task 2: an HTML/TXT doc (text_parser_available) packages as supported."""
+    from idis.persistence.repositories.data_room_packages import (
+        InMemoryDataRoomPackagesRepository,
+    )
+
+    repo = InMemoryDataRoomPackagesRepository(str(TENANT))
+    corpus = [
+        _corpus_doc(
+            DOC1,
+            doc_type="HTML",
+            parse_status="PARSED",
+            support_status="supported",
+            triage_status="ready",
+            reason_codes=("text_parser_available",),
+        )
+    ]
+    summary = _create(repo, [DOC1], corpus)
+
+    files = repo.list_files_by_package(summary["package_id"], str(DEAL))
+    assert len(files) == 1
+    entry = files[0]
+    assert entry.file_status.value == "supported"
+    assert entry.support_status.value == "supported"
+    assert entry.triage_status.value == "ready"
+    assert "text_parser_available" in entry.reason_codes
+    assert summary["counts_by_status"] == {"supported": 1}
+
+
+def test_unsupported_csv_style_document_rolls_up_to_blocked_ledger() -> None:
+    """Slice78 Task 3: an unsupported (CSV-style) doc packages as a visible blocker."""
+    from idis.persistence.repositories.data_room_packages import (
+        InMemoryDataRoomPackagesRepository,
+    )
+
+    repo = InMemoryDataRoomPackagesRepository(str(TENANT))
+    corpus = [
+        _corpus_doc(
+            DOC1,
+            doc_type="CSV",
+            parse_status="FAILED",
+            support_status="unsupported",
+            triage_status="unsupported_source",
+            reason_codes=("unsupported_format",),
+        )
+    ]
+    summary = _create(repo, [DOC1], corpus)
+
+    files = repo.list_files_by_package(summary["package_id"], str(DEAL))
+    assert len(files) == 1
+    entry = files[0]
+    assert entry.file_status.value == "blocked"
+    assert entry.support_status.value == "unsupported"
+    assert entry.triage_status.value == "unsupported_source"
+    assert entry.reason_codes == ["unsupported_format"]
+    assert summary["counts_by_status"] == {"blocked": 1}
+
+
 def test_duplicate_document_ids_and_path_hashes_do_not_duplicate_rows() -> None:
     from idis.persistence.repositories.data_room_packages import (
         InMemoryDataRoomPackagesRepository,
@@ -1176,3 +1234,109 @@ def test_real_example_inventory_hook_does_not_touch_readiness(tmp_path: Path) ->
     encoded = json.dumps(summary, sort_keys=True).lower()
     for forbidden in ("readiness", "vc_ready", "vc-ready"):
         assert forbidden not in encoded
+
+
+# --- Slice78 Task 4: INVENTORY_ONLY safe aggregate after canonical HTML/TXT support ---
+
+
+def _write_slice78_inventory_tree(root: Path) -> None:
+    """Private tree spanning text-like + blocker classes; raw markers must never leak."""
+    (root / "Site").mkdir(parents=True)
+    (root / "Site" / "index.html").write_text(
+        "<html><head><title>SECRET_HTML_TITLE</title></head>"
+        "<body><p>SECRET_CUSTOMER</p></body></html>",
+        encoding="utf-8",
+    )
+    (root / "Notes").mkdir()
+    (root / "Notes" / "memo.txt").write_text(
+        "SECRET_TXT_BODY s3://secret-bucket/key\n", encoding="utf-8"
+    )
+    (root / "Docs").mkdir()
+    (root / "Docs" / "board-pack.pdf").write_bytes(b"%PDF-1.4 SECRET_CUSTOMER")
+    (root / "Media").mkdir()
+    (root / "Media" / "demo.mp4").write_bytes(b"\x00\x00\x00\x18ftypmp42")
+    (root / "Scans").mkdir()
+    (root / "Scans" / "scan.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    (root / "Exports").mkdir()
+    (root / "Exports" / "data.csv").write_text("SECRET_CUSTOMER,123\n", encoding="utf-8")
+
+
+_SLICE78_MARKERS = (
+    "SECRET_HTML_TITLE",
+    "SECRET_TXT_BODY",
+    "SECRET_CUSTOMER",
+    "s3://secret-bucket/key",
+    "index.html",
+    "memo.txt",
+    "board-pack",
+    "storage_uri",
+    "manifest_uri",
+    "object_key",
+    "text_excerpt",
+)
+
+
+def test_real_example_inventory_includes_html_txt_and_stays_safe(tmp_path: Path) -> None:
+    """INVENTORY_ONLY safe aggregate over a text-like + blocker tree (Slice78 Task 4)."""
+    from idis.evaluation.real_example_gate import build_data_room_package_inventory_summary
+
+    root = tmp_path / "real_example"
+    ledger = tmp_path / "ledger.json"
+    _write_slice78_inventory_tree(root)
+
+    summary = build_data_room_package_inventory_summary(root=root, ledger_path=ledger)
+
+    # Safe aggregates only. INVENTORY_ONLY never parses, so every file is "inventoried"
+    # (it does NOT classify per-format) -- html/txt are inventoried like everything else.
+    assert summary["safe_summary"] is True
+    assert summary["file_count"] == 6
+    assert summary["counts_by_extension"] == {
+        ".csv": 1,
+        ".html": 1,
+        ".mp4": 1,
+        ".pdf": 1,
+        ".png": 1,
+        ".txt": 1,
+    }
+    assert summary["counts_by_status"] == {"inventoried": 6}
+    # No per-format support is asserted in INVENTORY_ONLY; nothing is flagged unsupported here.
+    assert "unsupported_format" not in summary["counts_by_reason_code"]
+
+    encoded = json.dumps(summary, sort_keys=True)
+    assert str(root) not in encoded
+    for marker in _SLICE78_MARKERS:
+        assert marker not in encoded
+    for raw_key in ('"path"', '"filename"', '"root_path"', '"sha256"', '"local_path"'):
+        assert raw_key not in encoded
+    lowered = encoded.lower()
+    for forbidden in ("readiness", "vc_ready", "vc-ready", "cleared", "full_run"):
+        assert forbidden not in lowered
+
+
+def test_real_example_inventory_text_tree_runs_no_execution(tmp_path: Path) -> None:
+    """INVENTORY_ONLY over text-like classes runs no parser/OCR/media/provider/readiness work."""
+    from idis.evaluation.real_example_gate import build_data_room_package_inventory_summary
+
+    root = tmp_path / "real_example"
+    ledger = tmp_path / "ledger.json"
+    _write_slice78_inventory_tree(root)
+
+    boom = AssertionError("inventory-only must not parse/transcribe/assess readiness")
+    with (
+        patch("idis.parsers.registry.parse_bytes", side_effect=boom),
+        patch("idis.evaluation.real_example_gate.capability_for_document", side_effect=boom),
+        patch("idis.evaluation.real_example_gate.probe_faster_whisper_model", side_effect=boom),
+        patch(
+            "idis.evaluation.real_example_gate.run_injected_parse_with_timeout", side_effect=boom
+        ),
+        patch("idis.evaluation.real_example_gate.run_parse_subprocess", side_effect=boom),
+        patch(
+            "idis.services.runs.strict_full_live.build_strict_full_live_readiness_report",
+            side_effect=boom,
+        ),
+    ):
+        summary = build_data_room_package_inventory_summary(root=root, ledger_path=ledger)
+
+    assert summary["file_count"] == 6
+    assert summary["safe_summary"] is True
+    assert summary["counts_by_status"] == {"inventoried": 6}

@@ -308,14 +308,19 @@ def test_parse_supported_defers_too_large_text_without_reading_file(
     _assert_safe_json(summary, forbidden=[str(root), "confidential", "do not read"])
 
 
-def test_default_upload_admission_still_rejects_html_and_text_bytes() -> None:
-    with pytest.raises(IdisHttpError):
-        _reject_unsupported_upload_format(
-            b"<html><body>SLICE35 HTML</body></html>",
-            "data-room-export.html",
-        )
-    with pytest.raises(IdisHttpError):
-        _reject_unsupported_upload_format(b"SLICE35 TXT", "notes.txt")
+def test_default_upload_admission_accepts_html_text_and_rejects_blockers() -> None:
+    # Slice78: HTML/HTM/TXT are canonical-supported -> admitted (no raise).
+    _reject_unsupported_upload_format(
+        b"<html><body>SLICE35 HTML</body></html>",
+        "data-room-export.html",
+    )
+    _reject_unsupported_upload_format(b"SLICE35 HTM", "page.htm")
+    _reject_unsupported_upload_format(b"SLICE35 TXT", "notes.txt")
+
+    # CSV / archives / mail remain user-visible UNSUPPORTED_FORMAT blockers.
+    for filename in ("export.csv", "bundle.zip", "archive.rar", "data.7z", "mail.msg", "mail.eml"):
+        with pytest.raises(IdisHttpError):
+            _reject_unsupported_upload_format(b"blocked-bytes", filename)
 
 
 def test_parse_supported_reports_no_text_pdf_as_ocr_required_without_leaks(

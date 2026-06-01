@@ -48,6 +48,20 @@ _SUPPORTED_CAPABILITIES: dict[str, ParserCapability] = {
         reason_codes=["pptx_partial_slide_text"],
         warnings=["PPTX parser extracts slide text only"],
     ),
+    "HTML": ParserCapability(
+        file_type="HTML",
+        parser_name="html_text",
+        support_status=DocumentSupportStatus.SUPPORTED,
+        triage_status=DocumentTriageStatus.READY,
+        reason_codes=["text_parser_available"],
+    ),
+    "TEXT": ParserCapability(
+        file_type="TEXT",
+        parser_name="html_text",
+        support_status=DocumentSupportStatus.SUPPORTED,
+        triage_status=DocumentTriageStatus.READY,
+        reason_codes=["text_parser_available"],
+    ),
 }
 
 _CONVERSION_REQUIRED_EXTENSIONS = {
@@ -64,9 +78,6 @@ _OCR_REQUIRED_EXTENSIONS = {
     ".bmp",
 }
 _UNSUPPORTED_EXTENSIONS = {
-    ".html",
-    ".htm",
-    ".txt",
     ".csv",
     ".zip",
     ".rar",
@@ -80,6 +91,9 @@ _EXTENSION_TO_FORMAT = {
     ".xlsm": "XLSX",
     ".docx": "DOCX",
     ".pptx": "PPTX",
+    ".html": "HTML",
+    ".htm": "HTML",
+    ".txt": "TEXT",
 }
 _LIMIT_ERROR_CODES = {
     ParseErrorCode.MAX_SIZE_EXCEEDED,

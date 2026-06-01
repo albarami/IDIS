@@ -931,6 +931,66 @@ class TestScannedPdfReadiness:
         assert document.metadata["parser_reason_codes"] == ["no_text_extracted"]
 
 
+class TestHtmlTextReadiness:
+    """HTML/TXT ingest to SUPPORTED text-parser metadata (Slice78 Task 2)."""
+
+    def test_html_ingest_persists_supported_text_parser_metadata(
+        self,
+        ingestion_service: Any,
+        ingestion_context: Any,
+        deal_id: UUID,
+        tenant_a: UUID,
+    ) -> None:
+        from idis.models.document import ParseStatus
+
+        result = ingestion_service.ingest_bytes(
+            ctx=ingestion_context,
+            deal_id=deal_id,
+            filename="overview.html",
+            media_type="text/html",
+            data=b"<html><body><h1>Overview</h1><p>Visible paragraph.</p></body></html>",
+        )
+
+        document = ingestion_service.get_document(tenant_a, result.document_id)
+
+        assert result.success is True
+        assert result.parse_status == ParseStatus.PARSED
+        assert document is not None
+        assert document.metadata["parser_support_status"] == "supported"
+        assert document.metadata["parser_triage_status"] == "ready"
+        assert "text_parser_available" in document.metadata["parser_reason_codes"]
+        assert document.metadata["parser_requires_ocr"] is False
+        assert document.metadata["parser_requires_conversion"] is False
+
+    def test_txt_ingest_persists_supported_text_parser_metadata(
+        self,
+        ingestion_service: Any,
+        ingestion_context: Any,
+        deal_id: UUID,
+        tenant_a: UUID,
+    ) -> None:
+        from idis.models.document import ParseStatus
+
+        result = ingestion_service.ingest_bytes(
+            ctx=ingestion_context,
+            deal_id=deal_id,
+            filename="notes.txt",
+            media_type="text/plain",
+            data=b"First line\nSecond line\n",
+        )
+
+        document = ingestion_service.get_document(tenant_a, result.document_id)
+
+        assert result.success is True
+        assert result.parse_status == ParseStatus.PARSED
+        assert document is not None
+        assert document.metadata["parser_support_status"] == "supported"
+        assert document.metadata["parser_triage_status"] == "ready"
+        assert "text_parser_available" in document.metadata["parser_reason_codes"]
+        assert document.metadata["parser_requires_ocr"] is False
+        assert document.metadata["parser_requires_conversion"] is False
+
+
 class TestFailClosedCorruptedOfficeZip:
     """Tests for fail-closed behavior on corrupted Office files."""
 

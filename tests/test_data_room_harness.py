@@ -31,8 +31,8 @@ def test_harness_runs_nested_fixture_and_emits_safe_summary(tmp_path: Path) -> N
     assert summary["mode"] == "FULL"
     assert summary["run_status"] in {"SUCCEEDED", "FAILED"}
     assert summary["inventory"]["file_count"] == 5
-    assert summary["inventory"]["supported_file_count"] == 1
-    assert summary["inventory"]["deferred_file_count"] == 3
+    assert summary["inventory"]["supported_file_count"] == 2
+    assert summary["inventory"]["deferred_file_count"] == 2
     assert summary["inventory"]["blocked_file_count"] == 1
     assert summary["inventory"]["supported_document_ids"]
     assert (
@@ -74,7 +74,9 @@ def test_harness_reports_blocked_steps_without_forcing_success(tmp_path: Path) -
     (tmp_path / "Media").mkdir()
     (tmp_path / "Media" / "Demo.mp4").write_bytes(b"\x00\x00\x00\x18ftypmp42")
     (tmp_path / "Notes").mkdir()
-    (tmp_path / "Notes" / "overview.html").write_text("<html>secret</html>", encoding="utf-8")
+    # Slice78: HTML is now canonical-supported, so use a genuinely-unsupported file (.csv)
+    # to keep exercising the "no ingested documents -> blocked" path honestly.
+    (tmp_path / "Notes" / "export.csv").write_text("col1,col2\nsecret,1\n", encoding="utf-8")
 
     summary = run_data_room_harness(
         data_room_root=tmp_path,
@@ -91,6 +93,7 @@ def test_harness_reports_blocked_steps_without_forcing_success(tmp_path: Path) -
     assert _step(summary, "DOCUMENT_PREFLIGHT")["status"] == "NOT_STARTED"
     assert "NO_INGESTED_DOCUMENTS" in summary["block_reasons"]
     assert summary["deferred_reasons"]
+    assert "secret" not in json.dumps(summary, ensure_ascii=False)
 
 
 def test_real_example_acceptance_when_fixture_is_available() -> None:

@@ -23,7 +23,7 @@ from idis.services.runs.strict_full_live import (
     build_strict_full_live_readiness_report,
 )
 
-PUBLIC_UPLOAD_EXTENSIONS = frozenset({".pdf", ".xlsx", ".docx", ".pptx"})
+PUBLIC_UPLOAD_EXTENSIONS = frozenset({".pdf", ".xlsx", ".docx", ".pptx", ".html", ".htm", ".txt"})
 MEDIA_EXTENSIONS = frozenset({".mp4"})
 UPLOAD_CONTENT_TYPE = "application/octet-stream"
 DEFAULT_API_KEY = "slice42-private-real-example-harness-key"

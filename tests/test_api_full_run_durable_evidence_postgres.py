@@ -217,7 +217,7 @@ def _write_supported_fixture_tree(root: Path) -> list[Path]:
     )
     files[2].write_bytes(create_test_docx(["slice26_nested_docx_claim supports renewal."]))
     files[3].write_bytes(create_test_pptx([["slice26_nested_pptx_claim shows pipeline."]]))
-    market.joinpath("ignored_unsupported.txt").write_text("not uploaded", encoding="utf-8")
+    market.joinpath("ignored_unsupported.csv").write_text("not uploaded", encoding="utf-8")
     return files
 
 
@@ -251,8 +251,8 @@ def _unsupported_upload_examples() -> list[dict[str, Any]]:
     return [
         {"filename": "slice26-video.bin", "data": b"\x00\x00\x00\x18ftypmp42"},
         {"filename": "slice26-image.bin", "data": b"\x89PNG\r\n\x1a\n"},
-        {"filename": "slice26-page.html", "data": b"<html><body>unsupported</body></html>"},
-        {"filename": "slice26-note.txt", "data": b"unsupported plain text"},
+        # Slice78: HTML/TXT are now canonical-supported (admitted); .csv stays unsupported.
+        {"filename": "slice26-export.csv", "data": b"col1,col2\nunsupported,1\n"},
     ]
 
 

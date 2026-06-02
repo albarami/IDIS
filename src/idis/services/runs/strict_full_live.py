@@ -21,11 +21,6 @@ from idis.models.step_provenance import (
     RuntimeUseStatus,
     StepProvenance,
 )
-from idis.parsers.media import (
-    FASTER_WHISPER_ADAPTER_NAME,
-    FasterWhisperMediaConfig,
-    probe_faster_whisper_model,
-)
 from idis.persistence.neo4j_driver import Neo4jHealthCheck, Neo4jHealthStatus, check_neo4j_health
 from idis.services.enrichment.byol_credentials import (
     BYOL_PROVIDER_ENV_SPECS,
@@ -37,6 +32,11 @@ from idis.services.enrichment.byol_credentials import (
     assess_byol_provider_readiness,
     build_enrichment_provider_matrix,
     byol_all_health_passed,
+)
+from idis.services.media_health import (
+    MediaHealthCheck,
+    MediaHealthStatus,
+    check_media_health,
 )
 from idis.services.ocr_health import (
     OcrHealthCheck,
@@ -276,6 +276,7 @@ def build_strict_provisioning_truth_report(
     neo4j_health_checker: Callable[[Mapping[str, str]], Neo4jHealthCheck] | None = None,
     pgvector_health_checker: Callable[[Mapping[str, str]], PgvectorHealthCheck] | None = None,
     ocr_health_checker: Callable[[Mapping[str, str]], OcrHealthCheck] | None = None,
+    media_health_checker: Callable[[Mapping[str, str]], MediaHealthCheck] | None = None,
     object_store_probe_base_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Build a redacted inventory/provisioning report without live runtime probes."""
@@ -293,6 +294,7 @@ def build_strict_provisioning_truth_report(
         neo4j_health_checker=neo4j_health_checker,
         pgvector_health_checker=pgvector_health_checker,
         ocr_health_checker=ocr_health_checker,
+        media_health_checker=media_health_checker,
         object_store_probe_base_dir=object_store_probe_base_dir,
     )
 
@@ -419,6 +421,7 @@ def build_strict_full_live_readiness_report(
     embedding_health_checker: Callable[[Mapping[str, str]], EmbeddingHealthCheck] | None = None,
     pgvector_health_checker: Callable[[Mapping[str, str]], PgvectorHealthCheck] | None = None,
     ocr_health_checker: Callable[[Mapping[str, str]], OcrHealthCheck] | None = None,
+    media_health_checker: Callable[[Mapping[str, str]], MediaHealthCheck] | None = None,
     probe_object_store: bool = True,
 ) -> StrictFullLiveReadinessReport:
     """Build a safe strict full-live readiness report without executing a run."""
@@ -452,6 +455,7 @@ def build_strict_full_live_readiness_report(
     embedding_health = _embedding_health(values, embedding_health_checker)
     pgvector_health = _pgvector_health(values, pgvector_health_checker)
     ocr_health = _ocr_health(values, ocr_health_checker, resolver)
+    media_health = _media_health(values, media_health_checker, resolver)
     product_export_ready = _product_export_ready(
         values,
         probe_object_store=probe_object_store,
@@ -468,7 +472,7 @@ def build_strict_full_live_readiness_report(
         _supported_parsers_extraction(values),
         _durable_runtime(values),
         _ocr(has_ocr_evidence=has_ocr_evidence, ocr_health=ocr_health),
-        _mp4_stt(has_media=has_media, env=values, binary_resolver=resolver),
+        _mp4_stt(has_media=has_media, media_health=media_health),
         _calculation_engine(env=values, product_export_ready=product_export_ready),
         _calc_sanad(env=values, product_export_ready=product_export_ready),
         _external_enrichment_apis(
@@ -495,13 +499,13 @@ def build_strict_full_live_readiness_report(
         preflight_corpus=preflight_corpus,
         has_ocr_evidence=has_ocr_evidence,
         has_media=has_media,
-        binary_resolver=resolver,
         byol_providers=byol_providers,
         byol_credentials_durable=byol_credentials_durable,
         graph_health=graph_health,
         embedding_health=embedding_health,
         pgvector_health=pgvector_health,
         ocr_health=ocr_health,
+        media_health=media_health,
         product_export_ready=product_export_ready,
         product_export_config_present=product_export_config_present,
         ui_api_download_ready=ui_api_download_ready,
@@ -603,10 +607,12 @@ def _ocr(
 def _mp4_stt(
     *,
     has_media: bool,
-    env: Mapping[str, str],
-    binary_resolver: Callable[[str], str | None],
+    media_health: MediaHealthCheck,
 ) -> StrictComponentReadiness:
-    evidence = "src/idis/parsers/media.py; src/idis/services/ingestion/defaults.py"
+    evidence = (
+        "src/idis/parsers/media.py; src/idis/services/ingestion/defaults.py; "
+        "src/idis/services/media_health.py"
+    )
     if not has_media:
         return StrictComponentReadiness(
             component_name="mp4_stt",
@@ -617,25 +623,31 @@ def _mp4_stt(
             evidence=evidence,
             may_proceed=True,
         )
-    if _media_runtime_ready(env=env, binary_resolver=binary_resolver):
+    if _media_runtime_ready(media_health):
         return _live("mp4_stt", evidence)
-    missing_services = [
-        service for service in ("ffmpeg", "ffprobe") if binary_resolver(service) is None
-    ]
-    missing_env = _missing_media_env(env)
-    if not _media_model_probe_ready(env):
-        missing_services.append("faster-whisper model")
-    blocker_prefix = "MP4 files are present and " if has_media else ""
+    if media_health.status is MediaHealthStatus.DISABLED:
+        required_env = ["IDIS_MEDIA_ADAPTER=faster-whisper", "IDIS_MEDIA_STT_MODEL_PATH"]
+        required_services = ["ffmpeg", "ffprobe", "faster-whisper model"]
+    elif media_health.status is MediaHealthStatus.MISSING_DEPENDENCIES:
+        required_env = []
+        required_services = list(media_health.missing_dependencies) or [
+            "ffmpeg",
+            "ffprobe",
+            "faster-whisper model",
+        ]
+    else:
+        required_env = []
+        required_services = ["ffmpeg", "ffprobe", "faster-whisper model"]
     return StrictComponentReadiness(
         component_name="mp4_stt",
         status=StrictComponentStatus.MISSING_INFRASTRUCTURE,
         blocker_message=(
-            f"{blocker_prefix}STT is not full-live ready: media transcription requires "
-            "ffmpeg, ffprobe, a provisioned faster-whisper model, and FULL ingestion wiring."
+            "MP4 files are present but strict media STT health is not full-live ready "
+            f"(status={media_health.status.value}): media transcription requires enabled "
+            "media config, ffmpeg, ffprobe, and a provisioned faster-whisper model."
         ),
-        required_env_vars=missing_env
-        or ["IDIS_MEDIA_ADAPTER=faster-whisper", "IDIS_MEDIA_STT_MODEL_PATH"],
-        required_services=missing_services or ["ffmpeg", "ffprobe", "faster-whisper model"],
+        required_env_vars=required_env,
+        required_services=required_services,
         evidence=evidence,
         may_proceed=False,
     )
@@ -1449,13 +1461,13 @@ def _build_component_inventory(
     preflight_corpus: Sequence[Mapping[str, Any]] | None,
     has_ocr_evidence: bool,
     has_media: bool,
-    binary_resolver: Callable[[str], str | None],
     byol_providers: list[ByolProviderReadiness],
     byol_credentials_durable: bool,
     graph_health: Neo4jHealthCheck,
     embedding_health: EmbeddingHealthCheck,
     pgvector_health: PgvectorHealthCheck,
     ocr_health: OcrHealthCheck,
+    media_health: MediaHealthCheck,
     product_export_ready: bool,
     product_export_config_present: bool,
     ui_api_download_ready: bool,
@@ -1463,7 +1475,7 @@ def _build_component_inventory(
 ) -> list[StrictComponentInventory]:
     env = env_source.effective_env
     ocr_ready = _ocr_runtime_ready(ocr_health)
-    media_ready = _media_runtime_ready(env=env, binary_resolver=binary_resolver)
+    media_ready = _media_runtime_ready(media_health)
     graph_ready = _graph_visibility_ready(
         env,
         graph_health,
@@ -1557,12 +1569,8 @@ def _build_component_inventory(
             "MP4/STT",
             exists=True,
             full_wired=media_ready or not has_media,
-            config_present=_media_model_config_present(env) or not has_media,
-            health=(
-                _media_health_status(env=env, binary_resolver=binary_resolver)
-                if has_media
-                else "not_applicable"
-            ),
+            config_present=media_health.enabled or not has_media,
+            health=_media_inventory_health(media_health, has_media=has_media),
             output_visible=media_ready or not has_media,
             blocker=(
                 "MP4 files are present and STT runtime/config is missing or unhealthy."
@@ -2194,6 +2202,26 @@ def _ocr_inventory_health(ocr_health: OcrHealthCheck, *, has_ocr_evidence: bool)
     return "configured_failed"
 
 
+def _media_health(
+    env: Mapping[str, str],
+    media_health_checker: Callable[[Mapping[str, str]], MediaHealthCheck] | None,
+    binary_resolver: Callable[[str], str | None],
+) -> MediaHealthCheck:
+    if media_health_checker is not None:
+        return media_health_checker(env)
+    return check_media_health(env=env, binary_resolver=binary_resolver)
+
+
+def _media_inventory_health(media_health: MediaHealthCheck, *, has_media: bool) -> str:
+    if not has_media:
+        return "not_applicable"
+    if media_health.status is MediaHealthStatus.HEALTHY:
+        return "healthy"
+    if media_health.status is MediaHealthStatus.DISABLED:
+        return "missing_config"
+    return "configured_failed"
+
+
 def _rag_config_present(env: Mapping[str, str]) -> bool:
     return _has_value(env, "IDIS_DATABASE_URL") and is_vector_search_enabled(env)
 
@@ -2582,66 +2610,12 @@ def _missing_product_export_env(env: Mapping[str, str]) -> list[str]:
     return missing
 
 
-def _media_model_config_present(env: Mapping[str, str]) -> bool:
-    return _has_value(env, "IDIS_MEDIA_STT_MODEL_PATH") or _has_value(
-        env,
-        "IDIS_MEDIA_STT_MODEL_NAME",
-    )
-
-
 def _ocr_runtime_ready(ocr_health: OcrHealthCheck) -> bool:
     return ocr_health.status is OcrHealthStatus.HEALTHY
 
 
-def _media_runtime_ready(
-    *,
-    env: Mapping[str, str],
-    binary_resolver: Callable[[str], str | None],
-) -> bool:
-    return (
-        str(env.get("IDIS_MEDIA_ADAPTER", "")).strip().lower() == FASTER_WHISPER_ADAPTER_NAME
-        and all(binary_resolver(binary) is not None for binary in ("ffmpeg", "ffprobe"))
-        and _media_model_probe_ready(env)
-    )
-
-
-def _media_model_probe_ready(env: Mapping[str, str]) -> bool:
-    if not _media_model_config_present(env):
-        return False
-    return probe_faster_whisper_model(
-        FasterWhisperMediaConfig(
-            model_path=_optional_env(env, "IDIS_MEDIA_STT_MODEL_PATH"),
-            model_name=_optional_env(env, "IDIS_MEDIA_STT_MODEL_NAME"),
-            allow_model_download=_truthy(env.get("IDIS_MEDIA_STT_ALLOW_DOWNLOAD")),
-        )
-    ).can_attempt
-
-
-def _missing_media_env(env: Mapping[str, str]) -> list[str]:
-    missing: list[str] = []
-    if str(env.get("IDIS_MEDIA_ADAPTER", "")).strip().lower() != FASTER_WHISPER_ADAPTER_NAME:
-        missing.append("IDIS_MEDIA_ADAPTER=faster-whisper")
-    if not _media_model_config_present(env):
-        missing.append("IDIS_MEDIA_STT_MODEL_PATH or IDIS_MEDIA_STT_MODEL_NAME")
-    return missing
-
-
-def _optional_env(env: Mapping[str, str], key: str) -> str | None:
-    value = env.get(key)
-    if value is None:
-        return None
-    stripped = str(value).strip()
-    return stripped or None
-
-
-def _media_health_status(
-    *,
-    env: Mapping[str, str],
-    binary_resolver: Callable[[str], str | None],
-) -> str:
-    if _media_runtime_ready(env=env, binary_resolver=binary_resolver):
-        return "healthy"
-    return "missing_config"
+def _media_runtime_ready(media_health: MediaHealthCheck) -> bool:
+    return media_health.status is MediaHealthStatus.HEALTHY
 
 
 def _not_implemented(
@@ -2689,10 +2663,6 @@ def _missing_model_env(
 
 def _has_value(env: Mapping[str, str], key: str) -> bool:
     return bool(str(env.get(key, "")).strip())
-
-
-def _truthy(value: str | None) -> bool:
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _safe_extensions(

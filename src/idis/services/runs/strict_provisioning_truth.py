@@ -14,6 +14,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from idis.persistence.neo4j_driver import Neo4jHealthCheck, Neo4jHealthStatus
+from idis.services.media_health import MediaHealthCheck, MediaHealthStatus, check_media_health
 from idis.services.ocr_health import OcrHealthCheck, OcrHealthStatus, check_ocr_health
 from idis.services.rag.embedding_health import EmbeddingHealthCheck
 from idis.services.rag.pgvector_health import PgvectorHealthCheck, PgvectorHealthStatus
@@ -76,6 +77,7 @@ def build_strict_provisioning_truth_report(
     neo4j_health_checker: Callable[[Mapping[str, str]], Neo4jHealthCheck] | None = None,
     pgvector_health_checker: Callable[[Mapping[str, str]], PgvectorHealthCheck] | None = None,
     ocr_health_checker: Callable[[Mapping[str, str]], OcrHealthCheck] | None = None,
+    media_health_checker: Callable[[Mapping[str, str]], MediaHealthCheck] | None = None,
     object_store_probe_base_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Build a redacted inventory/provisioning report without live runtime probes."""
@@ -91,6 +93,7 @@ def build_strict_provisioning_truth_report(
         embedding_health_checker=lambda checked_env: _static_embedding_health(checked_env),
         pgvector_health_checker=lambda checked_env: _static_pgvector_health(checked_env),
         ocr_health_checker=lambda checked_env: _static_ocr_health(checked_env),
+        media_health_checker=lambda checked_env: _static_media_health(checked_env),
         probe_object_store=False,
     )
     local_probe_statuses = _build_local_probe_statuses(
@@ -99,6 +102,7 @@ def build_strict_provisioning_truth_report(
         neo4j_health_checker=neo4j_health_checker,
         pgvector_health_checker=pgvector_health_checker,
         ocr_health_checker=ocr_health_checker,
+        media_health_checker=media_health_checker,
         object_store_probe_base_dir=object_store_probe_base_dir,
     )
     readiness_by_inventory_name = _readiness_by_inventory_name(readiness.components)
@@ -272,6 +276,7 @@ def _build_local_probe_statuses(
     neo4j_health_checker: Callable[[Mapping[str, str]], Neo4jHealthCheck] | None,
     pgvector_health_checker: Callable[[Mapping[str, str]], PgvectorHealthCheck] | None,
     ocr_health_checker: Callable[[Mapping[str, str]], OcrHealthCheck] | None,
+    media_health_checker: Callable[[Mapping[str, str]], MediaHealthCheck] | None,
     object_store_probe_base_dir: str | Path | None,
 ) -> dict[str, _LocalProbeStatus]:
     if not allow_local_strict_health_probes:
@@ -301,6 +306,11 @@ def _build_local_probe_statuses(
                 claim="OCR runtime health only",
                 blocker="explicit_opt_in_required",
             ),
+            "MP4/STT": _not_attempted_probe(
+                label="media_local_health",
+                claim="media STT runtime health only",
+                blocker="explicit_opt_in_required",
+            ),
         }
 
     statuses: dict[str, _LocalProbeStatus] = {}
@@ -314,6 +324,7 @@ def _build_local_probe_statuses(
         object_store_probe_base_dir=object_store_probe_base_dir,
     )
     statuses["OCR"] = _ocr_local_probe_status(env, ocr_health_checker)
+    statuses["MP4/STT"] = _media_local_probe_status(env, media_health_checker)
     return statuses
 
 
@@ -353,6 +364,22 @@ def _ocr_local_probe_status(
         label=label,
         claim=claim,
         passed=result.status is OcrHealthStatus.HEALTHY,
+    )
+
+
+def _media_local_probe_status(
+    env: Mapping[str, str],
+    health_checker: Callable[[Mapping[str, str]], MediaHealthCheck] | None,
+) -> _LocalProbeStatus:
+    label = "media_local_health"
+    claim = "media STT runtime health only"
+    result = health_checker(env) if health_checker is not None else check_media_health(env=env)
+    if result.status is MediaHealthStatus.DISABLED:
+        return _not_attempted_probe(label=label, claim=claim, blocker="media_disabled")
+    return _probe_status_from_bool(
+        label=label,
+        claim=claim,
+        passed=result.status is MediaHealthStatus.HEALTHY,
     )
 
 
@@ -494,6 +521,15 @@ def _static_ocr_health(env: Mapping[str, str]) -> OcrHealthCheck:
         return OcrHealthCheck.disabled()
     return OcrHealthCheck.failed(
         error="OCR runtime probe not executed in strict provisioning truth report."
+    )
+
+
+def _static_media_health(env: Mapping[str, str]) -> MediaHealthCheck:
+    adapter = str(env.get("IDIS_MEDIA_ADAPTER", "")).strip().lower()
+    if not adapter:
+        return MediaHealthCheck.disabled()
+    return MediaHealthCheck.failed(
+        error="Media runtime probe not executed in strict provisioning truth report."
     )
 
 

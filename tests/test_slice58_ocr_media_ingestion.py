@@ -14,6 +14,7 @@ from idis.parsers.ocr import OcrConfig, OcrPageText
 from idis.parsers.registry import parse_bytes
 from idis.services.ingestion import IngestionContext, IngestionService
 from idis.services.ingestion.defaults import build_default_ingestion_service
+from idis.services.media_health import MediaHealthCheck
 from idis.services.ocr_health import OcrHealthCheck
 from idis.services.runs.strict_full_live import (
     StrictComponentStatus,
@@ -234,9 +235,11 @@ def test_strict_readiness_ocr_and_media_can_clear_with_configured_healthy_runtim
             f"synthetic-{binary}" if binary in {"tesseract", "ffmpeg", "ffprobe"} else None
         ),
         load_byol_env_credentials=False,
-        # Slice79: OCR readiness now requires full health, not tesseract-binary presence
-        # alone; a configured-healthy runtime is represented via the injectable checker.
+        # Slice79/Slice80: OCR and media readiness now require full health, not binary
+        # presence alone; configured-healthy runtimes are represented via the injectable
+        # health checkers.
         ocr_health_checker=lambda _env: OcrHealthCheck.healthy(),
+        media_health_checker=lambda _env: MediaHealthCheck.healthy(),
     )
 
     assert report.component("ocr").may_proceed is True

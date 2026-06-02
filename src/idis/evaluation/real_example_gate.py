@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from idis.evaluation.real_example_gate_ledger import (
+    RETRYABLE_REASON_CODES,
     ledger_entry_count,
     load_ledger,
     media_policy_key,
@@ -282,6 +283,137 @@ def build_data_room_package_inventory_summary(
     }
 
 
+def build_real_example_parse_readiness_summary(
+    *,
+    root: str | Path = DEFAULT_REAL_EXAMPLE_ROOT,
+    ledger_path: str | Path = DEFAULT_LEDGER_PATH,
+    per_file_timeout_seconds: float = DEFAULT_PER_FILE_TIMEOUT_SECONDS,
+    max_runtime_seconds: float | None = None,
+    max_memory_mb: int | None = None,
+    parse_attempt_fn: ParseAttemptFn | None = None,
+    ocr_enabled: bool = False,
+    ocr_max_pages: int = MAX_OCR_PAGES,
+    ocr_timeout_seconds: float = 30.0,
+    ocr_dpi: int = 200,
+    media_enabled: bool = False,
+    media_timeout_seconds: float = 30.0,
+    media_adapter: str = MEDIA_ADAPTER_NONE,
+    media_model_name: str | None = None,
+    media_model_path: str | None = None,
+    media_allow_model_download: bool = False,
+    media_language: str = DEFAULT_MEDIA_LANGUAGE,
+    media_compute_type: str = DEFAULT_MEDIA_COMPUTE_TYPE,
+    media_max_duration_seconds: float = MAX_MEDIA_DURATION_SECONDS,
+) -> dict[str, object]:
+    """Safe PARSE_SUPPORTED parse-readiness projection over a private tree (Slice81).
+
+    Wraps ``run_real_example_gate`` in PARSE_SUPPORTED mode (never INVENTORY_ONLY) and
+    re-projects its safe aggregate, adding ``counts_by_evidence_class`` (extension-derived),
+    ``counts_by_deferral_class`` (intended vs unintended), the unintended reason-code
+    breakdown, and a ``parse_ready`` verdict (True only when zero unintended deferrals).
+    Does NOT mutate or extend ``_safe_summary``. Emits safe aggregates only -- never raw
+    paths, filenames, content, object keys, model paths, env values, command output, or
+    secrets; media bytes are never read (the gate's media-no-read behavior is preserved).
+    """
+    gate_summary = run_real_example_gate(
+        root=root,
+        ledger_path=ledger_path,
+        mode=GateMode.PARSE_SUPPORTED,
+        safe_summary=True,
+        per_file_timeout_seconds=per_file_timeout_seconds,
+        max_runtime_seconds=max_runtime_seconds,
+        max_memory_mb=max_memory_mb,
+        emit_progress=False,
+        parse_attempt_fn=parse_attempt_fn,
+        ocr_enabled=ocr_enabled,
+        ocr_max_pages=ocr_max_pages,
+        ocr_timeout_seconds=ocr_timeout_seconds,
+        ocr_dpi=ocr_dpi,
+        media_enabled=media_enabled,
+        media_timeout_seconds=media_timeout_seconds,
+        media_adapter=media_adapter,
+        media_model_name=media_model_name,
+        media_model_path=media_model_path,
+        media_allow_model_download=media_allow_model_download,
+        media_language=media_language,
+        media_compute_type=media_compute_type,
+        media_max_duration_seconds=media_max_duration_seconds,
+    )
+    counts_by_extension = gate_summary["counts_by_extension"]
+    counts_by_reason_code = gate_summary["counts_by_reason_code"]
+    assert isinstance(counts_by_extension, dict)
+    assert isinstance(counts_by_reason_code, dict)
+    counts_by_evidence_class = _aggregate_counts_by(
+        counts_by_extension, _evidence_class_for_extension
+    )
+    counts_by_deferral_class = _aggregate_counts_by(
+        counts_by_reason_code, _deferral_class_for_reason_code
+    )
+    unintended_deferral_reason_codes = {
+        reason_code: count
+        for reason_code, count in sorted(counts_by_reason_code.items())
+        if _deferral_class_for_reason_code(reason_code) == _DEFERRAL_CLASS_UNINTENDED
+    }
+    parse_ready = counts_by_deferral_class.get(_DEFERRAL_CLASS_UNINTENDED, 0) == 0
+    return {
+        "safe_summary": gate_summary["safe_summary"],
+        "source": "real_example_private_parse_readiness",
+        "mode": gate_summary["mode"],
+        "total_files": gate_summary["total_files"],
+        "processed_files": gate_summary["processed_files"],
+        "ledger_entry_count": gate_summary["ledger_entry_count"],
+        "counts_by_extension": counts_by_extension,
+        "counts_by_status": gate_summary["counts_by_status"],
+        "counts_by_parser_outcome": gate_summary["counts_by_parser_outcome"],
+        "counts_by_reason_code": counts_by_reason_code,
+        "counts_by_evidence_class": counts_by_evidence_class,
+        "counts_by_deferral_class": counts_by_deferral_class,
+        "unintended_deferral_reason_codes": unintended_deferral_reason_codes,
+        "parse_ready": parse_ready,
+    }
+
+
+def _run_parse_readiness_cli(args: argparse.Namespace) -> int:
+    """Run the Slice81 PARSE_SUPPORTED parse-readiness projection and print safe JSON."""
+    try:
+        summary = build_real_example_parse_readiness_summary(
+            root=args.root,
+            ledger_path=args.ledger,
+            per_file_timeout_seconds=args.per_file_timeout_seconds,
+            max_runtime_seconds=args.max_runtime_seconds,
+            max_memory_mb=args.max_memory_mb,
+            ocr_enabled=args.ocr_enabled,
+            ocr_max_pages=args.ocr_max_pages,
+            ocr_timeout_seconds=args.ocr_timeout_seconds,
+            ocr_dpi=args.ocr_dpi,
+            media_enabled=args.media_enabled,
+            media_timeout_seconds=args.media_timeout_seconds,
+            media_adapter=args.media_adapter,
+            media_model_name=args.media_model_name,
+            media_model_path=args.media_model_path,
+            media_allow_model_download=args.media_allow_model_download,
+            media_language=args.media_language,
+            media_compute_type=args.media_compute_type,
+            media_max_duration_seconds=args.media_max_duration_seconds,
+        )
+    except (FileNotFoundError, NotADirectoryError, RuntimeError, ValueError) as exc:
+        print(
+            json.dumps(
+                {
+                    "gate": "real_example_private_v1",
+                    "safe_summary": True,
+                    "status": "failed",
+                    "reason_code": _safe_cli_reason(exc),
+                },
+                sort_keys=True,
+                indent=2,
+            )
+        )
+        return 1
+    print(json.dumps(summary, sort_keys=True, indent=2))
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entrypoint for the private real_example gate."""
     parser = argparse.ArgumentParser(
@@ -290,6 +422,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "Examples:\n"
             "  python scripts/run_real_example_gate.py --inventory-only\n"
             "  python scripts/run_real_example_gate.py --parse-supported --safe-summary\n"
+            "  python scripts/run_real_example_gate.py --root real_example --parse-readiness\n"
             "  python scripts/run_real_example_gate.py --parse-supported --safe-summary "
             "--per-file-timeout-seconds 20 --max-runtime-seconds 900"
         ),
@@ -298,6 +431,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     modes = parser.add_mutually_exclusive_group(required=True)
     modes.add_argument("--inventory-only", action="store_true")
     modes.add_argument("--parse-supported", action="store_true")
+    modes.add_argument(
+        "--parse-readiness",
+        action="store_true",
+        help="Run the PARSE_SUPPORTED parse-readiness projection (evidence/deferral class + "
+        "parse_ready). Always emits the safe projection.",
+    )
     parser.add_argument("--safe-summary", action="store_true")
     parser.add_argument("--root", default=str(DEFAULT_REAL_EXAMPLE_ROOT))
     parser.add_argument("--ledger", default=str(DEFAULT_LEDGER_PATH))
@@ -345,6 +484,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--emit-progress", action="store_true")
     parser.add_argument("--no-progress", action="store_true")
     args = parser.parse_args(argv)
+
+    if args.parse_readiness:
+        return _run_parse_readiness_cli(args)
 
     mode = GateMode.PARSE_SUPPORTED if args.parse_supported else GateMode.INVENTORY_ONLY
     if mode == GateMode.PARSE_SUPPORTED and not args.safe_summary:
@@ -770,6 +912,95 @@ def _first_reason_code(reason_codes: list[str], *, default: str) -> str:
     if not reason_codes:
         return default
     return sorted(reason_codes)[0]
+
+
+# --- Slice81 parse-readiness classifiers (pure; extension/reason-code only; no IO) ---
+
+_EVIDENCE_CLASS_BY_EXTENSION: dict[str, str] = {
+    "pdf": "PDF",
+    "xlsx": "SPREADSHEET",
+    "xlsm": "SPREADSHEET",
+    "docx": "DOCUMENT",
+    "pptx": "PRESENTATION",
+    "html": "WEB_TEXT",
+    "htm": "WEB_TEXT",
+    "txt": "WEB_TEXT",
+    "png": "IMAGE",
+    "jpg": "IMAGE",
+    "jpeg": "IMAGE",
+    "tif": "IMAGE",
+    "tiff": "IMAGE",
+    "bmp": "IMAGE",
+    "mp4": "MEDIA",
+}
+_EVIDENCE_CLASS_OTHER = "OTHER"
+
+# Locked intended terminal blockers (safe, expected). Everything else — retryable/transient
+# codes, ``unknown_format``, empty/missing, or any unrecognized future code — is an UNINTENDED
+# deferral (fail-safe: parse readiness must never silently accept an unknown blocker).
+_INTENDED_REASON_CODES: frozenset[str] = frozenset(
+    {
+        "parsed",
+        "conversion_required",
+        "ocr_required",
+        "ocr_no_text_extracted",
+        "media_transcription_unavailable",
+        "media_no_text_extracted",
+        "media_duration_exceeded",
+        "unsupported_format",
+        "unsupported_in_slice_29",
+        "file_too_large",
+        "encrypted_pdf",
+        "no_text_extracted",
+        "corrupted_file",
+        "inventory_only",
+    }
+)
+_UNINTENDED_REASON_CODES: frozenset[str] = frozenset(
+    RETRYABLE_REASON_CODES
+    | {"unknown_format", "media_transcription_failed", "media_transcription_timeout"}
+)
+_DEFERRAL_CLASS_INTENDED = "intended"
+_DEFERRAL_CLASS_UNINTENDED = "unintended"
+
+
+def _evidence_class_for_extension(extension: str) -> str:
+    """Map a file extension to a safe evidence class.
+
+    Derived from the extension token only — never a filename or content. Case-insensitive;
+    a leading dot is optional. Unknown/empty tokens map to ``OTHER``.
+    """
+    token = str(extension).strip().lower().lstrip(".")
+    return _EVIDENCE_CLASS_BY_EXTENSION.get(token, _EVIDENCE_CLASS_OTHER)
+
+
+def _deferral_class_for_reason_code(reason_code: str | None) -> str:
+    """Classify a parse reason code as an intended blocker or an unintended deferral.
+
+    Fail-safe: only the locked intended set is ``intended``; retryable/transient codes,
+    ``unknown_format``, empty/missing, and any unrecognized future code are ``unintended``
+    so parse readiness never silently accepts an unknown blocker.
+    """
+    code = (reason_code or "").strip()
+    if code in _UNINTENDED_REASON_CODES:
+        return _DEFERRAL_CLASS_UNINTENDED
+    if code in _INTENDED_REASON_CODES:
+        return _DEFERRAL_CLASS_INTENDED
+    return _DEFERRAL_CLASS_UNINTENDED
+
+
+def _aggregate_counts_by(
+    counts: dict[str, int], classifier: Callable[[str], str]
+) -> dict[str, int]:
+    """Re-bucket an existing ``{key: count}`` aggregate by a classifier, count-weighted.
+
+    Emits only classifier labels (evidence class / deferral class) — never the original
+    keys — so reason/extension strings are not echoed beyond the gate's already-safe counts.
+    """
+    aggregated: Counter[str] = Counter()
+    for key, count in counts.items():
+        aggregated[classifier(key)] += count
+    return dict(sorted(aggregated.items()))
 
 
 def _runtime_exceeded(started_at: float, max_runtime_seconds: float | None) -> bool:

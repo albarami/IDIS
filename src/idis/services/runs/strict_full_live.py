@@ -33,6 +33,12 @@ from idis.services.enrichment.byol_credentials import (
     build_enrichment_provider_matrix,
     byol_all_health_passed,
 )
+from idis.services.llm_model_health import (
+    LlmModelHealthCheck,
+    LlmModelHealthStatus,
+    LlmModelRole,
+    check_llm_model_health,
+)
 from idis.services.media_health import (
     MediaHealthCheck,
     MediaHealthStatus,
@@ -277,6 +283,9 @@ def build_strict_provisioning_truth_report(
     pgvector_health_checker: Callable[[Mapping[str, str]], PgvectorHealthCheck] | None = None,
     ocr_health_checker: Callable[[Mapping[str, str]], OcrHealthCheck] | None = None,
     media_health_checker: Callable[[Mapping[str, str]], MediaHealthCheck] | None = None,
+    model_health_checker: (
+        Callable[[Mapping[str, str], LlmModelRole], LlmModelHealthCheck] | None
+    ) = None,
     object_store_probe_base_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Build a redacted inventory/provisioning report without live runtime probes."""
@@ -295,6 +304,7 @@ def build_strict_provisioning_truth_report(
         pgvector_health_checker=pgvector_health_checker,
         ocr_health_checker=ocr_health_checker,
         media_health_checker=media_health_checker,
+        model_health_checker=model_health_checker,
         object_store_probe_base_dir=object_store_probe_base_dir,
     )
 
@@ -422,6 +432,9 @@ def build_strict_full_live_readiness_report(
     pgvector_health_checker: Callable[[Mapping[str, str]], PgvectorHealthCheck] | None = None,
     ocr_health_checker: Callable[[Mapping[str, str]], OcrHealthCheck] | None = None,
     media_health_checker: Callable[[Mapping[str, str]], MediaHealthCheck] | None = None,
+    model_health_checker: (
+        Callable[[Mapping[str, str], LlmModelRole], LlmModelHealthCheck] | None
+    ) = None,
     probe_object_store: bool = True,
 ) -> StrictFullLiveReadinessReport:
     """Build a safe strict full-live readiness report without executing a run."""
@@ -456,6 +469,10 @@ def build_strict_full_live_readiness_report(
     pgvector_health = _pgvector_health(values, pgvector_health_checker)
     ocr_health = _ocr_health(values, ocr_health_checker, resolver)
     media_health = _media_health(values, media_health_checker, resolver)
+    extract_model_health = _model_health(values, model_health_checker, LlmModelRole.EXTRACTION)
+    debate_model_health = _model_health(values, model_health_checker, LlmModelRole.DEBATE)
+    analysis_model_health = _model_health(values, model_health_checker, LlmModelRole.ANALYSIS)
+    scoring_model_health = _model_health(values, model_health_checker, LlmModelRole.SCORING)
     product_export_ready = _product_export_ready(
         values,
         probe_object_store=probe_object_store,
@@ -479,12 +496,12 @@ def build_strict_full_live_readiness_report(
             byol_providers=byol_providers,
             byol_credentials_durable=byol_credentials_durable,
         ),
-        _live_llm_model_clients(values),
-        _analysis(values),
-        _debate_layer_1(values),
+        _live_llm_model_clients(values, extract_model_health),
+        _analysis(values, analysis_model_health),
+        _debate_layer_1(values, debate_model_health),
         _debate_layer_2_ic_challenge(values),
         _live("muhasabah_nff", "src/idis/debate/orchestrator.py; src/idis/deliverables/"),
-        _scoring(values),
+        _scoring(values, scoring_model_health),
         _rag_foundation_layer(values, embedding_health, pgvector_health),
         _graph_evidence_layer(
             values,
@@ -506,6 +523,10 @@ def build_strict_full_live_readiness_report(
         pgvector_health=pgvector_health,
         ocr_health=ocr_health,
         media_health=media_health,
+        extract_model_health=extract_model_health,
+        debate_model_health=debate_model_health,
+        analysis_model_health=analysis_model_health,
+        scoring_model_health=scoring_model_health,
         product_export_ready=product_export_ready,
         product_export_config_present=product_export_config_present,
         ui_api_download_ready=ui_api_download_ready,
@@ -762,85 +783,52 @@ def _calc_sanad(
     )
 
 
-def _live_llm_model_clients(env: Mapping[str, str]) -> StrictComponentReadiness:
-    missing = sorted(
-        set(
-            _missing_model_env(
-                env=env,
-                backend_key="IDIS_EXTRACT_BACKEND",
-                model_keys=["IDIS_ANTHROPIC_MODEL_EXTRACT"],
-            )
-            + _missing_model_env(
-                env=env,
-                backend_key="IDIS_DEBATE_BACKEND",
-                model_keys=[
-                    "IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT",
-                    "IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER",
-                ],
-            )
-        )
-    )
-    if missing:
-        return StrictComponentReadiness(
-            component_name="live_llm_model_clients",
-            status=StrictComponentStatus.MISSING_CREDENTIALS,
-            blocker_message=(
-                "Live model clients are not fully configured; deterministic model clients "
-                "would be selected for at least one strict-required path."
-            ),
-            required_env_vars=missing,
-            evidence="src/idis/api/routes/runs.py:_build_extraction_llm_client,_build_debate_role_runners",
-            may_proceed=False,
-        )
-    return _live(
-        "live_llm_model_clients",
-        "src/idis/services/extraction/extractors/anthropic_client.py",
+def _live_llm_model_clients(
+    env: Mapping[str, str], model_health: LlmModelHealthCheck
+) -> StrictComponentReadiness:
+    return _model_component(
+        model_health,
+        component_name="live_llm_model_clients",
+        evidence="src/idis/services/extraction/extractors/anthropic_client.py",
+        required_env_vars=_missing_model_env(
+            env=env,
+            backend_key="IDIS_EXTRACT_BACKEND",
+            model_keys=["IDIS_ANTHROPIC_MODEL_EXTRACT"],
+        ),
     )
 
 
-def _analysis(env: Mapping[str, str]) -> StrictComponentReadiness:
-    missing = _missing_model_env(
-        env=env,
-        backend_key="IDIS_DEBATE_BACKEND",
-        model_keys=["IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT"],
+def _analysis(
+    env: Mapping[str, str], model_health: LlmModelHealthCheck
+) -> StrictComponentReadiness:
+    return _model_component(
+        model_health,
+        component_name="agent_analysis",
+        evidence="src/idis/analysis/runner.py",
+        required_env_vars=_missing_model_env(
+            env=env,
+            backend_key="IDIS_DEBATE_BACKEND",
+            model_keys=["IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT"],
+        ),
     )
-    if missing:
-        return StrictComponentReadiness(
-            component_name="agent_analysis",
-            status=StrictComponentStatus.MISSING_CREDENTIALS,
-            blocker_message=(
-                "Agent analysis is wired, but strict mode requires live analysis LLM calls "
-                "instead of DeterministicAnalysisLLMClient."
-            ),
-            required_env_vars=missing,
-            evidence="src/idis/api/routes/runs.py:_build_analysis_llm_client",
-            may_proceed=False,
-        )
-    return _live("agent_analysis", "src/idis/analysis/runner.py")
 
 
-def _debate_layer_1(env: Mapping[str, str]) -> StrictComponentReadiness:
-    missing = _missing_model_env(
-        env=env,
-        backend_key="IDIS_DEBATE_BACKEND",
-        model_keys=[
-            "IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT",
-            "IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER",
-        ],
+def _debate_layer_1(
+    env: Mapping[str, str], model_health: LlmModelHealthCheck
+) -> StrictComponentReadiness:
+    return _model_component(
+        model_health,
+        component_name="debate_layer_1",
+        evidence="src/idis/debate/orchestrator.py",
+        required_env_vars=_missing_model_env(
+            env=env,
+            backend_key="IDIS_DEBATE_BACKEND",
+            model_keys=[
+                "IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT",
+                "IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER",
+            ],
+        ),
     )
-    if missing:
-        return StrictComponentReadiness(
-            component_name="debate_layer_1",
-            status=StrictComponentStatus.MISSING_CREDENTIALS,
-            blocker_message=(
-                "Debate layer 1 is wired, but default role runners are deterministic; "
-                "strict mode requires Anthropic-backed role runners."
-            ),
-            required_env_vars=missing,
-            evidence="src/idis/api/routes/runs.py:_build_debate_role_runners",
-            may_proceed=False,
-        )
-    return _live("debate_layer_1", "src/idis/debate/orchestrator.py")
 
 
 def _debate_layer_2_ic_challenge(env: Mapping[str, str]) -> StrictComponentReadiness:
@@ -889,25 +877,17 @@ def _debate_layer_2_ic_challenge(env: Mapping[str, str]) -> StrictComponentReadi
     )
 
 
-def _scoring(env: Mapping[str, str]) -> StrictComponentReadiness:
-    missing = _missing_model_env(
-        env=env,
-        backend_key="IDIS_DEBATE_BACKEND",
-        model_keys=["IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT"],
+def _scoring(env: Mapping[str, str], model_health: LlmModelHealthCheck) -> StrictComponentReadiness:
+    return _model_component(
+        model_health,
+        component_name="scoring",
+        evidence="src/idis/scoring/engine.py",
+        required_env_vars=_missing_model_env(
+            env=env,
+            backend_key="IDIS_DEBATE_BACKEND",
+            model_keys=["IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT"],
+        ),
     )
-    if missing:
-        return StrictComponentReadiness(
-            component_name="scoring",
-            status=StrictComponentStatus.MISSING_CREDENTIALS,
-            blocker_message=(
-                "Scoring is wired, but strict mode requires a live scoring LLM instead of "
-                "DeterministicScoringLLMClient."
-            ),
-            required_env_vars=missing,
-            evidence="src/idis/api/routes/runs.py:_build_scoring_llm_client",
-            may_proceed=False,
-        )
-    return _live("scoring", "src/idis/scoring/engine.py")
 
 
 def _rag_foundation_layer(
@@ -1468,6 +1448,10 @@ def _build_component_inventory(
     pgvector_health: PgvectorHealthCheck,
     ocr_health: OcrHealthCheck,
     media_health: MediaHealthCheck,
+    extract_model_health: LlmModelHealthCheck,
+    debate_model_health: LlmModelHealthCheck,
+    analysis_model_health: LlmModelHealthCheck,
+    scoring_model_health: LlmModelHealthCheck,
     product_export_ready: bool,
     product_export_config_present: bool,
     ui_api_download_ready: bool,
@@ -1585,40 +1569,29 @@ def _build_component_inventory(
         ),
         _inventory_llm_item(
             "Anthropic extraction",
-            backend_key="IDIS_EXTRACT_BACKEND",
-            model_keys=["IDIS_ANTHROPIC_MODEL_EXTRACT"],
+            model_health=extract_model_health,
             evidence=[
                 "src/idis/api/routes/runs.py",
                 "src/idis/services/extraction/extractors/anthropic_client.py",
             ],
-            env=env,
         ),
         _inventory_llm_item(
             "Anthropic debate",
-            backend_key="IDIS_DEBATE_BACKEND",
-            model_keys=[
-                "IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT",
-                "IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER",
-            ],
+            model_health=debate_model_health,
             evidence=["src/idis/api/routes/runs.py", "src/idis/debate/roles/llm_role_runner.py"],
-            env=env,
         ),
         _inventory_llm_item(
             "Anthropic analysis",
-            backend_key="IDIS_DEBATE_BACKEND",
-            model_keys=["IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT"],
+            model_health=analysis_model_health,
             evidence=["src/idis/api/routes/runs.py", "src/idis/analysis/agents/__init__.py"],
-            env=env,
         ),
         _inventory_llm_item(
             "Anthropic scoring",
-            backend_key="IDIS_DEBATE_BACKEND",
-            model_keys=["IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT"],
+            model_health=scoring_model_health,
             evidence=[
                 "src/idis/api/routes/runs.py",
                 "src/idis/analysis/scoring/llm_scorecard_runner.py",
             ],
-            env=env,
         ),
         _inventory_item(
             "enrichment public providers",
@@ -2027,29 +2000,18 @@ def _byol_credentials_durable(
 def _inventory_llm_item(
     component_name: str,
     *,
-    backend_key: str,
-    model_keys: Sequence[str],
+    model_health: LlmModelHealthCheck,
     evidence: list[str],
-    env: Mapping[str, str],
 ) -> StrictComponentInventory:
-    configured = (
-        env.get(backend_key) == "anthropic"
-        and _has_value(env, "ANTHROPIC_API_KEY")
-        and all(_has_value(env, key) for key in model_keys)
-    )
     return _inventory_item(
         component_name,
         exists=True,
         full_wired=True,
-        config_present=configured,
-        health="not_implemented" if configured else "missing_config",
+        config_present=model_health.configured,
+        health=_model_inventory_health(model_health),
         output_visible=False,
-        blocker=(
-            "Live Anthropic config is present, but Slice 56 has no real live model health check."
-            if configured
-            else "Live Anthropic backend/API key/model config is incomplete."
-        ),
-        slice_name="Slice 56",
+        blocker=_model_inventory_blocker(model_health),
+        slice_name="Slice 82",
         evidence=evidence,
     )
 
@@ -2220,6 +2182,73 @@ def _media_inventory_health(media_health: MediaHealthCheck, *, has_media: bool) 
     if media_health.status is MediaHealthStatus.DISABLED:
         return "missing_config"
     return "configured_failed"
+
+
+def _model_health(
+    env: Mapping[str, str],
+    model_health_checker: (Callable[[Mapping[str, str], LlmModelRole], LlmModelHealthCheck] | None),
+    role: LlmModelRole,
+) -> LlmModelHealthCheck:
+    if model_health_checker is not None:
+        return model_health_checker(env, role)
+    return check_llm_model_health(env=env, role=role)
+
+
+def _model_component(
+    model_health: LlmModelHealthCheck,
+    *,
+    component_name: str,
+    evidence: str,
+    required_env_vars: list[str],
+) -> StrictComponentReadiness:
+    # required_env_vars are operator-facing config KEY names (never secret values), preserving
+    # the established readiness contract; status is driven by the no-network model health check.
+    status = model_health.status
+    if status is LlmModelHealthStatus.HEALTHY:
+        return _live(component_name, evidence)
+    if status is LlmModelHealthStatus.FAILED:
+        return StrictComponentReadiness(
+            component_name=component_name,
+            status=StrictComponentStatus.CONFIGURED_BUT_FAILED_HEALTH_CHECK,
+            blocker_message=(
+                f"Live model health check failed for {component_name} "
+                f"(status={status.value}); strict FULL is blocked."
+            ),
+            required_env_vars=required_env_vars,
+            evidence=evidence,
+            may_proceed=False,
+        )
+    return StrictComponentReadiness(
+        component_name=component_name,
+        status=StrictComponentStatus.MISSING_CREDENTIALS,
+        blocker_message=(
+            f"Live model clients are not configured for {component_name} "
+            f"(status={status.value}); deterministic clients would be selected."
+        ),
+        required_env_vars=required_env_vars,
+        evidence=evidence,
+        may_proceed=False,
+    )
+
+
+def _model_inventory_health(model_health: LlmModelHealthCheck) -> str:
+    status = model_health.status
+    if status is LlmModelHealthStatus.HEALTHY:
+        return "healthy"
+    if status is LlmModelHealthStatus.FAILED:
+        return "configured_failed"
+    return "missing_config"
+
+
+def _model_inventory_blocker(model_health: LlmModelHealthCheck) -> str:
+    status = model_health.status
+    if status is LlmModelHealthStatus.HEALTHY:
+        return ""
+    if status is LlmModelHealthStatus.FAILED:
+        return "Live Anthropic model health check failed."
+    if status is LlmModelHealthStatus.DISABLED:
+        return "Live Anthropic backend is not configured."
+    return "Live Anthropic backend/API key/model config is incomplete."
 
 
 def _rag_config_present(env: Mapping[str, str]) -> bool:

@@ -14,6 +14,11 @@ from typing import Any
 from urllib.parse import urlparse
 
 from idis.persistence.neo4j_driver import Neo4jHealthCheck, Neo4jHealthStatus
+from idis.services.llm_model_health import (
+    LlmModelHealthCheck,
+    LlmModelRole,
+    check_llm_model_health,
+)
 from idis.services.media_health import MediaHealthCheck, MediaHealthStatus, check_media_health
 from idis.services.ocr_health import OcrHealthCheck, OcrHealthStatus, check_ocr_health
 from idis.services.rag.embedding_health import EmbeddingHealthCheck
@@ -78,6 +83,9 @@ def build_strict_provisioning_truth_report(
     pgvector_health_checker: Callable[[Mapping[str, str]], PgvectorHealthCheck] | None = None,
     ocr_health_checker: Callable[[Mapping[str, str]], OcrHealthCheck] | None = None,
     media_health_checker: Callable[[Mapping[str, str]], MediaHealthCheck] | None = None,
+    model_health_checker: (
+        Callable[[Mapping[str, str], LlmModelRole], LlmModelHealthCheck] | None
+    ) = None,
     object_store_probe_base_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Build a redacted inventory/provisioning report without live runtime probes."""
@@ -94,6 +102,7 @@ def build_strict_provisioning_truth_report(
         pgvector_health_checker=lambda checked_env: _static_pgvector_health(checked_env),
         ocr_health_checker=lambda checked_env: _static_ocr_health(checked_env),
         media_health_checker=lambda checked_env: _static_media_health(checked_env),
+        model_health_checker=model_health_checker,
         probe_object_store=False,
     )
     local_probe_statuses = _build_local_probe_statuses(
@@ -106,11 +115,17 @@ def build_strict_provisioning_truth_report(
         object_store_probe_base_dir=object_store_probe_base_dir,
     )
     readiness_by_inventory_name = _readiness_by_inventory_name(readiness.components)
+    model_runtime_proven = _model_runtime_proven_by_inventory(
+        env=values,
+        model_health_checker=model_health_checker,
+        allow_local_strict_health_probes=allow_local_strict_health_probes,
+    )
     components = [
         _strict_provisioning_component(
             inventory_item=inventory_item,
             readiness_component=readiness_by_inventory_name.get(inventory_item.component_name),
             local_probe_status=local_probe_statuses.get(inventory_item.component_name),
+            model_runtime_proven=model_runtime_proven.get(inventory_item.component_name, False),
         )
         for inventory_item in readiness.component_inventory
     ]
@@ -169,11 +184,40 @@ def _readiness_by_inventory_name(
     }
 
 
+_ANTHROPIC_INVENTORY_ROLES: dict[str, LlmModelRole] = {
+    "Anthropic extraction": LlmModelRole.EXTRACTION,
+    "Anthropic debate": LlmModelRole.DEBATE,
+    "Anthropic analysis": LlmModelRole.ANALYSIS,
+    "Anthropic scoring": LlmModelRole.SCORING,
+}
+
+
+def _model_runtime_proven_by_inventory(
+    *,
+    env: Mapping[str, str],
+    model_health_checker: (Callable[[Mapping[str, str], LlmModelRole], LlmModelHealthCheck] | None),
+    allow_local_strict_health_probes: bool,
+) -> dict[str, bool]:
+    # Runtime call proof is opt-in + approval-gated: never proven on the default/CI path.
+    if not allow_local_strict_health_probes:
+        return {}
+    proven: dict[str, bool] = {}
+    for inventory_name, role in _ANTHROPIC_INVENTORY_ROLES.items():
+        health = (
+            model_health_checker(env, role)
+            if model_health_checker is not None
+            else check_llm_model_health(env=env, role=role)
+        )
+        proven[inventory_name] = health.runtime_call_proven
+    return proven
+
+
 def _strict_provisioning_component(
     *,
     inventory_item: StrictComponentInventory,
     readiness_component: StrictComponentReadiness | None,
     local_probe_status: _LocalProbeStatus | None,
+    model_runtime_proven: bool = False,
 ) -> dict[str, Any]:
     required_env_names = (
         _canonical_env_names(readiness_component.required_env_vars)
@@ -197,7 +241,7 @@ def _strict_provisioning_component(
         "configured": inventory_item.config_present,
         "health_checked": bool(local_probe_status and local_probe_status.attempted)
         and health_check_status in {"healthy", "configured_failed"},
-        "runtime_call_proven": False,
+        "runtime_call_proven": model_runtime_proven,
         "full_run_used": False,
         "required_env_names": required_env_names,
         "required_service_names": required_service_names,

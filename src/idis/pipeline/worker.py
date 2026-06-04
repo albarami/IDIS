@@ -425,6 +425,11 @@ def _default_run_context_factory(
         run_data=run_data,
     )
 
+    strict_dotenv_path = os.environ.get(IDIS_STRICT_DOTENV_PATH_ENV)
+    strict_live_extraction_required = str(
+        run_data["mode"]
+    ).upper() == "FULL" and is_strict_full_live_required(dotenv_path=strict_dotenv_path)
+
     return build_run_context(
         db_conn=db_conn,
         tenant_id=tenant_id,
@@ -441,6 +446,7 @@ def _default_run_context_factory(
         created_by_actor_id=run_data.get("created_by_actor_id"),
         created_by_actor_type=run_data.get("created_by_actor_type"),
         audit_sink=audit_sink,
+        strict_live_extraction_required=strict_live_extraction_required,
     )
 
 

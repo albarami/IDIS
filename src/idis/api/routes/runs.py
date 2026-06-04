@@ -15,6 +15,8 @@ import asyncio
 import logging
 import os
 import uuid
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -224,7 +226,10 @@ async def start_run(
     documents = _extraction_ready_documents_from_preflight_corpus(preflight_corpus)
 
     strict_dotenv_path = os.environ.get(IDIS_STRICT_DOTENV_PATH_ENV)
-    if request_body.mode == "FULL" and is_strict_full_live_required(dotenv_path=strict_dotenv_path):
+    strict_live_extraction_required = request_body.mode == "FULL" and is_strict_full_live_required(
+        dotenv_path=strict_dotenv_path
+    )
+    if strict_live_extraction_required:
         strict_report = build_strict_full_live_admission_report(
             db_conn=db_conn,
             tenant_id=tenant_ctx.tenant_id,
@@ -277,6 +282,7 @@ async def start_run(
         deal_metadata=_load_deal_metadata_for_run(request, tenant_ctx.tenant_id, deal_id),
         preflight_corpus=preflight_corpus,
         audit_sink=audit_sink,
+        strict_live_extraction_required=strict_live_extraction_required,
     )
 
     try:
@@ -2432,6 +2438,8 @@ def _run_snapshot_extraction(
     deal_id: str,
     documents: list[dict[str, Any]],
     db_conn: Any = None,
+    extractor_client_factory: ExtractorClientFactory | None = None,
+    strict_live_extraction_required: bool = False,
 ) -> dict[str, Any]:
     """Execute SNAPSHOT extraction pipeline synchronously.
 
@@ -2458,7 +2466,11 @@ def _run_snapshot_extraction(
     prompt_text = _get_extraction_prompt()
     output_schema = _get_extraction_output_schema()
 
-    llm_client = _build_extraction_llm_client()
+    selection = _resolve_extraction_selection()
+    llm_client = _build_extraction_llm_client(
+        extractor_client_factory=extractor_client_factory,
+        strict_live_extraction_required=strict_live_extraction_required,
+    )
     scorer = ConfidenceScorer()
     extractor = LLMClaimExtractor(
         llm_client=llm_client,
@@ -2498,6 +2510,11 @@ def _run_snapshot_extraction(
         "chunk_count": result.chunk_count,
         "unique_claim_count": result.unique_claim_count,
         "conflict_count": result.conflict_count,
+        "extraction_provenance": _build_extraction_provenance(
+            selection=selection,
+            strict_live_extraction_required=strict_live_extraction_required,
+            client=llm_client,
+        ),
     }
 
 
@@ -2553,31 +2570,182 @@ def _get_extraction_output_schema() -> dict[str, Any]:
         return result
 
 
-def _build_extraction_llm_client() -> Any:
+_EXTRACTION_MAX_TOKENS = 4096
+
+# Safe, fixed strict-live-extraction outcome codes (value == name, mirroring
+# STRICT_FULL_LIVE_BLOCKED). Surfaced only as codes — never with secrets or raw messages.
+STRICT_LIVE_EXTRACTION_REQUIRED = "STRICT_LIVE_EXTRACTION_REQUIRED"
+STRICT_LIVE_EXTRACTION_PROVIDER_FAILED = "STRICT_LIVE_EXTRACTION_PROVIDER_FAILED"
+
+
+class StrictLiveExtractionError(Exception):
+    """Strict FULL extraction could not use an approved live extractor backend.
+
+    Carries only a safe, fixed ``code`` + ``message`` — never the API key, prompt, response,
+    provider payload, or a raw underlying exception message.
+    """
+
+    def __init__(self, *, code: str, message: str) -> None:
+        self.code = code
+        self.message = message
+        super().__init__(message)
+
+
+@dataclass(frozen=True)
+class ExtractorClientSelection:
+    """Safe selection context handed to an injected extractor-client factory.
+
+    Carries only the resolved backend + model + max_tokens — never the API key or any other
+    secret. The factory (test seam / future strict wiring) returns the extraction client.
+    """
+
+    backend: str
+    model: str | None
+    max_tokens: int
+
+
+ExtractorClientFactory = Callable[[ExtractorClientSelection], Any]
+
+_DEFAULT_ANTHROPIC_EXTRACT_MODEL = "claude-sonnet-4-20250514"
+_EXTRACTION_PROMPT_ID = "EXTRACT_CLAIMS_V1"
+
+
+def _resolve_extraction_selection() -> ExtractorClientSelection:
+    """Resolve the extraction backend/model selection from env (no client construction)."""
+    import os
+
+    backend = os.environ.get("IDIS_EXTRACT_BACKEND", "deterministic")
+    model = (
+        os.environ.get("IDIS_ANTHROPIC_MODEL_EXTRACT", _DEFAULT_ANTHROPIC_EXTRACT_MODEL)
+        if backend == "anthropic"
+        else None
+    )
+    return ExtractorClientSelection(backend=backend, model=model, max_tokens=_EXTRACTION_MAX_TOKENS)
+
+
+def _build_strict_anthropic_extractor(
+    selection: ExtractorClientSelection,
+    extractor_client_factory: ExtractorClientFactory | None,
+) -> Any:
+    """Build the live (Anthropic) extractor for strict FULL, failing closed safely.
+
+    Any construction/call failure is surfaced as ``STRICT_LIVE_EXTRACTION_PROVIDER_FAILED``
+    with a fixed message — never the raw exception message, key, prompt, or provider payload.
+    """
+    try:
+        if extractor_client_factory is not None:
+            return extractor_client_factory(selection)
+        from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
+
+        return AnthropicLLMClient(model=selection.model, max_tokens=selection.max_tokens)
+    except StrictLiveExtractionError:
+        raise
+    except Exception as exc:
+        raise StrictLiveExtractionError(
+            code=STRICT_LIVE_EXTRACTION_PROVIDER_FAILED,
+            message="Strict live extraction provider construction or call failed.",
+        ) from exc
+
+
+def _build_extraction_llm_client(
+    *,
+    extractor_client_factory: ExtractorClientFactory | None = None,
+    strict_live_extraction_required: bool = False,
+) -> Any:
     """Build the LLM client for extraction based on env configuration.
 
     Reads IDIS_EXTRACT_BACKEND (default: deterministic).
     Fail-closed: raises ValueError if anthropic backend selected but key missing.
 
+    When ``extractor_client_factory`` is supplied it is called with the resolved
+    ``ExtractorClientSelection`` and its return value is used as the extraction client
+    (injection seam for tests / strict wiring). When ``strict_live_extraction_required`` is
+    True (threaded only from the strict FULL execution path) a non-anthropic backend fails
+    closed with ``STRICT_LIVE_EXTRACTION_REQUIRED`` (deterministic extraction is forbidden)
+    and an anthropic provider failure surfaces ``STRICT_LIVE_EXTRACTION_PROVIDER_FAILED``.
+    The non-strict default path is unchanged.
+
     Returns:
         An LLMClient implementation instance.
 
     Raises:
-        ValueError: If IDIS_EXTRACT_BACKEND=anthropic but ANTHROPIC_API_KEY is unset.
+        ValueError: If IDIS_EXTRACT_BACKEND=anthropic but ANTHROPIC_API_KEY is unset
+            (non-strict default path only; an injected factory builds its own client).
+        StrictLiveExtractionError: If strict-live extraction is required but a live approved
+            backend is not available/usable.
     """
-    import os
+    selection = _resolve_extraction_selection()
 
-    backend = os.environ.get("IDIS_EXTRACT_BACKEND", "deterministic")
-
-    if backend == "anthropic":
+    if selection.backend == "anthropic":
+        if strict_live_extraction_required:
+            return _build_strict_anthropic_extractor(selection, extractor_client_factory)
+        if extractor_client_factory is not None:
+            return extractor_client_factory(selection)
         from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
 
-        model = os.environ.get("IDIS_ANTHROPIC_MODEL_EXTRACT", "claude-sonnet-4-20250514")
-        return AnthropicLLMClient(model=model, max_tokens=4096)
+        return AnthropicLLMClient(model=selection.model, max_tokens=selection.max_tokens)
+
+    # Non-anthropic backend (deterministic / unset / other).
+    if strict_live_extraction_required:
+        raise StrictLiveExtractionError(
+            code=STRICT_LIVE_EXTRACTION_REQUIRED,
+            message=(
+                "Strict live extraction requires the anthropic backend; "
+                "deterministic extraction is forbidden."
+            ),
+        )
+    if extractor_client_factory is not None:
+        return extractor_client_factory(selection)
 
     from idis.services.extraction.extractors.llm_client import DeterministicLLMClient
 
     return DeterministicLLMClient()
+
+
+def _safe_client_request_id(client: Any) -> str | None:
+    """Return a safe provider request id if the client exposes one, else None."""
+    value = getattr(client, "provider_request_id", None)
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _extraction_prompt_version() -> str | None:
+    """Return the extraction prompt's registry version from prompts/registry.yaml (safe)."""
+    import yaml
+
+    try:
+        registry_path = _find_project_root() / "prompts" / "registry.yaml"
+        data = yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return None
+    prompt = (data.get("prompts") or {}).get(_EXTRACTION_PROMPT_ID) or {}
+    version = prompt.get("version")
+    return version.strip() if isinstance(version, str) and version.strip() else None
+
+
+def _build_extraction_provenance(
+    *,
+    selection: ExtractorClientSelection,
+    strict_live_extraction_required: bool,
+    client: Any,
+) -> dict[str, Any]:
+    """Build a safe, additive extraction-provenance block for the step summary.
+
+    Records only provider/backend + safe model name + prompt id/version + the strict flag +
+    a sanitized provider request id (only if the client safely exposes one) — never the API
+    key, prompt body, response text, raw provider payload, exception message, or a path.
+    """
+    from idis.services.llm_model_health import _sanitize_request_id
+
+    provider = "anthropic" if selection.backend == "anthropic" else "deterministic"
+    return {
+        "provider": provider,
+        "backend": selection.backend,
+        "model": selection.model,
+        "prompt_id": _EXTRACTION_PROMPT_ID,
+        "prompt_version": _extraction_prompt_version(),
+        "strict_live_extraction_required": bool(strict_live_extraction_required),
+        "provider_request_id": _sanitize_request_id(_safe_client_request_id(client)),
+    }
 
 
 def _build_debate_role_runners(context: Any = None) -> Any:

@@ -91,6 +91,7 @@ def build_run_context(
     methodology_claim_materialization_fn: ClaimMaterializationFn | None = None,
     methodology_evidence_item_materialization_fn: EvidenceItemMaterializationFn | None = None,
     methodology_sanad_creation_linking_grading_fn: SanadCreationLinkingGradingFn | None = None,
+    strict_live_extraction_required: bool = False,
 ) -> RunContext:
     """Build a RunContext with the canonical step callables.
 
@@ -138,7 +139,11 @@ def build_run_context(
         methodology_claim_materialization_fn=methodology_claim_materialization_fn,
         methodology_evidence_item_materialization_fn=methodology_evidence_item_materialization_fn,
         methodology_sanad_creation_linking_grading_fn=methodology_sanad_creation_linking_grading_fn,
-        extract_fn=partial(_run_snapshot_extraction, db_conn=db_conn),
+        extract_fn=partial(
+            _run_snapshot_extraction,
+            db_conn=db_conn,
+            strict_live_extraction_required=strict_live_extraction_required,
+        ),
         grade_fn=partial(_run_snapshot_auto_grade, db_conn=db_conn),
         calc_fn=partial(_run_snapshot_calc, db_conn=db_conn),
         graph_fn=partial(_run_full_graph_evidence, db_conn=db_conn) if is_full else None,

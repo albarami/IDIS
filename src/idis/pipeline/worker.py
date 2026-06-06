@@ -447,6 +447,7 @@ def _default_run_context_factory(
         created_by_actor_type=run_data.get("created_by_actor_type"),
         audit_sink=audit_sink,
         strict_live_extraction_required=strict_live_extraction_required,
+        strict_live_debate_backend_required=strict_live_extraction_required,
     )
 
 

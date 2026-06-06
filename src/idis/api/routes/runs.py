@@ -283,6 +283,7 @@ async def start_run(
         preflight_corpus=preflight_corpus,
         audit_sink=audit_sink,
         strict_live_extraction_required=strict_live_extraction_required,
+        strict_live_debate_backend_required=strict_live_extraction_required,
     )
 
     try:
@@ -1149,6 +1150,8 @@ def _run_full_debate(
     created_claim_ids: list[str],
     calc_ids: list[str],
     db_conn: Any = None,
+    debate_role_runners_factory: DebateRoleRunnersFactory | None = None,
+    strict_live_debate_backend_required: bool = False,
 ) -> dict[str, Any]:
     """Run DebateOrchestrator for a FULL pipeline run.
 
@@ -1199,7 +1202,11 @@ def _run_full_debate(
         round_number=1,
     )
 
-    role_runners = _build_debate_role_runners(context=context)
+    role_runners = _build_debate_role_runners(
+        context=context,
+        debate_role_runners_factory=debate_role_runners_factory,
+        strict_live_debate_backend_required=strict_live_debate_backend_required,
+    )
     orchestrator = DebateOrchestrator(config=DebateConfig(), role_runners=role_runners)
     final_state = orchestrator.run(state)
 
@@ -1212,6 +1219,12 @@ def _run_full_debate(
         "round_number": final_state.round_number,
         "muhasabah_passed": muhasabah_passed,
         "agent_output_count": len(final_state.agent_outputs),
+        "debate_provenance": _build_debate_provenance(
+            selection=_resolve_debate_selection(),
+            strict_live_debate_backend_required=strict_live_debate_backend_required,
+            role_runners=role_runners,
+        ),
+        "debate_observability": _build_debate_observability(final_state),
     }
 
 
@@ -1386,6 +1399,8 @@ def _run_full_analysis(
     enrichment_refs: dict[str, Any],
     deal_metadata: dict[str, Any] | None = None,
     db_conn: Any = None,
+    analysis_client_factory: AnalysisClientFactory | None = None,
+    strict_live_debate_backend_required: bool = False,
 ) -> dict[str, Any]:
     """Run analysis agents for a FULL pipeline run.
 
@@ -1410,7 +1425,10 @@ def _run_full_analysis(
     from idis.analysis.runner import AnalysisEngine
     from idis.audit.sink import InMemoryAuditSink
 
-    llm_client = _build_analysis_llm_client()
+    llm_client = _build_analysis_llm_client(
+        analysis_client_factory=analysis_client_factory,
+        strict_live_debate_backend_required=strict_live_debate_backend_required,
+    )
     agents = build_default_specialist_agents(llm_client=llm_client)
 
     registry = AnalysisAgentRegistry()
@@ -1459,6 +1477,11 @@ def _run_full_analysis(
         "agent_count": len(bundle.reports),
         "report_ids": [r.agent_id for r in bundle.reports],
         "bundle_id": f"bundle-{run_id[:8]}",
+        "analysis_provenance": _build_analysis_provenance(
+            selection=_resolve_analysis_selection(),
+            strict_live_debate_backend_required=strict_live_debate_backend_required,
+            client=llm_client,
+        ),
         "_analysis_bundle": bundle,
         "_analysis_context": analysis_ctx,
     }
@@ -1613,6 +1636,8 @@ def _run_full_scoring(
     deal_id: str,
     analysis_bundle: Any,
     analysis_context: Any,
+    scoring_client_factory: ScoringClientFactory | None = None,
+    strict_live_debate_backend_required: bool = False,
 ) -> dict[str, Any]:
     """Run scoring engine for a FULL pipeline run.
 
@@ -1635,7 +1660,10 @@ def _run_full_scoring(
     from idis.analysis.scoring.models import Stage
     from idis.audit.sink import InMemoryAuditSink
 
-    llm_client = _build_scoring_llm_client()
+    llm_client = _build_scoring_llm_client(
+        scoring_client_factory=scoring_client_factory,
+        strict_live_debate_backend_required=strict_live_debate_backend_required,
+    )
     runner = LLMScorecardRunner(llm_client=llm_client)
     audit_sink = InMemoryAuditSink()
     engine = ScoringEngine(runner=runner, audit_sink=audit_sink)
@@ -1647,6 +1675,11 @@ def _run_full_scoring(
         "composite_score": scorecard.composite_score,
         "band": scorecard.score_band.value,
         "routing": scorecard.routing.value,
+        "scoring_provenance": _build_scoring_provenance(
+            selection=_resolve_scoring_selection(),
+            strict_live_debate_backend_required=strict_live_debate_backend_required,
+            client=llm_client,
+        ),
         "_scorecard": scorecard,
     }
 
@@ -2239,50 +2272,235 @@ def _graph_evidence_by_claim(
     return evidence_by_claim
 
 
-def _build_scoring_llm_client() -> Any:
+_ANALYSIS_MAX_TOKENS = 8192
+_SCORING_MAX_TOKENS = 16384
+_DEBATE_MAX_TOKENS = 8192
+_DEFAULT_DEBATE_MODEL = "claude-sonnet-4-20250514"
+_DEFAULT_DEBATE_ARBITER_MODEL = "claude-opus-4-20250514"
+
+
+@dataclass(frozen=True)
+class AnalysisClientSelection:
+    """Safe selection context for an injected analysis-client factory (no API key)."""
+
+    backend: str
+    model: str | None
+    max_tokens: int
+
+
+@dataclass(frozen=True)
+class ScoringClientSelection:
+    """Safe selection context for an injected scoring-client factory (no API key)."""
+
+    backend: str
+    model: str | None
+    max_tokens: int
+
+
+@dataclass(frozen=True)
+class DebateRoleRunnerSelection:
+    """Safe selection context for an injected debate role-runners factory (no API key)."""
+
+    backend: str
+    default_model: str | None
+    arbiter_model: str | None
+    max_tokens: int
+
+
+AnalysisClientFactory = Callable[[AnalysisClientSelection], Any]
+ScoringClientFactory = Callable[[ScoringClientSelection], Any]
+DebateRoleRunnersFactory = Callable[[DebateRoleRunnerSelection], Any]
+
+
+def _resolve_analysis_selection() -> AnalysisClientSelection:
+    """Resolve the analysis backend/model selection from env (no client construction)."""
+    backend = os.environ.get("IDIS_DEBATE_BACKEND", "deterministic")
+    model = (
+        os.environ.get("IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT", _DEFAULT_DEBATE_MODEL)
+        if backend == "anthropic"
+        else None
+    )
+    return AnalysisClientSelection(backend=backend, model=model, max_tokens=_ANALYSIS_MAX_TOKENS)
+
+
+def _resolve_scoring_selection() -> ScoringClientSelection:
+    """Resolve the scoring backend/model selection from env (no client construction)."""
+    backend = os.environ.get("IDIS_DEBATE_BACKEND", "deterministic")
+    model = (
+        os.environ.get("IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT", _DEFAULT_DEBATE_MODEL)
+        if backend == "anthropic"
+        else None
+    )
+    return ScoringClientSelection(backend=backend, model=model, max_tokens=_SCORING_MAX_TOKENS)
+
+
+def _resolve_debate_selection() -> DebateRoleRunnerSelection:
+    """Resolve the debate backend/models selection from env (no runner construction)."""
+    backend = os.environ.get("IDIS_DEBATE_BACKEND", "deterministic")
+    if backend == "anthropic":
+        default_model = os.environ.get("IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT", _DEFAULT_DEBATE_MODEL)
+        arbiter_model = os.environ.get(
+            "IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER", _DEFAULT_DEBATE_ARBITER_MODEL
+        )
+    else:
+        default_model = None
+        arbiter_model = None
+    return DebateRoleRunnerSelection(
+        backend=backend,
+        default_model=default_model,
+        arbiter_model=arbiter_model,
+        max_tokens=_DEBATE_MAX_TOKENS,
+    )
+
+
+# --- Slice84: execution-time strict-live enforcement for analysis / debate L1 / scoring ---
+# A single shared flag ``strict_live_debate_backend_required`` (threaded only from the strict
+# FULL execution path) forbids the deterministic analysis client / debate RoleRunners / scoring
+# client. Surfaced only as fixed, role-specific codes — never with the API key, prompt,
+# response, provider payload, or a raw underlying exception message.
+STRICT_LIVE_ANALYSIS_REQUIRED = "STRICT_LIVE_ANALYSIS_REQUIRED"
+STRICT_LIVE_ANALYSIS_PROVIDER_FAILED = "STRICT_LIVE_ANALYSIS_PROVIDER_FAILED"
+STRICT_LIVE_DEBATE_REQUIRED = "STRICT_LIVE_DEBATE_REQUIRED"
+STRICT_LIVE_DEBATE_PROVIDER_FAILED = "STRICT_LIVE_DEBATE_PROVIDER_FAILED"
+STRICT_LIVE_SCORING_REQUIRED = "STRICT_LIVE_SCORING_REQUIRED"
+STRICT_LIVE_SCORING_PROVIDER_FAILED = "STRICT_LIVE_SCORING_PROVIDER_FAILED"
+
+
+class StrictLiveRoleError(Exception):
+    """A strict FULL analysis/debate/scoring role could not use an approved live backend.
+
+    Carries only a safe, fixed ``code`` + ``message`` — never the API key, prompt, response,
+    provider payload, or a raw underlying exception message. The ``code`` is role-specific (one
+    of the ``STRICT_LIVE_{ANALYSIS,DEBATE,SCORING}_{REQUIRED,PROVIDER_FAILED}`` constants).
+    """
+
+    def __init__(self, *, code: str, message: str) -> None:
+        self.code = code
+        self.message = message
+        super().__init__(message)
+
+
+def _build_strict_anthropic_role_client(
+    selection: Any,
+    factory: Callable[[Any], Any] | None,
+    *,
+    role: str,
+    provider_failed_code: str,
+) -> Any:
+    """Build the live (Anthropic) analysis/scoring client for strict FULL, failing closed safely.
+
+    Any construction/call failure is surfaced as the role's ``..._PROVIDER_FAILED`` code with a
+    fixed message — never the raw exception message, key, prompt, or provider payload.
+    """
+    try:
+        if factory is not None:
+            return factory(selection)
+        from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
+
+        return AnthropicLLMClient(model=selection.model, max_tokens=selection.max_tokens)
+    except StrictLiveRoleError:
+        raise
+    except Exception as exc:
+        raise StrictLiveRoleError(
+            code=provider_failed_code,
+            message=f"Strict live {role} provider construction or call failed.",
+        ) from exc
+
+
+def _build_scoring_llm_client(
+    *,
+    scoring_client_factory: ScoringClientFactory | None = None,
+    strict_live_debate_backend_required: bool = False,
+) -> Any:
     """Build the LLM client for scoring based on env configuration.
 
-    Reads IDIS_DEBATE_BACKEND (default: deterministic).
-    When no real backend is configured, returns DeterministicScoringLLMClient
-    which produces valid scorecard JSON with all 8 dimensions.
+    Reads IDIS_DEBATE_BACKEND (default: deterministic). When ``scoring_client_factory`` is
+    supplied it is called with the resolved ``ScoringClientSelection`` and its return value is
+    used (injection seam for tests / strict wiring). When ``strict_live_debate_backend_required``
+    is True (threaded only from the strict FULL execution path) a non-anthropic backend fails
+    closed with ``STRICT_LIVE_SCORING_REQUIRED`` (deterministic scoring is forbidden) and an
+    anthropic provider failure surfaces ``STRICT_LIVE_SCORING_PROVIDER_FAILED``. The non-strict
+    default path is unchanged.
 
     Returns:
         An LLMClient implementation instance.
     """
-    import os
+    selection = _resolve_scoring_selection()
 
-    backend = os.environ.get("IDIS_DEBATE_BACKEND", "deterministic")
-
-    if backend == "anthropic":
+    if selection.backend == "anthropic":
+        if strict_live_debate_backend_required:
+            return _build_strict_anthropic_role_client(
+                selection,
+                scoring_client_factory,
+                role="scoring",
+                provider_failed_code=STRICT_LIVE_SCORING_PROVIDER_FAILED,
+            )
+        if scoring_client_factory is not None:
+            return scoring_client_factory(selection)
         from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
 
-        model = os.environ.get("IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT", "claude-sonnet-4-20250514")
-        return AnthropicLLMClient(model=model, max_tokens=16384)
+        return AnthropicLLMClient(model=selection.model, max_tokens=selection.max_tokens)
+
+    if strict_live_debate_backend_required:
+        raise StrictLiveRoleError(
+            code=STRICT_LIVE_SCORING_REQUIRED,
+            message=(
+                "Strict live scoring requires the anthropic backend; "
+                "deterministic scoring is forbidden."
+            ),
+        )
+    if scoring_client_factory is not None:
+        return scoring_client_factory(selection)
 
     from idis.services.extraction.extractors.llm_client import DeterministicScoringLLMClient
 
     return DeterministicScoringLLMClient()
 
 
-def _build_analysis_llm_client() -> Any:
+def _build_analysis_llm_client(
+    *,
+    analysis_client_factory: AnalysisClientFactory | None = None,
+    strict_live_debate_backend_required: bool = False,
+) -> Any:
     """Build the LLM client for analysis agents based on env configuration.
 
-    Reads IDIS_DEBATE_BACKEND (default: deterministic).
-    When no real backend is configured, returns DeterministicAnalysisLLMClient
-    which produces valid AgentReport JSON.
+    Reads IDIS_DEBATE_BACKEND (default: deterministic). When ``analysis_client_factory`` is
+    supplied it is called with the resolved ``AnalysisClientSelection`` and its return value is
+    used (injection seam for tests / strict wiring). When ``strict_live_debate_backend_required``
+    is True (threaded only from the strict FULL execution path) a non-anthropic backend fails
+    closed with ``STRICT_LIVE_ANALYSIS_REQUIRED`` (deterministic analysis is forbidden) and an
+    anthropic provider failure surfaces ``STRICT_LIVE_ANALYSIS_PROVIDER_FAILED``. The non-strict
+    default path is unchanged.
 
     Returns:
         An LLMClient implementation instance.
     """
-    import os
+    selection = _resolve_analysis_selection()
 
-    backend = os.environ.get("IDIS_DEBATE_BACKEND", "deterministic")
-
-    if backend == "anthropic":
+    if selection.backend == "anthropic":
+        if strict_live_debate_backend_required:
+            return _build_strict_anthropic_role_client(
+                selection,
+                analysis_client_factory,
+                role="analysis",
+                provider_failed_code=STRICT_LIVE_ANALYSIS_PROVIDER_FAILED,
+            )
+        if analysis_client_factory is not None:
+            return analysis_client_factory(selection)
         from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
 
-        model = os.environ.get("IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT", "claude-sonnet-4-20250514")
-        return AnthropicLLMClient(model=model, max_tokens=8192)
+        return AnthropicLLMClient(model=selection.model, max_tokens=selection.max_tokens)
+
+    if strict_live_debate_backend_required:
+        raise StrictLiveRoleError(
+            code=STRICT_LIVE_ANALYSIS_REQUIRED,
+            message=(
+                "Strict live analysis requires the anthropic backend; "
+                "deterministic analysis is forbidden."
+            ),
+        )
+    if analysis_client_factory is not None:
+        return analysis_client_factory(selection)
 
     from idis.services.extraction.extractors.llm_client import DeterministicAnalysisLLMClient
 
@@ -2710,16 +2928,7 @@ def _safe_client_request_id(client: Any) -> str | None:
 
 def _extraction_prompt_version() -> str | None:
     """Return the extraction prompt's registry version from prompts/registry.yaml (safe)."""
-    import yaml
-
-    try:
-        registry_path = _find_project_root() / "prompts" / "registry.yaml"
-        data = yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError):
-        return None
-    prompt = (data.get("prompts") or {}).get(_EXTRACTION_PROMPT_ID) or {}
-    version = prompt.get("version")
-    return version.strip() if isinstance(version, str) and version.strip() else None
+    return _prompt_registry_version(_EXTRACTION_PROMPT_ID)
 
 
 def _build_extraction_provenance(
@@ -2748,11 +2957,172 @@ def _build_extraction_provenance(
     }
 
 
-def _build_debate_role_runners(context: Any = None) -> Any:
+# --- Slice84 Task 4: safe, additive provenance + debate observability ---
+_SCORING_PROMPT_ID = "scoring_agent"  # on-disk prompt family: prompts/scoring_agent/1.0.0/
+_SCORING_PROMPT_VERSION = "1.0.0"
+_DEBATE_PROMPT_IDS = (
+    "DEBATE_ADVOCATE_V1",
+    "DEBATE_SANAD_BREAKER_V1",
+    "DEBATE_CONTRADICTION_FINDER_V1",
+    "DEBATE_RISK_OFFICER_V1",
+    "DEBATE_ARBITER_V1",
+)
+_DEBATE_PROMPT_VERSION_ID = "DEBATE_ARBITER_V1"
+
+
+def _prompt_registry_version(prompt_id: str) -> str | None:
+    """Return a prompt's registry version from prompts/registry.yaml (safe), else None."""
+    import yaml
+
+    try:
+        registry_path = _find_project_root() / "prompts" / "registry.yaml"
+        data = yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return None
+    prompt = (data.get("prompts") or {}).get(prompt_id) or {}
+    version = prompt.get("version")
+    return version.strip() if isinstance(version, str) and version.strip() else None
+
+
+def _provider_label(backend: str) -> str:
+    """Map a resolved backend to a safe provider label."""
+    return "anthropic" if backend == "anthropic" else "deterministic"
+
+
+def _build_role_client_provenance(
+    *,
+    selection: Any,
+    prompt_id: str | None,
+    prompt_version: str | None,
+    strict_live_debate_backend_required: bool,
+    client: Any,
+) -> dict[str, Any]:
+    """Build a safe, additive provenance block for a single-client role (analysis/scoring).
+
+    Records only provider/backend + safe model name + prompt id/version + the strict flag + a
+    sanitized provider request id (only if the client safely exposes one) — never the API key,
+    prompt body, response text, raw provider payload, exception message, or a path.
+    """
+    from idis.services.llm_model_health import _sanitize_request_id
+
+    return {
+        "provider": _provider_label(selection.backend),
+        "backend": selection.backend,
+        "model": selection.model,
+        "prompt_id": prompt_id,
+        "prompt_version": prompt_version,
+        "strict_live_debate_backend_required": bool(strict_live_debate_backend_required),
+        "provider_request_id": _sanitize_request_id(_safe_client_request_id(client)),
+    }
+
+
+def _build_analysis_provenance(
+    *, selection: Any, strict_live_debate_backend_required: bool, client: Any
+) -> dict[str, Any]:
+    """Safe analysis provenance.
+
+    Analysis runs 8 embedded specialist prompts (no single registry prompt id), so
+    ``prompt_id``/``prompt_version`` are null by design; the rest mirrors the shared block.
+    """
+    return _build_role_client_provenance(
+        selection=selection,
+        prompt_id=None,
+        prompt_version=None,
+        strict_live_debate_backend_required=strict_live_debate_backend_required,
+        client=client,
+    )
+
+
+def _build_scoring_provenance(
+    *, selection: Any, strict_live_debate_backend_required: bool, client: Any
+) -> dict[str, Any]:
+    """Safe scoring provenance (on-disk prompt family scoring_agent/1.0.0)."""
+    return _build_role_client_provenance(
+        selection=selection,
+        prompt_id=_SCORING_PROMPT_ID,
+        prompt_version=_SCORING_PROMPT_VERSION,
+        strict_live_debate_backend_required=strict_live_debate_backend_required,
+        client=client,
+    )
+
+
+def _safe_runner_request_id(runner: Any) -> str | None:
+    """Return a safe provider request id from a role runner's client, if any."""
+    client = getattr(runner, "llm_client", None)
+    return _safe_client_request_id(client) if client is not None else None
+
+
+def _build_debate_provenance(
+    *, selection: Any, strict_live_debate_backend_required: bool, role_runners: Any
+) -> dict[str, Any]:
+    """Build safe, additive debate provenance.
+
+    Records default + arbiter model names, the 5 registry debate prompt ids + their version, the
+    strict flag, and sanitized default/arbiter provider request ids (only if safely exposed) —
+    never the API key, prompt body, response, raw payload, exception message, or a path.
+    """
+    from idis.services.llm_model_health import _sanitize_request_id
+
+    return {
+        "provider": _provider_label(selection.backend),
+        "backend": selection.backend,
+        "default_model": selection.default_model,
+        "arbiter_model": selection.arbiter_model,
+        "prompt_ids": list(_DEBATE_PROMPT_IDS),
+        "prompt_version": _prompt_registry_version(_DEBATE_PROMPT_VERSION_ID),
+        "strict_live_debate_backend_required": bool(strict_live_debate_backend_required),
+        "default_provider_request_id": _sanitize_request_id(
+            _safe_runner_request_id(getattr(role_runners, "advocate", None))
+        ),
+        "arbiter_provider_request_id": _sanitize_request_id(
+            _safe_runner_request_id(getattr(role_runners, "arbiter", None))
+        ),
+    }
+
+
+def _build_debate_observability(final_state: Any) -> dict[str, Any]:
+    """Build safe, additive debate observability for the step summary.
+
+    Surfaces only bounded counts/booleans + safe source-reference ids + a FIXED arbiter rationale
+    summary — never the raw arbiter rationale (which may contain private model text), agent output
+    content, the API key, response, raw payload, or a path.
+    """
+    decisions = list(getattr(final_state, "arbiter_decisions", []) or [])
+    return {
+        "round_number": final_state.round_number,
+        "stop_reason": (final_state.stop_reason.value if final_state.stop_reason else None),
+        "agent_output_count": len(final_state.agent_outputs),
+        "arbiter_decision_count": len(decisions),
+        "dissent_preserved": any(bool(d.dissent_preserved) for d in decisions),
+        "challenges_validated_count": sum(len(d.challenges_validated) for d in decisions),
+        "arbiter_rationale_summary": (
+            "arbiter_decision_recorded" if decisions else "no_arbiter_decision"
+        ),
+        "source_reference_ids": [
+            final_state.claim_registry_ref,
+            final_state.sanad_graph_ref,
+        ],
+    }
+
+
+def _build_debate_role_runners(
+    context: Any = None,
+    *,
+    debate_role_runners_factory: DebateRoleRunnersFactory | None = None,
+    strict_live_debate_backend_required: bool = False,
+) -> Any:
     """Build role runners for debate based on env configuration.
 
     Reads IDIS_DEBATE_BACKEND (default: deterministic).
     Fail-closed: raises ValueError if anthropic backend selected but key missing.
+
+    When ``debate_role_runners_factory`` is supplied it is called with the resolved
+    ``DebateRoleRunnerSelection`` and its return value (a complete ``RoleRunners``) is used
+    (injection seam for tests / strict wiring). When ``strict_live_debate_backend_required`` is
+    True (threaded only from the strict FULL execution path) a non-anthropic backend fails closed
+    with ``STRICT_LIVE_DEBATE_REQUIRED`` (deterministic debate is forbidden) and an anthropic
+    provider failure surfaces ``STRICT_LIVE_DEBATE_PROVIDER_FAILED``. The non-strict default path
+    is unchanged.
 
     Args:
         context: Optional DebateContext with rich pipeline data for LLM agents.
@@ -2761,30 +3131,75 @@ def _build_debate_role_runners(context: Any = None) -> Any:
         RoleRunners instance (deterministic or LLM-backed).
 
     Raises:
-        ValueError: If IDIS_DEBATE_BACKEND=anthropic but ANTHROPIC_API_KEY is unset.
+        ValueError: If IDIS_DEBATE_BACKEND=anthropic but ANTHROPIC_API_KEY is unset
+            (default path only; an injected factory builds its own runners).
+        StrictLiveRoleError: If strict-live debate is required but a live approved backend is
+            not available/usable.
     """
-    import os
-
     from idis.debate.orchestrator import RoleRunners
 
-    backend = os.environ.get("IDIS_DEBATE_BACKEND", "deterministic")
+    selection = _resolve_debate_selection()
 
-    if backend != "anthropic":
-        return RoleRunners()
+    if selection.backend == "anthropic":
+        if strict_live_debate_backend_required:
+            return _build_strict_debate_role_runners(
+                selection, context, debate_role_runners_factory
+            )
+        if debate_role_runners_factory is not None:
+            return debate_role_runners_factory(selection)
+        return _build_live_debate_role_runners(selection, context)
 
+    if strict_live_debate_backend_required:
+        raise StrictLiveRoleError(
+            code=STRICT_LIVE_DEBATE_REQUIRED,
+            message=(
+                "Strict live debate requires the anthropic backend; "
+                "deterministic debate is forbidden."
+            ),
+        )
+    if debate_role_runners_factory is not None:
+        return debate_role_runners_factory(selection)
+    return RoleRunners()
+
+
+def _build_strict_debate_role_runners(
+    selection: DebateRoleRunnerSelection,
+    context: Any,
+    debate_role_runners_factory: DebateRoleRunnersFactory | None,
+) -> Any:
+    """Build the live debate RoleRunners for strict FULL, failing closed safely.
+
+    Any construction/call failure is surfaced as ``STRICT_LIVE_DEBATE_PROVIDER_FAILED`` with a
+    fixed message — never the raw exception message, key, prompt, or provider payload.
+    """
+    try:
+        if debate_role_runners_factory is not None:
+            return debate_role_runners_factory(selection)
+        return _build_live_debate_role_runners(selection, context)
+    except StrictLiveRoleError:
+        raise
+    except Exception as exc:
+        raise StrictLiveRoleError(
+            code=STRICT_LIVE_DEBATE_PROVIDER_FAILED,
+            message="Strict live debate provider construction or call failed.",
+        ) from exc
+
+
+def _build_live_debate_role_runners(selection: DebateRoleRunnerSelection, context: Any) -> Any:
+    """Construct the live (Anthropic) debate RoleRunners (5 LLM role runners)."""
+    from idis.debate.orchestrator import RoleRunners
     from idis.debate.roles.llm_role_runner import LLMRoleRunner
     from idis.models.debate import DebateRole
     from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
 
-    default_model = os.environ.get(
-        "IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT", "claude-sonnet-4-20250514"
-    )
-    arbiter_model = os.environ.get("IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER", "claude-opus-4-20250514")
-
     prompts = _load_debate_prompts()
 
-    default_client = AnthropicLLMClient(model=default_model, max_tokens=8192)
-    arbiter_client = AnthropicLLMClient(model=arbiter_model, max_tokens=8192)
+    default_client = AnthropicLLMClient(
+        model=selection.default_model, max_tokens=selection.max_tokens
+    )
+    arbiter_client = AnthropicLLMClient(
+        model=selection.arbiter_model, max_tokens=selection.max_tokens
+    )
 
     return RoleRunners(
         advocate=LLMRoleRunner(

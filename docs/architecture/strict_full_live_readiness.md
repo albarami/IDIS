@@ -10,6 +10,8 @@ The system can complete the current local/deterministic FULL pipeline, but it ca
 
 No additional long `real_example` fallback run should be used as evidence for full-live readiness. The prior run is only a baseline showing that the fallback/local pipeline can complete.
 
+> **Update (2026-06-06, post-Slice84):** The "strict-mode rejection of deterministic clients" item (see *Missing Implementations* and *Required Code Changes* #3) is now implemented as **execution-time enforcement**, in addition to the preflight readiness gate: extraction (Slice83 — `STRICT_LIVE_EXTRACTION_REQUIRED` / `STRICT_LIVE_EXTRACTION_PROVIDER_FAILED`) and debate Layer 1 / analysis / scoring (Slice84 — `STRICT_LIVE_{DEBATE,ANALYSIS,SCORING}_REQUIRED` / `..._PROVIDER_FAILED`, gated by `IDIS_DEBATE_BACKEND=anthropic`). Layer 2 IC challenge retains its own separate strict pattern. The Slice-53 census below is otherwise preserved as the original gap analysis.
+
 ## Strict Classification
 
 Allowed strict classifications:

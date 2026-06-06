@@ -92,6 +92,10 @@ def build_run_context(
     methodology_evidence_item_materialization_fn: EvidenceItemMaterializationFn | None = None,
     methodology_sanad_creation_linking_grading_fn: SanadCreationLinkingGradingFn | None = None,
     strict_live_extraction_required: bool = False,
+    strict_live_debate_backend_required: bool = False,
+    analysis_client_factory: Callable[[Any], Any] | None = None,
+    scoring_client_factory: Callable[[Any], Any] | None = None,
+    debate_role_runners_factory: Callable[[Any], Any] | None = None,
 ) -> RunContext:
     """Build a RunContext with the canonical step callables.
 
@@ -149,14 +153,37 @@ def build_run_context(
         graph_fn=partial(_run_full_graph_evidence, db_conn=db_conn) if is_full else None,
         rag_fn=partial(_run_full_rag_evidence, db_conn=db_conn) if is_full else None,
         enrich_fn=partial(_run_full_enrichment, db_conn=db_conn) if is_full else None,
-        debate_fn=partial(_run_full_debate, db_conn=db_conn) if is_full else None,
-        layer2_ic_challenge_fn=_run_full_layer2_ic_challenge if is_full else None,
-        analysis_fn=(
-            partial(_run_full_analysis, db_conn=db_conn, deal_metadata=deal_metadata)
+        debate_fn=(
+            partial(
+                _run_full_debate,
+                db_conn=db_conn,
+                debate_role_runners_factory=debate_role_runners_factory,
+                strict_live_debate_backend_required=strict_live_debate_backend_required,
+            )
             if is_full
             else None
         ),
-        scoring_fn=_run_full_scoring if is_full else None,
+        layer2_ic_challenge_fn=_run_full_layer2_ic_challenge if is_full else None,
+        analysis_fn=(
+            partial(
+                _run_full_analysis,
+                db_conn=db_conn,
+                deal_metadata=deal_metadata,
+                analysis_client_factory=analysis_client_factory,
+                strict_live_debate_backend_required=strict_live_debate_backend_required,
+            )
+            if is_full
+            else None
+        ),
+        scoring_fn=(
+            partial(
+                _run_full_scoring,
+                scoring_client_factory=scoring_client_factory,
+                strict_live_debate_backend_required=strict_live_debate_backend_required,
+            )
+            if is_full
+            else None
+        ),
         deliverables_fn=partial(
             _run_full_deliverables,
             db_conn=db_conn,

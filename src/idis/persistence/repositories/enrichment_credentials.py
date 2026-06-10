@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import hmac
 import json
 import logging
 import os
@@ -386,66 +385,69 @@ def _get_encryption_key() -> bytes:
     return hashlib.sha256(raw_key.encode("utf-8")).digest()
 
 
-def encrypt_credentials(credentials: dict[str, str]) -> str:
-    """Encrypt credentials dict to a ciphertext string.
+# Versioned ciphertext format: "v2:" + base64(nonce[12] + AES-256-GCM sealed payload).
+# The version prefix makes the cipher self-describing; unversioned (legacy) blobs fail closed.
+_CIPHERTEXT_FORMAT_V2 = "v2"
+_GCM_NONCE_LENGTH = 12
 
-    Uses XOR-based encryption with HMAC authentication.
-    For production, replace with AES-GCM via cryptography library.
+
+def encrypt_credentials(credentials: dict[str, str]) -> str:
+    """Encrypt credentials dict to a versioned ciphertext string.
+
+    Uses AES-256-GCM (authenticated encryption) via the cryptography library, keyed by the
+    SHA256-derived 32-byte key from IDIS_ENRICHMENT_ENCRYPTION_KEY, with a fresh random
+    nonce per encryption.
 
     Args:
         credentials: Plaintext credential key-value pairs.
 
     Returns:
-        Base64-encoded ciphertext string with embedded IV and HMAC.
+        Ciphertext string in the format ``v2:`` + base64(nonce + sealed payload).
 
     Raises:
         EncryptionKeyMissingError: If encryption key is not configured.
     """
     key = _get_encryption_key()
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
     plaintext = json.dumps(credentials, sort_keys=True, separators=(",", ":")).encode("utf-8")
-
-    iv = secrets.token_bytes(16)
-    # Derive a stream key from key + IV
-    stream_key = hashlib.sha256(key + iv).digest()
-
-    # XOR encryption (lightweight; swap for AES-GCM in production hardening)
-    encrypted = bytes(p ^ stream_key[i % len(stream_key)] for i, p in enumerate(plaintext))
-
-    mac = hmac.new(key, iv + encrypted, hashlib.sha256).digest()
-    payload = iv + encrypted + mac
-
-    return base64.b64encode(payload).decode("ascii")
+    nonce = secrets.token_bytes(_GCM_NONCE_LENGTH)
+    sealed = AESGCM(key).encrypt(nonce, plaintext, None)
+    encoded = base64.b64encode(nonce + sealed).decode("ascii")
+    return f"{_CIPHERTEXT_FORMAT_V2}:{encoded}"
 
 
 def decrypt_credentials(ciphertext: str) -> dict[str, str]:
-    """Decrypt a ciphertext string back to credentials dict.
+    """Decrypt a versioned ciphertext string back to a credentials dict.
+
+    Fail-closed: an unversioned/legacy, malformed, tampered, or wrong-key ciphertext raises
+    ValueError with a fixed message — never the plaintext, key material, or a raw library
+    error message.
 
     Args:
-        ciphertext: Base64-encoded ciphertext from encrypt_credentials.
+        ciphertext: Versioned ciphertext from encrypt_credentials.
 
     Returns:
         Decrypted credential dict.
 
     Raises:
         EncryptionKeyMissingError: If encryption key is not configured.
-        ValueError: If ciphertext is invalid or HMAC verification fails.
+        ValueError: If the ciphertext format is unsupported or authentication fails.
     """
     key = _get_encryption_key()
-    payload = base64.b64decode(ciphertext)
+    prefix = f"{_CIPHERTEXT_FORMAT_V2}:"
+    if not ciphertext.startswith(prefix):
+        raise ValueError("Invalid ciphertext: unsupported format version")
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-    if len(payload) < 48:
-        raise ValueError("Invalid ciphertext: too short")
-
-    iv = payload[:16]
-    mac = payload[-32:]
-    encrypted = payload[16:-32]
-
-    expected_mac = hmac.new(key, iv + encrypted, hashlib.sha256).digest()
-    if not hmac.compare_digest(mac, expected_mac):
-        raise ValueError("Invalid ciphertext: HMAC verification failed")
-
-    stream_key = hashlib.sha256(key + iv).digest()
-    plaintext = bytes(c ^ stream_key[i % len(stream_key)] for i, c in enumerate(encrypted))
-
-    result: dict[str, str] = json.loads(plaintext.decode("utf-8"))
+    try:
+        payload = base64.b64decode(ciphertext[len(prefix) :], validate=True)
+        if len(payload) <= _GCM_NONCE_LENGTH:
+            raise ValueError("Invalid ciphertext: too short")
+        nonce = payload[:_GCM_NONCE_LENGTH]
+        sealed = payload[_GCM_NONCE_LENGTH:]
+        plaintext = AESGCM(key).decrypt(nonce, sealed, None)
+        result: dict[str, str] = json.loads(plaintext.decode("utf-8"))
+    except Exception as exc:
+        raise ValueError("Invalid ciphertext: authentication failed") from exc
     return result

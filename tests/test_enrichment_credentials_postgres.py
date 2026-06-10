@@ -273,22 +273,25 @@ class TestEncryptionRoundTrip:
 
         import base64
 
-        raw = bytearray(base64.b64decode(ciphertext))
-        # Tamper with encrypted bytes (between IV and HMAC)
-        if len(raw) > 20:
-            raw[17] ^= 0xFF
-        tampered = base64.b64encode(bytes(raw)).decode("ascii")
+        # Slice85: versioned AES-256-GCM format ("v2:" + base64(nonce + sealed payload)).
+        raw = bytearray(base64.b64decode(ciphertext.removeprefix("v2:")))
+        raw[17] ^= 0xFF  # corrupt a sealed byte (past the 12-byte nonce)
+        tampered = "v2:" + base64.b64encode(bytes(raw)).decode("ascii")
 
-        with pytest.raises(ValueError, match="HMAC verification failed"):
+        with pytest.raises(ValueError, match="authentication failed"):
             decrypt_credentials(tampered)
 
     def test_too_short_ciphertext_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("IDIS_ENRICHMENT_ENCRYPTION_KEY", "test-key")
         import base64
 
-        short = base64.b64encode(b"too_short").decode("ascii")
-        with pytest.raises(ValueError, match="too short"):
-            decrypt_credentials(short)
+        short_payload = base64.b64encode(b"too_short").decode("ascii")
+        # Unversioned (legacy-shape) blob fails the format gate.
+        with pytest.raises(ValueError, match="unsupported format version"):
+            decrypt_credentials(short_payload)
+        # Versioned but truncated payload fails authentication.
+        with pytest.raises(ValueError, match="authentication failed"):
+            decrypt_credentials(f"v2:{short_payload}")
 
     def test_different_keys_cannot_decrypt(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("IDIS_ENRICHMENT_ENCRYPTION_KEY", "key-one-for-encrypt!!")

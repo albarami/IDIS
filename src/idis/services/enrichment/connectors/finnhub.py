@@ -30,6 +30,10 @@ from idis.services.enrichment.models import (
     EntityType,
     RightsClass,
 )
+from idis.services.enrichment.redaction import (
+    install_httpx_redaction_filter,
+    redact_secret_params,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +161,7 @@ class FinnhubConnector:
         Raises:
             FinnhubFetchError: On network or HTTP errors.
         """
+        install_httpx_redaction_filter()
         headers = {"Accept": "application/json"}
 
         client = self._http_client
@@ -224,7 +229,10 @@ class FinnhubConnector:
                 if attempt < attempts - 1:
                     continue
 
-        raise FinnhubFetchError(f"Finnhub request failed after {attempts} attempts: {last_error}")
+        raise FinnhubFetchError(
+            f"Finnhub request failed after {attempts} attempts: "
+            f"{redact_secret_params(str(last_error))}"
+        )
 
     @staticmethod
     def _normalize_response(

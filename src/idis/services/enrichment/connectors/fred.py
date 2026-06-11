@@ -30,6 +30,10 @@ from idis.services.enrichment.models import (
     EntityType,
     RightsClass,
 )
+from idis.services.enrichment.redaction import (
+    install_httpx_redaction_filter,
+    redact_secret_params,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +166,7 @@ class FredConnector:
         Raises:
             FredFetchError: On network or HTTP errors.
         """
+        install_httpx_redaction_filter()
         headers = {"Accept": "application/json"}
 
         client = self._http_client
@@ -229,7 +234,10 @@ class FredConnector:
                 if attempt < attempts - 1:
                     continue
 
-        raise FredFetchError(f"FRED request failed after {attempts} attempts: {last_error}")
+        raise FredFetchError(
+            f"FRED request failed after {attempts} attempts: "
+            f"{redact_secret_params(str(last_error))}"
+        )
 
     @staticmethod
     def _normalize_response(

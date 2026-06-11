@@ -176,6 +176,7 @@ def _stub_deliverables(
     graph_evidence: dict[str, Any] | None = None,
     rag_evidence: dict[str, Any] | None = None,
     layer2_evidence: dict[str, Any] | None = None,
+    enrichment_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Deterministic deliverables stub."""
     return {

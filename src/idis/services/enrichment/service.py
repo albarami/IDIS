@@ -169,7 +169,9 @@ class EnrichmentService:
                 severity="LOW",
                 details={"status": cached.status.value},
             )
-            return cached
+            # Mark the returned copy as cache-served; the stored entry stays unmarked so a
+            # later live fetch is never mislabeled.
+            return cached.model_copy(update={"from_cache": True})
 
         # Step 3: BYOL credential loading (if required)
         ctx = EnrichmentContext(
@@ -272,6 +274,7 @@ class EnrichmentService:
                 "requires_byol": d.requires_byol,
                 "cache_ttl_seconds": d.cache_policy.ttl_seconds,
                 "cache_no_store": d.cache_policy.no_store,
+                "optional_in_strict": d.optional_in_strict,
             }
             for d in descriptors
         ]

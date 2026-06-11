@@ -48,6 +48,9 @@ class ProviderDescriptor:
         cache_policy: Caching configuration for this provider.
         requires_byol: True if the provider needs tenant-supplied credentials.
         connector: The connector instance implementing the adapter contract.
+        optional_in_strict: True if this provider's error/blocked outcome is recorded and
+            continued (not fatal) in strict FULL runs. Default False — provider failures
+            are fatal in strict mode unless policy says optional.
     """
 
     provider_id: str
@@ -55,6 +58,7 @@ class ProviderDescriptor:
     cache_policy: CachePolicyConfig
     requires_byol: bool
     connector: EnrichmentConnector
+    optional_in_strict: bool = False
 
 
 @dataclass
@@ -72,12 +76,15 @@ class EnrichmentProviderRegistry:
         connector: EnrichmentConnector,
         *,
         requires_byol: bool = False,
+        optional_in_strict: bool = False,
     ) -> None:
         """Register a connector in the registry.
 
         Args:
             connector: Connector implementing the adapter contract.
             requires_byol: Whether this connector needs tenant-supplied credentials.
+            optional_in_strict: Whether this provider's failures are non-fatal (recorded and
+                continued) in strict FULL runs. Default False (mandatory).
 
         Raises:
             DuplicateProviderError: If a provider with the same ID is already registered.
@@ -92,6 +99,7 @@ class EnrichmentProviderRegistry:
             cache_policy=connector.cache_policy,
             requires_byol=requires_byol,
             connector=connector,
+            optional_in_strict=optional_in_strict,
         )
         self._providers[pid] = descriptor
         logger.info(

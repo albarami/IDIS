@@ -30,6 +30,10 @@ from idis.services.enrichment.models import (
     EntityType,
     RightsClass,
 )
+from idis.services.enrichment.redaction import (
+    install_httpx_redaction_filter,
+    redact_secret_params,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +164,7 @@ class FmpConnector:
         Raises:
             FmpFetchError: On network or HTTP errors.
         """
+        install_httpx_redaction_filter()
         headers = {"Accept": "application/json"}
 
         client = self._http_client
@@ -230,7 +235,9 @@ class FmpConnector:
                 if attempt < attempts - 1:
                     continue
 
-        raise FmpFetchError(f"FMP request failed after {attempts} attempts: {last_error}")
+        raise FmpFetchError(
+            f"FMP request failed after {attempts} attempts: {redact_secret_params(str(last_error))}"
+        )
 
     @staticmethod
     def _normalize_response(

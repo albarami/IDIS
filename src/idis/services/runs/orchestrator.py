@@ -2121,6 +2121,10 @@ class RunOrchestrator:
                 "unresolved_question_count": accumulated.get("unresolved_question_count"),
                 "muhasabah_passed": accumulated.get("muhasabah_passed"),
             },
+            enrichment_evidence={
+                "enrichment_ledger": accumulated.get("enrichment_ledger"),
+                "enrichment_refs": accumulated.get("enrichment_refs"),
+            },
         )
 
     def _start_step(

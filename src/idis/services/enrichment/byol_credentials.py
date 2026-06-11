@@ -127,6 +127,11 @@ class EnrichmentProviderDescriptorLike(Protocol):
         """Whether the provider requires tenant BYOL credentials."""
         ...
 
+    @property
+    def optional_in_strict(self) -> bool:
+        """Whether the provider's failures are non-fatal (recorded) in strict FULL runs."""
+        ...
+
 
 BYOL_PROVIDER_ENV_SPECS: dict[str, ByolProviderEnvSpec] = {
     "companies_house": ByolProviderEnvSpec(
@@ -181,6 +186,7 @@ class EnrichmentProviderMatrixEntry(BaseModel):
     health_status: str
     strict_behavior: str
     provenance_output_status: str
+    optional_in_strict: bool = False
 
 
 class ByolCredentialLoadReport(BaseModel):
@@ -380,6 +386,7 @@ def build_enrichment_provider_matrix(
             provider_id=descriptor.provider_id,
             requires_byol=descriptor.requires_byol,
             byol_readiness=byol_by_id.get(descriptor.provider_id),
+            optional_in_strict=getattr(descriptor, "optional_in_strict", False),
         )
         for descriptor in provider_descriptors
     ]
@@ -427,7 +434,11 @@ def _registered_matrix_entry(
     provider_id: str,
     requires_byol: bool,
     byol_readiness: ByolProviderReadiness | None,
+    optional_in_strict: bool = False,
 ) -> EnrichmentProviderMatrixEntry:
+    # Optional providers (Slice86 policy) are recorded-and-continued in strict FULL, so their
+    # strict behavior token reflects that instead of the fail-closed default.
+    optional_behavior = "strict_optional_continue_on_error"
     if not requires_byol:
         return EnrichmentProviderMatrixEntry(
             provider_id=provider_id,
@@ -436,8 +447,11 @@ def _registered_matrix_entry(
             env_var=None,
             credential_repo_status="not_required",
             health_status="not_checked",
-            strict_behavior="strict_fail_closed_on_error",
-            provenance_output_status="provenance_ref_on_hit_not_final_output_visible",
+            strict_behavior=(
+                optional_behavior if optional_in_strict else "strict_fail_closed_on_error"
+            ),
+            provenance_output_status="enrichment_package_output_visible",
+            optional_in_strict=optional_in_strict,
         )
 
     if byol_readiness is None:
@@ -448,8 +462,11 @@ def _registered_matrix_entry(
             env_var=BYOL_PROVIDER_ENV_SPECS[provider_id].env_var,
             credential_repo_status="tenant_credential_missing",
             health_status="not_checked_missing_credential",
-            strict_behavior="strict_blocks_until_byol_ready",
-            provenance_output_status="provenance_ref_on_hit_not_final_output_visible",
+            strict_behavior=(
+                optional_behavior if optional_in_strict else "strict_blocks_until_byol_ready"
+            ),
+            provenance_output_status="enrichment_package_output_visible",
+            optional_in_strict=optional_in_strict,
         )
 
     return EnrichmentProviderMatrixEntry(
@@ -459,8 +476,13 @@ def _registered_matrix_entry(
         env_var=byol_readiness.env_var,
         credential_repo_status=_matrix_credential_repo_status(byol_readiness.status),
         health_status=_matrix_health_status(byol_readiness.status),
-        strict_behavior=_matrix_strict_behavior(byol_readiness.status),
-        provenance_output_status="provenance_ref_on_hit_not_final_output_visible",
+        strict_behavior=(
+            optional_behavior
+            if optional_in_strict
+            else _matrix_strict_behavior(byol_readiness.status)
+        ),
+        provenance_output_status="enrichment_package_output_visible",
+        optional_in_strict=optional_in_strict,
     )
 
 

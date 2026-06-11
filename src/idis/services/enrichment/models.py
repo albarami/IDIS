@@ -141,6 +141,8 @@ class EnrichmentResult(BaseModel):
         provenance: Source metadata and audit trail.
         raw: Optional raw payload (only if policy allows; must not leak secrets).
         expires_at: Cache expiry timestamp (derived from cache policy).
+        from_cache: True only when this result was served from the enrichment cache
+            (set by the service on cache hits; additive, Slice86).
     """
 
     status: EnrichmentStatus
@@ -148,6 +150,7 @@ class EnrichmentResult(BaseModel):
     provenance: EnrichmentProvenance | None = None
     raw: dict[str, Any] | None = None
     expires_at: datetime | None = None
+    from_cache: bool = False
 
 
 @runtime_checkable

@@ -87,6 +87,7 @@ class ProductBundleExporter:
         graph_evidence: dict[str, Any] | None = None,
         rag_evidence: dict[str, Any] | None = None,
         layer2_evidence: dict[str, Any] | None = None,
+        enrichment_evidence: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Persist a product bundle and return a safe run-step summary."""
         artifacts: list[_StoredArtifact] = []
@@ -98,6 +99,7 @@ class ProductBundleExporter:
             graph_evidence=graph_evidence,
             rag_evidence=rag_evidence,
             layer2_evidence=layer2_evidence,
+            enrichment_evidence=enrichment_evidence,
         ):
             artifacts.append(
                 self._store_artifact(
@@ -145,11 +147,13 @@ class ProductBundleExporter:
         graph_evidence: dict[str, Any] | None,
         rag_evidence: dict[str, Any] | None,
         layer2_evidence: dict[str, Any] | None,
+        enrichment_evidence: dict[str, Any] | None,
     ) -> list[_ArtifactDraft]:
         calc_package = self._calc_package(analysis_context)
         graph_package = _graph_package(graph_evidence)
         rag_package = _rag_package(rag_evidence)
         layer2_package = _layer2_package(layer2_evidence)
+        enrichment_package = _enrichment_package(enrichment_evidence)
         screening_snapshot = self._safe_text_export_deliverable(bundle.screening_snapshot)
         ic_memo = self._safe_text_export_deliverable(bundle.ic_memo)
         screening_pdf = self._deliverable_exporter.export_to_pdf(
@@ -217,6 +221,7 @@ class ProductBundleExporter:
                     graph_package=graph_package,
                     rag_package=rag_package,
                     layer2_package=layer2_package,
+                    enrichment_package=enrichment_package,
                 ),
             ),
             self._json_draft(
@@ -263,6 +268,16 @@ class ProductBundleExporter:
                     "layer2_challenge_ids": layer2_package["layer2_challenge_ids"],
                     "layer2_finding_count": layer2_package["finding_count"],
                     "layer2_unresolved_question_count": layer2_package["unresolved_question_count"],
+                    "enrichment_status": enrichment_package["status"],
+                    "enrichment_provider_count": len(enrichment_package["providers"]),
+                    "enrichment_hit_count": enrichment_package["counts"]["hit"],
+                    "enrichment_miss_count": enrichment_package["counts"]["miss"],
+                    "enrichment_error_count": enrichment_package["counts"]["error"],
+                    "enrichment_blocked_count": (
+                        enrichment_package["counts"]["blocked_rights"]
+                        + enrichment_package["counts"]["blocked_missing_byol"]
+                    ),
+                    "enrichment_cache_hit_count": enrichment_package["counts"]["cache_hits"],
                 },
             ),
         ]
@@ -444,6 +459,7 @@ class ProductBundleExporter:
         graph_package: dict[str, Any],
         rag_package: dict[str, Any],
         layer2_package: dict[str, Any],
+        enrichment_package: dict[str, Any],
     ) -> dict[str, Any]:
         entries: list[dict[str, Any]] = []
         for deliverable in (
@@ -475,6 +491,7 @@ class ProductBundleExporter:
             "graph_evidence": graph_package,
             "rag_evidence": rag_package,
             "layer2_evidence": layer2_package,
+            "enrichment_evidence": enrichment_package,
         }
 
 
@@ -610,6 +627,77 @@ def _layer2_package(layer2_evidence: dict[str, Any] | None) -> dict[str, Any]:
             layer2_evidence.get("unresolved_question_count")
         ),
         "muhasabah_passed": bool(layer2_evidence.get("muhasabah_passed")),
+    }
+
+
+def _enrichment_package(enrichment_evidence: dict[str, Any] | None) -> dict[str, Any]:
+    """Build the safe enrichment package for the VC bundle (Slice86).
+
+    Whitelist-only: each provider row keeps ids/enums/bools (provider_id, status, from_cache,
+    rights_class, optional_in_strict, ref_id, source_grade) and counts keep the six known
+    non-negative integers — anything else in the evidence dict is dropped, never copied.
+    """
+    if not isinstance(enrichment_evidence, dict):
+        return _empty_enrichment_package()
+    ledger = enrichment_evidence.get("enrichment_ledger")
+    if not isinstance(ledger, dict):
+        return _empty_enrichment_package()
+    raw_rows = ledger.get("providers")
+    rows: list[dict[str, Any]] = []
+    for item in raw_rows if isinstance(raw_rows, list) else []:
+        if not isinstance(item, dict):
+            continue
+        ref_id = item.get("ref_id")
+        rows.append(
+            {
+                "provider_id": str(item.get("provider_id") or ""),
+                "status": str(item.get("status") or ""),
+                "from_cache": bool(item.get("from_cache")),
+                "rights_class": str(item.get("rights_class") or ""),
+                "optional_in_strict": bool(item.get("optional_in_strict")),
+                "ref_id": ref_id if isinstance(ref_id, str) and ref_id else None,
+                "source_grade": str(item.get("source_grade") or ""),
+                "conflicts": _safe_conflict_flags(item.get("conflicts")),
+            }
+        )
+    raw_counts = ledger.get("counts")
+    counts_source = raw_counts if isinstance(raw_counts, dict) else {}
+    counts = {
+        key: _safe_non_negative_int(counts_source.get(key))
+        for key in ("hit", "miss", "error", "blocked_rights", "blocked_missing_byol", "cache_hits")
+    }
+    return {
+        "status": "executed" if rows else "skipped",
+        "providers": rows,
+        "counts": counts,
+    }
+
+
+def _safe_conflict_flags(raw: object) -> list[dict[str, str]]:
+    """Whitelist conflict flags to {code, field} string pairs; drop everything else."""
+    flags: list[dict[str, str]] = []
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        code = item.get("code")
+        field = item.get("field")
+        if isinstance(code, str) and code and isinstance(field, str) and field:
+            flags.append({"code": code, "field": field})
+    return flags
+
+
+def _empty_enrichment_package() -> dict[str, Any]:
+    return {
+        "status": "skipped",
+        "providers": [],
+        "counts": {
+            "hit": 0,
+            "miss": 0,
+            "error": 0,
+            "blocked_rights": 0,
+            "blocked_missing_byol": 0,
+            "cache_hits": 0,
+        },
     }
 
 

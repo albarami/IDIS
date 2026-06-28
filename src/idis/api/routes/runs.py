@@ -1889,6 +1889,43 @@ def _run_full_deliverables(
     }
 
 
+def _calc_evidence_block(calc_ids: list[str] | None) -> dict[str, Any]:
+    """Additive, sanitized reflection of the deterministic calc ids available to a step."""
+    ids = sorted({str(calc_id) for calc_id in (calc_ids or []) if str(calc_id).strip()})
+    return {
+        "status": "calc_evidence_available" if ids else "no_calc_evidence",
+        "calc_count": len(ids),
+        "calc_ids": ids,
+    }
+
+
+def _graph_calculations_by_claim(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    calc_ids: list[str],
+    db_conn: Any,
+) -> dict[str, list[dict[str, Any]]]:
+    """Load PERSISTED deterministic calcs for the given ids, grouped by input claim id.
+
+    Only real persisted calculations are returned (never invented), so the graph projection
+    attaches calc edges only when the persisted calc relationships actually exist.
+    """
+    wanted = {str(calc_id) for calc_id in calc_ids}
+    if not wanted:
+        return {}
+    from idis.persistence.repositories.calculations import get_calculations_repository
+
+    repo = get_calculations_repository(db_conn, tenant_id)
+    by_claim: dict[str, list[dict[str, Any]]] = {}
+    for calc in repo.list_by_deal(deal_id):
+        if str(calc.get("calc_id") or "") not in wanted:
+            continue
+        for claim_id in _calc_input_claim_ids(calc.get("inputs")):
+            by_claim.setdefault(claim_id, []).append(calc)
+    return by_claim
+
+
 def _run_full_graph_evidence(
     *,
     run_id: str,
@@ -1942,6 +1979,7 @@ def _run_full_graph_evidence(
         created_claim_ids=created_claim_ids,
         db_conn=db_conn,
         projection_service=projection_service,
+        calc_ids=calc_ids,
     )
     projection_status = projection_summary["status"]
     if projection_status != "projected":
@@ -1989,6 +2027,31 @@ def _run_full_graph_evidence(
 
 
 def _run_full_rag_evidence(
+    *,
+    calc_ids: list[str] | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """RAG FULL-step seam; additively surfaces the deterministic calc evidence given to RAG.
+
+    Threads accumulated calc ids through the existing seam and attaches a sanitized
+    rag_calc_evidence block to the step summary (and any blocked summary). No pgvector
+    calc-embedding is performed — this is an additive evidence reflection only.
+    """
+    from idis.services.runs.orchestrator import RunStepBlockedError
+
+    calc_evidence = _calc_evidence_block(calc_ids)
+    try:
+        summary = _run_full_rag_evidence_inner(**kwargs)
+    except RunStepBlockedError as exc:
+        result_summary = getattr(exc, "result_summary", None)
+        if isinstance(result_summary, dict):
+            result_summary["rag_calc_evidence"] = calc_evidence
+        raise
+    summary["rag_calc_evidence"] = calc_evidence
+    return summary
+
+
+def _run_full_rag_evidence_inner(
     *,
     run_id: str,
     tenant_id: str,
@@ -2187,10 +2250,17 @@ def _project_graph_evidence(
     created_claim_ids: list[str],
     db_conn: Any,
     projection_service: Any = None,
+    calc_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     from idis.persistence.graph_consistency import GraphProjectionService, ProjectionStatus
 
     service = projection_service or GraphProjectionService()
+    calcs_by_claim = _graph_calculations_by_claim(
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        calc_ids=calc_ids or [],
+        db_conn=db_conn,
+    )
     safe_documents = _graph_documents(documents)
     safe_spans = _graph_spans(documents)
     try:
@@ -2240,14 +2310,16 @@ def _project_graph_evidence(
             "projected_calculation_count": 0,
         }
     projected_claim_count = 0
+    projected_calc_ids: set[str] = set()
     for claim in claims:
+        claim_calculations = calcs_by_claim.get(claim["claim_id"], [])
         try:
             result = service.project_claim_sanad(
                 tenant_id=tenant_id,
                 claim=claim,
                 evidence_items=evidence_by_claim.get(claim["claim_id"], []),
                 transmission_nodes=[],
-                calculations=[],
+                calculations=claim_calculations,
             )
         except Exception:
             return {
@@ -2266,13 +2338,14 @@ def _project_graph_evidence(
                 "projected_calculation_count": 0,
             }
         projected_claim_count += 1
+        projected_calc_ids.update(str(calc.get("calc_id") or "") for calc in claim_calculations)
 
     return {
         "status": "projected",
         "projected_document_count": len(safe_documents),
         "projected_span_count": len(safe_spans),
         "projected_claim_count": projected_claim_count,
-        "projected_calculation_count": 0,
+        "projected_calculation_count": len(projected_calc_ids - {""}),
     }
 
 

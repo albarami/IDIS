@@ -19,6 +19,7 @@ from idis.deliverables.artifact_catalog import (
     resolve_artifact_entry,
 )
 from idis.deliverables.export import DeliverableExporter
+from idis.deliverables.financial_table import build_financial_table
 from idis.models.deliverables import DeliverablesBundle, ICMemo, ScreeningSnapshot
 from idis.persistence.repositories.deliverables import (
     DeliverablesRepository,
@@ -206,6 +207,7 @@ class ProductBundleExporter:
                     else None,
                     "sanad_grade_distribution": bundle.ic_memo.sanad_grade_distribution,
                     "calculation_package": calc_package,
+                    "financial_table": self._financial_table_package(analysis_context),
                 },
             ),
             self._json_draft(
@@ -449,6 +451,19 @@ class ProductBundleExporter:
             "calc_count": len(calculations),
             "calc_sanad_count": sum(1 for item in calculations if item.get("calc_sanad_id")),
             "calculations": calculations,
+        }
+
+    def _financial_table_package(self, analysis_context: AnalysisContext) -> dict[str, Any]:
+        """Sanitized, typed financial-table block derived from eligible deterministic calcs.
+
+        Additive to (never a replacement for) the calculation_package; built from the typed
+        FinancialTable model so only declared, audit-safe fields are emitted.
+        """
+        table = build_financial_table(analysis_context.calc_registry)
+        return {
+            "status": "financial_table_available" if table.rows else "no_eligible_calculations",
+            "row_count": table.row_count,
+            "rows": [row.model_dump(mode="json") for row in table.rows],
         }
 
     def _evidence_index(

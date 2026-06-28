@@ -323,6 +323,55 @@ class TruthRow(BaseModel):
         return v
 
 
+class FinancialTableRow(BaseModel):
+    """One deterministic calculation rendered as a typed financial-table row.
+
+    Each row mirrors an eligible DeterministicCalculation (CalcSanad-backed, with a valid
+    reproducibility hash) and carries its full provenance so the row is independently auditable.
+    Values are Decimal-as-string to preserve determinism.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    calc_id: str = Field(..., description="Calculation identifier")
+    calc_type: str = Field(..., description="CalcType value, e.g. GROSS_MARGIN")
+    label: str = Field(..., description="Human-readable label for the metric")
+    primary_value: str | None = Field(
+        default=None, description="Primary output value (Decimal as string)"
+    )
+    unit: str | None = Field(default=None, description="Output unit, e.g. months or %")
+    currency: str | None = Field(default=None, description="Output currency if monetary")
+    output_summary: str = Field(default="", description="Readable output summary")
+    calc_sanad_id: str | None = Field(default=None, description="Linked CalcSanad id")
+    formula_hash: str | None = Field(default=None, description="Formula spec hash")
+    code_version: str | None = Field(default=None, description="Engine code version")
+    reproducibility_hash: str | None = Field(default=None, description="Reproducibility hash")
+    calc_grade: str | None = Field(default=None, description="CalcSanad grade (A/B/C/D)")
+    input_min_sanad_grade: str | None = Field(default=None, description="Weakest input claim grade")
+    input_claim_ids: list[str] = Field(
+        default_factory=list, description="Source claim ids backing this calc (sorted)"
+    )
+
+    @field_validator("input_claim_ids", mode="before")
+    @classmethod
+    def sort_claim_ids(cls, v: list[str]) -> list[str]:
+        """Sort input claim ids for stable output."""
+        if isinstance(v, list):
+            return sorted(v)
+        return v
+
+
+class FinancialTable(BaseModel):
+    """A typed, deterministic financial table derived from eligible calculations."""
+
+    model_config = ConfigDict(frozen=True)
+
+    rows: list[FinancialTableRow] = Field(
+        default_factory=list, description="Rows sorted deterministically by calc_id"
+    )
+    row_count: int = Field(default=0, description="Number of rows")
+
+
 class TruthDashboard(BaseModel):
     """Truth Dashboard deliverable — claim-level truth matrix.
 

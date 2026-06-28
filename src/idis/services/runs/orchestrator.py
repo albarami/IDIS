@@ -1936,6 +1936,7 @@ class RunOrchestrator:
             tenant_id=ctx.tenant_id,
             deal_id=ctx.deal_id,
             documents=ctx.documents,
+            calc_ids=accumulated.get("calc_ids", []),
         )
 
     def _execute_debate(

@@ -19,7 +19,8 @@ Pins (per the locked decisions D-A..D-G):
   5. CalcEngine.verify_reproducibility exists but is never invoked in production (G5).
   6. Deliverables: Task 4 added a typed FinancialTable; memo financials are now agent-driven AND
      calc-fed (additive, LLM financial_agent bridge preserved). The scenario builder stays unfed.
-  7. Graph and RAG do not consume calc outputs (G4).
+  7. Task 5: graph projection feeds persisted calcs and the RAG step surfaces calc evidence through
+     the FULL-step seams (G4 closed); the underlying retrieval modules stay calc-agnostic.
   8. Migration 0005 already provides both calc tables — no new migration expected.
 """
 
@@ -220,21 +221,21 @@ def test_memo_financials_agent_driven_plus_calc_fed_financial_table() -> None:
     assert hits  # non-empty: model + builder + bundle/memo consumers
 
 
-# --- 7. graph and RAG do not consume calc outputs (G4) ---
+# --- 7. graph/RAG FULL-step seams feed calc (G4 closed); retrieval modules stay calc-agnostic ---
 
 
-def test_graph_and_rag_do_not_consume_calc_outputs() -> None:
+def test_graph_and_rag_full_step_seams_feed_calc() -> None:
+    runs_src = (_SRC / "api" / "routes" / "runs.py").read_text(encoding="utf-8")
+    # Task 5: graph projection feeds PERSISTED calcs through the existing project_claim_sanad seam.
+    assert "_graph_calculations_by_claim" in runs_src
+    assert "calculations=claim_calculations" in runs_src
+    # Task 5: the RAG step additively surfaces deterministic calc evidence.
+    assert "rag_calc_evidence" in runs_src
+
+    # The underlying retrieval modules stay calc-agnostic — the feed is at the step-orchestration
+    # layer (no new infra in the retrieval services).
     graph_retrieval = (_SRC / "services" / "graph" / "retrieval.py").read_text(encoding="utf-8")
     assert "calc" not in graph_retrieval.lower()
-
-    rag_dir = _SRC / "services" / "rag"
-    rag_calc_refs = [
-        path
-        for path in rag_dir.rglob("*.py")
-        if "calc_id" in path.read_text(encoding="utf-8")
-        or "calculation" in path.read_text(encoding="utf-8").lower()
-    ]
-    assert rag_calc_refs == []
 
 
 # --- 8. migration 0005 already provides both tables — no new migration expected ---

@@ -109,6 +109,7 @@ def build_run_context(
         _run_full_enrichment,
         _run_full_graph_evidence,
         _run_full_layer2_ic_challenge,
+        _run_full_methodology_deterministic_calculation,
         _run_full_rag_evidence,
         _run_full_scoring,
         _run_snapshot_auto_grade,
@@ -143,6 +144,11 @@ def build_run_context(
         methodology_claim_materialization_fn=methodology_claim_materialization_fn,
         methodology_evidence_item_materialization_fn=methodology_evidence_item_materialization_fn,
         methodology_sanad_creation_linking_grading_fn=methodology_sanad_creation_linking_grading_fn,
+        methodology_deterministic_calculation_fn=(
+            partial(_run_full_methodology_deterministic_calculation, db_conn=db_conn)
+            if is_full
+            else None
+        ),
         extract_fn=partial(
             _run_snapshot_extraction,
             db_conn=db_conn,

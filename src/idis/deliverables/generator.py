@@ -26,6 +26,7 @@ from idis.analysis.models import AgentReport, AnalysisBundle, AnalysisContext
 from idis.analysis.scoring.models import RoutingAction, Scorecard, ScoreDimension
 from idis.audit.sink import AuditSink, AuditSinkError
 from idis.deliverables.decline_letter import DeclineLetterBuilder
+from idis.deliverables.financial_table import build_financial_table
 from idis.deliverables.memo import ICMemoBuilder
 from idis.deliverables.qa_brief import QABriefBuilder
 from idis.deliverables.screening import ScreeningSnapshotBuilder
@@ -497,6 +498,17 @@ class DeliverablesGenerator:
                     claim_refs=list(risk.claim_ids),
                     calc_refs=list(risk.calc_ids),
                 )
+
+        # Additive: feed deterministic calc-derived financial facts alongside the LLM bridge.
+        for row in build_financial_table(ctx.calc_registry).rows:
+            if not row.input_claim_ids:
+                continue  # No-Free-Facts requires claim backing
+            builder.add_financials_fact(
+                text=f"{row.label}: {row.output_summary}",
+                claim_refs=list(row.input_claim_ids),
+                calc_refs=[row.calc_id],
+                sanad_grade=row.calc_grade,
+            )
 
         all_claim_refs: list[str] = []
         all_calc_refs: list[str] = []

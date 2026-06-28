@@ -17,8 +17,8 @@ Pins (per the locked decisions D-A..D-G):
   4. Reproducibility hash + formula_hash + code_version are model fields and are bundle-visible in
      _calc_package; per-calc formula_version is NOT surfaced (G5).
   5. CalcEngine.verify_reproducibility exists but is never invoked in production (G5).
-  6. Deliverables: memo financials/scenario builders exist but nothing feeds them; no FinancialTable
-     model exists (G3).
+  6. Deliverables: Task 4 added a typed FinancialTable; memo financials are now agent-driven AND
+     calc-fed (additive, LLM financial_agent bridge preserved). The scenario builder stays unfed.
   7. Graph and RAG do not consume calc outputs (G4).
   8. Migration 0005 already provides both calc tables — no new migration expected.
 """
@@ -198,25 +198,26 @@ def test_verify_reproducibility_defined_but_uninvoked() -> None:
     assert invocations == [_SRC / "calc" / "engine.py"]
 
 
-# --- 6. deliverables: financials are LLM-agent-driven, no calc FinancialTable (G3) ---
+# --- 6. deliverables: Task 4 added a typed FinancialTable; financials agent-driven AND calc-fed ---
 
 
-def test_memo_financials_are_agent_driven_no_calc_financial_table() -> None:
+def test_memo_financials_agent_driven_plus_calc_fed_financial_table() -> None:
     memo_src = (_SRC / "deliverables" / "memo.py").read_text(encoding="utf-8")
     assert "def add_financials_fact" in memo_src
     assert "def add_scenario_fact" in memo_src
 
-    # Today the memo "financials" section is bridged from the LLM financial_agent report, NOT
-    # from deterministic CalcEngine outputs, and the scenario builder is never fed.
     generator_src = (_SRC / "deliverables" / "generator.py").read_text(encoding="utf-8")
+    # The LLM financial_agent bridge is preserved...
     assert '"financial_agent": "financials"' in generator_src
-    assert "add_scenario_fact" not in generator_src  # scenario facts unfed (G3)
+    # ...and Task 4 additively feeds deterministic calc-derived financial facts (G3 closed).
+    assert "build_financial_table" in generator_src
+    assert "add_scenario_fact" not in generator_src  # scenario builder still unfed
 
-    # No deterministic FinancialTable model/builder exists anywhere yet (the Slice87 G3 gap).
+    # A typed deterministic FinancialTable model/builder now exists (Task 4).
     hits = [
         path for path in _SRC.rglob("*.py") if "FinancialTable" in path.read_text(encoding="utf-8")
     ]
-    assert hits == []
+    assert hits  # non-empty: model + builder + bundle/memo consumers
 
 
 # --- 7. graph and RAG do not consume calc outputs (G4) ---

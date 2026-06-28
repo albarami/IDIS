@@ -45,7 +45,7 @@ class SanadsReader(Protocol):
 
 
 class CalculationsWriter(Protocol):
-    """Calculation persistence behavior needed by CalcRunner."""
+    """Calculation persistence + lookup behavior needed by CalcRunner."""
 
     def create(
         self,
@@ -54,6 +54,9 @@ class CalculationsWriter(Protocol):
         calc_sanad: Any,
     ) -> None:
         """Persist a calculation and CalcSanad."""
+
+    def list_by_deal(self, deal_id: str) -> list[dict[str, Any]]:
+        """List persisted calculations for a deal (methodology-authoritative dedup)."""
 
 
 class CalcRunner:
@@ -94,8 +97,17 @@ class CalcRunner:
         requested_calc_types = calc_types or self._registry.list_registered()
         claims = self._load_claims(created_claim_ids)
 
+        # Methodology-authoritative dedup: an already-persisted calculation with the same
+        # reproducibility hash IS the same calculation. Reuse its id and merge instead of
+        # recomputing a parallel duplicate under a fresh id (also makes re-runs idempotent).
+        existing_by_hash = {
+            row["reproducibility_hash"]: row["calc_id"]
+            for row in self._calculations_repo.list_by_deal(self._deal_id)
+        }
+
         calc_ids: list[str] = []
         hashes: list[str] = []
+        persisted_count = 0
         blocked_candidates: list[dict[str, Any]] = []
 
         for calc_type in requested_calc_types:
@@ -117,12 +129,21 @@ class CalcRunner:
                 blocked_candidates.append(_blocked_from_gate(calc_type, exc))
                 continue
 
+            repro_hash = engine_result.calculation.reproducibility_hash
+            existing_id = existing_by_hash.get(repro_hash)
+            if existing_id is not None:
+                calc_ids.append(existing_id)
+                hashes.append(repro_hash)
+                continue
+
             self._calculations_repo.create(
                 calculation=engine_result.calculation,
                 calc_sanad=engine_result.calc_sanad,
             )
+            existing_by_hash[repro_hash] = engine_result.calculation.calc_id
             calc_ids.append(engine_result.calculation.calc_id)
-            hashes.append(engine_result.calculation.reproducibility_hash)
+            hashes.append(repro_hash)
+            persisted_count += 1
 
         if not calc_ids and not blocked_candidates:
             blocked_candidates.append(
@@ -136,7 +157,7 @@ class CalcRunner:
         return {
             "calc_ids": calc_ids,
             "reproducibility_hashes": hashes,
-            "persisted_count": len(calc_ids),
+            "persisted_count": persisted_count,
             "blocked_candidates": blocked_candidates,
         }
 

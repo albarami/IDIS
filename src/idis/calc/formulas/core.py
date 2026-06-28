@@ -1,6 +1,8 @@
 """Core formulas for deterministic calculations.
 
-Phase 4.1: Minimal formula set for tests (runway, gross_margin).
+Covers 9 of the 10 CalcTypes: RUNWAY, GROSS_MARGIN, BURN_RATE, LTV_CAC_RATIO, MOIC,
+VALUATION_MULTIPLE, NET_REVENUE_RETENTION, CAC_PAYBACK, and LTV. IRR is deferred until a
+cash-flow-series input model exists (formulas take a flat dict[str, Decimal] of scalars).
 All formulas use Decimal arithmetic exclusively.
 """
 
@@ -114,6 +116,138 @@ def _ltv_cac_ratio_formula(inputs: dict[str, Decimal]) -> Decimal:
     return ratio.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
 
 
+def _moic_formula(inputs: dict[str, Decimal]) -> Decimal:
+    """Calculate Multiple on Invested Capital (MOIC).
+
+    Formula: moic = total_value / invested_capital
+
+    Required inputs:
+        - total_value: Current/realized value of the investment (Decimal)
+        - invested_capital: Capital invested (Decimal, must be > 0)
+
+    Returns:
+        MOIC as a multiple (Decimal, e.g., 3.0000 for 3x).
+
+    Raises:
+        ValueError: If invested_capital is zero or negative.
+    """
+    total_value = inputs["total_value"]
+    invested_capital = inputs["invested_capital"]
+
+    if invested_capital <= Decimal("0"):
+        raise ValueError("invested_capital must be positive")
+
+    moic = total_value / invested_capital
+    return moic.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+
+
+def _valuation_multiple_formula(inputs: dict[str, Decimal]) -> Decimal:
+    """Calculate a revenue valuation multiple.
+
+    Formula: valuation_multiple = valuation / revenue
+
+    Required inputs:
+        - valuation: Company valuation / enterprise value (Decimal)
+        - revenue: Revenue basis for the multiple (Decimal, must be > 0)
+
+    Returns:
+        Valuation multiple (Decimal, e.g., 5.0000 for 5x revenue).
+
+    Raises:
+        ValueError: If revenue is zero or negative.
+    """
+    valuation = inputs["valuation"]
+    revenue = inputs["revenue"]
+
+    if revenue <= Decimal("0"):
+        raise ValueError("revenue must be positive")
+
+    multiple = valuation / revenue
+    return multiple.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+
+
+def _net_revenue_retention_formula(inputs: dict[str, Decimal]) -> Decimal:
+    """Calculate Net Revenue Retention (NRR) as a percentage.
+
+    Formula: nrr = (starting_arr + expansion - contraction - churn) / starting_arr * 100
+
+    Required inputs:
+        - starting_arr: ARR at period start (Decimal, must be > 0)
+        - expansion: Expansion ARR from existing customers (Decimal)
+        - contraction: Contraction ARR from existing customers (Decimal)
+        - churn: Churned ARR from existing customers (Decimal)
+
+    Returns:
+        NRR as a percentage (Decimal, e.g., 105.0000 for 105%).
+
+    Raises:
+        ValueError: If starting_arr is zero or negative.
+    """
+    starting_arr = inputs["starting_arr"]
+    expansion = inputs["expansion"]
+    contraction = inputs["contraction"]
+    churn = inputs["churn"]
+
+    if starting_arr <= Decimal("0"):
+        raise ValueError("starting_arr must be positive")
+
+    retained = starting_arr + expansion - contraction - churn
+    nrr = (retained / starting_arr) * Decimal("100")
+    return nrr.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+
+
+def _cac_payback_formula(inputs: dict[str, Decimal]) -> Decimal:
+    """Calculate CAC payback period in months.
+
+    Formula: cac_payback_months = cac / monthly_gross_profit
+
+    Required inputs:
+        - cac: Customer acquisition cost (Decimal)
+        - monthly_gross_profit: Monthly gross profit per customer (Decimal, must be > 0)
+
+    Returns:
+        CAC payback period in months (Decimal).
+
+    Raises:
+        ValueError: If monthly_gross_profit is zero or negative.
+    """
+    cac = inputs["cac"]
+    monthly_gross_profit = inputs["monthly_gross_profit"]
+
+    if monthly_gross_profit <= Decimal("0"):
+        raise ValueError("monthly_gross_profit must be positive")
+
+    payback = cac / monthly_gross_profit
+    return payback.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+
+
+def _ltv_formula(inputs: dict[str, Decimal]) -> Decimal:
+    """Calculate customer Lifetime Value (LTV).
+
+    Formula: ltv = (arpa * gross_margin_rate) / churn_rate
+
+    Required inputs:
+        - arpa: Average revenue per account per period (Decimal)
+        - gross_margin_rate: Gross margin as a fraction, e.g. 0.8 (Decimal)
+        - churn_rate: Customer churn rate per period as a fraction (Decimal, must be > 0)
+
+    Returns:
+        Lifetime value (Decimal).
+
+    Raises:
+        ValueError: If churn_rate is zero or negative.
+    """
+    arpa = inputs["arpa"]
+    gross_margin_rate = inputs["gross_margin_rate"]
+    churn_rate = inputs["churn_rate"]
+
+    if churn_rate <= Decimal("0"):
+        raise ValueError("churn_rate must be positive")
+
+    ltv = (arpa * gross_margin_rate) / churn_rate
+    return ltv.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+
+
 RUNWAY_SPEC = FormulaSpec(
     calc_type=CalcType.RUNWAY,
     version="1.0.0",
@@ -150,6 +284,51 @@ LTV_CAC_RATIO_SPEC = FormulaSpec(
     output_precision=4,
 )
 
+MOIC_SPEC = FormulaSpec(
+    calc_type=CalcType.MOIC,
+    version="1.0.0",
+    expression_id="moic_total_value_invested_v1",
+    fn=_moic_formula,
+    required_inputs=("total_value", "invested_capital"),
+    output_precision=4,
+)
+
+VALUATION_MULTIPLE_SPEC = FormulaSpec(
+    calc_type=CalcType.VALUATION_MULTIPLE,
+    version="1.0.0",
+    expression_id="valuation_multiple_revenue_v1",
+    fn=_valuation_multiple_formula,
+    required_inputs=("valuation", "revenue"),
+    output_precision=4,
+)
+
+NET_REVENUE_RETENTION_SPEC = FormulaSpec(
+    calc_type=CalcType.NET_REVENUE_RETENTION,
+    version="1.0.0",
+    expression_id="nrr_expansion_contraction_churn_v1",
+    fn=_net_revenue_retention_formula,
+    required_inputs=("starting_arr", "expansion", "contraction", "churn"),
+    output_precision=4,
+)
+
+CAC_PAYBACK_SPEC = FormulaSpec(
+    calc_type=CalcType.CAC_PAYBACK,
+    version="1.0.0",
+    expression_id="cac_payback_months_v1",
+    fn=_cac_payback_formula,
+    required_inputs=("cac", "monthly_gross_profit"),
+    output_precision=4,
+)
+
+LTV_SPEC = FormulaSpec(
+    calc_type=CalcType.LTV,
+    version="1.0.0",
+    expression_id="ltv_arpa_margin_churn_v1",
+    fn=_ltv_formula,
+    required_inputs=("arpa", "gross_margin_rate", "churn_rate"),
+    output_precision=4,
+)
+
 
 def register_core_formulas(registry: FormulaRegistry | None = None) -> FormulaRegistry:
     """Register all core formulas with the registry.
@@ -163,7 +342,17 @@ def register_core_formulas(registry: FormulaRegistry | None = None) -> FormulaRe
     if registry is None:
         registry = FormulaRegistry()
 
-    for spec in [RUNWAY_SPEC, GROSS_MARGIN_SPEC, BURN_RATE_SPEC, LTV_CAC_RATIO_SPEC]:
+    for spec in [
+        RUNWAY_SPEC,
+        GROSS_MARGIN_SPEC,
+        BURN_RATE_SPEC,
+        LTV_CAC_RATIO_SPEC,
+        MOIC_SPEC,
+        VALUATION_MULTIPLE_SPEC,
+        NET_REVENUE_RETENTION_SPEC,
+        CAC_PAYBACK_SPEC,
+        LTV_SPEC,
+    ]:
         if registry.get(spec.calc_type) is None:
             registry.register(spec)
 

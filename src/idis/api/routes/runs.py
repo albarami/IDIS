@@ -2682,6 +2682,56 @@ def _run_snapshot_calc(
     return result
 
 
+def _run_full_methodology_deterministic_calculation(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+    materialized_claims: list[Any],
+    sanads: list[Any],
+    sanad_grades: list[Any],
+    extraction_tasks: list[Any],
+    db_conn: Any = None,
+) -> tuple[Any, list[Any], list[Any]]:
+    """Run FULL methodology deterministic calculations and persist them durably.
+
+    The methodology service stays pure (it returns run-scoped in-memory records). This wrapper
+    persists each calculation and its CalcSanad through the existing durable persistence path,
+    preserving the deterministic UUID5 methodology calc_ids and skipping any id already stored so
+    resume never double-writes. The returned tuple is unchanged for the orchestrator.
+    """
+    from idis.persistence.repositories.calculations import get_calculations_repository
+    from idis.services.runs.methodology_deterministic_calculation import (
+        InMemoryRunMethodologyDeterministicCalculationService,
+    )
+
+    service = InMemoryRunMethodologyDeterministicCalculationService()
+    run_result, calculations, calc_sanads = service.run(
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        run_id=run_id,
+        materialized_claims=materialized_claims,
+        sanads=sanads,
+        sanad_grades=sanad_grades,
+        extraction_tasks=extraction_tasks,
+    )
+
+    repo = get_calculations_repository(db_conn, tenant_id)
+    existing_ids = {row["calc_id"] for row in repo.list_by_deal(deal_id)}
+    calc_sanad_by_id = {record.calc_id: record.calc_sanad for record in calc_sanads}
+    for record in calculations:
+        calculation = record.calculation
+        if calculation.calc_id in existing_ids:
+            continue
+        repo.create(
+            calculation=calculation,
+            calc_sanad=calc_sanad_by_id[calculation.calc_id],
+        )
+        existing_ids.add(calculation.calc_id)
+
+    return run_result, calculations, calc_sanads
+
+
 def _run_snapshot_auto_grade(
     *,
     run_id: str,

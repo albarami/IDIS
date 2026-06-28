@@ -45,6 +45,12 @@ class FakeCalculationsRepository:
             raise RuntimeError("database unavailable")
         self.created.append((calculation, calc_sanad))
 
+    def list_by_deal(self, deal_id: str) -> list[dict[str, Any]]:
+        return [
+            {"calc_id": calc.calc_id, "reproducibility_hash": calc.reproducibility_hash}
+            for calc, _ in self.created
+        ]
+
 
 def _money_claim(claim_id: str, predicate: str, amount: str) -> dict[str, Any]:
     return {

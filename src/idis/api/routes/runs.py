@@ -1648,6 +1648,7 @@ def _build_analysis_calc_registry(
 ) -> dict[str, Any]:
     """Load readable calculation summaries for Layer 2 analysis context."""
     from idis.analysis.models import AnalysisCalcReference
+    from idis.calc.formulas.core import resolve_formula_version
     from idis.persistence.repositories.calculations import get_calculations_repository
 
     requested_ids = set(calc_ids)
@@ -1678,6 +1679,9 @@ def _build_analysis_calc_registry(
             calc_sanad_id=calc_sanad.get("calc_sanad_id"),
             formula_hash=calc.get("formula_hash"),
             code_version=calc.get("code_version"),
+            formula_version=resolve_formula_version(
+                calc.get("calc_type"), calc.get("formula_hash")
+            ),
             output=_calc_output_payload(output),
             assumptions=_calc_assumptions(calc.get("inputs")),
             calc_grade=calc_sanad.get("calc_grade"),

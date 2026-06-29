@@ -14,9 +14,11 @@ Pins (per the locked decisions D-A..D-G):
   3. The methodology SERVICE stays pure (returns run-scoped in-memory records, deterministic
      UUID5 ids); Task 2 made the FULL methodology PATH persist them durably via a wired wrapper,
      so G1 is closed (behavioral proof lives in test_slice87_calc_unification.py).
-  4. Reproducibility hash + formula_hash + code_version are model fields and are bundle-visible in
-     _calc_package; per-calc formula_version is NOT surfaced (G5).
-  5. CalcEngine.verify_reproducibility exists but is never invoked in production (G5).
+  4. Reproducibility hash + formula_hash + code_version are model fields and bundle-visible; Task 6
+     additively surfaces per-calc formula_version in _calc_package (resolved by registry lookup with
+     a formula_hash guard, not a model field). G5 reproducibility/version polish.
+  5. CalcEngine.verify_reproducibility has no production caller by design; Task 6 exercises it
+     through the acceptance path (test_slice87_reproducibility_version.py).
   6. Deliverables: Task 4 added a typed FinancialTable; memo financials are now agent-driven AND
      calc-fed (additive, LLM financial_agent bridge preserved). The scenario builder stays unfed.
   7. Task 5: graph projection feeds persisted calcs and the RAG step surfaces calc evidence through
@@ -168,34 +170,42 @@ def test_methodology_and_calc_are_two_full_steps() -> None:
     )
 
 
-# --- 4. repro/version fields: present + bundle-visible; formula_version NOT surfaced (G5) ---
+# --- 4. repro/version fields: present + bundle-visible; Task 6 surfaces formula_version (G5) ---
 
 
 def test_calc_model_carries_repro_and_version_fields() -> None:
     fields = set(DeterministicCalculation.model_fields)
     assert {"reproducibility_hash", "formula_hash", "code_version"} <= fields
-    assert "formula_version" not in fields  # per-calc formula_version not a model field
+    # Task 6 surfaces formula_version via registry lookup at the view layer, NOT as a model field.
+    assert "formula_version" not in fields
 
 
-def test_calc_package_surfaces_hashes_but_not_formula_version() -> None:
+def test_calc_package_surfaces_hashes_and_formula_version() -> None:
     bundle_src = (_SRC / "deliverables" / "product_bundle.py").read_text(encoding="utf-8")
     calc_pkg = bundle_src[bundle_src.index("def _calc_package") :].split("def _evidence_index")[0]
-    for field in ('"reproducibility_hash"', '"formula_hash"', '"code_version"', '"calc_grade"'):
+    # Task 6 additively surfaces formula_version alongside the preserved hash/version fields.
+    for field in (
+        '"reproducibility_hash"',
+        '"formula_hash"',
+        '"code_version"',
+        '"calc_grade"',
+        '"formula_version"',
+    ):
         assert field in calc_pkg
-    assert '"formula_version"' not in calc_pkg  # G5: formula_version not surfaced per calc
 
 
-# --- 5. verify_reproducibility exists but is never invoked in production (G5) ---
+# --- 5. verify_reproducibility has no production caller by design; Task 6 exercises it (G5) ---
 
 
-def test_verify_reproducibility_defined_but_uninvoked() -> None:
+def test_verify_reproducibility_defined_no_production_caller() -> None:
     assert callable(CalcEngine.verify_reproducibility)
     invocations = [
         path
         for path in _SRC.rglob("*.py")
         if "verify_reproducibility(" in path.read_text(encoding="utf-8")
     ]
-    # Only the definition site (engine.py) references it; no production caller.
+    # Only the definition site (engine.py) references it in src; verification is exercised through
+    # the acceptance path (tests/test_slice87_reproducibility_version.py), not a production caller.
     assert invocations == [_SRC / "calc" / "engine.py"]
 
 

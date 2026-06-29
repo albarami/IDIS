@@ -440,6 +440,7 @@ class ProductBundleExporter:
                 "output": calc.output,
                 "formula_hash": calc.formula_hash,
                 "code_version": calc.code_version,
+                "formula_version": calc.formula_version,
                 "reproducibility_hash": calc.reproducibility_hash,
                 "calc_grade": calc.calc_grade,
                 "input_min_sanad_grade": calc.input_min_sanad_grade,

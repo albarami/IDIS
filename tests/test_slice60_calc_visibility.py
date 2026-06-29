@@ -102,6 +102,7 @@ def test_financial_diligence_json_includes_structured_calc_package(tmp_path: Pat
             "output": {"currency": None, "primary_value": "60.0000", "unit": "percent"},
             "formula_hash": VALID_FORMULA_HASH,
             "code_version": "0.1.0",
+            "formula_version": None,
             "reproducibility_hash": VALID_REPRO_HASH,
             "calc_grade": "A",
             "input_min_sanad_grade": "A",

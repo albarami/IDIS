@@ -83,6 +83,7 @@ class AnalysisCalcReference(BaseModel):
     )
     formula_hash: str | None = None
     code_version: str | None = None
+    formula_version: str | None = None
     output: dict[str, Any] = Field(default_factory=dict)
     assumptions: dict[str, Any] = Field(default_factory=dict)
     calc_grade: str | None = None

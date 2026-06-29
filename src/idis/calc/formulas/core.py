@@ -357,3 +357,24 @@ def register_core_formulas(registry: FormulaRegistry | None = None) -> FormulaRe
             registry.register(spec)
 
     return registry
+
+
+def resolve_formula_version(
+    calc_type: str | CalcType | None, formula_hash: str | None
+) -> str | None:
+    """Return the registered formula version for a calc when its formula_hash matches.
+
+    The version is surfaced only when the registered spec's formula_hash equals the calc's stored
+    formula_hash, so a historical calc produced by a different formula version is never mislabeled.
+    Returns None for missing/unknown calc types or hash mismatches.
+    """
+    if calc_type is None:
+        return None
+    try:
+        resolved_type = calc_type if isinstance(calc_type, CalcType) else CalcType(str(calc_type))
+    except ValueError:
+        return None
+    spec = register_core_formulas(FormulaRegistry()).get(resolved_type)
+    if spec is not None and formula_hash and spec.formula_hash == formula_hash:
+        return spec.version
+    return None

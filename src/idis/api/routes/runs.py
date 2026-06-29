@@ -1930,6 +1930,131 @@ def _graph_calculations_by_claim(
     return by_claim
 
 
+# The Sanad service persists transmission-node input_refs ENTITY-KEYED (e.g. {"evidence_id": ...}),
+# while the graph repo routes INPUT edges on ref["type"]. Map each known entity key to its node
+# type so the persisted lineage actually materializes as INPUT edges.
+_INPUT_REF_KEY_TO_TYPE: tuple[tuple[str, str], ...] = (
+    ("span_id", "span"),
+    ("source_span_id", "span"),
+    ("evidence_id", "evidence"),
+    ("claim_id", "claim"),
+    ("calc_id", "calculation"),
+    ("calculation_id", "calculation"),
+)
+
+
+def _normalize_input_ref(ref: dict[str, Any]) -> dict[str, str] | None:
+    """Normalize a persisted Sanad input_ref into the graph-repo ``{type, id}`` shape.
+
+    Maps the entity-keyed refs the Sanad service persists (e.g. ``{"evidence_id": ...}``) to the
+    ``{type, id}`` shape the graph repo routes INPUT edges on, preserves refs already in
+    ``{type, id}`` form, and drops malformed refs (returns ``None``).
+    """
+    for key, ref_type in _INPUT_REF_KEY_TO_TYPE:
+        ref_id = ref.get(key)
+        if ref_id:
+            return {"type": ref_type, "id": str(ref_id)}
+    explicit_type = ref.get("type")
+    explicit_id = ref.get("id")
+    if explicit_type and explicit_id:
+        return {"type": str(explicit_type), "id": str(explicit_id)}
+    return None
+
+
+def _graph_transmission_nodes_by_claim(
+    *,
+    tenant_id: str,
+    created_claim_ids: list[str],
+    db_conn: Any,
+) -> dict[str, list[dict[str, Any]]]:
+    """Load each claim's PERSISTED Sanad transmission chain, shaped for project_claim_sanad.
+
+    The chain is durable on the sanad (`transmission_chain`). Only real persisted transmission
+    nodes are returned (never invented); the projection writes HAS_SANAD_STEP/INPUT/OUTPUT edges
+    only when the persisted chain actually exists. input_refs are normalized from the persisted
+    entity-keyed shape into the graph-repo `{type, id}` shape (see `_normalize_input_ref`). Uses
+    the existing schema — no dedicated Sanad node.
+    """
+    from idis.persistence.repositories.claims import (
+        InMemorySanadsRepository,
+        SanadsRepository,
+    )
+
+    repo: Any = (
+        SanadsRepository(db_conn, tenant_id)
+        if db_conn is not None
+        else InMemorySanadsRepository(tenant_id)
+    )
+    by_claim: dict[str, list[dict[str, Any]]] = {}
+    for claim_id in sorted(set(created_claim_ids)):
+        sanad = repo.get_by_claim(claim_id)
+        chain = (sanad or {}).get("transmission_chain") or []
+        nodes: list[dict[str, Any]] = []
+        for node in chain:
+            if not isinstance(node, dict):
+                continue
+            node_id = str(node.get("node_id") or "")
+            if not node_id:
+                continue
+            input_refs: list[dict[str, str]] = []
+            for ref in node.get("input_refs") or []:
+                if not isinstance(ref, dict):
+                    continue
+                normalized = _normalize_input_ref(ref)
+                if normalized is not None:
+                    input_refs.append(normalized)
+            nodes.append(
+                {
+                    "node_id": node_id,
+                    "timestamp": str(node.get("timestamp") or ""),
+                    "input_refs": input_refs,
+                }
+            )
+        by_claim[claim_id] = nodes
+    return by_claim
+
+
+def _graph_defects_by_claim(
+    *,
+    tenant_id: str,
+    created_claim_ids: list[str],
+    db_conn: Any,
+) -> dict[str, list[dict[str, Any]]]:
+    """Load each claim's PERSISTED defects, shaped for project_claim_sanad.
+
+    Only real persisted defects are returned (never invented); the projection writes Defect /
+    HAS_DEFECT edges only when the persisted defects actually exist. Uses the existing schema
+    (Defect node already exists) — no schema change.
+    """
+    from idis.persistence.repositories.claims import (
+        DefectsRepository,
+        InMemoryDefectsRepository,
+    )
+
+    repo: Any = (
+        DefectsRepository(db_conn, tenant_id)
+        if db_conn is not None
+        else InMemoryDefectsRepository(tenant_id)
+    )
+    by_claim: dict[str, list[dict[str, Any]]] = {}
+    for claim_id in sorted(set(created_claim_ids)):
+        defects, _ = repo.list_by_claim(claim_id, limit=200)
+        items: list[dict[str, Any]] = []
+        for defect in defects:
+            defect_id = str(defect.get("defect_id") or "")
+            if not defect_id:
+                continue
+            items.append(
+                {
+                    "defect_id": defect_id,
+                    "defect_type": str(defect.get("defect_type") or ""),
+                    "severity": str(defect.get("severity") or "MINOR"),
+                }
+            )
+        by_claim[claim_id] = items
+    return by_claim
+
+
 def _run_full_graph_evidence(
     *,
     run_id: str,
@@ -2265,6 +2390,16 @@ def _project_graph_evidence(
         calc_ids=calc_ids or [],
         db_conn=db_conn,
     )
+    transmission_by_claim = _graph_transmission_nodes_by_claim(
+        tenant_id=tenant_id,
+        created_claim_ids=created_claim_ids,
+        db_conn=db_conn,
+    )
+    defects_by_claim = _graph_defects_by_claim(
+        tenant_id=tenant_id,
+        created_claim_ids=created_claim_ids,
+        db_conn=db_conn,
+    )
     safe_documents = _graph_documents(documents)
     safe_spans = _graph_spans(documents)
     try:
@@ -2315,14 +2450,19 @@ def _project_graph_evidence(
         }
     projected_claim_count = 0
     projected_calc_ids: set[str] = set()
+    projected_sanad_step_ids: set[str] = set()
+    projected_defect_ids: set[str] = set()
     for claim in claims:
         claim_calculations = calcs_by_claim.get(claim["claim_id"], [])
+        claim_transmission_nodes = transmission_by_claim.get(claim["claim_id"], [])
+        claim_defects = defects_by_claim.get(claim["claim_id"], [])
         try:
             result = service.project_claim_sanad(
                 tenant_id=tenant_id,
                 claim=claim,
                 evidence_items=evidence_by_claim.get(claim["claim_id"], []),
-                transmission_nodes=[],
+                transmission_nodes=claim_transmission_nodes,
+                defects=claim_defects,
                 calculations=claim_calculations,
             )
         except Exception:
@@ -2343,6 +2483,10 @@ def _project_graph_evidence(
             }
         projected_claim_count += 1
         projected_calc_ids.update(str(calc.get("calc_id") or "") for calc in claim_calculations)
+        projected_sanad_step_ids.update(
+            str(node.get("node_id") or "") for node in claim_transmission_nodes
+        )
+        projected_defect_ids.update(str(defect.get("defect_id") or "") for defect in claim_defects)
 
     return {
         "status": "projected",
@@ -2350,6 +2494,8 @@ def _project_graph_evidence(
         "projected_span_count": len(safe_spans),
         "projected_claim_count": projected_claim_count,
         "projected_calculation_count": len(projected_calc_ids - {""}),
+        "projected_sanad_step_count": len(projected_sanad_step_ids - {""}),
+        "projected_defect_count": len(projected_defect_ids - {""}),
     }
 
 

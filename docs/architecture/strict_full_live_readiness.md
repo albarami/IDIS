@@ -44,7 +44,7 @@ Allowed strict classifications:
 | Muhasabah / NFF gates | `live-wired-and-used` | Debate, analysis, scoring, and deliverables validate No-Free-Facts / muhasabah outputs. | Validation is not enough to make deterministic or unwired components full-live. |
 | Scoring LLM | `missing-credentials` | Scoring engine is wired, but client selection follows `IDIS_DEBATE_BACKEND`. | Without Anthropic configuration, scoring uses deterministic scorecard output. |
 | RAG/evidence retrieval | `not-implemented` | pgvector is provisioned in database setup only; no app embedding/index/query path exists. Debate retrieval node only marks retrieval complete. | Need production embedding, index, query, and FULL wiring into debate/analysis/evidence. |
-| Graph/evidence layer | `code-exists-but-not-wired` | Neo4j driver, graph repository, and projection service exist. | FULL does not call `GraphProjectionService`; `NEO4J_*` env is absent. |
+| Graph/evidence layer | `missing-credentials` | FULL calls `GraphProjectionService` after durable Postgres writes, projecting deal/document/span/claim/evidence, the Sanad transmission chain, defects, and calculations into Neo4j (idempotent MERGE, tenant-scoped). Deliverables projection is deferred (no Deliverable node in the locked 12-node schema). | `NEO4J_*` env is absent; strict blocks safely via `GRAPH_HEALTH_BLOCKED` until configured. Graph retrieval into analysis/debate is a later slice. |
 | Deliverable generation | `live-wired-and-used` | `DeliverablesGenerator.generate()` is called by FULL deliverables. | Generated bundle is in-memory and only as good as upstream evidence; it is not strict-live if upstream components are fallback/missing. |
 | Export bundle | `code-exists-but-not-wired` | Product has deliverable export primitives; Slice 53 private exporter was experiment tooling and is not part of product wiring. | Product-wired export from strict-live run outputs is still required. |
 
@@ -61,7 +61,7 @@ These are not sufficient for full-live VC-grade readiness because strict live re
 
 - OCR execution exists, but default ingestion omits `OcrConfig`.
 - Media/STT parsing exists, but FULL/public upload defers MP4 files rather than transcribing them.
-- Neo4j graph projection exists, but FULL does not call the graph projection service.
+- Neo4j graph projection is wired into FULL (it calls `GraphProjectionService` after durable Postgres writes, feeding claims/evidence/Sanad chain/defects/calculations); it requires `NEO4J_*` env to write and blocks safely without it. Graph retrieval into analysis/debate is not yet wired (later slice).
 - Product export primitives exist, but strict VC bundle export is not product-wired.
 - Several methodology boundaries are in-memory/run-scoped and explicitly defer persistence, promotion, provider execution, Layer 2 decisioning, and delivery surfaces. (Exception: the methodology deterministic-calculation boundary now persists durably and is unified with the CALC step per Slice87; the others remain in-memory.)
 
@@ -155,7 +155,7 @@ Required enrichment credential work:
    - Add embedding generation.
    - Add pgvector index/query path.
    - Wire RAG results into debate, analysis, and evidence references.
-   - Wire Neo4j graph projection and graph retrieval into FULL.
+   - Wire Neo4j graph retrieval into FULL (graph projection is already wired).
 
 7. Implement Layer 2 debate:
    - Add distinct IC challenge/review debate orchestration.

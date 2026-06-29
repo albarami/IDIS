@@ -28,6 +28,7 @@ class CalcCandidate:
     calc_type: CalcType
     input_values: dict[str, Decimal]
     input_grades: list[InputGradeInfo]
+    metadata: dict[str, str]
 
 
 class ClaimsReader(Protocol):
@@ -124,6 +125,7 @@ class CalcRunner:
                     calc_type=candidate.calc_type,
                     input_values=candidate.input_values,
                     input_grades=candidate.input_grades,
+                    metadata=candidate.metadata,
                 )
             except ExtractionGateBlockedError as exc:
                 blocked_candidates.append(_blocked_from_gate(calc_type, exc))
@@ -214,11 +216,19 @@ class CalcRunner:
             assert input_grade is not None
             input_grades.append(input_grade)
 
+        # Local import avoids a module-level cycle (the methodology helpers import utilities from
+        # this module). Shared metadata source so CALC and methodology hashes align (Slice87 G1).
+        from idis.services.runs.methodology_deterministic_calculation_helpers import (
+            metadata_for_calc,
+        )
+
+        candidate_claims = [claims_by_input[input_key] for input_key in spec.required_inputs]
         return (
             CalcCandidate(
                 calc_type=calc_type,
                 input_values=input_values,
                 input_grades=input_grades,
+                metadata=metadata_for_calc(calc_type, candidate_claims),
             ),
             None,
         )

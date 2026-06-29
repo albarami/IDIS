@@ -35,7 +35,7 @@ Allowed strict classifications:
 | Extraction LLM | `missing-credentials` | Extraction client selection defaults to deterministic unless `IDIS_EXTRACT_BACKEND=anthropic`. | `ANTHROPIC_API_KEY` is absent; strict mode must reject deterministic extraction. |
 | OCR | `code-exists-but-not-wired` | `TesseractOcrAdapter` and OCR parser configuration exist; default ingestion does not enable OCR. | FULL must enable OCR for OCR-required files or fail before execution. |
 | MP4/STT | `missing-infrastructure` | Faster-whisper adapter exists; current data room includes MP4s; harness/public upload path defers media. | `ffmpeg`, `ffprobe`, and a provisioned faster-whisper model are missing; FULL media ingestion is not wired. |
-| Deterministic calculations | `live-wired-and-used` | `CalcRunner` and deterministic calculation steps are wired into SNAPSHOT/FULL paths. | None for deterministic calculation execution itself. |
+| Deterministic calculations | `live-wired-and-used` | `CalcRunner` and deterministic calculation steps are wired into SNAPSHOT/FULL paths. Slice87 persists the methodology records durably and dedups the CALC step against them by reproducibility hash (both paths share the `metadata_for_calc` source so metadata-bearing types unify too), and surfaced calc outputs into financial tables, graph projection, RAG evidence, and the VC `calculation_package` (with `formula_version`). | None for execution itself. |
 | External enrichment APIs | `missing-credentials` | Default registry includes public and BYOL connectors; FULL enrichment iterates providers. | BYOL credentials are not loaded into tenant credential storage; strict mode must fail on provider errors instead of swallowing them. |
 | Live LLM/model clients | `missing-credentials` | Anthropic client exists and fails closed when selected without key; defaults remain deterministic. | `ANTHROPIC_API_KEY` is absent; strict mode must require live backend selection for extraction, debate, analysis, and scoring. |
 | Agent analysis | `missing-credentials` | Eight specialist agents are wired through FULL analysis. | Analysis uses `IDIS_DEBATE_BACKEND`; without Anthropic configuration it uses deterministic analysis output. |
@@ -63,7 +63,7 @@ These are not sufficient for full-live VC-grade readiness because strict live re
 - Media/STT parsing exists, but FULL/public upload defers MP4 files rather than transcribing them.
 - Neo4j graph projection exists, but FULL does not call the graph projection service.
 - Product export primitives exist, but strict VC bundle export is not product-wired.
-- Several methodology boundaries are in-memory/run-scoped and explicitly defer persistence, promotion, provider execution, Layer 2 decisioning, and delivery surfaces.
+- Several methodology boundaries are in-memory/run-scoped and explicitly defer persistence, promotion, provider execution, Layer 2 decisioning, and delivery surfaces. (Exception: the methodology deterministic-calculation boundary now persists durably and is unified with the CALC step per Slice87; the others remain in-memory.)
 
 ## Missing Credentials And Env Vars
 

@@ -177,3 +177,61 @@ def test_calc_path_does_not_over_suppress_distinct_inputs() -> None:
 
     assert distinct["persisted_count"] == 1  # different inputs -> persisted, not deduped away
     assert len(repo.list_by_deal(CR_DEAL)) == 2
+
+
+def test_calc_step_dedups_metadata_bearing_methodology_calc() -> None:
+    """Cross-path dedup for metadata-bearing calc types (GROSS_MARGIN), not just metadata-free.
+
+    The methodology path stamps output metadata (e.g. unit=percent, currency) into the
+    reproducibility hash via metadata_for_calc; the CALC step must produce the SAME metadata so it
+    dedups against the methodology-authoritative record instead of persisting a parallel duplicate.
+    """
+    from decimal import Decimal as _D
+
+    from idis.calc.engine import CalcEngine, InputGradeInfo
+    from idis.calc.formulas.core import register_core_formulas
+    from idis.calc.formulas.registry import FormulaRegistry
+    from idis.models.calc_sanad import SanadGrade
+
+    repo = InMemoryCalculationsRepository(CR_TENANT)
+
+    # Seed a methodology-authoritative GROSS_MARGIN calc WITH methodology metadata (unit+currency),
+    # exactly as metadata_for_calc stamps it.
+    FormulaRegistry.reset_instance()
+    engine = CalcEngine(
+        registry=register_core_formulas(FormulaRegistry()), enforce_extraction_gate=False
+    )
+    seeded = engine.run(
+        tenant_id=CR_TENANT,
+        deal_id=CR_DEAL,
+        calc_type=CalcType.GROSS_MARGIN,
+        input_values={"revenue": _D("1000"), "cogs": _D("400")},
+        input_grades=[
+            InputGradeInfo(claim_id="c-revenue", grade=SanadGrade.A),
+            InputGradeInfo(claim_id="c-cogs", grade=SanadGrade.A),
+        ],
+        metadata={"unit": "percent", "currency": "USD"},
+    )
+    repo.create(calculation=seeded.calculation, calc_sanad=seeded.calc_sanad)
+    seeded_id = seeded.calculation.calc_id
+
+    # The CALC step over the SAME claims must reuse the methodology calc, not duplicate it.
+    claims = {
+        "c-revenue": _money_claim("c-revenue", "revenue", "1000"),
+        "c-cogs": _money_claim("c-cogs", "cogs", "400"),
+    }
+    sanads = {"c-revenue": _sanad("c-revenue"), "c-cogs": _sanad("c-cogs")}
+    runner = CalcRunner(
+        tenant_id=CR_TENANT,
+        deal_id=CR_DEAL,
+        claims_repo=FakeClaimsRepository(claims),
+        sanads_repo=FakeSanadsRepository(sanads),
+        calculations_repo=repo,
+    )
+    result = runner.run(
+        created_claim_ids=["c-revenue", "c-cogs"], calc_types=[CalcType.GROSS_MARGIN]
+    )
+
+    assert result["calc_ids"] == [seeded_id]  # reused the methodology-authoritative id
+    assert result["persisted_count"] == 0  # no parallel duplicate persisted
+    assert len(repo.list_by_deal(CR_DEAL)) == 1

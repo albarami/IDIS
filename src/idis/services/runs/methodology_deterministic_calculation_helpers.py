@@ -151,9 +151,13 @@ def predicate_from_claim(
 
 def metadata_for_calc(
     calc_type: CalcType,
-    claims: list[RunScopedMaterializedClaim | RunScopedMaterializedClaimShell],
+    claims: list[Any],
 ) -> dict[str, str]:
-    """Build safe scalar metadata for the canonical CalcOutput."""
+    """Build safe scalar metadata for the canonical CalcOutput.
+
+    Shared by the methodology path (run-scoped claim objects) and the CALC step (`CalcRunner`,
+    repository dict claims) so both stamp identical output metadata into the reproducibility hash.
+    """
     currency = common_attr(claims, "currency")
     metadata: dict[str, str] = {}
     if calc_type in {CalcType.GROSS_MARGIN, CalcType.LTV_CAC_RATIO}:
@@ -167,16 +171,26 @@ def metadata_for_calc(
 
 
 def common_attr(
-    claims: list[RunScopedMaterializedClaim | RunScopedMaterializedClaimShell],
+    claims: list[Any],
     attr: str,
 ) -> str | None:
-    """Return a value-struct attribute only when all inputs agree."""
-    values = {
-        str(getattr(value_struct, attr))
-        for claim in claims
-        if (value_struct := getattr(claim, "value_struct", None)) is not None
-        and getattr(value_struct, attr, None) is not None
-    }
+    """Return a value-struct attribute only when all inputs agree.
+
+    Reads `claim.value_struct.<attr>` for run-scoped claim objects, or `claim["value"][<attr>]`
+    for repository dict claims, so the methodology and CALC paths share one metadata source.
+    """
+    values: set[str] = set()
+    for claim in claims:
+        value_struct = getattr(claim, "value_struct", None)
+        if value_struct is not None:
+            raw = getattr(value_struct, attr, None)
+        elif isinstance(claim, dict):
+            value = claim.get("value")
+            raw = value.get(attr) if isinstance(value, dict) else None
+        else:
+            raw = None
+        if raw is not None:
+            values.add(str(raw))
     if len(values) == 1:
         return next(iter(values))
     return None

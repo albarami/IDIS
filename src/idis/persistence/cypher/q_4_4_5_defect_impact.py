@@ -12,7 +12,7 @@ QUERY = """\
 MATCH (defect:Defect {defect_id: $defect_id, tenant_id: $tenant_id})
       <-[:HAS_DEFECT]-(claim:Claim)
 OPTIONAL MATCH (calc:Calculation)-[:DERIVED_FROM]->(claim)
-RETURN defect.defect_type, defect.severity,
+RETURN defect.defect_type AS defect_type, defect.severity AS severity,
        collect(DISTINCT {
          claim_id: claim.claim_id,
          claim_text: claim.claim_text,

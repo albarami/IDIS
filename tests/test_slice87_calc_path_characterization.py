@@ -242,10 +242,14 @@ def test_graph_and_rag_full_step_seams_feed_calc() -> None:
     # Task 5: the RAG step additively surfaces deterministic calc evidence.
     assert "rag_calc_evidence" in runs_src
 
-    # The underlying retrieval modules stay calc-agnostic — the feed is at the step-orchestration
-    # layer (no new infra in the retrieval services).
+    # The retrieval modules do no calc COMPUTATION — no CalcRunner/CalcEngine — so calc feeding
+    # stays at the step-orchestration layer. They MAY surface calc IDs already present in graph
+    # relationships (Slice89 defect-impact's affected_calc_ids), which is graph-derived provenance.
     graph_retrieval = (_SRC / "services" / "graph" / "retrieval.py").read_text(encoding="utf-8")
-    assert "calc" not in graph_retrieval.lower()
+    assert "CalcRunner" not in graph_retrieval
+    assert "CalcEngine" not in graph_retrieval
+    assert "calc_runner" not in graph_retrieval.lower()
+    assert "calc_engine" not in graph_retrieval.lower()
 
 
 # --- 8. migration 0005 already provides both tables — no new migration expected ---

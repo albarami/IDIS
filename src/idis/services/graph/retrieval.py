@@ -45,6 +45,13 @@ class GraphRepositoryProtocol(Protocol):
         claim_id: str,
     ) -> list[dict[str, Any]]: ...
 
+    def get_defect_impact(
+        self,
+        *,
+        tenant_id: str,
+        defect_id: str,
+    ) -> list[dict[str, Any]]: ...
+
 
 class GraphRetrievalService:
     """Run existing Neo4j Cypher retrievals and return safe counts only."""
@@ -59,8 +66,15 @@ class GraphRetrievalService:
         tenant_id: str,
         deal_id: str,
         claim_ids: list[str],
+        defect_ids: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Return a tenant-scoped graph retrieval summary without raw records."""
+        """Return a tenant-scoped graph retrieval summary with safe conclusions.
+
+        Preserves the existing counts-only ``query_summaries`` and adds ``graph_conclusions``
+        derived deterministically from safe fields only (ids, grades, statuses, counts) — never
+        raw spans/text/paths/source names. The defect-impact query is run only when ``defect_ids``
+        are supplied.
+        """
         query_summaries: list[dict[str, Any]] = []
 
         deal_claims = self._graph_repo.get_deal_claims_with_grades(
@@ -80,6 +94,7 @@ class GraphRetrievalService:
         )
 
         safe_claim_ids = sorted({claim_id for claim_id in claim_ids if claim_id})
+        claim_conclusions: list[dict[str, Any]] = []
         for claim_id in safe_claim_ids:
             chain = self._graph_repo.get_claim_sanad_chain(
                 tenant_id=tenant_id,
@@ -114,6 +129,25 @@ class GraphRetrievalService:
                     "record_count": len(weakest),
                 }
             )
+            claim_conclusions.append(
+                _claim_conclusion(claim_id, chain=chain, clusters=clusters, weakest=weakest)
+            )
+
+        safe_defect_ids = sorted({defect_id for defect_id in (defect_ids or []) if defect_id})
+        defect_impacts: list[dict[str, Any]] = []
+        for defect_id in safe_defect_ids:
+            impact = self._graph_repo.get_defect_impact(
+                tenant_id=tenant_id,
+                defect_id=defect_id,
+            )
+            query_summaries.append(
+                {
+                    "query": "defect_impact",
+                    "defect_id": defect_id,
+                    "record_count": len(impact),
+                }
+            )
+            defect_impacts.append(_defect_conclusion(defect_id, records=impact))
 
         return {
             "status": "retrieved",
@@ -122,4 +156,54 @@ class GraphRetrievalService:
             "claim_ids": safe_claim_ids,
             "retrieval_count": len(query_summaries),
             "query_summaries": query_summaries,
+            "graph_conclusions": {
+                "claims": claim_conclusions,
+                "defect_impacts": defect_impacts,
+                "co_occurring_entity_count": len(entity_cooccurrence),
+            },
         }
+
+
+def _claim_conclusion(
+    claim_id: str,
+    *,
+    chain: list[dict[str, Any]],
+    clusters: list[dict[str, Any]],
+    weakest: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Derive a per-claim graph conclusion from safe fields only (no raw spans/text/paths)."""
+    cluster = clusters[0] if clusters else {}
+    weak = weakest[0] if weakest else {}
+    chain_depth = max((int(record.get("chain_depth", 0) or 0) for record in chain), default=0)
+    weakest_grade = weak.get("min_grade")
+    corroboration_status = cluster.get("corroboration_status")
+    return {
+        "claim_id": claim_id,
+        "chain_depth": chain_depth,
+        "weakest_grade": str(weakest_grade) if weakest_grade else None,
+        "corroboration_status": str(corroboration_status) if corroboration_status else None,
+        "independent_source_count": int(cluster.get("independent_source_count", 0) or 0),
+    }
+
+
+def _defect_conclusion(defect_id: str, *, records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Derive a defect-impact conclusion (ids/types/severities only — never raw claim text)."""
+    record = records[0] if records else {}
+    affected = record.get("affected_claims") or []
+    affected_claim_ids = sorted(
+        {
+            str(item.get("claim_id"))
+            for item in affected
+            if isinstance(item, dict) and item.get("claim_id")
+        }
+    )
+    affected_calc_ids = sorted(
+        {str(calc_id) for calc_id in (record.get("affected_calculations") or []) if calc_id}
+    )
+    return {
+        "defect_id": defect_id,
+        "defect_type": str(record.get("defect_type") or ""),
+        "severity": str(record.get("severity") or ""),
+        "affected_claim_ids": affected_claim_ids,
+        "affected_calc_ids": affected_calc_ids,
+    }

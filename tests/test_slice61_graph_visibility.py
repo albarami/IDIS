@@ -89,6 +89,26 @@ class FakeGraphRepository:
         self.calls.append(("weakest_link", {"tenant_id": tenant_id, "claim_id": claim_id}))
         return [{"min_grade": "C", "source_system": "private_user"}]
 
+    def get_defect_impact(self, *, tenant_id: str, defect_id: str) -> list[dict[str, Any]]:
+        self.calls.append(("defect_impact", {"tenant_id": tenant_id, "defect_id": defect_id}))
+        # Mirrors aliased q_4_4_5 output; affected_claims carries the full map literal incl.
+        # adversarial claim_text (which the safe derivation drops).
+        return [
+            {
+                "defect_type": "CONTRADICTION",
+                "severity": "MAJOR",
+                "affected_claims": [
+                    {
+                        "claim_id": "claim-001",
+                        "claim_text": "PRIVATE raw revenue text must not leak",
+                        "materiality": 0.9,
+                        "grade": "B",
+                    }
+                ],
+                "affected_calculations": ["calc-001"],
+            }
+        ]
+
 
 class FailingProjectionService:
     """Projection service fake that reports a failed projection."""

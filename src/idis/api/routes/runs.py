@@ -1833,6 +1833,14 @@ def _run_full_deliverables(
     audit_sink = InMemoryAuditSink()
     generator = DeliverablesGenerator(audit_sink=audit_sink)
 
+    graph_conclusions: dict[str, Any] | None = None
+    if isinstance(graph_evidence, dict):
+        retrieval = graph_evidence.get("graph_retrieval")
+        if isinstance(retrieval, dict):
+            conclusions = retrieval.get("graph_conclusions")
+            if isinstance(conclusions, dict):
+                graph_conclusions = conclusions
+
     generated_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     bundle = generator.generate(
         ctx=analysis_context,
@@ -1841,6 +1849,7 @@ def _run_full_deliverables(
         deal_name=deal_id,
         generated_at=generated_at,
         deliverable_id_prefix=f"del-{run_id[:8]}",
+        graph_conclusions=graph_conclusions,
     )
 
     types: list[str] = [
@@ -2130,6 +2139,7 @@ def _run_full_graph_evidence(
         tenant_id=tenant_id,
         deal_id=deal_id,
         claim_ids=created_claim_ids,
+        defect_ids=projection_summary.get("projected_defect_ids"),
         retrieval_service=retrieval_service,
     )
     retrieval_status = retrieval_summary["status"]
@@ -2496,6 +2506,7 @@ def _project_graph_evidence(
         "projected_calculation_count": len(projected_calc_ids - {""}),
         "projected_sanad_step_count": len(projected_sanad_step_ids - {""}),
         "projected_defect_count": len(projected_defect_ids - {""}),
+        "projected_defect_ids": sorted(projected_defect_ids - {""}),
     }
 
 
@@ -2504,6 +2515,7 @@ def _retrieve_graph_evidence(
     tenant_id: str,
     deal_id: str,
     claim_ids: list[str],
+    defect_ids: list[str] | None = None,
     retrieval_service: Any = None,
 ) -> dict[str, Any]:
     from idis.services.graph.retrieval import GraphRetrievalService
@@ -2514,6 +2526,7 @@ def _retrieve_graph_evidence(
             tenant_id=tenant_id,
             deal_id=deal_id,
             claim_ids=claim_ids,
+            defect_ids=defect_ids,
         )
     except Exception:
         return {"status": "failed", "retrieval_count": 0, "query_summaries": []}

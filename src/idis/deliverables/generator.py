@@ -128,6 +128,7 @@ class DeliverablesGenerator:
         deal_name: str,
         generated_at: str,
         deliverable_id_prefix: str,
+        graph_conclusions: dict[str, Any] | None = None,
     ) -> DeliverablesBundle:
         """Generate the full deliverables bundle.
 
@@ -181,6 +182,7 @@ class DeliverablesGenerator:
                 deal_name=deal_name,
                 generated_at=generated_at,
                 deliverable_id=f"{deliverable_id_prefix}-memo",
+                graph_conclusions=graph_conclusions,
             )
 
             truth = self._build_truth_dashboard(
@@ -452,6 +454,7 @@ class DeliverablesGenerator:
         deal_name: str,
         generated_at: str,
         deliverable_id: str,
+        graph_conclusions: dict[str, Any] | None = None,
     ) -> ICMemo:
         """Build ICMemo by bridging agent reports to existing builder."""
         builder = ICMemoBuilder(
@@ -508,6 +511,45 @@ class DeliverablesGenerator:
                 claim_refs=list(row.input_claim_ids),
                 calc_refs=[row.calc_id],
                 sanad_grade=row.calc_grade,
+            )
+
+        # Additive: render Task-2 graph_conclusions as facts with existing claim/calc provenance.
+        # Safe fields only (grades, statuses, counts, ids) — never raw text/paths/names.
+        for claim_conclusion in (graph_conclusions or {}).get("claims", []):
+            claim_id = claim_conclusion.get("claim_id")
+            if not claim_id:
+                continue  # No-Free-Facts requires claim backing
+            builder.add_risks_fact(
+                text=(
+                    "Graph-derived lineage: weakest-link grade "
+                    f"{claim_conclusion.get('weakest_grade') or 'n/a'}, corroboration "
+                    f"{claim_conclusion.get('corroboration_status') or 'n/a'}, "
+                    f"{int(claim_conclusion.get('independent_source_count', 0) or 0)} "
+                    "independent source(s), chain depth "
+                    f"{int(claim_conclusion.get('chain_depth', 0) or 0)}."
+                ),
+                claim_refs=[str(claim_id)],
+                calc_refs=[],
+            )
+        for defect_impact in (graph_conclusions or {}).get("defect_impacts", []):
+            affected_claim_ids = sorted(
+                {str(cid) for cid in (defect_impact.get("affected_claim_ids") or []) if cid}
+            )
+            affected_calc_ids = sorted(
+                {str(cid) for cid in (defect_impact.get("affected_calc_ids") or []) if cid}
+            )
+            if not affected_claim_ids and not affected_calc_ids:
+                continue  # No-Free-Facts requires refs
+            builder.add_risks_fact(
+                text=(
+                    "Graph-derived defect impact: "
+                    f"{defect_impact.get('severity') or 'n/a'} "
+                    f"{defect_impact.get('defect_type') or 'defect'} affecting "
+                    f"{len(affected_claim_ids)} claim(s) and "
+                    f"{len(affected_calc_ids)} calculation(s)."
+                ),
+                claim_refs=affected_claim_ids,
+                calc_refs=affected_calc_ids,
             )
 
         all_claim_refs: list[str] = []

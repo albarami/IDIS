@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Protocol
 
@@ -18,6 +20,8 @@ from idis.services.rag.embedding_health import (
 )
 
 SOURCE_TYPE_DOCUMENT_SPAN = "document_span"
+SOURCE_TYPE_CALC_OUTPUT = "calc_output"
+SOURCE_TYPE_GRAPH_SUMMARY = "graph_summary"
 MAX_PROBE_EMBEDDINGS = 3
 
 
@@ -124,6 +128,200 @@ def index_document_spans_for_deal(
             "status": "indexed",
             "indexed_span_count": indexed_span_count,
             "skipped_span_count": skipped_span_count,
+        },
+        probe_embeddings,
+    )
+
+
+def _calc_output_text(calc: dict[str, Any]) -> str:
+    """Construct a deterministic, safe embed text from a calc's output (no raw private content)."""
+    output = calc.get("output") or {}
+    primary = str(output.get("primary_value") or "").strip()
+    unit = str(output.get("unit") or output.get("currency") or "").strip()
+    calc_type = str(calc.get("calc_type") or "calc").strip()
+    return f"{calc_type}: {primary} {unit}".strip()
+
+
+def index_calc_outputs_for_deal(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+    calculations: Sequence[dict[str, Any]],
+    repository: VectorEmbeddingsRepository,
+    embed_batch: Callable[[list[str]], list[list[float]]],
+    embedding_model: str,
+    embedding_dimensions: int = VECTOR_EMBEDDING_DIMENSIONS,
+) -> tuple[dict[str, Any], list[list[float]]]:
+    """Index persisted calc outputs and return a safe summary plus probe vectors.
+
+    Mirrors ``index_document_spans_for_deal`` for the ``calc_output`` source type on the existing
+    vector schema: ``source_id`` is the calc_id, ``content_hash`` is the reproducibility hash
+    (idempotent dedup). Only safe output text (calc type + primary value + unit) is embedded — never
+    raw inputs or claim text.
+    """
+    eligible: list[dict[str, str]] = []
+    skipped_calc_count = 0
+    for calc in calculations:
+        if not isinstance(calc, dict):
+            skipped_calc_count += 1
+            continue
+        calc_id = str(calc.get("calc_id") or "").strip()
+        content_hash = str(calc.get("reproducibility_hash") or "").strip()
+        text = _calc_output_text(calc)
+        if not calc_id or not content_hash or not text:
+            skipped_calc_count += 1
+            continue
+        eligible.append({"calc_id": calc_id, "content_hash": content_hash, "text": text})
+
+    if not eligible:
+        return (
+            {
+                "status": "skipped",
+                "indexed_calc_count": 0,
+                "skipped_calc_count": skipped_calc_count,
+            },
+            [],
+        )
+
+    embeddings = embed_batch([calc["text"] for calc in eligible])
+    if len(embeddings) != len(eligible):
+        msg = "Embedding provider returned an unexpected batch size."
+        raise ValueError(msg)
+
+    indexed_calc_count = 0
+    probe_embeddings: list[list[float]] = []
+    for calc, embedding in zip(eligible, embeddings, strict=True):
+        repository.upsert_embedding(
+            deal_id=deal_id,
+            source_type=SOURCE_TYPE_CALC_OUTPUT,
+            source_id=calc["calc_id"],
+            content_hash=calc["content_hash"],
+            embedding=embedding,
+            embedding_model=embedding_model,
+            embedding_dimensions=embedding_dimensions,
+            run_id=run_id,
+        )
+        indexed_calc_count += 1
+        if len(probe_embeddings) < MAX_PROBE_EMBEDDINGS:
+            probe_embeddings.append(embedding)
+
+    return (
+        {
+            "status": "indexed",
+            "indexed_calc_count": indexed_calc_count,
+            "skipped_calc_count": skipped_calc_count,
+        },
+        probe_embeddings,
+    )
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(value)
+    except (ValueError, AttributeError, TypeError):
+        return False
+    return True
+
+
+def _graph_claim_text(claim: dict[str, Any]) -> str:
+    """Safe per-claim graph summary text (grades/statuses/counts only — no ids or raw payload)."""
+    return (
+        "Graph lineage: chain depth "
+        f"{int(claim.get('chain_depth', 0) or 0)}, weakest grade "
+        f"{claim.get('weakest_grade') or 'n/a'}, corroboration "
+        f"{claim.get('corroboration_status') or 'n/a'}, "
+        f"{int(claim.get('independent_source_count', 0) or 0)} independent source(s)"
+    )
+
+
+def _graph_defect_text(defect: dict[str, Any]) -> str:
+    """Safe per-defect graph summary text (type/severity/counts only — no ids or raw payload)."""
+    affected_claims = [
+        claim_id for claim_id in (defect.get("affected_claim_ids") or []) if claim_id
+    ]
+    affected_calcs = [calc_id for calc_id in (defect.get("affected_calc_ids") or []) if calc_id]
+    return (
+        "Graph defect impact: "
+        f"{defect.get('severity') or 'n/a'} {defect.get('defect_type') or 'defect'} "
+        f"affecting {len(affected_claims)} claim(s) and {len(affected_calcs)} calculation(s)"
+    )
+
+
+def index_graph_summaries_for_deal(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+    graph_conclusions: dict[str, Any] | None,
+    repository: VectorEmbeddingsRepository,
+    embed_batch: Callable[[list[str]], list[list[float]]],
+    embedding_model: str,
+    embedding_dimensions: int = VECTOR_EMBEDDING_DIMENSIONS,
+) -> tuple[dict[str, Any], list[list[float]]]:
+    """Index Slice89 ``graph_conclusions`` as ``graph_summary`` embeddings (per claim / per defect).
+
+    Constructs SAFE text from safe fields only (grades, statuses, counts, types) — never raw graph
+    rows, evidence text, ids, or private payloads. ``source_id`` is the claim/defect UUID; records
+    without a safe UUID source id are skipped and counted. ``content_hash`` is a deterministic hash
+    of the constructed text (idempotent dedup).
+    """
+    conclusions = graph_conclusions or {}
+    records: list[dict[str, str]] = []
+    skipped_graph_summary_count = 0
+
+    for claim in conclusions.get("claims") or []:
+        source_id = str(claim.get("claim_id") or "").strip() if isinstance(claim, dict) else ""
+        if not _is_uuid(source_id):
+            skipped_graph_summary_count += 1
+            continue
+        records.append({"source_id": source_id, "text": _graph_claim_text(claim)})
+
+    for defect in conclusions.get("defect_impacts") or []:
+        source_id = str(defect.get("defect_id") or "").strip() if isinstance(defect, dict) else ""
+        if not _is_uuid(source_id):
+            skipped_graph_summary_count += 1
+            continue
+        records.append({"source_id": source_id, "text": _graph_defect_text(defect)})
+
+    if not records:
+        return (
+            {
+                "status": "skipped",
+                "indexed_graph_summary_count": 0,
+                "skipped_graph_summary_count": skipped_graph_summary_count,
+            },
+            [],
+        )
+
+    embeddings = embed_batch([record["text"] for record in records])
+    if len(embeddings) != len(records):
+        msg = "Embedding provider returned an unexpected batch size."
+        raise ValueError(msg)
+
+    indexed_graph_summary_count = 0
+    probe_embeddings: list[list[float]] = []
+    for record, embedding in zip(records, embeddings, strict=True):
+        content_hash = hashlib.sha256(record["text"].encode("utf-8")).hexdigest()
+        repository.upsert_embedding(
+            deal_id=deal_id,
+            source_type=SOURCE_TYPE_GRAPH_SUMMARY,
+            source_id=record["source_id"],
+            content_hash=content_hash,
+            embedding=embedding,
+            embedding_model=embedding_model,
+            embedding_dimensions=embedding_dimensions,
+            run_id=run_id,
+        )
+        indexed_graph_summary_count += 1
+        if len(probe_embeddings) < MAX_PROBE_EMBEDDINGS:
+            probe_embeddings.append(embedding)
+
+    return (
+        {
+            "status": "indexed",
+            "indexed_graph_summary_count": indexed_graph_summary_count,
+            "skipped_graph_summary_count": skipped_graph_summary_count,
         },
         probe_embeddings,
     )

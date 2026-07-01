@@ -16,6 +16,8 @@ No additional long `real_example` fallback run should be used as evidence for fu
 
 > **Update (2026-06-11, post-Slice86):** The strict enrichment-execution items (see the *External enrichment APIs* row's "strict mode must fail on provider errors instead of swallowing them" and *Missing Implementations* "Strict provider error handling that fails instead of silently continuing") are now implemented: provider errors/blocked outcomes are **fatal in strict FULL by default**, with a per-provider `optional_in_strict` registration policy (all 15 default providers mandatory) whose failures are recorded-and-continued instead. The ENRICHMENT step additionally records a per-provider hit/miss/error/cache/blocked **ledger** (with rights class, `SourceGrade` mapping GREEN→B / YELLOW→C / RED+BYOL→C / RED-without-BYOL→D, and narrow identifier-mismatch conflict flags), and enrichment provenance is now **output-visible in the VC product bundle** (`run_summary` enrichment counts + `evidence_index.enrichment_evidence`); the strict provider matrix's `provenance_output_status` accordingly reports `enrichment_package_output_visible` for registered providers. FRED/Finnhub/FMP URL-key exposure is hardened by FetchError + httpx-log redaction (Finnhub header auth was not verifiable from primary docs, so query-param auth is retained). The Slice-53 census below is otherwise preserved as the original gap analysis.
 
+> **Update (2026-07-01, post-Slice90):** The RAG items (see *Missing Infrastructure* "RAG embedding/index/query infrastructure" and *Missing Implementations* "RAG embeddings, vector index, retrieval API, and FULL integration") are now implemented and FULL-wired: a live OpenAI embedding provider (approved-live-only; the `deterministic` backend is rejected), pgvector storage (vector(1536), HNSW, RLS), indexing, and probe retrieval, strict-gated via `RAG_CONFIG_BLOCKED`/`RAG_HEALTH_BLOCKED`. `document_span` indexes parsed spans, OCR text, and transcripts; `calc_output` and `graph_summary` are indexed; enrichment-record indexing is deferred (no durable UUID source id). The Slice-53 census below is otherwise preserved as the original gap analysis.
+
 ## Strict Classification
 
 Allowed strict classifications:
@@ -43,7 +45,7 @@ Allowed strict classifications:
 | Debate layer 2 / IC challenge | `not-implemented` | Audit found no distinct second challenge/review debate orchestrator. | A production Layer 2 debate design and implementation are required. |
 | Muhasabah / NFF gates | `live-wired-and-used` | Debate, analysis, scoring, and deliverables validate No-Free-Facts / muhasabah outputs. | Validation is not enough to make deterministic or unwired components full-live. |
 | Scoring LLM | `missing-credentials` | Scoring engine is wired, but client selection follows `IDIS_DEBATE_BACKEND`. | Without Anthropic configuration, scoring uses deterministic scorecard output. |
-| RAG/evidence retrieval | `not-implemented` | pgvector is provisioned in database setup only; no app embedding/index/query path exists. Debate retrieval node only marks retrieval complete. | Need production embedding, index, query, and FULL wiring into debate/analysis/evidence. |
+| RAG/evidence retrieval | `missing-credentials` | Live OpenAI embedding (approved-live-only — the `deterministic` backend is rejected), pgvector storage (vector(1536), HNSW, RLS), span indexing, and probe retrieval exist and are FULL-wired; strict blocks safely via `RAG_CONFIG_BLOCKED`/`RAG_HEALTH_BLOCKED`. Indexes `document_span` (parsed spans, OCR text, and transcripts), `calc_output`, and `graph_summary`. | `IDIS_ENABLE_VECTOR_SEARCH`/`OPENAI_API_KEY`/pgvector env required; strict blocks until configured. Enrichment-record indexing is deferred (no durable UUID source id — needs a durable enrichment table first). |
 | Graph/evidence layer | `missing-credentials` | FULL calls `GraphProjectionService` after durable Postgres writes, projecting deal/document/span/claim/evidence, the Sanad transmission chain, defects, and calculations into Neo4j (idempotent MERGE, tenant-scoped). Deliverables projection is deferred (no Deliverable node in the locked 12-node schema). | `NEO4J_*` env is absent; strict blocks safely via `GRAPH_HEALTH_BLOCKED` until configured. Graph retrieval is wired into FULL and feeds graph-derived conclusions (per-claim lineage + defect-impact, with claim/calc provenance) into the VC package; analysis/debate/scoring/Layer 2 consumer feeds are a later follow-on. |
 | Deliverable generation | `live-wired-and-used` | `DeliverablesGenerator.generate()` is called by FULL deliverables. | Generated bundle is in-memory and only as good as upstream evidence; it is not strict-live if upstream components are fallback/missing. |
 | Export bundle | `code-exists-but-not-wired` | Product has deliverable export primitives; Slice 53 private exporter was experiment tooling and is not part of product wiring. | Product-wired export from strict-live run outputs is still required. |
@@ -152,9 +154,8 @@ Required enrichment credential work:
    - Persist and expose provenance references in evidence and deliverables.
 
 6. Implement retrieval layers:
-   - Add embedding generation.
-   - Add pgvector index/query path.
-   - Wire RAG results into debate, analysis, and evidence references.
+   - Add durable UUID-keyed enrichment-record persistence, then index enrichment records — the only scoped evidence type not yet indexed (parsed spans, OCR, and transcripts index via `document_span`; `calc_output` and `graph_summary` are indexed).
+   - Wire RAG retrieval results into analysis/debate (retrieval is already wired into FULL and surfaced in the VC package).
    - Wire graph-retrieval conclusions into analysis/debate/scoring/Layer 2 (retrieval is already wired into FULL and feeds the VC package).
 
 7. Implement Layer 2 debate:

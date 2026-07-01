@@ -1931,12 +1931,17 @@ class RunOrchestrator:
                 },
             }
 
+        graph_retrieval = accumulated.get("graph_retrieval")
+        graph_conclusions = (
+            graph_retrieval.get("graph_conclusions") if isinstance(graph_retrieval, dict) else None
+        )
         return ctx.rag_fn(
             run_id=ctx.run_id,
             tenant_id=ctx.tenant_id,
             deal_id=ctx.deal_id,
             documents=ctx.documents,
             calc_ids=accumulated.get("calc_ids", []),
+            graph_conclusions=graph_conclusions,
         )
 
     def _execute_debate(

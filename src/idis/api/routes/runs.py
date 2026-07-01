@@ -2165,22 +2165,119 @@ def _run_full_graph_evidence(
     }
 
 
+def _index_full_calc_outputs(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+    calc_ids: list[str] | None,
+    repository: Any,
+    env: Any,
+    db_conn: Any,
+    embedding_model: str,
+    embedding_dimensions: int,
+    calc_indexing_service: Any,
+) -> tuple[dict[str, Any], list[list[float]]]:
+    """Index the run's durable calc outputs into pgvector (additive; same provider as spans)."""
+    from idis.services.rag.indexing import create_openai_embed_batch, index_calc_outputs_for_deal
+
+    safe_calc_ids = sorted({str(calc_id) for calc_id in (calc_ids or []) if str(calc_id).strip()})
+    if not safe_calc_ids:
+        return ({"status": "skipped", "indexed_calc_count": 0, "skipped_calc_count": 0}, [])
+    if calc_indexing_service is not None:
+        injected: tuple[dict[str, Any], list[list[float]]] = calc_indexing_service(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            run_id=run_id,
+            calc_ids=safe_calc_ids,
+            repository=repository,
+            embedding_model=embedding_model,
+            embedding_dimensions=embedding_dimensions,
+        )
+        return injected
+    from idis.persistence.repositories.calculations import get_calculations_repository
+
+    calc_repo = get_calculations_repository(db_conn, tenant_id)
+    wanted = set(safe_calc_ids)
+    calculations = [
+        calc for calc in calc_repo.list_by_deal(deal_id) if str(calc.get("calc_id")) in wanted
+    ]
+    return index_calc_outputs_for_deal(
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        run_id=run_id,
+        calculations=calculations,
+        repository=repository,
+        embed_batch=create_openai_embed_batch(env=env),
+        embedding_model=embedding_model,
+        embedding_dimensions=embedding_dimensions,
+    )
+
+
+def _index_full_graph_summaries(
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+    graph_conclusions: dict[str, Any] | None,
+    repository: Any,
+    env: Any,
+    embedding_model: str,
+    embedding_dimensions: int,
+    graph_indexing_service: Any,
+) -> tuple[dict[str, Any], list[list[float]]]:
+    """Index the run's graph_conclusions into pgvector (additive; same provider/repo as spans)."""
+    from idis.services.rag.indexing import create_openai_embed_batch, index_graph_summaries_for_deal
+
+    conclusions = graph_conclusions if isinstance(graph_conclusions, dict) else None
+    if not conclusions:
+        return (
+            {
+                "status": "skipped",
+                "indexed_graph_summary_count": 0,
+                "skipped_graph_summary_count": 0,
+            },
+            [],
+        )
+    if graph_indexing_service is not None:
+        injected: tuple[dict[str, Any], list[list[float]]] = graph_indexing_service(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            run_id=run_id,
+            graph_conclusions=conclusions,
+            repository=repository,
+            embedding_model=embedding_model,
+            embedding_dimensions=embedding_dimensions,
+        )
+        return injected
+    return index_graph_summaries_for_deal(
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        run_id=run_id,
+        graph_conclusions=conclusions,
+        repository=repository,
+        embed_batch=create_openai_embed_batch(env=env),
+        embedding_model=embedding_model,
+        embedding_dimensions=embedding_dimensions,
+    )
+
+
 def _run_full_rag_evidence(
     *,
     calc_ids: list[str] | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """RAG FULL-step seam; additively surfaces the deterministic calc evidence given to RAG.
+    """RAG FULL-step seam; surfaces calc evidence and indexes durable calc outputs into pgvector.
 
-    Threads accumulated calc ids through the existing seam and attaches a sanitized
-    rag_calc_evidence block to the step summary (and any blocked summary). No pgvector
-    calc-embedding is performed — this is an additive evidence reflection only.
+    Threads accumulated calc ids through the seam: attaches a sanitized rag_calc_evidence block to
+    the step summary (and any blocked summary), and indexes the run's durable calc outputs into
+    pgvector after span indexing (Slice90).
     """
     from idis.services.runs.orchestrator import RunStepBlockedError
 
     calc_evidence = _calc_evidence_block(calc_ids)
     try:
-        summary = _run_full_rag_evidence_inner(**kwargs)
+        summary = _run_full_rag_evidence_inner(calc_ids=calc_ids, **kwargs)
     except RunStepBlockedError as exc:
         result_summary = getattr(exc, "result_summary", None)
         if isinstance(result_summary, dict):
@@ -2198,13 +2295,17 @@ def _run_full_rag_evidence_inner(
     documents: list[dict[str, Any]],
     db_conn: Any = None,
     strict_full_live: bool | None = None,
+    calc_ids: list[str] | None = None,
+    graph_conclusions: dict[str, Any] | None = None,
     pgvector_health_checker: Any = None,
     embedding_health_checker: Any = None,
     indexing_service: Any = None,
     retrieval_service: Any = None,
     vector_repository_factory: Any = None,
+    calc_indexing_service: Any = None,
+    graph_indexing_service: Any = None,
 ) -> dict[str, Any]:
-    """Index persisted spans and run bounded probe retrieval for product visibility."""
+    """Index persisted spans, calc outputs, and graph summaries; then run probe retrieval."""
     from idis.services.rag.embedding_health import (
         EmbeddingHealthStatus,
         check_embedding_health,
@@ -2342,6 +2443,35 @@ def _run_full_rag_evidence_inner(
             )
         return summary
 
+    # Additive: index the run's durable calc outputs into pgvector after spans (Slice90 Task 4).
+    calc_indexing_summary, calc_probe_embeddings = _index_full_calc_outputs(
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        run_id=run_id,
+        calc_ids=calc_ids,
+        repository=repository,
+        env=env,
+        db_conn=db_conn,
+        embedding_model=embedding_model,
+        embedding_dimensions=embedding_dimensions,
+        calc_indexing_service=calc_indexing_service,
+    )
+    probe_embeddings = [*probe_embeddings, *calc_probe_embeddings]
+
+    # Additive: index the run's graph_conclusions into pgvector after calc outputs (Slice90 Task 5).
+    graph_indexing_summary, graph_probe_embeddings = _index_full_graph_summaries(
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        run_id=run_id,
+        graph_conclusions=graph_conclusions,
+        repository=repository,
+        env=env,
+        embedding_model=embedding_model,
+        embedding_dimensions=embedding_dimensions,
+        graph_indexing_service=graph_indexing_service,
+    )
+    probe_embeddings = [*probe_embeddings, *graph_probe_embeddings]
+
     if retrieval_service is not None:
         retrieval_summary = retrieval_service(
             deal_id=deal_id,
@@ -2360,6 +2490,8 @@ def _run_full_rag_evidence_inner(
         summary = {
             "rag_status": "blocked",
             "rag_indexing": indexing_summary,
+            "rag_calc_indexing": calc_indexing_summary,
+            "rag_graph_indexing": graph_indexing_summary,
             "rag_retrieval": retrieval_summary,
             "pgvector_health_status": pgvector_health.status.value,
             "embedding_health_status": embedding_health.status.value,
@@ -2375,6 +2507,8 @@ def _run_full_rag_evidence_inner(
     return {
         "rag_status": "available",
         "rag_indexing": indexing_summary,
+        "rag_calc_indexing": calc_indexing_summary,
+        "rag_graph_indexing": graph_indexing_summary,
         "rag_retrieval": retrieval_summary,
         "pgvector_health_status": pgvector_health.status.value,
         "embedding_health_status": embedding_health.status.value,

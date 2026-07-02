@@ -107,6 +107,7 @@ def _stub_debate(
     deal_id: str,
     created_claim_ids: list[str],
     calc_ids: list[str],
+    rag_retrieval: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Deterministic debate stub."""
     return {
@@ -140,6 +141,7 @@ def _stub_analysis(
     created_claim_ids: list[str],
     calc_ids: list[str],
     enrichment_refs: dict[str, Any],
+    rag_retrieval: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Deterministic analysis stub."""
     return {
@@ -665,6 +667,7 @@ class TestEnrichmentStepDataFlow:
             created_claim_ids: list[str],
             calc_ids: list[str],
             enrichment_refs: dict[str, Any],
+            rag_retrieval: dict[str, Any] | None = None,
         ) -> dict[str, Any]:
             received["enrichment_refs"] = enrichment_refs
             return {

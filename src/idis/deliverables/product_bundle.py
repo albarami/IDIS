@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -266,6 +267,7 @@ class ProductBundleExporter:
                     "rag_indexed_span_count": rag_package["indexing"].get("indexed_span_count", 0),
                     "rag_probe_count": rag_package["retrieval"].get("probe_count", 0),
                     "rag_match_count": rag_package["retrieval"].get("match_count", 0),
+                    "rag_runtime_proof": rag_package["runtime_proof"],
                     "layer2_status": layer2_package["status"],
                     "layer2_challenge_ids": layer2_package["layer2_challenge_ids"],
                     "layer2_finding_count": layer2_package["finding_count"],
@@ -623,7 +625,12 @@ def _rag_package(rag_evidence: dict[str, Any] | None) -> dict[str, Any]:
     status = str(rag_evidence.get("rag_status") or "")
     if status not in {"available", "blocked", "skipped"}:
         status = "available" if indexing["status"] == "indexed" else "skipped"
-    return {"status": status, "indexing": indexing, "retrieval": retrieval}
+    return {
+        "status": status,
+        "indexing": indexing,
+        "retrieval": retrieval,
+        "runtime_proof": _rag_runtime_proof(retrieval),
+    }
 
 
 def _layer2_package(layer2_evidence: dict[str, Any] | None) -> dict[str, Any]:
@@ -731,10 +738,12 @@ def _empty_layer2_package() -> dict[str, Any]:
 
 
 def _empty_rag_package() -> dict[str, Any]:
+    retrieval = _empty_rag_retrieval()
     return {
         "status": "skipped",
         "indexing": _empty_rag_indexing(),
-        "retrieval": _empty_rag_retrieval(),
+        "retrieval": retrieval,
+        "runtime_proof": _rag_runtime_proof(retrieval),
     }
 
 
@@ -784,15 +793,26 @@ def _safe_rag_retrieval(value: object) -> dict[str, Any]:
         for item in raw_matches:
             if not isinstance(item, dict):
                 continue
-            source_type = str(item.get("source_type") or "")
-            source_id = str(item.get("source_id") or "")
-            if not source_type or not source_id:
+            source_type = item.get("source_type")
+            source_id = item.get("source_id")
+            # String IDs only — non-string IDs are skipped, never repr-stringified.
+            if not isinstance(source_type, str) or not source_type:
+                continue
+            if not isinstance(source_id, str) or not source_id:
+                continue
+            # Skip rows whose score cannot be coerced to a finite float — never
+            # crash the deliverables step, never emit NaN/Infinity into bundle JSON.
+            try:
+                score = float(item.get("score") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(score):
                 continue
             matches.append(
                 {
                     "source_type": source_type,
                     "source_id": source_id,
-                    "score": float(item.get("score") or 0.0),
+                    "score": score,
                 }
             )
     return {
@@ -801,6 +821,22 @@ def _safe_rag_retrieval(value: object) -> dict[str, Any]:
         "probe_count": _safe_non_negative_int(value.get("probe_count")),
         "match_count": _safe_non_negative_int(value.get("match_count")),
         "matches": matches,
+    }
+
+
+def _rag_runtime_proof(retrieval: dict[str, Any]) -> dict[str, Any]:
+    """Derive the RAG runtime proof from the retrieval outcome alone (Slice91, DEC-D).
+
+    Distinct from pgvector connectivity: health checks say the vector store is reachable;
+    this proof says probe retrieval actually ran in this run (``probed``/``failed``) and
+    whether it returned matches (``probed``). Derived solely from the sanitized retrieval
+    summary — never from health-check fields. Summary signal only; adds no strict gate.
+    """
+    status = retrieval["status"]
+    return {
+        "retrieval_ran": status in {"probed", "failed"},
+        "retrieval_proved": status == "probed",
+        "match_count": retrieval["match_count"],
     }
 
 

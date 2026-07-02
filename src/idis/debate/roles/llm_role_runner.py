@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid5
@@ -54,6 +54,9 @@ class DebateContext:
     claims: list[dict]
     calc_results: list[dict]
     conflicts: list[dict]
+    # Safe RAG probe-retrieval section (Slice91): status/mode provenance plus
+    # matches carrying source_type/source_id/score only — never text or vectors.
+    rag_evidence: dict = field(default_factory=dict)
 
 
 def _deterministic_id(prefix: str, *, seed: str) -> str:
@@ -299,6 +302,23 @@ class LLMRoleRunner(RoleRunner):
                 lines.append(f"- {cid}: {name} = {val}")
         else:
             lines.append("(no deterministic calculations produced for this run)")
+
+        rag = ctx.rag_evidence or {}
+        raw_matches = rag.get("matches")
+        rag_matches = raw_matches if isinstance(raw_matches, list) else []
+        rag_status = str(rag.get("status") or "skipped")
+        lines.append("")
+        lines.append(
+            f"## RAG RETRIEVAL EVIDENCE ({len(rag_matches)} matches, status: {rag_status})"
+        )
+        if rag_matches:
+            for match in rag_matches:
+                source_type = match.get("source_type", "")
+                source_id = match.get("source_id", "")
+                score = match.get("score", 0.0)
+                lines.append(f"- {source_type} {source_id} (score: {score})")
+        else:
+            lines.append("(no retrieval matches for this run)")
 
         return "\n".join(lines)
 

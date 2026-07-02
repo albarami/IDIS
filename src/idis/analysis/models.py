@@ -11,6 +11,7 @@ Defines the Layer 2 (IC mode) analysis framework models per TDD §10.2:
 
 from __future__ import annotations
 
+import math
 from enum import StrEnum
 from typing import Any
 
@@ -90,6 +91,98 @@ class AnalysisCalcReference(BaseModel):
     input_min_sanad_grade: str | None = None
 
 
+_RAG_STATUS_WHITELIST = frozenset({"probed", "failed", "skipped", "not_attempted"})
+
+
+class AnalysisRagMatch(BaseModel):
+    """Safe RAG probe-retrieval match available to analysis agents (Slice91).
+
+    Carries safe IDs/scores only — span text, vectors, and query text never
+    enter this model (No-Free-Facts posture for retrieval evidence).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    source_type: str = Field(..., min_length=1, description="Indexed source type")
+    source_id: str = Field(..., min_length=1, description="Durable source identifier")
+    score: float = Field(..., description="Similarity score from probe retrieval")
+
+
+class AnalysisRagEvidence(BaseModel):
+    """Safe RAG probe-retrieval evidence for analysis prompt contexts (Slice91).
+
+    Reuses the FULL RAG step's probe matches — there is no query-driven
+    retriever; matches are the deal's own indexed evidence proven retrievable.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    status: str = Field(default="skipped", description="Probe retrieval status")
+    retrieval_mode: str = Field(default="probe", description="Always probe mode")
+    matches: list[AnalysisRagMatch] = Field(
+        default_factory=list,
+        description="Safe retrieval matches (source_type/source_id/score only)",
+    )
+
+    def to_payload_section(self) -> dict[str, Any]:
+        """Deterministic safe payload section shared by consumer prompt contexts.
+
+        Analysis, scoring, and debate all surface this identical shape:
+        status/mode provenance plus matches sorted by (source_type, source_id),
+        each carrying only source_type/source_id/score.
+        """
+        matches = sorted(self.matches, key=lambda match: (match.source_type, match.source_id))
+        return {
+            "status": self.status,
+            "retrieval_mode": self.retrieval_mode,
+            "match_count": len(matches),
+            "matches": [match.model_dump(mode="json") for match in matches],
+        }
+
+    @classmethod
+    def from_retrieval_summary(cls, value: object) -> AnalysisRagEvidence:
+        """Whitelist-convert a RAG step ``rag_retrieval`` summary into safe evidence.
+
+        Malformed input degrades to the empty probe shape; unsafe fields
+        (text excerpts, vectors, query text) are never copied.
+        """
+        if not isinstance(value, dict):
+            return cls()
+        status = str(value.get("status") or "")
+        if status not in _RAG_STATUS_WHITELIST:
+            status = "skipped"
+        matches: list[AnalysisRagMatch] = []
+        raw_matches = value.get("matches")
+        if isinstance(raw_matches, list):
+            for item in raw_matches:
+                if not isinstance(item, dict):
+                    continue
+                source_type = item.get("source_type")
+                source_id = item.get("source_id")
+                # String IDs only — non-string IDs are skipped, never repr-stringified
+                # into prompt-visible fields.
+                if not isinstance(source_type, str) or not source_type:
+                    continue
+                if not isinstance(source_id, str) or not source_id:
+                    continue
+                # Skip matches whose score cannot be coerced to a finite float —
+                # never crash, never admit NaN/inf, never invent a real score.
+                try:
+                    score = float(item.get("score") or 0.0)
+                except (TypeError, ValueError):
+                    continue
+                if not math.isfinite(score):
+                    continue
+                matches.append(
+                    AnalysisRagMatch(
+                        source_type=source_type,
+                        source_id=source_id,
+                        score=score,
+                    )
+                )
+        return cls(status=status, retrieval_mode="probe", matches=matches)
+
+
 class AnalysisContext(BaseModel):
     """Input context for analysis agents.
 
@@ -115,6 +208,10 @@ class AnalysisContext(BaseModel):
     calc_registry: dict[str, AnalysisCalcReference] = Field(
         default_factory=dict,
         description="Readable calculation summaries keyed by calc_id for Layer 2 analysis",
+    )
+    rag_evidence: AnalysisRagEvidence = Field(
+        default_factory=AnalysisRagEvidence,
+        description="Safe RAG probe-retrieval matches (IDs/scores only) for prompt context",
     )
     company_name: str = Field(default="", description="Company name for deal context")
     stage: str = Field(default="", description="Deal stage (e.g. Series A, Seed)")

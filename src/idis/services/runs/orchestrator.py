@@ -1956,6 +1956,7 @@ class RunOrchestrator:
         Args:
             ctx: Run context with optional debate_fn.
             accumulated: Must contain created_claim_ids and calc_ids from prior steps.
+                May contain rag_retrieval from the RAG_EVIDENCE step (Slice91).
 
         Returns:
             Debate result dict including stop_reason and muhasabah_passed.
@@ -1968,12 +1969,14 @@ class RunOrchestrator:
 
         created_claim_ids = accumulated.get("created_claim_ids", [])
         calc_ids = accumulated.get("calc_ids", [])
+        rag_retrieval = accumulated.get("rag_retrieval")
         return ctx.debate_fn(
             run_id=ctx.run_id,
             tenant_id=ctx.tenant_id,
             deal_id=ctx.deal_id,
             created_claim_ids=created_claim_ids,
             calc_ids=calc_ids,
+            rag_retrieval=rag_retrieval if isinstance(rag_retrieval, dict) else None,
         )
 
     def _execute_layer2_ic_challenge(
@@ -2026,6 +2029,7 @@ class RunOrchestrator:
         Args:
             ctx: Run context with optional analysis_fn.
             accumulated: Must contain created_claim_ids, calc_ids, enrichment_refs.
+                May contain rag_retrieval from the RAG_EVIDENCE step (Slice91).
 
         Returns:
             Analysis result dict with agent_count, report_ids, bundle_id.
@@ -2039,6 +2043,7 @@ class RunOrchestrator:
         created_claim_ids = accumulated.get("created_claim_ids", [])
         calc_ids = accumulated.get("calc_ids", [])
         enrichment_refs = accumulated.get("enrichment_refs", {})
+        rag_retrieval = accumulated.get("rag_retrieval")
         return ctx.analysis_fn(
             run_id=ctx.run_id,
             tenant_id=ctx.tenant_id,
@@ -2046,6 +2051,7 @@ class RunOrchestrator:
             created_claim_ids=created_claim_ids,
             calc_ids=calc_ids,
             enrichment_refs=enrichment_refs,
+            rag_retrieval=rag_retrieval if isinstance(rag_retrieval, dict) else None,
         )
 
     def _execute_scoring(

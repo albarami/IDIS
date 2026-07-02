@@ -105,6 +105,7 @@ def _build_context_payload(
         "calc_registry": calc_registry,
         "enrichment_refs": enrichment_refs,
         "agent_reports": agent_reports,
+        "rag_evidence": ctx.rag_evidence.to_payload_section(),
     }
     return json.dumps(payload, sort_keys=True, indent=2)
 

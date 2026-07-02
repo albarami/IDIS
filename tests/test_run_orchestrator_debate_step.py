@@ -98,6 +98,7 @@ def _stub_debate(
     deal_id: str,
     created_claim_ids: list[str],
     calc_ids: list[str],
+    rag_retrieval: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Deterministic debate stub returning fixed output."""
     return {
@@ -131,6 +132,7 @@ def _stub_analysis(
     created_claim_ids: list[str],
     calc_ids: list[str],
     enrichment_refs: dict[str, Any],
+    rag_retrieval: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Deterministic analysis stub."""
     return {
@@ -317,6 +319,7 @@ class TestDebateStepHappyPath:
             deal_id: str,
             created_claim_ids: list[str],
             calc_ids: list[str],
+            rag_retrieval: dict[str, Any] | None = None,
         ) -> dict[str, Any]:
             received_args["created_claim_ids"] = created_claim_ids
             received_args["calc_ids"] = calc_ids

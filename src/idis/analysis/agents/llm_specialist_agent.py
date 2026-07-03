@@ -104,6 +104,7 @@ def _build_context_payload(ctx: AnalysisContext) -> str:
         "claim_registry": claim_registry,
         "calc_registry": calc_registry,
         "enrichment_refs": enrichment_refs,
+        "rag_evidence": ctx.rag_evidence.to_payload_section(),
     }
     return json.dumps(payload, sort_keys=True, indent=2)
 

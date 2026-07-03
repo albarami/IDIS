@@ -340,6 +340,7 @@ class TestRetryDebateStepIdempotentNoDuplicateDebate:
             deal_id: str,
             created_claim_ids: list[str],
             calc_ids: list[str],
+            rag_retrieval: dict[str, Any] | None = None,
         ) -> dict[str, Any]:
             nonlocal debate_call_count
             debate_call_count += 1
@@ -359,6 +360,7 @@ class TestRetryDebateStepIdempotentNoDuplicateDebate:
             created_claim_ids: list[str],
             calc_ids: list[str],
             enrichment_refs: dict[str, Any],
+            rag_retrieval: dict[str, Any] | None = None,
         ) -> dict[str, Any]:
             return {
                 "agent_count": 8,

@@ -1149,6 +1149,7 @@ def _run_full_debate(
     deal_id: str,
     created_claim_ids: list[str],
     calc_ids: list[str],
+    rag_retrieval: dict[str, Any] | None = None,
     db_conn: Any = None,
     debate_role_runners_factory: DebateRoleRunnersFactory | None = None,
     strict_live_debate_backend_required: bool = False,
@@ -1164,12 +1165,15 @@ def _run_full_debate(
         deal_id: Deal UUID.
         created_claim_ids: Claim IDs from extraction/grading.
         calc_ids: Calc IDs from calculation step.
+        rag_retrieval: Safe probe-retrieval summary from the RAG_EVIDENCE step
+            (Slice91); whitelist-converted to an IDs/scores-only context section.
         db_conn: SQLAlchemy connection (None for in-memory fallback).
 
     Returns:
         Dict with debate_id, stop_reason, round_number, muhasabah_passed,
         and agent_output_count.
     """
+    from idis.analysis.models import AnalysisRagEvidence
     from idis.debate.orchestrator import DebateOrchestrator
     from idis.debate.roles.llm_role_runner import DebateContext
     from idis.models.debate import DebateConfig, DebateState
@@ -1192,6 +1196,7 @@ def _run_full_debate(
             for cid in calc_ids
         ],
         conflicts=[],
+        rag_evidence=AnalysisRagEvidence.from_retrieval_summary(rag_retrieval).to_payload_section(),
     )
 
     state = DebateState(
@@ -1505,6 +1510,7 @@ def _run_full_analysis(
     created_claim_ids: list[str],
     calc_ids: list[str],
     enrichment_refs: dict[str, Any],
+    rag_retrieval: dict[str, Any] | None = None,
     deal_metadata: dict[str, Any] | None = None,
     db_conn: Any = None,
     analysis_client_factory: AnalysisClientFactory | None = None,
@@ -1522,13 +1528,15 @@ def _run_full_analysis(
         created_claim_ids: Claim IDs from extraction/grading.
         calc_ids: Calc IDs from calculation step.
         enrichment_refs: Enrichment references from enrichment step.
+        rag_retrieval: Safe probe-retrieval summary from the RAG_EVIDENCE step
+            (Slice91); IDs/scores only, whitelist-converted onto the context.
 
     Returns:
         Dict with agent_count, report_ids, bundle_id, and internal state
         (_analysis_bundle, _analysis_context) for downstream steps.
     """
     from idis.analysis.agents import build_default_specialist_agents
-    from idis.analysis.models import AnalysisContext, EnrichmentRef
+    from idis.analysis.models import AnalysisContext, AnalysisRagEvidence, EnrichmentRef
     from idis.analysis.registry import AnalysisAgentRegistry
     from idis.analysis.runner import AnalysisEngine
     from idis.audit.sink import InMemoryAuditSink
@@ -1571,6 +1579,7 @@ def _run_full_analysis(
             calc_ids=calc_ids,
             db_conn=db_conn,
         ),
+        rag_evidence=AnalysisRagEvidence.from_retrieval_summary(rag_retrieval),
         company_name=str((deal_metadata or {}).get("company_name") or ""),
         stage=str((deal_metadata or {}).get("stage") or ""),
         sector=str((deal_metadata or {}).get("sector") or ""),

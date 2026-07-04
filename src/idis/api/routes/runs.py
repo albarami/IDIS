@@ -1457,8 +1457,15 @@ def _run_full_layer2_ic_challenge(
     graph_evidence: dict[str, Any] | None = None,
     rag_evidence: dict[str, Any] | None = None,
     enrichment_refs: dict[str, Any] | None = None,
+    vep_package_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Run the distinct Layer 2 IC challenge for a FULL pipeline run."""
+    """Run the distinct Layer 2 IC challenge for a FULL pipeline run.
+
+    ``vep_package_ids`` (Slice92) carries the durable Layer-1 VEP candidate ids
+    persisted by the METHODOLOGY_VALIDATED_EVIDENCE_PACKAGE step; they are surfaced
+    as safe sorted ``vep_ref_ids`` in the result so the Layer-2 ledger entry
+    references the durable Layer-1 output.
+    """
     from idis.services.runs.layer2_ic_challenge import (
         RunLayer2ICChallengeService,
         build_live_layer2_ic_runners,
@@ -1489,7 +1496,7 @@ def _run_full_layer2_ic_challenge(
         challenger_runner=challenger_runner,
         arbiter_runner=arbiter_runner,
     )
-    return service.run(
+    result = service.run(
         tenant_id=tenant_id,
         deal_id=deal_id,
         run_id=run_id,
@@ -1500,6 +1507,11 @@ def _run_full_layer2_ic_challenge(
         rag_evidence=rag_evidence,
         enrichment_refs=enrichment_refs,
     )
+    # Safe durable Layer-1 reference: sorted, deduped, non-empty strings only.
+    result["vep_ref_ids"] = sorted(
+        {item for item in (vep_package_ids or []) if isinstance(item, str) and item}
+    )
+    return result
 
 
 def _run_full_analysis(
@@ -1817,6 +1829,7 @@ def _run_full_deliverables(
     rag_evidence: dict[str, Any] | None = None,
     layer2_evidence: dict[str, Any] | None = None,
     enrichment_evidence: dict[str, Any] | None = None,
+    vep_evidence: dict[str, Any] | None = None,
     db_conn: Any = None,
     object_store: Any = None,
 ) -> dict[str, Any]:
@@ -1899,6 +1912,7 @@ def _run_full_deliverables(
             rag_evidence=rag_evidence,
             layer2_evidence=layer2_evidence,
             enrichment_evidence=enrichment_evidence,
+            vep_evidence=vep_evidence,
         )
         export_summary["durable_export"] = True
         return export_summary

@@ -368,6 +368,10 @@ class RunContext:
         ]
         | None
     ) = None
+    # Durable Layer-1 evidence repository (Slice92). ``None`` falls back to the
+    # in-memory twin so non-database runs stay green; injected Postgres repos make
+    # court findings, Muhasabah records, and the VEP candidate durable.
+    layer1_evidence_repository: Any = None
     methodology_validated_evidence_package: (
         RunScopedValidatedEvidencePackageRecord | RunScopedValidatedEvidencePackageShell | None
     ) = None
@@ -1251,6 +1255,7 @@ class RunOrchestrator:
                 "Evidence Trust Court requires a full Truth Dashboard record",
             )
 
+        muhasabah_records: list[Any] = []
         if ctx.methodology_evidence_trust_court_fn is not None:
             run_result, courts = ctx.methodology_evidence_trust_court_fn(
                 tenant_id=ctx.tenant_id,
@@ -1271,7 +1276,9 @@ class RunOrchestrator:
                 InMemoryRunMethodologyEvidenceTrustCourtService,
             )
 
-            run_result, courts = InMemoryRunMethodologyEvidenceTrustCourtService().run(
+            run_result, courts = InMemoryRunMethodologyEvidenceTrustCourtService(
+                muhasabah_sink=muhasabah_records
+            ).run(
                 tenant_id=ctx.tenant_id,
                 deal_id=ctx.deal_id,
                 run_id=ctx.run_id,
@@ -1294,7 +1301,113 @@ class RunOrchestrator:
                 "Evidence Trust Court failed closed",
                 result_summary=summary,
             )
+        persistence = self._persist_layer1_court_rows(
+            ctx,
+            record=ctx.methodology_evidence_trust_court,
+            muhasabah_records=muhasabah_records,
+        )
+        if persistence is not None:
+            summary["layer1_persistence"] = persistence
         return summary
+
+    def _layer1_evidence_repository(self, ctx: RunContext) -> Any:
+        """Return the injected Layer-1 repository or the in-memory twin default."""
+        if ctx.layer1_evidence_repository is not None:
+            return ctx.layer1_evidence_repository
+        from idis.persistence.repositories.layer1_evidence import (
+            get_layer1_evidence_repository,
+        )
+
+        return get_layer1_evidence_repository(None, ctx.tenant_id)
+
+    def _persist_layer1_court_rows(
+        self,
+        ctx: RunContext,
+        *,
+        record: Any,
+        muhasabah_records: list[Any],
+    ) -> dict[str, Any] | None:
+        """Persist court findings + court-scoped Muhasabah rows (Slice92, DEC-F).
+
+        Write failures fail the step closed with a reason-coded blocker; the
+        in-memory twin default cannot fail, so non-database runs stay green.
+        Returns a safe ids/counts block for the step summary, or None when there
+        is no full court record to persist.
+        """
+        if not isinstance(record, RunScopedEvidenceTrustCourtRecord):
+            return None
+        from idis.models.layer1_durability import (
+            EvidenceTrustFindingRow,
+            MuhasabahRecordRow,
+        )
+
+        try:
+            repository = self._layer1_evidence_repository(ctx)
+            finding_row_count = 0
+            for finding in record.findings:
+                repository.upsert_evidence_trust_finding(
+                    EvidenceTrustFindingRow.from_finding(
+                        finding,
+                        tenant_id=record.tenant_id,
+                        deal_id=record.deal_id,
+                        run_id=record.run_id,
+                        court_id=record.court_id,
+                    )
+                )
+                finding_row_count += 1
+            muhasabah_row_count = 0
+            for muhasabah_record in muhasabah_records:
+                repository.upsert_muhasabah_record(
+                    MuhasabahRecordRow.from_debate_record(
+                        muhasabah_record,
+                        tenant_id=record.tenant_id,
+                        deal_id=record.deal_id,
+                        run_id=record.run_id,
+                        source_step=StepName.METHODOLOGY_EVIDENCE_TRUST_COURT.value,
+                    )
+                )
+                muhasabah_row_count += 1
+        except Exception as exc:
+            # The message is ledger-visible via step.error_message — never include
+            # raw exception text; the cause stays chained for logs/debugging.
+            raise RunStepBlockedError(
+                "METHODOLOGY_LAYER1_PERSISTENCE_FAILED",
+                "Layer 1 evidence persistence failed closed",
+            ) from exc
+        return {
+            "status": "persisted",
+            "finding_row_count": finding_row_count,
+            "muhasabah_row_count": muhasabah_row_count,
+        }
+
+    def _persist_layer1_vep_row(
+        self,
+        ctx: RunContext,
+        *,
+        record: Any,
+    ) -> dict[str, Any] | None:
+        """Persist the durable VEP candidate row (Slice92, DEC-F fail-closed)."""
+        if not isinstance(record, RunScopedValidatedEvidencePackageRecord):
+            return None
+        from idis.models.layer1_durability import ValidatedEvidencePackageRow
+
+        try:
+            repository = self._layer1_evidence_repository(ctx)
+            repository.upsert_validated_evidence_package(
+                ValidatedEvidencePackageRow.from_record(record)
+            )
+        except Exception as exc:
+            # The message is ledger-visible via step.error_message — never include
+            # raw exception text; the cause stays chained for logs/debugging.
+            raise RunStepBlockedError(
+                "METHODOLOGY_LAYER1_PERSISTENCE_FAILED",
+                "Layer 1 evidence persistence failed closed",
+            ) from exc
+        return {
+            "status": "persisted",
+            "package_row_count": 1,
+            "package_ids": [record.package_id],
+        }
 
     def _execute_methodology_validated_evidence_package(
         self,
@@ -1341,6 +1454,11 @@ class RunOrchestrator:
                 "Validated Evidence Package failed closed",
                 result_summary=summary,
             )
+        persistence = self._persist_layer1_vep_row(
+            ctx, record=ctx.methodology_validated_evidence_package
+        )
+        if persistence is not None:
+            summary["layer1_persistence"] = persistence
         return summary
 
     def _execute_methodology_external_intelligence_conflict_check_plan(
@@ -1997,6 +2115,12 @@ class RunOrchestrator:
             "muhasabah_passed": accumulated.get("muhasabah_passed"),
             "agent_output_count": accumulated.get("agent_output_count"),
         }
+        # Durable Layer-1 reference (Slice92): the VEP step's persisted package ids
+        # arrive via its layer1_persistence summary block; null-safe like rag_retrieval.
+        layer1_persistence = accumulated.get("layer1_persistence")
+        vep_package_ids = (
+            layer1_persistence.get("package_ids") if isinstance(layer1_persistence, dict) else None
+        )
         return ctx.layer2_ic_challenge_fn(
             run_id=ctx.run_id,
             tenant_id=ctx.tenant_id,
@@ -2004,6 +2128,7 @@ class RunOrchestrator:
             debate_summary=debate_summary,
             created_claim_ids=created_claim_ids,
             calc_ids=calc_ids,
+            vep_package_ids=vep_package_ids if isinstance(vep_package_ids, list) else None,
             graph_evidence={
                 "graph_status": accumulated.get("graph_status"),
                 "graph_projection": accumulated.get("graph_projection"),
@@ -2137,6 +2262,13 @@ class RunOrchestrator:
                 "enrichment_ledger": accumulated.get("enrichment_ledger"),
                 "enrichment_refs": accumulated.get("enrichment_refs"),
             },
+            # Durable Layer-1 VEP visibility (Slice92): the VEP step's persisted
+            # summary block feeds the safe vep_evidence export package; null-safe.
+            vep_evidence=(
+                accumulated.get("layer1_persistence")
+                if isinstance(accumulated.get("layer1_persistence"), dict)
+                else None
+            ),
         )
 
     def _start_step(

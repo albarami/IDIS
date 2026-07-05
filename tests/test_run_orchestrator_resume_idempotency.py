@@ -394,6 +394,7 @@ class TestRetryDebateStepIdempotentNoDuplicateDebate:
             rag_evidence: dict[str, Any] | None = None,
             layer2_evidence: dict[str, Any] | None = None,
             enrichment_evidence: dict[str, Any] | None = None,
+            vep_evidence: dict[str, Any] | None = None,
         ) -> dict[str, Any]:
             return {
                 "deliverable_count": 4,

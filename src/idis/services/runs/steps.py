@@ -34,6 +34,7 @@ from idis.models.sanad_materialization import (
     RunScopedSanadRecord,
 )
 from idis.persistence.repositories.documents import PostgresDocumentsRepository
+from idis.persistence.repositories.layer1_evidence import get_layer1_evidence_repository
 from idis.services.runs.methodology_coverage_init import load_default_methodology_registry
 from idis.services.runs.orchestrator import RunContext
 
@@ -130,6 +131,7 @@ def build_run_context(
         deal_id=deal_id,
         mode=mode,
         documents=documents,
+        layer1_evidence_repository=get_layer1_evidence_repository(db_conn, tenant_id),
         created_by_actor_id=created_by_actor_id,
         created_by_actor_type=created_by_actor_type,
         deal_metadata=deal_metadata,

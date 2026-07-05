@@ -740,6 +740,7 @@ def _stub_layer2_ic_challenge(
     graph_evidence: dict[str, Any] | None = None,
     rag_evidence: dict[str, Any] | None = None,
     enrichment_refs: dict[str, Any] | None = None,
+    vep_package_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Deterministic Layer 2 IC challenge stub returning safe refs only."""
     return {
@@ -803,6 +804,7 @@ def _stub_deliverables(
     rag_evidence: dict[str, Any] | None = None,
     layer2_evidence: dict[str, Any] | None = None,
     enrichment_evidence: dict[str, Any] | None = None,
+    vep_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Deterministic deliverables stub."""
     return {

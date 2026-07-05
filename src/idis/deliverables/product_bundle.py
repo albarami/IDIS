@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import re
+import uuid
 from dataclasses import dataclass
 from typing import Any
 
@@ -90,6 +91,7 @@ class ProductBundleExporter:
         rag_evidence: dict[str, Any] | None = None,
         layer2_evidence: dict[str, Any] | None = None,
         enrichment_evidence: dict[str, Any] | None = None,
+        vep_evidence: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Persist a product bundle and return a safe run-step summary."""
         artifacts: list[_StoredArtifact] = []
@@ -102,6 +104,7 @@ class ProductBundleExporter:
             rag_evidence=rag_evidence,
             layer2_evidence=layer2_evidence,
             enrichment_evidence=enrichment_evidence,
+            vep_evidence=vep_evidence,
         ):
             artifacts.append(
                 self._store_artifact(
@@ -150,10 +153,12 @@ class ProductBundleExporter:
         rag_evidence: dict[str, Any] | None,
         layer2_evidence: dict[str, Any] | None,
         enrichment_evidence: dict[str, Any] | None,
+        vep_evidence: dict[str, Any] | None,
     ) -> list[_ArtifactDraft]:
         calc_package = self._calc_package(analysis_context)
         graph_package = _graph_package(graph_evidence)
         rag_package = _rag_package(rag_evidence)
+        vep_package = _vep_package(vep_evidence)
         layer2_package = _layer2_package(layer2_evidence)
         enrichment_package = _enrichment_package(enrichment_evidence)
         screening_snapshot = self._safe_text_export_deliverable(bundle.screening_snapshot)
@@ -225,6 +230,7 @@ class ProductBundleExporter:
                     rag_package=rag_package,
                     layer2_package=layer2_package,
                     enrichment_package=enrichment_package,
+                    vep_package=vep_package,
                 ),
             ),
             self._json_draft(
@@ -282,6 +288,9 @@ class ProductBundleExporter:
                         + enrichment_package["counts"]["blocked_missing_byol"]
                     ),
                     "enrichment_cache_hit_count": enrichment_package["counts"]["cache_hits"],
+                    "vep_status": vep_package["status"],
+                    "vep_package_count": vep_package["package_count"],
+                    "vep_package_ids": vep_package["package_ids"],
                 },
             ),
         ]
@@ -478,6 +487,7 @@ class ProductBundleExporter:
         rag_package: dict[str, Any],
         layer2_package: dict[str, Any],
         enrichment_package: dict[str, Any],
+        vep_package: dict[str, Any],
     ) -> dict[str, Any]:
         entries: list[dict[str, Any]] = []
         for deliverable in (
@@ -510,6 +520,7 @@ class ProductBundleExporter:
             "rag_evidence": rag_package,
             "layer2_evidence": layer2_package,
             "enrichment_evidence": enrichment_package,
+            "vep_evidence": vep_package,
         }
 
 
@@ -734,6 +745,45 @@ def _empty_layer2_package() -> dict[str, Any]:
         "finding_count": 0,
         "unresolved_question_count": 0,
         "muhasabah_passed": False,
+    }
+
+
+def _empty_vep_package() -> dict[str, Any]:
+    return {"status": "skipped", "package_count": 0, "package_ids": []}
+
+
+def _is_uuid_string(value: object) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        uuid.UUID(value)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _vep_package(value: object) -> dict[str, Any]:
+    """Whitelist the Layer-1 VEP persistence block for export (Slice92, DEC-E).
+
+    IDs/counts/status only — production package ids are bare UUID5, so only
+    UUID-parseable strings survive (free text can never ride in as an "id");
+    the count derives from the sanitized ids, and no other field is copied.
+    """
+    if not isinstance(value, dict):
+        return _empty_vep_package()
+    status = str(value.get("status") or "skipped")
+    if status not in {"persisted", "skipped", "failed"}:
+        status = "skipped"
+    raw_ids = value.get("package_ids")
+    package_ids = (
+        sorted({item for item in raw_ids if _is_uuid_string(item)})
+        if isinstance(raw_ids, list)
+        else []
+    )
+    return {
+        "status": status,
+        "package_count": len(package_ids),
+        "package_ids": package_ids,
     }
 
 

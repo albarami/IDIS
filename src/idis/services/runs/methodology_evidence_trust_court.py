@@ -14,6 +14,7 @@ from idis.models.claim_materialization import (
     RunScopedMaterializedClaim,
     RunScopedMaterializedClaimShell,
 )
+from idis.models.debate import MuhasabahRecord
 from idis.models.evidence_item_materialization import (
     RunScopedEvidenceItemRecord,
     RunScopedEvidenceItemShell,
@@ -56,6 +57,16 @@ from idis.services.runs.methodology_evidence_trust_court_helpers import (
 
 class InMemoryRunMethodologyEvidenceTrustCourtService:
     """Build run-scoped Layer 1 Evidence Trust Court records from Slice 6-10 outputs."""
+
+    def __init__(self, *, muhasabah_sink: list[MuhasabahRecord] | None = None) -> None:
+        """Initialize the court service.
+
+        Args:
+            muhasabah_sink: Optional collector that receives the Muhasabah records
+                from the court's governed Layer-1 debate outputs (Slice92 durable
+                persistence). ``None`` preserves the original discard behavior.
+        """
+        self._muhasabah_sink = muhasabah_sink
 
     def run(
         self,
@@ -239,6 +250,8 @@ class InMemoryRunMethodologyEvidenceTrustCourtService:
                 for assessment in assessments
             ),
         )
+        if self._muhasabah_sink is not None:
+            self._muhasabah_sink.extend(output.muhasabah for output in final_state.agent_outputs)
         return RunScopedEvidenceTrustCourtRecord(
             tenant_id=bundle.tenant_id,
             deal_id=bundle.deal_id,

@@ -39,6 +39,106 @@ SENSITIVE_ARTIFACT_VALUE_PARTS = frozenset(
 WINDOWS_PATH_PATTERN = re.compile(r"(?i)(^|[^a-z0-9])[a-z]:[\\/]")
 POSIX_LOCAL_PATH_PATTERN = re.compile(r"(?i)(^|[^a-z0-9])/(tmp|var|home|users|private|opt)/")
 
+# The run-level LLM provenance blocks surfaced in the source/provenance appendix (Slice94).
+_PROVENANCE_BLOCKS = (
+    "extraction_provenance",
+    "debate_provenance",
+    "analysis_provenance",
+    "scoring_provenance",
+    "layer2_provenance",
+)
+# Whitelist of safe provenance keys — provider/backend, model names, prompt ids/version,
+# strict flags, SANITIZED provider request ids, and executed booleans. Any other key (a raw
+# prompt body, model output, API key, path, or exception text a future builder might add) is
+# dropped, so the appendix can never leak private content.
+_SAFE_PROVENANCE_KEYS = frozenset(
+    {
+        "provider",
+        "backend",
+        "model",
+        "default_model",
+        "arbiter_model",
+        "challenger_model",
+        "prompt_id",
+        "prompt_ids",
+        "prompt_version",
+        "strict_live_debate_backend_required",
+        "strict_live_extraction_required",
+        "strict_full_live",
+        "provider_request_id",
+        "default_provider_request_id",
+        "arbiter_provider_request_id",
+        "challenger_provider_request_id",
+        "challenger_executed",
+        "arbiter_executed",
+        "live_calls_executed",
+    }
+)
+# Typed value filtering: boolean fields keep only ``bool``; ``prompt_ids`` keeps only bounded
+# strings; every other allowlisted field is a bounded string scalar (or ``None``). Nested
+# dicts/lists and mistyped values are DROPPED — never stringified or coerced — so a raw model
+# answer can never ride in under an allowed key.
+_PROVENANCE_BOOL_KEYS = frozenset(
+    {
+        "strict_live_debate_backend_required",
+        "strict_live_extraction_required",
+        "strict_full_live",
+        "challenger_executed",
+        "arbiter_executed",
+        "live_calls_executed",
+    }
+)
+_PROVENANCE_STRING_LIST_KEYS = frozenset({"prompt_ids"})
+_MAX_PROVENANCE_STRING = 256
+_DROP_PROVENANCE_VALUE = object()
+
+
+def _safe_provenance_value(key: str, value: Any) -> Any:
+    """Type-filter one allowlisted provenance value; return the safe value or the drop sentinel."""
+    if key in _PROVENANCE_BOOL_KEYS:
+        return value if isinstance(value, bool) else _DROP_PROVENANCE_VALUE
+    if key in _PROVENANCE_STRING_LIST_KEYS:
+        if not isinstance(value, list):
+            return _DROP_PROVENANCE_VALUE
+        return [
+            item
+            for item in value
+            if isinstance(item, str) and 0 < len(item) <= _MAX_PROVENANCE_STRING
+        ]
+    if value is None:
+        return None
+    if isinstance(value, str) and len(value) <= _MAX_PROVENANCE_STRING:
+        return value
+    return _DROP_PROVENANCE_VALUE
+
+
+def _provenance_appendix(run_provenance: dict[str, Any] | None) -> dict[str, Any]:
+    """Whitelist the run-level LLM provenance blocks for the bundle (Slice94, DEC-B).
+
+    Safe fields only (see ``_SAFE_PROVENANCE_KEYS``) — never prompt bodies, model output, raw
+    rationale, API keys, paths, or exception text; keys outside the allowlist are dropped.
+    ``status`` is ``present`` only when at least one block yields a safe field.
+    """
+    source = run_provenance if isinstance(run_provenance, dict) else {}
+    blocks: dict[str, Any] = {}
+    for name in _PROVENANCE_BLOCKS:
+        block = source.get(name)
+        if isinstance(block, dict):
+            safe: dict[str, Any] = {}
+            for key in sorted(block):
+                if key not in _SAFE_PROVENANCE_KEYS:
+                    continue
+                filtered = _safe_provenance_value(key, block[key])
+                if filtered is not _DROP_PROVENANCE_VALUE:
+                    safe[key] = filtered
+            if safe:
+                blocks[name] = safe
+    return {
+        "status": "present" if blocks else "absent",
+        "blocks_present": sorted(blocks),
+        "provenance": blocks,
+    }
+
 
 @dataclass(frozen=True)
 class _ArtifactDraft:
@@ -92,6 +192,7 @@ class ProductBundleExporter:
         layer2_evidence: dict[str, Any] | None = None,
         enrichment_evidence: dict[str, Any] | None = None,
         vep_evidence: dict[str, Any] | None = None,
+        run_provenance: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Persist a product bundle and return a safe run-step summary."""
         artifacts: list[_StoredArtifact] = []
@@ -105,6 +206,7 @@ class ProductBundleExporter:
             layer2_evidence=layer2_evidence,
             enrichment_evidence=enrichment_evidence,
             vep_evidence=vep_evidence,
+            run_provenance=run_provenance,
         ):
             artifacts.append(
                 self._store_artifact(
@@ -154,6 +256,7 @@ class ProductBundleExporter:
         layer2_evidence: dict[str, Any] | None,
         enrichment_evidence: dict[str, Any] | None,
         vep_evidence: dict[str, Any] | None,
+        run_provenance: dict[str, Any] | None = None,
     ) -> list[_ArtifactDraft]:
         calc_package = self._calc_package(analysis_context)
         graph_package = _graph_package(graph_evidence)
@@ -161,6 +264,8 @@ class ProductBundleExporter:
         vep_package = _vep_package(vep_evidence)
         layer2_package = _layer2_package(layer2_evidence)
         enrichment_package = _enrichment_package(enrichment_evidence)
+        provenance_appendix = _provenance_appendix(run_provenance)
+        provenance_present = provenance_appendix["status"] == "present"
         screening_snapshot = self._safe_text_export_deliverable(bundle.screening_snapshot)
         ic_memo = self._safe_text_export_deliverable(bundle.ic_memo)
         screening_pdf = self._deliverable_exporter.export_to_pdf(
@@ -179,7 +284,7 @@ class ProductBundleExporter:
             ic_memo,
             export_timestamp=export_timestamp,
         )
-        return [
+        drafts: list[_ArtifactDraft] = [
             self._binary_draft("screening_snapshot", "PDF", screening_pdf.content_bytes),
             self._binary_draft("screening_snapshot", "DOCX", screening_docx.content_bytes),
             self._binary_draft("ic_memo", "PDF", memo_pdf.content_bytes),
@@ -231,6 +336,7 @@ class ProductBundleExporter:
                     layer2_package=layer2_package,
                     enrichment_package=enrichment_package,
                     vep_package=vep_package,
+                    provenance_appendix=provenance_appendix,
                 ),
             ),
             self._json_draft(
@@ -291,9 +397,14 @@ class ProductBundleExporter:
                     "vep_status": vep_package["status"],
                     "vep_package_count": vep_package["package_count"],
                     "vep_package_ids": vep_package["package_ids"],
+                    "provenance_status": provenance_appendix["status"],
+                    "provenance_blocks": provenance_appendix["blocks_present"],
                 },
             ),
         ]
+        if provenance_present:
+            drafts.append(self._json_draft("provenance_appendix", provenance_appendix))
+        return drafts
 
     def _catalog_entry(self, artifact_type: str, format_: str) -> ArtifactCatalogEntry:
         entry = resolve_artifact_entry(artifact_type, format_)
@@ -488,6 +599,7 @@ class ProductBundleExporter:
         layer2_package: dict[str, Any],
         enrichment_package: dict[str, Any],
         vep_package: dict[str, Any],
+        provenance_appendix: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         entries: list[dict[str, Any]] = []
         for deliverable in (
@@ -513,7 +625,7 @@ class ProductBundleExporter:
             }
             for item in calc_package["calculations"]
         ]
-        return {
+        index: dict[str, Any] = {
             "entries": entries,
             "calc_entries": calc_entries,
             "graph_evidence": graph_package,
@@ -522,6 +634,10 @@ class ProductBundleExporter:
             "enrichment_evidence": enrichment_package,
             "vep_evidence": vep_package,
         }
+        # The source/provenance appendix gains the run-level *provenance* side (Slice94).
+        if isinstance(provenance_appendix, dict) and provenance_appendix.get("status") == "present":
+            index["provenance_appendix"] = provenance_appendix
+        return index
 
 
 def _is_sensitive_artifact_key(key: str) -> bool:

@@ -2272,6 +2272,15 @@ class RunOrchestrator:
                 if isinstance(accumulated.get("layer1_persistence"), dict)
                 else None
             ),
+            # Run-level LLM provenance (Slice94): the per-step provenance blocks feed the
+            # safe provenance appendix; each is whitelisted again at export (null-safe).
+            run_provenance={
+                "extraction_provenance": accumulated.get("extraction_provenance"),
+                "debate_provenance": accumulated.get("debate_provenance"),
+                "analysis_provenance": accumulated.get("analysis_provenance"),
+                "scoring_provenance": accumulated.get("scoring_provenance"),
+                "layer2_provenance": accumulated.get("layer2_provenance"),
+            },
         )
 
     def _start_step(

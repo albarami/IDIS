@@ -1458,6 +1458,8 @@ def _run_full_layer2_ic_challenge(
     rag_evidence: dict[str, Any] | None = None,
     enrichment_refs: dict[str, Any] | None = None,
     vep_package_ids: list[str] | None = None,
+    db_conn: Any = None,
+    challenge_repository: Any = None,
 ) -> dict[str, Any]:
     """Run the distinct Layer 2 IC challenge for a FULL pipeline run.
 
@@ -1465,27 +1467,34 @@ def _run_full_layer2_ic_challenge(
     persisted by the METHODOLOGY_VALIDATED_EVIDENCE_PACKAGE step; they are surfaced
     as safe sorted ``vep_ref_ids`` in the result so the Layer-2 ledger entry
     references the durable Layer-1 output.
+
+    After the service returns a completed record, the safe challenge + finding rows
+    are persisted (Slice93) via ``challenge_repository`` when provided, else the
+    Postgres/InMemory twin selector; a write failure fails the step closed with a
+    static ``LAYER2_PERSISTENCE_FAILED`` reason.
     """
     from idis.services.runs.layer2_ic_challenge import (
+        Layer2ICChallengeBlockedError,
         RunLayer2ICChallengeService,
         build_live_layer2_ic_runners,
     )
 
     strict_dotenv_path = os.environ.get(IDIS_STRICT_DOTENV_PATH_ENV)
     strict_full_live = is_strict_full_live_required(dotenv_path=strict_dotenv_path)
+    backend = str(os.environ.get("IDIS_DEBATE_BACKEND", "")).strip().lower()
+    default_model = os.environ.get(
+        "IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT",
+        "claude-sonnet-4-20250514",
+    )
+    arbiter_model = os.environ.get(
+        "IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER",
+        "claude-opus-4-20250514",
+    )
     challenger_runner = None
     arbiter_runner = None
     if strict_full_live:
         from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
 
-        default_model = os.environ.get(
-            "IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT",
-            "claude-sonnet-4-20250514",
-        )
-        arbiter_model = os.environ.get(
-            "IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER",
-            "claude-opus-4-20250514",
-        )
         challenger_runner, arbiter_runner = build_live_layer2_ic_runners(
             challenger_client=AnthropicLLMClient(model=default_model, max_tokens=8192),
             arbiter_client=AnthropicLLMClient(model=arbiter_model, max_tokens=8192),
@@ -1496,7 +1505,7 @@ def _run_full_layer2_ic_challenge(
         challenger_runner=challenger_runner,
         arbiter_runner=arbiter_runner,
     )
-    result = service.run(
+    result, record = service.run_with_record(
         tenant_id=tenant_id,
         deal_id=deal_id,
         run_id=run_id,
@@ -1507,9 +1516,49 @@ def _run_full_layer2_ic_challenge(
         rag_evidence=rag_evidence,
         enrichment_refs=enrichment_refs,
     )
+
+    # Persist the durable safe rows (Slice93). Deterministic ids -> idempotent upserts;
+    # the InMemory twin keeps non-database runs green. Fail closed with a static,
+    # ledger-safe reason (no raw exception text; cause chained for logs).
+    from idis.models.layer2_durability import Layer2ChallengeRow, Layer2FindingRow
+    from idis.persistence.repositories.layer2_challenge import get_layer2_challenge_repository
+
+    repository = challenge_repository or get_layer2_challenge_repository(db_conn, tenant_id)
+    try:
+        repository.upsert_challenge(Layer2ChallengeRow.from_record(record))
+        for finding in record.findings:
+            repository.upsert_finding(
+                Layer2FindingRow.from_finding(
+                    finding,
+                    tenant_id=record.tenant_id,
+                    deal_id=record.deal_id,
+                    run_id=record.run_id,
+                    challenge_id=record.layer2_challenge_id,
+                )
+            )
+    except Exception as exc:
+        raise Layer2ICChallengeBlockedError("LAYER2_PERSISTENCE_FAILED") from exc
+    result["layer2_persistence"] = {
+        "status": "persisted",
+        "challenge_ids": [record.layer2_challenge_id],
+        "finding_row_count": len(record.findings),
+    }
+
     # Safe durable Layer-1 reference: sorted, deduped, non-empty strings only.
     result["vep_ref_ids"] = sorted(
         {item for item in (vep_package_ids or []) if isinstance(item, str) and item}
+    )
+
+    # Safe live-provider provenance (Slice93 Task 5): model/prompt ids + a runtime-executed
+    # signal proving the challenger + arbiter live calls ran. Non-strict runs report
+    # live_calls_executed=False (no live runners were constructed).
+    result["layer2_provenance"] = _build_layer2_provenance(
+        strict_full_live=strict_full_live,
+        backend=backend,
+        challenger_model=default_model if strict_full_live else None,
+        arbiter_model=arbiter_model if strict_full_live else None,
+        challenger_runner=challenger_runner,
+        arbiter_runner=arbiter_runner,
     )
     return result
 
@@ -1872,6 +1921,7 @@ def _run_full_deliverables(
         generated_at=generated_at,
         deliverable_id_prefix=f"del-{run_id[:8]}",
         graph_conclusions=graph_conclusions,
+        layer2_evidence=layer2_evidence,
     )
 
     types: list[str] = [
@@ -3630,6 +3680,58 @@ def _build_debate_provenance(
         "arbiter_provider_request_id": _sanitize_request_id(
             _safe_runner_request_id(getattr(role_runners, "arbiter", None))
         ),
+    }
+
+
+_LAYER2_CHALLENGER_PROMPT_ID = "layer2_ic_challenger"
+_LAYER2_ARBITER_PROMPT_ID = "layer2_ic_arbiter"
+_LAYER2_PROMPT_IDS = (_LAYER2_CHALLENGER_PROMPT_ID, _LAYER2_ARBITER_PROMPT_ID)
+_LAYER2_PROMPT_VERSION = "1.0.0"
+
+
+def _safe_runner_executed(runner: Any) -> bool:
+    """True when a Layer-2 role runner reports a completed live model call."""
+    return bool(getattr(runner, "executed", False))
+
+
+def _build_layer2_provenance(
+    *,
+    strict_full_live: bool,
+    backend: str,
+    challenger_model: str | None,
+    arbiter_model: str | None,
+    challenger_runner: Any,
+    arbiter_runner: Any,
+) -> dict[str, Any]:
+    """Build safe, additive Layer-2 IC challenge provenance (Slice93 Task 5, DEC-F).
+
+    Records provider/backend + challenger/arbiter model names + the two registry prompt ids
+    and version + the strict flag + sanitized challenger/arbiter provider request ids (only if
+    a client safely exposes one) + booleans proving each live runner executed — never the API
+    key, prompt body, model output, raw rationale, or a path. ``live_calls_executed`` is the
+    per-run runtime-execution signal (both challenger and arbiter calls completed).
+    """
+    from idis.services.llm_model_health import _sanitize_request_id
+
+    challenger_executed = _safe_runner_executed(challenger_runner)
+    arbiter_executed = _safe_runner_executed(arbiter_runner)
+    return {
+        "provider": _provider_label(backend),
+        "backend": backend,
+        "challenger_model": challenger_model,
+        "arbiter_model": arbiter_model,
+        "prompt_ids": list(_LAYER2_PROMPT_IDS),
+        "prompt_version": _LAYER2_PROMPT_VERSION,
+        "strict_full_live": bool(strict_full_live),
+        "challenger_provider_request_id": _sanitize_request_id(
+            _safe_runner_request_id(challenger_runner)
+        ),
+        "arbiter_provider_request_id": _sanitize_request_id(
+            _safe_runner_request_id(arbiter_runner)
+        ),
+        "challenger_executed": challenger_executed,
+        "arbiter_executed": arbiter_executed,
+        "live_calls_executed": bool(challenger_executed and arbiter_executed),
     }
 
 

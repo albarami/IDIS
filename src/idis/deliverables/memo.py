@@ -21,6 +21,7 @@ from idis.models.deliverables import (
     DeliverableSection,
     DissentSection,
     ICMemo,
+    Layer2ChallengeVisibility,
     RefType,
 )
 
@@ -85,6 +86,7 @@ class ICMemoBuilder:
 
         self._sanad_grade_distribution: dict[str, int] = {"A": 0, "B": 0, "C": 0, "D": 0}
         self._dissent_section: DissentSection | None = None
+        self._layer2_challenge: Layer2ChallengeVisibility | None = None
         self._additional_sections: list[DeliverableSection] = []
 
         self._all_claim_refs: set[str] = set()
@@ -283,6 +285,10 @@ class ICMemoBuilder:
         )
         self._scenario_facts.append(fact)
         return self
+
+    def set_layer2_challenge(self, layer2_challenge: Layer2ChallengeVisibility | None) -> None:
+        """Set the safe Layer-2 IC challenge visibility (Slice93)."""
+        self._layer2_challenge = layer2_challenge
 
     def set_sanad_grade_distribution(
         self,
@@ -488,6 +494,7 @@ class ICMemoBuilder:
             sanad_grade_distribution=self._sanad_grade_distribution,
             scenario_analysis=scenario_analysis,
             dissent_section=self._dissent_section,
+            layer2_challenge=self._layer2_challenge,
             additional_sections=self._additional_sections,
             audit_appendix=audit_appendix,
             generated_at=self._generated_at,

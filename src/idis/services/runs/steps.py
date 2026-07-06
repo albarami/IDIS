@@ -171,7 +171,9 @@ def build_run_context(
             if is_full
             else None
         ),
-        layer2_ic_challenge_fn=_run_full_layer2_ic_challenge if is_full else None,
+        layer2_ic_challenge_fn=(
+            partial(_run_full_layer2_ic_challenge, db_conn=db_conn) if is_full else None
+        ),
         analysis_fn=(
             partial(
                 _run_full_analysis,

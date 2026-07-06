@@ -107,11 +107,13 @@ def test_durable_repos_exist_and_step_path_is_wired() -> None:
 # --- 3. G1/DEC-A closed (Task 2): migration 0021 adds the Layer-1 durability tables ---
 
 
-def test_latest_migration_is_0021_layer1_durability() -> None:
+def test_migration_0021_layer1_durability_present() -> None:
     numbers = sorted(
         path.name[:4] for path in _MIGRATIONS_DIR.glob("0*.py") if path.name[:4].isdigit()
     )
-    assert numbers[-1] == "0021"
+    # Slice92 added 0021 (Layer-1 durability). It was the head at Slice92; later slices
+    # advance it (Slice93 adds 0022), so pin that 0021 is present — not that it is the head.
+    assert "0021" in numbers
     assert list(_MIGRATIONS_DIR.glob("0021_layer1_evidence_durability.py"))
 
 
@@ -162,6 +164,10 @@ def test_layer2_ic_challenge_accepts_vep_reference() -> None:
         "rag_evidence",
         "enrichment_refs",
         "vep_package_ids",
+        # Slice93 Task 3 added durable persistence seams to the same route fn; the VEP
+        # reference (vep_package_ids) it must still accept stays present above.
+        "db_conn",
+        "challenge_repository",
     }
 
 

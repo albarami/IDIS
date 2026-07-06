@@ -53,12 +53,19 @@ class LlmClientFactory(Protocol):
 
 
 class LlmModelRole(StrEnum):
-    """Strict-readiness live-model roles (map 1:1 to the Anthropic inventory components)."""
+    """Strict-readiness live-model roles.
+
+    EXTRACTION/DEBATE/ANALYSIS/SCORING map 1:1 to the Anthropic inventory components.
+    DEBATE_ARBITER is an internal per-model proof role (the debate arbiter model) used so
+    Layer-2 readiness can require BOTH the challenger and arbiter models to be runtime-proven;
+    it is not a separate inventory component.
+    """
 
     EXTRACTION = "extraction"
     DEBATE = "debate"
     ANALYSIS = "analysis"
     SCORING = "scoring"
+    DEBATE_ARBITER = "debate_arbiter"
 
 
 # role -> (backend env var, ((model env var, safe identifier), ...))
@@ -81,6 +88,10 @@ _ROLE_SPECS: dict[LlmModelRole, tuple[str, tuple[tuple[str, str], ...]]] = {
     LlmModelRole.SCORING: (
         IDIS_DEBATE_BACKEND_ENV,
         ((IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT_ENV, "scoring_model"),),
+    ),
+    LlmModelRole.DEBATE_ARBITER: (
+        IDIS_DEBATE_BACKEND_ENV,
+        ((IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER_ENV, "debate_arbiter_model"),),
     ),
 }
 

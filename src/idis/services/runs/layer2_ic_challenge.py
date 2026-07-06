@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from idis.models.layer2_ic_challenge import (
+    Layer2ChallengeCategory,
     Layer2ICChallengeFinding,
     Layer2ICChallengeRecord,
     Layer2ICChallengeStatus,
@@ -38,6 +39,17 @@ class Layer2ICLLMRunner:
         self._role = role
         self._llm_client = llm_client
         self._system_prompt = system_prompt
+        self._executed = False
+
+    @property
+    def llm_client(self) -> Any:
+        """Expose the underlying client for safe provider-request-id provenance."""
+        return self._llm_client
+
+    @property
+    def executed(self) -> bool:
+        """True once a live model call has completed (runtime-execution proof)."""
+        return self._executed
 
     def run(self, payload: dict[str, Any]) -> str:
         """Call the configured LLM client with a safe JSON payload."""
@@ -47,7 +59,10 @@ class Layer2ICLLMRunner:
             "LAYER2_SAFE_CONTEXT_JSON:\n"
             f"{json.dumps(role_payload, sort_keys=True, separators=(',', ':'))}"
         )
-        return str(self._llm_client.call(prompt, json_mode=True))
+        result = str(self._llm_client.call(prompt, json_mode=True))
+        # Mark executed only after the provider call returns — genuine runtime proof.
+        self._executed = True
+        return result
 
 
 class RunLayer2ICChallengeService:
@@ -80,7 +95,34 @@ class RunLayer2ICChallengeService:
         rag_evidence: dict[str, Any] | None,
         enrichment_refs: dict[str, Any] | None,
     ) -> dict[str, Any]:
-        """Execute the minimal Layer 2 IC challenge contract."""
+        """Execute the Layer 2 IC challenge and return the safe summary only."""
+        summary, _record = self.run_with_record(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            run_id=run_id,
+            debate_summary=debate_summary,
+            created_claim_ids=created_claim_ids,
+            calc_ids=calc_ids,
+            graph_evidence=graph_evidence,
+            rag_evidence=rag_evidence,
+            enrichment_refs=enrichment_refs,
+        )
+        return summary
+
+    def run_with_record(
+        self,
+        *,
+        tenant_id: str,
+        deal_id: str,
+        run_id: str,
+        debate_summary: dict[str, Any],
+        created_claim_ids: list[str],
+        calc_ids: list[str],
+        graph_evidence: dict[str, Any] | None,
+        rag_evidence: dict[str, Any] | None,
+        enrichment_refs: dict[str, Any] | None,
+    ) -> tuple[dict[str, Any], Layer2ICChallengeRecord]:
+        """Execute the challenge, returning (safe summary, full record) for persistence."""
         debate_id = str(debate_summary.get("debate_id") or "").strip()
         if not debate_id or debate_summary.get("muhasabah_passed") is not True:
             raise Layer2ICChallengeBlockedError("LAYER1_DEBATE_MISSING")
@@ -144,7 +186,7 @@ class RunLayer2ICChallengeService:
             unresolved_question_count=1,
             muhasabah_passed=True,
         )
-        return record.to_run_step_summary()
+        return record.to_run_step_summary(), record
 
     def _run_strict_live(
         self,
@@ -159,7 +201,7 @@ class RunLayer2ICChallengeService:
         rag_ref_ids: list[str],
         enrichment_ref_ids: list[str],
         debate_summary: dict[str, Any],
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], Layer2ICChallengeRecord]:
         if self._challenger_runner is None or self._arbiter_runner is None:
             raise Layer2ICChallengeBlockedError("LAYER2_LIVE_RUNNER_MISSING")
 
@@ -230,7 +272,7 @@ class RunLayer2ICChallengeService:
             ),
             muhasabah_passed=True,
         )
-        return record.to_run_step_summary()
+        return record.to_run_step_summary(), record
 
 
 def _missing_layer2_model_env(env: Mapping[str, str]) -> list[str]:
@@ -352,6 +394,51 @@ def _validate_runner_refs(
     )
 
 
+_SAFE_TOKEN_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def _safe_finding_id(value: Any, *, index: int) -> str:
+    """Return an identifier-shaped finding id, else the deterministic fallback.
+
+    Strict-mode finding ids arrive from the model output, so a free-text value could
+    otherwise be persisted and surfaced. Anything that is not a bounded
+    ``[A-Za-z0-9._-]`` identifier is replaced with ``layer2-finding-<index>``.
+    """
+    candidate = str(value or "").strip()
+    if candidate and _SAFE_TOKEN_RE.fullmatch(candidate):
+        return candidate
+    return f"layer2-finding-{index:03d}"
+
+
+def _safe_category(value: Any, *, fallback: str, max_length: int) -> str:
+    """Return a bounded identifier-shaped category token, else a safe fallback.
+
+    Strict-mode ``finding_type``/``severity`` arrive from the model output, so free
+    text could otherwise be persisted and surfaced in the category/severity histograms
+    and downstream deliverables. Anything that is not a bounded ``[A-Za-z0-9._-]`` token
+    within ``max_length`` chars is replaced with ``fallback`` (e.g. ``ic_challenge`` /
+    ``medium``). ``max_length`` matches the durable column width so the sanitized value
+    fits identically on both the Postgres and InMemory twins (no backend divergence).
+    """
+    candidate = str(value or "").strip()
+    if candidate and len(candidate) <= max_length and _SAFE_TOKEN_RE.fullmatch(candidate):
+        return candidate
+    return fallback
+
+
+def _safe_challenge_category(value: Any) -> Layer2ChallengeCategory:
+    """Coerce an LLM-supplied challenge category to a bounded enum member, else GENERAL.
+
+    Strict-mode ``category`` arrives from model output, so free text / unknown values must
+    never persist or surface; anything that is not a known ``Layer2ChallengeCategory`` value
+    collapses to the ``GENERAL`` catch-all.
+    """
+    try:
+        return Layer2ChallengeCategory(str(value or "").strip())
+    except ValueError:
+        return Layer2ChallengeCategory.GENERAL
+
+
 def _validated_findings(
     findings: list[Any],
     *,
@@ -371,9 +458,14 @@ def _validated_findings(
         if not isinstance(raw, dict):
             raise Layer2ICChallengeBlockedError("LAYER2_INVALID_OUTPUT")
         finding = Layer2ICChallengeFinding(
-            finding_id=str(raw.get("finding_id") or f"layer2-finding-{index:03d}"),
-            finding_type=str(raw.get("finding_type") or "ic_challenge"),
-            severity=str(raw.get("severity") or "medium"),
+            finding_id=_safe_finding_id(raw.get("finding_id"), index=index),
+            # max_length matches the durable columns: finding_type VARCHAR(80), severity
+            # VARCHAR(40) (migration 0022) — so a long token can never overflow on Postgres.
+            finding_type=_safe_category(
+                raw.get("finding_type"), fallback="ic_challenge", max_length=80
+            ),
+            severity=_safe_category(raw.get("severity"), fallback="medium", max_length=40),
+            category=_safe_challenge_category(raw.get("category")),
             supported_claim_ids=_safe_ids(raw.get("supported_claim_ids") or []),
             supported_calc_ids=_safe_ids(raw.get("supported_calc_ids") or []),
             graph_ref_ids=_safe_ids(raw.get("graph_ref_ids") or []),

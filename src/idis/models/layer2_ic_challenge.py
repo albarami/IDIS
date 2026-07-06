@@ -11,6 +11,8 @@ from uuid import UUID, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from idis.analysis.scoring.models import Stage
+
 LAYER2_IC_CHALLENGE_NAMESPACE = UUID("0794fcbf-556b-5067-91d3-ea88dd749bc8")
 
 
@@ -21,6 +23,24 @@ class Layer2ICChallengeStatus(StrEnum):
     BLOCKED = "blocked"
 
 
+class Layer2ChallengeCategory(StrEnum):
+    """Bounded IC challenge categories (Slice93 Task 6, DEC-D).
+
+    The first eight map 1:1 to the scorecard dimensions (enabling scorecard-safe stage
+    weighting); ``GENERAL`` is the catch-all for unmapped / free-text challenges.
+    """
+
+    MARKET_RISK = "market_risk"
+    TEAM_RISK = "team_risk"
+    PRODUCT_RISK = "product_risk"
+    TRACTION_RISK = "traction_risk"
+    THESIS_FIT_RISK = "thesis_fit_risk"
+    CAPITAL_EFFICIENCY_RISK = "capital_efficiency_risk"
+    SCALABILITY_RISK = "scalability_risk"
+    EXECUTION_RISK = "execution_risk"
+    GENERAL = "general"
+
+
 class Layer2ICChallengeFinding(BaseModel):
     """Safe, reference-bound finding emitted by the IC challenge."""
 
@@ -29,6 +49,10 @@ class Layer2ICChallengeFinding(BaseModel):
     finding_id: str
     finding_type: str
     severity: str
+    category: Layer2ChallengeCategory = Field(
+        default=Layer2ChallengeCategory.GENERAL,
+        description="Bounded challenge category (defaults to the GENERAL catch-all)",
+    )
     supported_claim_ids: list[str] = Field(default_factory=list)
     supported_calc_ids: list[str] = Field(default_factory=list)
     graph_ref_ids: list[str] = Field(default_factory=list)
@@ -177,11 +201,20 @@ class Layer2ICChallengeRecord(BaseModel):
             muhasabah_passed=self.muhasabah_passed,
         )
 
-    def to_run_step_summary(self) -> dict[str, Any]:
-        """Return safe Layer 2 run-step visibility."""
+    def to_run_step_summary(self, stage: Stage = Stage.SEED) -> dict[str, Any]:
+        """Return safe Layer 2 run-step visibility.
+
+        ``stage`` selects the stage-weighted category emphasis (DEC-E); it defaults to
+        ``Stage.SEED`` to mirror the scoring step's default stage.
+        """
+        # Lazy import breaks the models<->emphasis import cycle (emphasis imports the
+        # category enum defined above); the emphasis reuses stage_packs read-only.
+        from idis.services.runs.layer2_stage_emphasis import apply_layer2_stage_emphasis
+
         shell = self.to_shell()
         by_severity = counter(finding.severity for finding in self.findings)
         by_type = counter(finding.finding_type for finding in self.findings)
+        by_category = counter(finding.category.value for finding in self.findings)
         return {
             "status": self.status.value,
             "layer2_challenge_ids": [self.layer2_challenge_id],
@@ -197,6 +230,8 @@ class Layer2ICChallengeRecord(BaseModel):
             "muhasabah_passed": shell.muhasabah_passed,
             "by_finding_type": by_type,
             "by_severity": by_severity,
+            "by_category": by_category,
+            "stage_emphasis": apply_layer2_stage_emphasis(stage, by_category),
             "challenge_shells": [shell.model_dump(mode="json")],
         }
 

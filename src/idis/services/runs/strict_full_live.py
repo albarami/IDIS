@@ -471,6 +471,9 @@ def build_strict_full_live_readiness_report(
     media_health = _media_health(values, media_health_checker, resolver)
     extract_model_health = _model_health(values, model_health_checker, LlmModelRole.EXTRACTION)
     debate_model_health = _model_health(values, model_health_checker, LlmModelRole.DEBATE)
+    debate_arbiter_model_health = _model_health(
+        values, model_health_checker, LlmModelRole.DEBATE_ARBITER
+    )
     analysis_model_health = _model_health(values, model_health_checker, LlmModelRole.ANALYSIS)
     scoring_model_health = _model_health(values, model_health_checker, LlmModelRole.SCORING)
     product_export_ready = _product_export_ready(
@@ -499,7 +502,7 @@ def build_strict_full_live_readiness_report(
         _live_llm_model_clients(values, extract_model_health),
         _analysis(values, analysis_model_health),
         _debate_layer_1(values, debate_model_health),
-        _debate_layer_2_ic_challenge(values),
+        _debate_layer_2_ic_challenge(values, debate_model_health, debate_arbiter_model_health),
         _live("muhasabah_nff", "src/idis/debate/orchestrator.py; src/idis/deliverables/"),
         _scoring(values, scoring_model_health),
         _rag_foundation_layer(values, embedding_health, pgvector_health),
@@ -831,7 +834,11 @@ def _debate_layer_1(
     )
 
 
-def _debate_layer_2_ic_challenge(env: Mapping[str, str]) -> StrictComponentReadiness:
+def _debate_layer_2_ic_challenge(
+    env: Mapping[str, str],
+    challenger_health: LlmModelHealthCheck,
+    arbiter_health: LlmModelHealthCheck,
+) -> StrictComponentReadiness:
     missing = _missing_layer2_ic_challenge_env(env)
     if missing:
         return StrictComponentReadiness(
@@ -860,6 +867,46 @@ def _debate_layer_2_ic_challenge(env: Mapping[str, str]) -> StrictComponentReadi
             evidence="src/idis/services/runs/layer2_ic_challenge.py",
             may_proceed=False,
         )
+    evidence = (
+        "src/idis/services/runs/layer2_ic_challenge.py:Layer2ICLLMRunner; "
+        "src/idis/api/routes/runs.py:_run_full_layer2_ic_challenge:_build_layer2_provenance"
+    )
+    # Either debate model (challenger=default, arbiter) failing health blocks strict FULL.
+    if (
+        challenger_health.status is LlmModelHealthStatus.FAILED
+        or arbiter_health.status is LlmModelHealthStatus.FAILED
+    ):
+        return StrictComponentReadiness(
+            component_name="debate_layer_2_ic_challenge",
+            status=StrictComponentStatus.CONFIGURED_BUT_FAILED_HEALTH_CHECK,
+            blocker_message=(
+                "Layer 2 IC challenge live model health check failed; strict FULL is blocked."
+            ),
+            required_env_vars=[],
+            evidence=evidence,
+            may_proceed=False,
+        )
+    both_healthy = (
+        challenger_health.status is LlmModelHealthStatus.HEALTHY
+        and arbiter_health.status is LlmModelHealthStatus.HEALTHY
+    )
+    if not both_healthy:
+        return StrictComponentReadiness(
+            component_name="debate_layer_2_ic_challenge",
+            status=StrictComponentStatus.MISSING_CREDENTIALS,
+            blocker_message=(
+                "Layer 2 IC challenge is wired, but strict mode requires Anthropic-backed "
+                "IC challenger and arbiter live runner construction."
+            ),
+            required_env_vars=_missing_layer2_ic_challenge_env(env),
+            evidence=evidence,
+            may_proceed=False,
+        )
+    if challenger_health.runtime_call_proven and arbiter_health.runtime_call_proven:
+        # Runtime proof: BOTH the challenger and arbiter debate models made a proven live
+        # call. The per-run provenance artifact (_build_layer2_provenance) records the paired
+        # executed signal. One-of-two proven is NOT enough to clear.
+        return _live("debate_layer_2_ic_challenge", evidence)
     return StrictComponentReadiness(
         component_name="debate_layer_2_ic_challenge",
         status=StrictComponentStatus.CODE_EXISTS_BUT_NOT_WIRED,
@@ -869,10 +916,7 @@ def _debate_layer_2_ic_challenge(env: Mapping[str, str]) -> StrictComponentReadi
         ),
         required_env_vars=[],
         required_services=["Anthropic Messages API"],
-        evidence=(
-            "src/idis/services/runs/layer2_ic_challenge.py:Layer2ICLLMRunner; "
-            "src/idis/api/routes/runs.py:_run_full_layer2_ic_challenge"
-        ),
+        evidence=evidence,
         may_proceed=False,
     )
 
@@ -2414,7 +2458,10 @@ def _layer2_live_runner_construction_wired() -> bool:
         runs_module = import_module("idis.api.routes.runs")
         route_source = inspect.getsource(runs_module._run_full_layer2_ic_challenge)
         service_module = import_module("idis.services.runs.layer2_ic_challenge")
-        service_source = inspect.getsource(service_module.RunLayer2ICChallengeService.run)
+        # ``run`` delegates to ``run_with_record`` (Slice93), which holds the strict branch.
+        service_source = inspect.getsource(
+            service_module.RunLayer2ICChallengeService.run
+        ) + inspect.getsource(service_module.RunLayer2ICChallengeService.run_with_record)
         strict_source = inspect.getsource(
             service_module.RunLayer2ICChallengeService._run_strict_live
         )

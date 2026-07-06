@@ -227,6 +227,26 @@ class ScreeningSnapshot(BaseModel):
     generated_at: str = Field(..., description="ISO timestamp (passed in, not generated)")
 
 
+class Layer2ChallengeVisibility(BaseModel):
+    """Safe Layer-2 IC challenge visibility for deliverables (Slice93).
+
+    IDs, counts, and category/severity histograms only — never claim text,
+    transcripts, or raw model output.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    status: str = Field(..., description="Layer-2 challenge status")
+    challenge_ids: list[str] = Field(default_factory=list, description="Challenge ids")
+    finding_ids: list[str] = Field(default_factory=list, description="Finding ids")
+    finding_count: int = Field(..., ge=0, description="Number of findings")
+    unresolved_question_count: int = Field(..., ge=0, description="Unresolved questions")
+    by_finding_type: dict[str, int] = Field(
+        default_factory=dict, description="Finding-type category histogram"
+    )
+    by_severity: dict[str, int] = Field(default_factory=dict, description="Severity histogram")
+
+
 class ICMemo(BaseModel):
     """IC Memo deliverable - full investment committee memo.
 
@@ -271,6 +291,11 @@ class ICMemo(BaseModel):
     dissent_section: DissentSection | None = Field(
         default=None,
         description="Dissent section if stable dissent exists",
+    )
+
+    layer2_challenge: Layer2ChallengeVisibility | None = Field(
+        default=None,
+        description="Safe Layer-2 IC challenge visibility (ids/counts/categories)",
     )
 
     additional_sections: list[DeliverableSection] = Field(
@@ -457,6 +482,11 @@ class QABrief(BaseModel):
     items: list[QAItem] = Field(
         default_factory=list,
         description="QA items sorted by (topic, agent_type, question)",
+    )
+
+    layer2_challenge: Layer2ChallengeVisibility | None = Field(
+        default=None,
+        description="Safe Layer-2 IC challenge visibility (ids/counts/categories)",
     )
 
     summary_section: DeliverableSection = Field(..., description="Brief summary section")

@@ -16,6 +16,7 @@ from idis.models.deliverables import (
     AuditAppendixEntry,
     DeliverableFact,
     DeliverableSection,
+    Layer2ChallengeVisibility,
     QABrief,
     QAItem,
     RefType,
@@ -76,6 +77,7 @@ class QABriefBuilder:
 
         self._items: list[QAItem] = []
         self._summary_facts: list[DeliverableFact] = []
+        self._layer2_challenge: Layer2ChallengeVisibility | None = None
 
         self._all_claim_refs: set[str] = set()
         self._all_calc_refs: set[str] = set()
@@ -150,6 +152,13 @@ class QABriefBuilder:
         self._summary_facts.append(fact)
         return self
 
+    def set_layer2_challenge(
+        self, layer2_challenge: Layer2ChallengeVisibility | None
+    ) -> QABriefBuilder:
+        """Set the safe Layer-2 IC challenge visibility (Slice93)."""
+        self._layer2_challenge = layer2_challenge
+        return self
+
     def _build_audit_appendix(self) -> AuditAppendix:
         """Build the audit appendix from all collected refs."""
         entries: list[AuditAppendixEntry] = []
@@ -202,6 +211,7 @@ class QABriefBuilder:
             deal_id=self._deal_id,
             deal_name=self._deal_name,
             items=sorted_items,
+            layer2_challenge=self._layer2_challenge,
             summary_section=summary_section,
             audit_appendix=audit_appendix,
             generated_at=self._generated_at,

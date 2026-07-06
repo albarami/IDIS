@@ -2254,8 +2254,11 @@ class RunOrchestrator:
                 "source_debate_ids": accumulated.get("source_debate_ids"),
                 "claim_ids": accumulated.get("claim_ids"),
                 "calc_ids": accumulated.get("calc_ids"),
+                "finding_ids": accumulated.get("finding_ids"),
                 "finding_count": accumulated.get("finding_count"),
                 "unresolved_question_count": accumulated.get("unresolved_question_count"),
+                "by_finding_type": accumulated.get("by_finding_type"),
+                "by_severity": accumulated.get("by_severity"),
                 "muhasabah_passed": accumulated.get("muhasabah_passed"),
             },
             enrichment_evidence={

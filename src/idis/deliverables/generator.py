@@ -19,6 +19,8 @@ Trust invariants:
 from __future__ import annotations
 
 import logging
+import re
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -37,6 +39,7 @@ from idis.models.deliverables import (
     DeclineLetter,
     DeliverablesBundle,
     ICMemo,
+    Layer2ChallengeVisibility,
     QABrief,
     RefType,
     ScreeningSnapshot,
@@ -90,6 +93,92 @@ _DIMENSION_TO_TOPIC: dict[str, str] = {
 _MAX_SCORECARD_CLAIM_REFS_PER_FACT = 4
 _MAX_SCORECARD_CALC_REFS_PER_FACT = 2
 
+# Defense-in-depth: the Layer-2 visibility whitelist independently re-checks the shape of
+# every id/category it surfaces, so free text can never ride into a deliverable even if an
+# upstream sanitizer is bypassed. Bounded identifier tokens (finding ids / histogram
+# category keys) match ``_SAFE_TOKEN_RE``; challenge ids must be UUID-shaped.
+_SAFE_TOKEN_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def _is_uuid_shaped(value: Any) -> bool:
+    """True only for strings that parse as a UUID (bare production challenge ids)."""
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        uuid.UUID(value)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _safe_uuid_list(value: Any) -> list[str]:
+    """Keep only UUID-shaped strings; drop free text / wrong-shaped ids."""
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if _is_uuid_shaped(item)]
+
+
+def _safe_token_list(value: Any) -> list[str]:
+    """Keep only bounded identifier-shaped tokens (e.g. ``layer2-finding-001``)."""
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str) and _SAFE_TOKEN_RE.fullmatch(item)]
+
+
+def _safe_count_map(value: Any) -> dict[str, int]:
+    """Coerce to a ``dict[str, non-negative int]`` histogram; drop anything else."""
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, int] = {}
+    for key, count in value.items():
+        if not isinstance(key, str) or not _SAFE_TOKEN_RE.fullmatch(key):
+            continue
+        try:
+            n = int(count)
+        except (TypeError, ValueError):
+            continue
+        if n >= 0:
+            out[key] = n
+    return out
+
+
+def _safe_nonneg_int(value: Any) -> int:
+    """Coerce to a non-negative int; 0 on anything else."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return n if n >= 0 else 0
+
+
+def _safe_layer2_challenge_visibility(
+    layer2_evidence: dict[str, Any] | None,
+) -> Layer2ChallengeVisibility | None:
+    """Whitelist the safe Layer-2 IC challenge visibility for deliverables (Slice93).
+
+    Returns None unless the challenge completed with at least one challenge id.
+    Only IDs, counts, and category/severity histograms are surfaced — never claim
+    text, transcripts, or raw model output.
+    """
+    if not isinstance(layer2_evidence, dict):
+        return None
+    if layer2_evidence.get("status") != "completed":
+        return None
+    challenge_ids = _safe_uuid_list(layer2_evidence.get("layer2_challenge_ids"))
+    if not challenge_ids:
+        return None
+    return Layer2ChallengeVisibility(
+        status="completed",
+        challenge_ids=challenge_ids,
+        finding_ids=_safe_token_list(layer2_evidence.get("finding_ids")),
+        finding_count=_safe_nonneg_int(layer2_evidence.get("finding_count")),
+        unresolved_question_count=_safe_nonneg_int(
+            layer2_evidence.get("unresolved_question_count")
+        ),
+        by_finding_type=_safe_count_map(layer2_evidence.get("by_finding_type")),
+        by_severity=_safe_count_map(layer2_evidence.get("by_severity")),
+    )
+
 
 class DeliverablesGeneratorError(Exception):
     """Raised when the deliverables generator encounters a fatal error."""
@@ -129,6 +218,7 @@ class DeliverablesGenerator:
         generated_at: str,
         deliverable_id_prefix: str,
         graph_conclusions: dict[str, Any] | None = None,
+        layer2_evidence: dict[str, Any] | None = None,
     ) -> DeliverablesBundle:
         """Generate the full deliverables bundle.
 
@@ -183,6 +273,7 @@ class DeliverablesGenerator:
                 generated_at=generated_at,
                 deliverable_id=f"{deliverable_id_prefix}-memo",
                 graph_conclusions=graph_conclusions,
+                layer2_evidence=layer2_evidence,
             )
 
             truth = self._build_truth_dashboard(
@@ -200,6 +291,7 @@ class DeliverablesGenerator:
                 deal_name=deal_name,
                 generated_at=generated_at,
                 deliverable_id=f"{deliverable_id_prefix}-qa",
+                layer2_evidence=layer2_evidence,
             )
 
             decline: DeclineLetter | None = None
@@ -455,6 +547,7 @@ class DeliverablesGenerator:
         generated_at: str,
         deliverable_id: str,
         graph_conclusions: dict[str, Any] | None = None,
+        layer2_evidence: dict[str, Any] | None = None,
     ) -> ICMemo:
         """Build ICMemo by bridging agent reports to existing builder."""
         builder = ICMemoBuilder(
@@ -586,6 +679,8 @@ class DeliverablesGenerator:
 
         grade_dist: dict[str, int] = {"A": 0, "B": 0, "C": 0, "D": 0}
         builder.set_sanad_grade_distribution(grade_dist)
+
+        builder.set_layer2_challenge(_safe_layer2_challenge_visibility(layer2_evidence))
 
         return builder.build()
 
@@ -758,6 +853,7 @@ class DeliverablesGenerator:
         deal_name: str,
         generated_at: str,
         deliverable_id: str,
+        layer2_evidence: dict[str, Any] | None = None,
     ) -> QABrief:
         """Build QABrief from agent reports' questions_for_founder."""
         builder = QABriefBuilder(
@@ -789,6 +885,8 @@ class DeliverablesGenerator:
             text=f"QA Brief: {total_questions} questions from {len(reports_by_type)} agents",
             is_subjective=True,
         )
+
+        builder.set_layer2_challenge(_safe_layer2_challenge_visibility(layer2_evidence))
 
         return builder.build()
 

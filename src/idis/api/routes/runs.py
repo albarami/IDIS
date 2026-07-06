@@ -1879,6 +1879,7 @@ def _run_full_deliverables(
     layer2_evidence: dict[str, Any] | None = None,
     enrichment_evidence: dict[str, Any] | None = None,
     vep_evidence: dict[str, Any] | None = None,
+    run_provenance: dict[str, Any] | None = None,
     db_conn: Any = None,
     object_store: Any = None,
 ) -> dict[str, Any]:
@@ -1963,6 +1964,7 @@ def _run_full_deliverables(
             layer2_evidence=layer2_evidence,
             enrichment_evidence=enrichment_evidence,
             vep_evidence=vep_evidence,
+            run_provenance=run_provenance,
         )
         export_summary["durable_export"] = True
         return export_summary

@@ -55,6 +55,9 @@ ARTIFACT_CATALOG: tuple[ArtifactCatalogEntry, ...] = (
     ArtifactCatalogEntry("evidence_index", "JSON", "evidence_index.json", JSON_CONTENT_TYPE),
     ArtifactCatalogEntry("run_summary", "JSON", "run_summary.json", JSON_CONTENT_TYPE),
     ArtifactCatalogEntry(
+        "provenance_appendix", "JSON", "provenance_appendix.json", JSON_CONTENT_TYPE
+    ),
+    ArtifactCatalogEntry(
         MANIFEST_ARTIFACT_TYPE,
         "JSON",
         MANIFEST_FILENAME,

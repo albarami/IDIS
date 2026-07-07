@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from idis.api.auth import RequireTenantContext
 from idis.api.errors import IdisHttpError
@@ -36,13 +36,30 @@ class RunRef(BaseModel):
     status: str
 
 
+class DebateRoundSummary(BaseModel):
+    """Safe-shape debate round summary — round/role/ref-ids only, never raw content.
+
+    ``extra='forbid'`` hardens the contract: a round carrying a private key (content /
+    message / text / prompt / raw...) is rejected, so raw agent reasoning can never
+    serialize through GET /v1/debate/{debateId}. (DEC-C: safe-shape only; the real debate
+    orchestrator is NOT wired into this API this slice — rounds stays empty until then.)
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    round_number: int
+    role: str
+    claim_refs: list[str] = Field(default_factory=list)
+    calc_refs: list[str] = Field(default_factory=list)
+
+
 class DebateSession(BaseModel):
     """Debate session response for GET /v1/debate/{debateId}."""
 
     debate_id: str
     deal_id: str
     protocol_version: str
-    rounds: list[dict[str, Any]]
+    rounds: list[DebateRoundSummary]
     created_at: str
 
 

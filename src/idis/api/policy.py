@@ -179,6 +179,10 @@ POLICY_RULES: dict[str, PolicyRule] = {
     "runCalc": PolicyRule(allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=True),
     "startRun": PolicyRule(allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=True),
     "getRun": PolicyRule(allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=False),
+    "getStrictReadiness": PolicyRule(
+        allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=False
+    ),
+    "listDealRuns": PolicyRule(allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=True),
     "retryRun": PolicyRule(allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=False),
     "resumeRun": PolicyRule(allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=False),
     "cancelRun": PolicyRule(allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=False),

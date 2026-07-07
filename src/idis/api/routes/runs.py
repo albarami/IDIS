@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from idis.api.auth import RequireTenantContext
@@ -122,6 +122,24 @@ class RunStatus(BaseModel):
     source: RunSource | None = None
     steps: list[RunStepResponse] = Field(default_factory=list)
     block_reason: str | None = None
+
+
+class RunListItem(BaseModel):
+    """Safe run summary for the deal run list (detail + steps live in GET /v1/runs/{runId})."""
+
+    run_id: str
+    deal_id: str
+    status: str
+    mode: str
+    started_at: str
+    finished_at: str | None = None
+
+
+class PaginatedRunList(BaseModel):
+    """Paginated list of a deal's runs (newest first)."""
+
+    items: list[RunListItem]
+    next_cursor: str | None = None
 
 
 def _validate_start_run_body(body: dict[str, Any] | None) -> StartRunRequest:
@@ -371,6 +389,37 @@ def get_run(
         steps=step_responses,
         block_reason=run_data.get("block_reason") or _derive_block_reason(steps),
     )
+
+
+@router.get("/deals/{deal_id}/runs", response_model=PaginatedRunList)
+def list_deal_runs(
+    deal_id: str,
+    request: Request,
+    tenant_ctx: RequireTenantContext,
+    limit: int = Query(default=50, ge=1, le=200),
+    cursor: str | None = Query(default=None),
+) -> PaginatedRunList:
+    """List a deal's runs as safe summaries, newest first, cursor-paginated.
+
+    The cursor is an opaque, stable composite of (created_at, run_id) so runs sharing a
+    created_at are never dropped across pages. Per-run blocker detail and the step ledger
+    stay in GET /v1/runs/{run_id}.
+    """
+    db_conn = getattr(request.state, "db_conn", None)
+    runs_repo = get_runs_repository(db_conn, tenant_ctx.tenant_id)
+    rows, next_cursor = runs_repo.list_by_deal(deal_id=deal_id, limit=limit, cursor=cursor)
+    items = [
+        RunListItem(
+            run_id=row["run_id"],
+            deal_id=row["deal_id"],
+            status=row["status"],
+            mode=row["mode"],
+            started_at=row["started_at"],
+            finished_at=row.get("finished_at"),
+        )
+        for row in rows
+    ]
+    return PaginatedRunList(items=items, next_cursor=next_cursor)
 
 
 @router.post("/runs/{run_id}/retry", response_model=RunRef, status_code=202)

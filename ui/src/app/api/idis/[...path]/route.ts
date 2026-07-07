@@ -46,10 +46,12 @@ async function proxyHandler(
     url.searchParams.set(key, value);
   });
 
-  // Build headers for backend request
+  // Build headers for backend request. Preserve the request Content-Type so binary uploads
+  // (application/octet-stream) are forwarded correctly rather than coerced to JSON.
   const requestId = getOrGenerateRequestId(request.headers.get("X-Request-Id"));
+  const requestContentType = request.headers.get("Content-Type") || "application/json";
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
+    "Content-Type": requestContentType,
     "X-IDIS-API-Key": apiKey,
     "X-Request-Id": requestId,
   };
@@ -60,13 +62,21 @@ async function proxyHandler(
     headers["Idempotency-Key"] = idempotencyKey;
   }
 
-  // Get request body for non-GET methods
-  let body: string | undefined;
+  // Get request body for non-GET methods. JSON bodies forward as text; any other content type
+  // (e.g. octet-stream document uploads) forwards as raw bytes so binary is not corrupted.
+  let body: BodyInit | undefined;
   if (request.method !== "GET" && request.method !== "HEAD") {
     try {
-      const text = await request.text();
-      if (text) {
-        body = text;
+      if (requestContentType.includes("application/json")) {
+        const text = await request.text();
+        if (text) {
+          body = text;
+        }
+      } else {
+        const buffer = await request.arrayBuffer();
+        if (buffer.byteLength > 0) {
+          body = buffer;
+        }
       }
     } catch {
       // No body or failed to read

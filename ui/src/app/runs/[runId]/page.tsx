@@ -7,6 +7,7 @@ import Header from "@/components/Header";
 import StatusBadge from "@/components/StatusBadge";
 import ErrorCallout from "@/components/ErrorCallout";
 import DebateTranscript from "@/components/DebateTranscript";
+import RunStepLedger from "@/components/RunStepLedger";
 import { idis, type Run, type DebateSession, IDISApiError } from "@/lib/idis";
 
 export default function RunStatusPage() {
@@ -132,6 +133,14 @@ export default function RunStatusPage() {
             </div>
           )}
         </div>
+
+        {/* Pipeline steps + blocker detail */}
+        {(run.block_reason || (run.steps && run.steps.length > 0)) && (
+          <div className="bg-white shadow rounded-lg p-6 mb-6">
+            <h2 className="text-lg font-medium text-gray-900 mb-4">Pipeline steps</h2>
+            <RunStepLedger steps={run.steps ?? []} blockReason={run.block_reason} />
+          </div>
+        )}
 
         {/* Debate Details */}
         {debate && (

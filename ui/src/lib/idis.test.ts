@@ -107,3 +107,46 @@ describe("idis client error handling", () => {
     }
   });
 });
+
+describe("idis.documents.upload transport", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("POSTs the raw file as octet-stream (not JSON), preserving the exact Blob body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+      json: async () => ({ doc_id: "d1", deal_id: "deal-1", doc_type: "PITCH_DECK" }),
+    });
+    global.fetch = fetchMock;
+
+    const { default: idis } = await import("./idis");
+    const file = new File(["raw-file-bytes"], "deck.pdf", { type: "application/pdf" });
+
+    await idis.documents.upload("deal-1", file, { filename: "deck.pdf", docType: "PITCH_DECK" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    // URL: correct upload path + query params.
+    expect(url).toContain("/api/idis/v1/deals/deal-1/documents/upload");
+    expect(url).toContain("filename=deck.pdf");
+    expect(url).toContain("doc_type=PITCH_DECK");
+    // Method + transport headers.
+    expect(options.method).toBe("POST");
+    expect((options.headers as Record<string, string>)["Content-Type"]).toBe(
+      "application/octet-stream",
+    );
+    expect(options.credentials).toBe("include");
+    // Body is the EXACT File object — never JSON-stringified or coerced to text.
+    expect(options.body).toBe(file);
+    expect(typeof options.body).not.toBe("string");
+  });
+});

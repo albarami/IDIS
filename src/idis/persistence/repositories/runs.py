@@ -136,6 +136,42 @@ class PostgresRunsRepository:
             return None
         return self._row_to_dict(row)
 
+    def list_by_deal(
+        self,
+        *,
+        deal_id: str,
+        limit: int,
+        cursor: str | None = None,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """List tenant-scoped runs for a deal, newest first, using a stable (created_at, run_id)
+        composite cursor so rows sharing a created_at are never dropped across pages. RLS-scoped."""
+        query = """
+            SELECT run_id, tenant_id, deal_id, mode, status,
+                   started_at, finished_at, source, created_at, cancel_requested_at,
+                   created_by_actor_id, created_by_actor_type
+            FROM runs
+            WHERE deal_id = :deal_id
+        """
+        params: dict[str, Any] = {"deal_id": deal_id, "limit": limit + 1}
+        decoded = _decode_run_cursor(cursor)
+        if decoded is not None:
+            params["cursor_created_at"], params["cursor_run_id"] = decoded
+            query += (
+                " AND (created_at < :cursor_created_at"
+                " OR (created_at = :cursor_created_at AND run_id < :cursor_run_id))"
+            )
+        query += " ORDER BY created_at DESC, run_id DESC LIMIT :limit"
+        rows = self._conn.execute(text(query), params).fetchall()
+        items: list[dict[str, Any]] = []
+        next_cursor: str | None = None
+        for index, row in enumerate(rows):
+            if index >= limit:
+                if items:
+                    next_cursor = _encode_run_cursor(items[-1]["created_at"], items[-1]["run_id"])
+                break
+            items.append(self._row_to_dict(row))
+        return items, next_cursor
+
     def update_status(
         self,
         run_id: str,
@@ -389,6 +425,24 @@ _in_memory_runs_store: dict[str, dict[str, Any]] = {}
 """Global in-memory store keyed by run_id."""
 
 
+_RUN_CURSOR_SEP = "|"
+
+
+def _encode_run_cursor(created_at: str, run_id: str) -> str:
+    """Encode a stable composite run-list cursor from (created_at, run_id)."""
+    return f"{created_at}{_RUN_CURSOR_SEP}{run_id}"
+
+
+def _decode_run_cursor(cursor: str | None) -> tuple[str, str] | None:
+    """Decode a composite run cursor to (created_at, run_id); None if absent/malformed."""
+    if not cursor:
+        return None
+    parts = cursor.split(_RUN_CURSOR_SEP, 1)
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        return None
+    return parts[0], parts[1]
+
+
 class InMemoryRunsRepository:
     """In-memory fallback repository for runs when Postgres is not configured.
 
@@ -465,6 +519,41 @@ class InMemoryRunsRepository:
         if run is None or run.get("tenant_id") != self._tenant_id:
             return None
         return run
+
+    def list_by_deal(
+        self,
+        *,
+        deal_id: str,
+        limit: int,
+        cursor: str | None = None,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """List tenant-scoped runs for a deal, newest first, using a stable (created_at, run_id)
+        composite cursor so rows sharing a created_at are never dropped across pages."""
+        matching = [
+            run
+            for run in _in_memory_runs_store.values()
+            if run.get("tenant_id") == self._tenant_id and run.get("deal_id") == deal_id
+        ]
+        matching.sort(
+            key=lambda run: (run.get("created_at") or "", run.get("run_id") or ""),
+            reverse=True,
+        )
+        decoded = _decode_run_cursor(cursor)
+        if decoded is not None:
+            matching = [
+                run
+                for run in matching
+                if (run.get("created_at") or "", run.get("run_id") or "") < decoded
+            ]
+        items: list[dict[str, Any]] = []
+        next_cursor: str | None = None
+        for index, run in enumerate(matching):
+            if index >= limit:
+                if items:
+                    next_cursor = _encode_run_cursor(items[-1]["created_at"], items[-1]["run_id"])
+                break
+            items.append(dict(run))
+        return items, next_cursor
 
     def update_status(
         self,

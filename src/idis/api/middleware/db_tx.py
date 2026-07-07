@@ -30,6 +30,13 @@ from idis.api.error_model import make_error_response_no_request
 
 logger = logging.getLogger(__name__)
 
+# Config / read-model inspection endpoints that open NO transaction and MUST remain available when
+# the database is down (e.g. the reviewer strict-readiness view, which reports config/wiring modes
+# only). They are exempt from the request-scoped DB transaction so a DB outage cannot turn a
+# read-model GET into a 503. Keep this set exact-match and minimal — every entry weakens tenant
+# SET LOCAL / in-tx audit for that path, so only routes that touch no tenant data belong here.
+_DB_TX_EXEMPT_PATHS = frozenset({"/v1/strict-readiness"})
+
 
 def _open_connection() -> tuple[Any, Any]:
     """Open a DB connection and begin a transaction (sync, runs in thread).
@@ -98,6 +105,11 @@ class DBTransactionMiddleware:
         path = request.url.path
 
         if not path.startswith("/v1"):
+            await self.app(scope, receive, send)
+            return
+
+        if path in _DB_TX_EXEMPT_PATHS:
+            # Config/read-model inspection route: no transaction, works when the DB is down.
             await self.app(scope, receive, send)
             return
 

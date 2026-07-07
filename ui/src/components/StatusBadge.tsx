@@ -15,6 +15,7 @@ const runStatusStyles: Record<RunStatus, string> = {
   RUNNING: "bg-blue-100 text-blue-800",
   SUCCEEDED: "bg-green-100 text-green-800",
   FAILED: "bg-red-100 text-red-800",
+  CANCELLED: "bg-gray-200 text-gray-700",
 };
 
 interface StatusBadgeProps {

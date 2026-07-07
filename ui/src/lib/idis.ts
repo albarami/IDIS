@@ -70,7 +70,7 @@ export type ClaimAction =
 export type Materiality = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
 export type DefectSeverity = "FATAL" | "MAJOR" | "MINOR";
 export type HumanGateAction = "APPROVE" | "CORRECT" | "REJECT";
-export type RunStatus = "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED";
+export type RunStatus = "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
 
 export interface Deal {
   deal_id: string;
@@ -150,6 +150,36 @@ export interface ProductBundleManifestReview {
   artifacts: Array<Record<string, unknown>>;
 }
 
+export interface StrictReadinessComponentReview {
+  component_name: string;
+  status: string;
+  may_proceed: boolean;
+  required_env_vars: string[];
+  required_services: string[];
+}
+
+export interface StrictReadinessReview {
+  required: boolean;
+  may_proceed: boolean;
+  blocker_count: number;
+  blocking_components: string[];
+  components: StrictReadinessComponentReview[];
+}
+
+/** Safe durable summary returned after a data-room document upload (no raw content). */
+export interface DocumentArtifact {
+  doc_id: string;
+  deal_id: string;
+  doc_type: string;
+  title?: string | null;
+  source_system?: string;
+  version_id?: string | null;
+  parse_status?: string;
+  sha256?: string | null;
+  ingested_at?: string | null;
+  uri?: string | null;
+}
+
 export interface HumanGate {
   gate_id: string;
   deal_id: string;
@@ -158,18 +188,54 @@ export interface HumanGate {
   created_at: string;
 }
 
+/** Response from submitting a human-gate action (POST /v1/deals/{dealId}/human-gates). */
+export interface HumanGateActionResult {
+  action_id: string;
+  gate_id: string;
+  action: string;
+  actor_id: string;
+  created_at: string;
+}
+
 export interface Override {
   override_id: string;
   deal_id: string;
   override_type: string;
-  reason: string;
-  actor_id: string;
+  justification: string;
+  status: string;
   created_at: string;
+}
+
+export interface RunStepError {
+  code: string;
+  message?: string | null;
+}
+
+export interface RunStep {
+  step_name: string;
+  status: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  error?: RunStepError | null;
+  retry_count?: number;
 }
 
 export interface Run {
   run_id: string;
   status: RunStatus;
+  mode?: string;
+  started_at: string;
+  finished_at?: string | null;
+  steps?: RunStep[];
+  block_reason?: string | null;
+}
+
+/** Safe run summary row for the deal-scoped run list (GET /v1/deals/{dealId}/runs). */
+export interface RunListItem {
+  run_id: string;
+  deal_id: string;
+  status: string;
+  mode: string;
   started_at: string;
   finished_at?: string | null;
 }
@@ -351,6 +417,9 @@ export const idis = {
       }),
 
     get: (runId: string) => request<Run>(`/v1/runs/${runId}`),
+
+    list: (dealId: string, params?: { limit?: number; cursor?: string }) =>
+      request<PaginatedResponse<RunListItem>>(`/v1/deals/${dealId}/runs`, { params }),
   },
 
   // Debate
@@ -379,7 +448,7 @@ export const idis = {
       data: { gate_id: string; action: string; notes?: string },
       idempotencyKey?: string
     ) =>
-      request<HumanGate>(`/v1/deals/${dealId}/human-gates`, {
+      request<HumanGateActionResult>(`/v1/deals/${dealId}/human-gates`, {
         method: "POST",
         body: data,
         idempotencyKey,
@@ -410,6 +479,50 @@ export const idis = {
       after?: string;
       before?: string;
     }) => request<PaginatedResponse<AuditEvent>>("/v1/audit/events", { params }),
+  },
+
+  // Strict full-live readiness (reviewer-safe: component modes, blockers, env-var names/services)
+  readiness: {
+    get: () => request<StrictReadinessReview>("/v1/strict-readiness"),
+  },
+
+  // Data-room documents
+  documents: {
+    // Raw-bytes upload — sent as application/octet-stream (not via the JSON `request` helper),
+    // returns a safe durable summary. The proxy forwards binary bodies with this content-type.
+    upload: async (
+      dealId: string,
+      file: Blob,
+      options: { filename: string; docType: string },
+    ): Promise<DocumentArtifact> => {
+      const params = new URLSearchParams({
+        filename: options.filename,
+        doc_type: options.docType,
+      });
+      const response = await fetch(
+        `/api/idis/v1/deals/${dealId}/documents/upload?${params.toString()}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/octet-stream",
+            "X-Request-Id": generateRequestId(),
+          },
+          body: file,
+          credentials: "include",
+        },
+      );
+      const data = await response.json();
+      if (!response.ok) {
+        const error = data as IDISError;
+        throw new IDISApiError(response.status, {
+          code: error.code || "upload_error",
+          message: error.message || "Upload failed",
+          details: error.details,
+          request_id: error.request_id,
+        });
+      }
+      return data as DocumentArtifact;
+    },
   },
 };
 

@@ -1006,6 +1006,26 @@ paths:
           $ref: "#/components/responses/Unauthorized"
 
   /v1/deals/{dealId}/runs:
+    get:
+      tags: [Runs]
+      summary: List runs for a deal
+      description: >
+        Returns a deal's runs as safe summaries (ids, status, mode, timestamps), newest first,
+        cursor-paginated. Per-run blocker detail and the step ledger are in GET /v1/runs/{runId}.
+      operationId: listDealRuns
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Paginated run list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedRunList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
     post:
       tags: [Runs]
       summary: Start an IDIS pipeline run (snapshot or full)
@@ -1103,6 +1123,25 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+
+  /v1/strict-readiness:
+    get:
+      tags: [Readiness]
+      summary: Get strict full-live readiness (reviewer-safe)
+      description: >
+        Returns the safe strict full-live readiness review — component modes, blocker counts +
+        blocking component names, and required env-var names / service labels only. Excludes
+        internal evidence, env sources, free-text blocker messages, and provider matrices.
+      operationId: getStrictReadiness
+      responses:
+        "200":
+          description: Strict full-live readiness review
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StrictReadinessReview"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
   /v1/runs/{runId}:
     get:
@@ -2164,9 +2203,83 @@ components:
         protocol_version: { type: string }
         max_rounds: { type: integer, minimum: 1, maximum: 10, default: 5 }
 
+    StrictReadinessComponentReview:
+      type: object
+      additionalProperties: false
+      required: [component_name, status, may_proceed]
+      properties:
+        component_name: { type: string }
+        status:
+          type: string
+          enum:
+            - live-wired-and-used
+            - code-exists-but-not-wired
+            - configured-but-failed-health-check
+            - missing-credentials
+            - missing-infrastructure
+            - not-implemented
+        may_proceed: { type: boolean }
+        required_env_vars:
+          type: array
+          items: { type: string }
+        required_services:
+          type: array
+          items: { type: string }
+
+    StrictReadinessReview:
+      type: object
+      additionalProperties: false
+      required: [required, may_proceed, blocker_count]
+      properties:
+        required: { type: boolean }
+        may_proceed: { type: boolean }
+        blocker_count: { type: integer }
+        blocking_components:
+          type: array
+          items: { type: string }
+        components:
+          type: array
+          items:
+            $ref: "#/components/schemas/StrictReadinessComponentReview"
+
+    RunListItem:
+      type: object
+      required: [run_id, deal_id, status, mode, started_at]
+      properties:
+        run_id: { type: string, format: uuid }
+        deal_id: { type: string, format: uuid }
+        status: { type: string }
+        mode: { type: string }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time, nullable: true }
+
+    PaginatedRunList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/RunListItem"
+        next_cursor: { type: string, nullable: true }
+
+    DebateRoundSummary:
+      type: object
+      additionalProperties: false
+      required: [round_number, role]
+      properties:
+        round_number: { type: integer }
+        role: { type: string }
+        claim_refs:
+          type: array
+          items: { type: string }
+        calc_refs:
+          type: array
+          items: { type: string }
+
     DebateSession:
       type: object
-      required: [debate_id, deal_id, protocol_version, created_at]
+      required: [debate_id, deal_id, protocol_version, rounds, created_at]
       properties:
         debate_id: { type: string, format: uuid }
         deal_id: { type: string, format: uuid }
@@ -2174,8 +2287,7 @@ components:
         rounds:
           type: array
           items:
-            type: object
-            additionalProperties: true
+            $ref: "#/components/schemas/DebateRoundSummary"
         created_at: { type: string, format: date-time }
 
     HumanGate:

@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 from idis.models.run_source import RunSource
 from idis.models.run_step import RunStep, StepName, StepStatus
+from idis.observability.runtime_signals import RUN_QUEUE_OBSERVED, emit_run_signal
 from idis.persistence.db import get_app_engine, set_tenant_local
 from idis.persistence.repositories.run_steps import get_run_steps_repository
 from idis.persistence.repositories.runs import get_runs_repository
@@ -108,6 +109,15 @@ class PipelineWorker:
 
             await asyncio.sleep(self._poll_interval)
 
+    def _observability_sink(self) -> Any:
+        """Lazily build a best-effort audit sink for observability signals (None if unavailable)."""
+        if not hasattr(self, "_obs_sink"):
+            try:
+                self._obs_sink = _default_worker_audit_sink()
+            except Exception:
+                self._obs_sink = None
+        return self._obs_sink
+
     async def _process_queued_runs(self) -> int:
         """Process all queued runs."""
         if not self._tenant_ids:
@@ -126,6 +136,18 @@ class PipelineWorker:
                 if not runs:
                     continue
 
+                try:
+                    emit_run_signal(
+                        self._observability_sink(),
+                        event_type=RUN_QUEUE_OBSERVED,
+                        tenant_id=tenant_id,
+                        details={
+                            "queued_count": runs_repo.count_queued_runs(),
+                            "claimed_count": len(runs),
+                        },
+                    )
+                except Exception:  # observability is best-effort; never break the poll
+                    logger.debug("queue-depth signal skipped", exc_info=True)
                 logger.info("Found %s queued runs for tenant %s", len(runs), tenant_id)
 
                 for run_data in runs:

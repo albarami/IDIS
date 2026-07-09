@@ -42,11 +42,11 @@ from idis.api.routes.runs import router as runs_router
 from idis.api.routes.sanad import router as sanad_router
 from idis.api.routes.tenancy import router as tenancy_router
 from idis.api.routes.webhooks import router as webhooks_router
-from idis.audit.sink import AuditSink
+from idis.audit.sink import AuditSink, get_audit_sink
 from idis.idempotency.store import SqliteIdempotencyStore
 from idis.observability.tracing import configure_tracing, instrument_fastapi, instrument_httpx
 from idis.pipeline.worker import start_worker, stop_worker
-from idis.rate_limit.limiter import TenantRateLimiter
+from idis.rate_limit.limiter import TenantRateLimiter, build_default_rate_limit_store
 from idis.services.ingestion.defaults import build_default_ingestion_service
 
 try:
@@ -118,7 +118,14 @@ def create_app(
         version=IDIS_VERSION,
     )
 
-    app.state.audit_sink = audit_sink
+    # Default to the configured audit sink when no test sink is injected. Production invokes
+    # create_app() with no args (Dockerfile --factory / idis/app.py), so without this the
+    # observability signals (rate-limit denials, idempotency cleanup) and the run-lifecycle
+    # events read app.state.audit_sink == None and become silent no-ops. This effective sink is
+    # shared by app.state and the AuditMiddleware; the default ingestion wiring keeps its prior
+    # audit_sink behavior (unchanged) to avoid an out-of-scope change to ingestion audit.
+    effective_audit_sink = audit_sink if audit_sink is not None else get_audit_sink()
+    app.state.audit_sink = effective_audit_sink
     app.state.ingestion_service = ingestion_service or build_default_ingestion_service(
         audit_sink=audit_sink
     )
@@ -134,11 +141,16 @@ def create_app(
         postgres_store=postgres_idempotency_store,
     )
     app.add_middleware(RBACMiddleware)
+    if rate_limiter is None:
+        # DEC-A: Redis cross-replica store when IDIS_REDIS_URL is set, else in-memory default.
+        rate_limiter = TenantRateLimiter(store=build_default_rate_limit_store())
     app.add_middleware(RateLimitMiddleware, limiter=rate_limiter)
     app.add_middleware(ResidencyMiddleware, service_region=service_region)
     app.add_middleware(TracingEnrichmentMiddleware)
     app.add_middleware(OpenAPIValidationMiddleware)
-    app.add_middleware(AuditMiddleware, sink=audit_sink, postgres_sink=postgres_audit_sink)
+    app.add_middleware(
+        AuditMiddleware, sink=effective_audit_sink, postgres_sink=postgres_audit_sink
+    )
     app.add_middleware(DBTransactionMiddleware)
     app.add_middleware(RequestIdMiddleware)
 

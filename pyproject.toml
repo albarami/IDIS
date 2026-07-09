@@ -37,6 +37,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "neo4j>=5.14.0",
     "openai>=1.40.0",
+    "redis>=5.0.0",  # cross-replica rate-limit store (Slice96 DEC-A); imported lazily when configured
 ]
 
 [project.optional-dependencies]
@@ -116,6 +117,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["sqlalchemy.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["redis.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

@@ -17,7 +17,10 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import threading
+import time
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
 from fastapi import Request, Response
@@ -26,13 +29,16 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
 from idis.api.error_model import make_error_response_no_request
+from idis.audit.sink import AuditSink
 from idis.idempotency.store import (
     IdempotencyRecord,
     IdempotencyStoreError,
     ScopeKey,
     SqliteIdempotencyStore,
     get_current_timestamp,
+    load_idempotency_ttl_days,
 )
+from idis.observability.runtime_signals import IDEMPOTENCY_CLEANUP, emit_run_signal
 
 try:
     from idis.idempotency.postgres_store import PostgresIdempotencyStore
@@ -117,6 +123,9 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         app: ASGIApp,
         store: SqliteIdempotencyStore | None = None,
         postgres_store: PostgresIdempotencyStore | None = None,
+        *,
+        ttl_days: int | None = None,
+        cleanup_interval_seconds: float = 3600.0,
     ) -> None:
         """Initialize the idempotency middleware.
 
@@ -124,10 +133,18 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             app: The ASGI application
             store: Optional SQLite idempotency store. If None, creates default store.
             postgres_store: Optional Postgres idempotency store for in-transaction ops.
+            ttl_days: Idempotency-record TTL in days for opportunistic cleanup. Defaults to the
+                configured value (``IDIS_IDEMPOTENCY_TTL_DAYS``, ~30).
+            cleanup_interval_seconds: Minimum seconds between opportunistic cleanups per tenant, so
+                cleanup does not run on every request (throttle). 0 disables throttling.
         """
         super().__init__(app)
         self._store = store
         self._postgres_store = postgres_store
+        self._ttl_days = ttl_days if ttl_days is not None else load_idempotency_ttl_days()
+        self._cleanup_interval_seconds = cleanup_interval_seconds
+        self._last_cleanup: dict[str, float] = {}
+        self._cleanup_lock = threading.Lock()
 
     def _get_store(self) -> SqliteIdempotencyStore:
         """Get or lazily create the SQLite idempotency store.
@@ -153,6 +170,38 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         if self._postgres_store is None:
             self._postgres_store = PostgresIdempotencyStore()
         return self._postgres_store
+
+    def _maybe_cleanup(
+        self,
+        tenant_id: str,
+        store: SqliteIdempotencyStore | PostgresIdempotencyStore,
+        audit_sink: AuditSink | None = None,
+    ) -> None:
+        """Opportunistically reclaim this tenant's expired idempotency records (throttled).
+
+        Best-effort and tenant-scoped: runs at most once per tenant per
+        ``cleanup_interval_seconds`` and removes only records older than the configured TTL. Any
+        failure is swallowed -- cleanup must never affect the request or its replay/conflict
+        semantics.
+        """
+        now = time.monotonic()
+        with self._cleanup_lock:
+            last = self._last_cleanup.get(tenant_id)
+            if last is not None and (now - last) < self._cleanup_interval_seconds:
+                return
+            self._last_cleanup[tenant_id] = now
+        try:
+            cutoff = datetime.now(UTC) - timedelta(days=self._ttl_days)
+            deleted = store.delete_expired(tenant_id=tenant_id, older_than=cutoff)
+            if deleted > 0:  # only signal a real outcome (records reclaimed), not routine no-ops
+                emit_run_signal(
+                    audit_sink,
+                    event_type=IDEMPOTENCY_CLEANUP,
+                    tenant_id=tenant_id,
+                    details={"deleted_count": int(deleted)},
+                )
+        except Exception as exc:  # best-effort: never break the request
+            logger.warning("Idempotency TTL cleanup failed: %s", str(exc))
 
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
@@ -225,6 +274,18 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
                     "Idempotency store is unavailable",
                     request_id,
                 )
+
+        # Opportunistic, throttled, best-effort TTL cleanup for this tenant (DEC-E). Runs before the
+        # lookup and never affects replay/conflict: it removes only OTHER already-expired records.
+        # Best-effort observability sink lookup. Real requests always carry scope["app"], but a
+        # hand-built scope (e.g. driving dispatch directly) may not -- use scope.get so a missing
+        # "app" degrades to no sink instead of raising KeyError and breaking the request.
+        app_obj = request.scope.get("app")
+        cleanup_audit_sink = getattr(getattr(app_obj, "state", None), "audit_sink", None)
+        if use_postgres and postgres_store is not None:
+            self._maybe_cleanup(scope_key.tenant_id, postgres_store, cleanup_audit_sink)
+        else:
+            self._maybe_cleanup(scope_key.tenant_id, store, cleanup_audit_sink)
 
         try:
             if use_postgres and postgres_store is not None:

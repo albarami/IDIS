@@ -78,6 +78,9 @@ class _StrictBlockRunsRepository:
     def deal_exists(self, deal_id: str) -> bool:
         return deal_id == "deal-strict-pre-created"
 
+    def has_active_run(self, deal_id: str) -> bool:
+        return False
+
     def create(self, **_kwargs: Any) -> dict[str, Any]:
         self.create_calls += 1
         raise AssertionError("strict full-live gate must run before runs_repo.create")

@@ -132,6 +132,8 @@ from idis.models.validated_evidence_package_materialization import (
     RunScopedValidatedEvidencePackageShell,
     RunScopedValidatedEvidencePackageSummary,
 )
+from idis.observability.runtime_signals import RUN_CANCELLED as RUN_CANCELLED_EVENT
+from idis.observability.runtime_signals import emit_run_signal
 from idis.persistence.repositories.run_steps import RunStepsRepo
 from idis.validators.audit_event_validator import validate_audit_event
 
@@ -598,12 +600,33 @@ class RunOrchestrator:
     def _cancelled_result(self, ctx: RunContext) -> OrchestratorResult:
         """Return a safe cancellation result without overwriting terminal state."""
         all_steps = self._steps_repo.get_by_run_id(ctx.run_id)
+        emit_run_signal(
+            self._audit,
+            event_type=RUN_CANCELLED_EVENT,
+            tenant_id=ctx.tenant_id,
+            details={"run_id": ctx.run_id, "code": "RUN_CANCELLED"},
+        )
         return OrchestratorResult(
             status="CANCELLED",
             steps=all_steps,
             block_reason="RUN_CANCELLED",
             error_code="RUN_CANCELLED",
             error_message="Run cancelled by lifecycle request",
+        )
+
+    @staticmethod
+    def _run_signals_cancellation(run_data: dict[str, Any] | None) -> bool:
+        """A run signals cancellation once cancel_requested_at is set or its status is CANCELLED.
+
+        Consulting cancel_requested_at lets a still-RUNNING run stop cooperatively as soon as
+        cancellation is requested; retry/resume clears cancel_requested_at, so a resumed run is
+        never spuriously cancelled.
+        """
+        if run_data is None:
+            return False
+        return (
+            run_data.get("cancel_requested_at") is not None
+            or str(run_data.get("status")) == "CANCELLED"
         )
 
     def _is_cancellation_requested(self, ctx: RunContext) -> bool:
@@ -614,17 +637,14 @@ class RunOrchestrator:
         if self._runs_repo is not None:
             get_run = getattr(self._runs_repo, "get", None)
             if callable(get_run):
-                run_data = get_run(ctx.run_id)
-                return bool(run_data is not None and str(run_data.get("status")) == "CANCELLED")
+                return self._run_signals_cancellation(get_run(ctx.run_id))
 
         from idis.persistence.repositories.runs import _in_memory_runs_store
 
         run_data = _in_memory_runs_store.get(ctx.run_id)
-        return bool(
-            run_data is not None
-            and str(run_data.get("tenant_id")) == ctx.tenant_id
-            and str(run_data.get("status")) == "CANCELLED"
-        )
+        if run_data is None or str(run_data.get("tenant_id")) != ctx.tenant_id:
+            return False
+        return self._run_signals_cancellation(run_data)
 
     def _dispatch_step(
         self,

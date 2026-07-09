@@ -96,7 +96,7 @@ def test_durable_layer2_repos_exist_and_step_path_is_wired() -> None:
     numbers = sorted(
         path.name[:4] for path in _MIGRATIONS_DIR.glob("0*.py") if path.name[:4].isdigit()
     )
-    assert numbers[-1] == "0022"
+    assert "0022" in numbers  # 0022 present in the chain (not pinned as head; later slices append)
     assert list(_MIGRATIONS_DIR.glob("0022_layer2_ic_challenge_durability.py"))
     # The LAYER2 step path persists through the repository (Task 3): the route fn selects
     # the repository and fails closed, and steps.py binds db_conn to it.

@@ -7,6 +7,7 @@ and that the Postgres SQL surfaces and migration 0019 carry the new columns.
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import inspect
 from typing import Any
@@ -86,6 +87,9 @@ def test_postgres_runs_create_and_select_sql_include_created_by_actor() -> None:
         def execute(self, statement: object, params: dict[str, Any] | None = None) -> _FakeResult:
             self.executed_sql.append(str(statement))
             return _FakeResult()
+
+        def begin_nested(self) -> contextlib.AbstractContextManager[None]:
+            return contextlib.nullcontext()
 
     conn = _FakeConnection()
     # Bypass real SET LOCAL; PostgresRunsRepository.__init__ calls set_tenant_local.

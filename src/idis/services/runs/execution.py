@@ -14,6 +14,7 @@ from typing import Protocol
 
 from idis.audit.sink import AuditSink
 from idis.models.run_step import RunStep
+from idis.observability.runtime_signals import RUN_CLAIMED, emit_run_signal
 from idis.persistence.repositories.run_steps import RunStepsRepo
 from idis.services.runs.orchestrator import OrchestratorResult, RunContext, RunOrchestrator
 
@@ -76,6 +77,13 @@ class RunExecutionService:
         if not self._try_mark_running(ctx.run_id):
             return RunExecutionResult(claimed=False, status="NOT_CLAIMED")
         self._commit_after_claim()
+
+        emit_run_signal(
+            self._audit_sink,
+            event_type=RUN_CLAIMED,
+            tenant_id=ctx.tenant_id,
+            details={"run_id": ctx.run_id, "mode": ctx.mode},
+        )
 
         orchestrator = RunOrchestrator(
             audit_sink=self._audit_sink,

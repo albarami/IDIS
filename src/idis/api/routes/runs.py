@@ -29,7 +29,7 @@ from idis.api.errors import IdisHttpError
 from idis.audit.sink import AuditSink, AuditSinkError
 from idis.models.run_source import RunSource
 from idis.persistence.repositories.run_steps import get_run_steps_repository
-from idis.persistence.repositories.runs import get_runs_repository
+from idis.persistence.repositories.runs import RunAlreadyActiveError, get_runs_repository
 from idis.services.runs import strict_full_live as strict_full_live_module
 from idis.services.runs.execution import RunExecutionService
 from idis.services.runs.lifecycle import RunLifecycleService
@@ -228,6 +228,15 @@ async def start_run(
     if not runs_repo.deal_exists(deal_id):
         raise IdisHttpError(status_code=404, code="NOT_FOUND", message="Deal not found")
 
+    # DEC-D: at most one active (QUEUED/RUNNING) run per (tenant, deal). Fail fast before the
+    # preflight/strict work; the create() path + Postgres partial unique index are the backstop.
+    if runs_repo.has_active_run(deal_id):
+        raise IdisHttpError(
+            status_code=409,
+            code="RUN_ALREADY_ACTIVE",
+            message="An active run already exists for this deal",
+        )
+
     preflight_corpus = _gather_preflight_corpus(request, tenant_ctx.tenant_id, deal_id)
     preflight_corpus = _apply_run_source_to_preflight_corpus(
         preflight_corpus=preflight_corpus,
@@ -262,15 +271,25 @@ async def start_run(
                 details=build_strict_block_operator_safe_details(strict_report),
             )
 
-    run_data = runs_repo.create(
-        run_id=run_id,
-        deal_id=deal_id,
-        mode=request_body.mode,
-        idempotency_key=idempotency_key,
-        source=request_body.source.to_storage_dict() if request_body.source is not None else None,
-        created_by_actor_id=tenant_ctx.actor_id,
-        created_by_actor_type=tenant_ctx.actor_type,
-    )
+    try:
+        run_data = runs_repo.create(
+            run_id=run_id,
+            deal_id=deal_id,
+            mode=request_body.mode,
+            idempotency_key=idempotency_key,
+            source=(
+                request_body.source.to_storage_dict() if request_body.source is not None else None
+            ),
+            created_by_actor_id=tenant_ctx.actor_id,
+            created_by_actor_type=tenant_ctx.actor_type,
+        )
+    except RunAlreadyActiveError as exc:
+        # Loser of a concurrent create race (past the fail-fast check) -> same safe 409.
+        raise IdisHttpError(
+            status_code=409,
+            code="RUN_ALREADY_ACTIVE",
+            message="An active run already exists for this deal",
+        ) from exc
 
     request.state.audit_resource_id = run_id
 
@@ -1260,6 +1279,7 @@ def _run_full_debate(
         context=context,
         debate_role_runners_factory=debate_role_runners_factory,
         strict_live_debate_backend_required=strict_live_debate_backend_required,
+        tenant_id=tenant_id,
     )
     orchestrator = DebateOrchestrator(config=DebateConfig(), role_runners=role_runners)
     final_state = orchestrator.run(state)
@@ -1542,11 +1562,13 @@ def _run_full_layer2_ic_challenge(
     challenger_runner = None
     arbiter_runner = None
     if strict_full_live:
-        from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
-
         challenger_runner, arbiter_runner = build_live_layer2_ic_runners(
-            challenger_client=AnthropicLLMClient(model=default_model, max_tokens=8192),
-            arbiter_client=AnthropicLLMClient(model=arbiter_model, max_tokens=8192),
+            challenger_client=_new_budgeted_llm_client(
+                model=default_model, max_tokens=8192, tenant_id=tenant_id
+            ),
+            arbiter_client=_new_budgeted_llm_client(
+                model=arbiter_model, max_tokens=8192, tenant_id=tenant_id
+            ),
         )
     service = RunLayer2ICChallengeService(
         strict_full_live=strict_full_live,
@@ -1654,6 +1676,7 @@ def _run_full_analysis(
     llm_client = _build_analysis_llm_client(
         analysis_client_factory=analysis_client_factory,
         strict_live_debate_backend_required=strict_live_debate_backend_required,
+        tenant_id=tenant_id,
     )
     agents = build_default_specialist_agents(llm_client=llm_client)
 
@@ -1894,6 +1917,7 @@ def _run_full_scoring(
     llm_client = _build_scoring_llm_client(
         scoring_client_factory=scoring_client_factory,
         strict_live_debate_backend_required=strict_live_debate_backend_required,
+        tenant_id=tenant_id,
     )
     runner = LLMScorecardRunner(llm_client=llm_client)
     audit_sink = InMemoryAuditSink()
@@ -2984,12 +3008,29 @@ class StrictLiveRoleError(Exception):
         super().__init__(message)
 
 
+def _new_budgeted_llm_client(*, model: str | None, max_tokens: int, tenant_id: str | None) -> Any:
+    """Construct the live Anthropic client and wrap it in the per-tenant/provider budget gate.
+
+    Slice96 DEC-C: the single construction point for every live LLM seam, so no live provider call
+    can bypass the hard cap. ``wrap_with_provider_budget`` is a passthrough when no budget is
+    configured (the default), leaving non-strict/dev runs unchanged; when a cap is set the returned
+    client raises the safe provider-budget denial before any provider request once the tenant's
+    budget for the provider is exhausted.
+    """
+    from idis.providers.budget import wrap_with_provider_budget
+    from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
+
+    client = AnthropicLLMClient(model=model, max_tokens=max_tokens)
+    return wrap_with_provider_budget(client, tenant_id=tenant_id or "", provider="anthropic")
+
+
 def _build_strict_anthropic_role_client(
     selection: Any,
     factory: Callable[[Any], Any] | None,
     *,
     role: str,
     provider_failed_code: str,
+    tenant_id: str | None = None,
 ) -> Any:
     """Build the live (Anthropic) analysis/scoring client for strict FULL, failing closed safely.
 
@@ -2999,9 +3040,9 @@ def _build_strict_anthropic_role_client(
     try:
         if factory is not None:
             return factory(selection)
-        from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
-
-        return AnthropicLLMClient(model=selection.model, max_tokens=selection.max_tokens)
+        return _new_budgeted_llm_client(
+            model=selection.model, max_tokens=selection.max_tokens, tenant_id=tenant_id
+        )
     except StrictLiveRoleError:
         raise
     except Exception as exc:
@@ -3015,6 +3056,7 @@ def _build_scoring_llm_client(
     *,
     scoring_client_factory: ScoringClientFactory | None = None,
     strict_live_debate_backend_required: bool = False,
+    tenant_id: str | None = None,
 ) -> Any:
     """Build the LLM client for scoring based on env configuration.
 
@@ -3038,12 +3080,13 @@ def _build_scoring_llm_client(
                 scoring_client_factory,
                 role="scoring",
                 provider_failed_code=STRICT_LIVE_SCORING_PROVIDER_FAILED,
+                tenant_id=tenant_id,
             )
         if scoring_client_factory is not None:
             return scoring_client_factory(selection)
-        from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
-
-        return AnthropicLLMClient(model=selection.model, max_tokens=selection.max_tokens)
+        return _new_budgeted_llm_client(
+            model=selection.model, max_tokens=selection.max_tokens, tenant_id=tenant_id
+        )
 
     if strict_live_debate_backend_required:
         raise StrictLiveRoleError(
@@ -3065,6 +3108,7 @@ def _build_analysis_llm_client(
     *,
     analysis_client_factory: AnalysisClientFactory | None = None,
     strict_live_debate_backend_required: bool = False,
+    tenant_id: str | None = None,
 ) -> Any:
     """Build the LLM client for analysis agents based on env configuration.
 
@@ -3088,12 +3132,13 @@ def _build_analysis_llm_client(
                 analysis_client_factory,
                 role="analysis",
                 provider_failed_code=STRICT_LIVE_ANALYSIS_PROVIDER_FAILED,
+                tenant_id=tenant_id,
             )
         if analysis_client_factory is not None:
             return analysis_client_factory(selection)
-        from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
-
-        return AnthropicLLMClient(model=selection.model, max_tokens=selection.max_tokens)
+        return _new_budgeted_llm_client(
+            model=selection.model, max_tokens=selection.max_tokens, tenant_id=tenant_id
+        )
 
     if strict_live_debate_backend_required:
         raise StrictLiveRoleError(
@@ -3342,6 +3387,7 @@ def _run_snapshot_extraction(
     llm_client = _build_extraction_llm_client(
         extractor_client_factory=extractor_client_factory,
         strict_live_extraction_required=strict_live_extraction_required,
+        tenant_id=tenant_id,
     )
     scorer = ConfidenceScorer()
     extractor = LLMClaimExtractor(
@@ -3498,6 +3544,8 @@ def _resolve_extraction_selection() -> ExtractorClientSelection:
 def _build_strict_anthropic_extractor(
     selection: ExtractorClientSelection,
     extractor_client_factory: ExtractorClientFactory | None,
+    *,
+    tenant_id: str | None = None,
 ) -> Any:
     """Build the live (Anthropic) extractor for strict FULL, failing closed safely.
 
@@ -3507,9 +3555,9 @@ def _build_strict_anthropic_extractor(
     try:
         if extractor_client_factory is not None:
             return extractor_client_factory(selection)
-        from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
-
-        return AnthropicLLMClient(model=selection.model, max_tokens=selection.max_tokens)
+        return _new_budgeted_llm_client(
+            model=selection.model, max_tokens=selection.max_tokens, tenant_id=tenant_id
+        )
     except StrictLiveExtractionError:
         raise
     except Exception as exc:
@@ -3523,6 +3571,7 @@ def _build_extraction_llm_client(
     *,
     extractor_client_factory: ExtractorClientFactory | None = None,
     strict_live_extraction_required: bool = False,
+    tenant_id: str | None = None,
 ) -> Any:
     """Build the LLM client for extraction based on env configuration.
 
@@ -3550,12 +3599,14 @@ def _build_extraction_llm_client(
 
     if selection.backend == "anthropic":
         if strict_live_extraction_required:
-            return _build_strict_anthropic_extractor(selection, extractor_client_factory)
+            return _build_strict_anthropic_extractor(
+                selection, extractor_client_factory, tenant_id=tenant_id
+            )
         if extractor_client_factory is not None:
             return extractor_client_factory(selection)
-        from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
-
-        return AnthropicLLMClient(model=selection.model, max_tokens=selection.max_tokens)
+        return _new_budgeted_llm_client(
+            model=selection.model, max_tokens=selection.max_tokens, tenant_id=tenant_id
+        )
 
     # Non-anthropic backend (deterministic / unset / other).
     if strict_live_extraction_required:
@@ -3816,6 +3867,7 @@ def _build_debate_role_runners(
     *,
     debate_role_runners_factory: DebateRoleRunnersFactory | None = None,
     strict_live_debate_backend_required: bool = False,
+    tenant_id: str | None = None,
 ) -> Any:
     """Build role runners for debate based on env configuration.
 
@@ -3849,11 +3901,11 @@ def _build_debate_role_runners(
     if selection.backend == "anthropic":
         if strict_live_debate_backend_required:
             return _build_strict_debate_role_runners(
-                selection, context, debate_role_runners_factory
+                selection, context, debate_role_runners_factory, tenant_id=tenant_id
             )
         if debate_role_runners_factory is not None:
             return debate_role_runners_factory(selection)
-        return _build_live_debate_role_runners(selection, context)
+        return _build_live_debate_role_runners(selection, context, tenant_id=tenant_id)
 
     if strict_live_debate_backend_required:
         raise StrictLiveRoleError(
@@ -3872,6 +3924,8 @@ def _build_strict_debate_role_runners(
     selection: DebateRoleRunnerSelection,
     context: Any,
     debate_role_runners_factory: DebateRoleRunnersFactory | None,
+    *,
+    tenant_id: str | None = None,
 ) -> Any:
     """Build the live debate RoleRunners for strict FULL, failing closed safely.
 
@@ -3881,7 +3935,7 @@ def _build_strict_debate_role_runners(
     try:
         if debate_role_runners_factory is not None:
             return debate_role_runners_factory(selection)
-        return _build_live_debate_role_runners(selection, context)
+        return _build_live_debate_role_runners(selection, context, tenant_id=tenant_id)
     except StrictLiveRoleError:
         raise
     except Exception as exc:
@@ -3891,20 +3945,21 @@ def _build_strict_debate_role_runners(
         ) from exc
 
 
-def _build_live_debate_role_runners(selection: DebateRoleRunnerSelection, context: Any) -> Any:
+def _build_live_debate_role_runners(
+    selection: DebateRoleRunnerSelection, context: Any, *, tenant_id: str | None = None
+) -> Any:
     """Construct the live (Anthropic) debate RoleRunners (5 LLM role runners)."""
     from idis.debate.orchestrator import RoleRunners
     from idis.debate.roles.llm_role_runner import LLMRoleRunner
     from idis.models.debate import DebateRole
-    from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
 
     prompts = _load_debate_prompts()
 
-    default_client = AnthropicLLMClient(
-        model=selection.default_model, max_tokens=selection.max_tokens
+    default_client = _new_budgeted_llm_client(
+        model=selection.default_model, max_tokens=selection.max_tokens, tenant_id=tenant_id
     )
-    arbiter_client = AnthropicLLMClient(
-        model=selection.arbiter_model, max_tokens=selection.max_tokens
+    arbiter_client = _new_budgeted_llm_client(
+        model=selection.arbiter_model, max_tokens=selection.max_tokens, tenant_id=tenant_id
     )
 
     return RoleRunners(

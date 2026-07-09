@@ -16,13 +16,14 @@ import threading
 import time
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Final
+from typing import Any, Final, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
 ENV_RATE_LIMIT_USER_RPM: Final[str] = "IDIS_RATE_LIMIT_USER_RPM"
 ENV_RATE_LIMIT_INTEGRATION_RPM: Final[str] = "IDIS_RATE_LIMIT_INTEGRATION_RPM"
 ENV_RATE_LIMIT_BURST_MULTIPLIER: Final[str] = "IDIS_RATE_LIMIT_BURST_MULTIPLIER"
+ENV_REDIS_URL: Final[str] = "IDIS_REDIS_URL"
 
 DEFAULT_USER_RPM: Final[int] = 600
 DEFAULT_INTEGRATION_RPM: Final[int] = 1200
@@ -227,18 +228,148 @@ class _TokenBucket:
             return (False, int(retry_after_sec), remaining)
 
 
-class TenantRateLimiter:
-    """Tenant-scoped rate limiter using token buckets.
+@runtime_checkable
+class RateLimitStore(Protocol):
+    """Storage + atomic consume for per-key token buckets. The default is a process-local in-memory
+    store; a Redis-backed store shares counters across replicas so a tenant's limit holds
+    cluster-wide (DEC-A)."""
 
-    Creates separate buckets for each (tenant_id, tier) combination.
-    Thread-safe for concurrent access.
+    def consume(
+        self, *, key: str, capacity: int, refill_rate_per_sec: float, cost: int = 1
+    ) -> tuple[bool, int, int]:
+        """Atomically refill + consume ``cost`` tokens for ``key``.
+
+        Returns ``(allowed, retry_after_seconds, remaining_tokens)``; retry_after is 0 when allowed.
+        """
+        ...
+
+    def reset(self) -> None:
+        """Drop all buckets (a test convenience honoured by the in-memory default)."""
+        ...
+
+
+class InMemoryRateLimitStore:
+    """Per-process in-memory token-bucket store — the default. NOT shared across replicas, so in a
+    multi-replica deployment each pod holds its own counters (see DEC-A / RedisTokenBucketStore)."""
+
+    def __init__(self) -> None:
+        self._buckets: dict[str, _TokenBucket] = {}
+        self._lock = threading.Lock()
+
+    def consume(
+        self, *, key: str, capacity: int, refill_rate_per_sec: float, cost: int = 1
+    ) -> tuple[bool, int, int]:
+        with self._lock:
+            bucket = self._buckets.get(key)
+            if bucket is None:
+                bucket = _TokenBucket(capacity, refill_rate_per_sec)
+                self._buckets[key] = bucket
+        return bucket.try_consume(cost)
+
+    def reset(self) -> None:
+        with self._lock:
+            self._buckets.clear()
+
+
+_REDIS_KEY_PREFIX: Final[str] = "idis:ratelimit:"
+_REDIS_TTL_MS: Final[int] = 5 * 60 * 1000  # bucket keys expire well after their refill window
+
+# Atomic token-bucket refill+consume. KEYS[1]=bucket key;
+# ARGV = capacity, refill_per_sec, cost, now_ms, ttl_ms. Returns {allowed, remaining, retry}.
+_LUA_TOKEN_BUCKET: Final[str] = """
+local capacity = tonumber(ARGV[1])
+local refill = tonumber(ARGV[2])
+local cost = tonumber(ARGV[3])
+local now = tonumber(ARGV[4])
+local ttl = tonumber(ARGV[5])
+local data = redis.call('HMGET', KEYS[1], 'tokens', 'ts')
+local tokens = tonumber(data[1])
+local ts = tonumber(data[2])
+if tokens == nil then tokens = capacity end
+if ts == nil then ts = now end
+local elapsed = now - ts
+if elapsed < 0 then elapsed = 0 end
+tokens = math.min(capacity, tokens + elapsed * refill / 1000.0)
+local allowed = 0
+if tokens >= cost then tokens = tokens - cost; allowed = 1 end
+redis.call('HMSET', KEYS[1], 'tokens', tokens, 'ts', now)
+redis.call('PEXPIRE', KEYS[1], ttl)
+local retry = 0
+if allowed == 0 then
+  if refill > 0 then retry = math.ceil((cost - tokens) / refill) else retry = 60 end
+  if retry < 1 then retry = 1 end
+end
+return {allowed, math.floor(tokens), retry}
+"""
+
+
+class RedisTokenBucketStore:
+    """Redis-backed token-bucket store: an atomic Lua script keeps the bucket state in Redis so a
+    tenant's limit is enforced across ALL replicas (DEC-A). The client is injected (duck-typed on
+    ``.eval``) so tests use a fake; ``from_url`` builds a real client and is the only place redis is
+    imported — redis is a declared runtime dependency, imported lazily so this module has no
+    module-load import of it."""
+
+    def __init__(self, client: Any, *, key_prefix: str = _REDIS_KEY_PREFIX) -> None:
+        self._client = client
+        self._prefix = key_prefix
+
+    @classmethod
+    def from_url(cls, url: str) -> RedisTokenBucketStore:
+        import redis  # lazy: build a real client only when configured (no module-load import)
+
+        return cls(redis.Redis.from_url(url))
+
+    def consume(
+        self, *, key: str, capacity: int, refill_rate_per_sec: float, cost: int = 1
+    ) -> tuple[bool, int, int]:
+        now_ms = int(time.time() * 1000)
+        result = self._client.eval(
+            _LUA_TOKEN_BUCKET,
+            1,
+            self._prefix + key,
+            capacity,
+            refill_rate_per_sec,
+            cost,
+            now_ms,
+            _REDIS_TTL_MS,
+        )
+        allowed = bool(int(result[0]))
+        remaining = int(result[1])
+        retry = int(result[2])
+        return (allowed, 0 if allowed else retry, remaining)
+
+    def reset(self) -> None:
+        # Rate-limit keys are ephemeral (they PEXPIRE); a global reset is a safe no-op for the
+        # shared store — the in-memory default provides a real reset() for tests.
+        return None
+
+
+def build_default_rate_limit_store() -> RateLimitStore:
+    """Select the rate-limit store: Redis (cross-replica) when IDIS_REDIS_URL is set, else the
+    per-process in-memory default."""
+    url = os.environ.get(ENV_REDIS_URL, "").strip()
+    if url:
+        return RedisTokenBucketStore.from_url(url)
+    return InMemoryRateLimitStore()
+
+
+class TenantRateLimiter:
+    """Tenant-scoped rate limiter over a pluggable RateLimitStore.
+
+    The store holds the per-(tenant, tier) token buckets; the default is the in-memory store, and a
+    RedisTokenBucketStore can be injected for correct cross-replica limits. Behaviour (tiers, burst,
+    decision fields) is unchanged from the original in-memory implementation.
     """
 
-    def __init__(self, config: RateLimitConfig | None = None) -> None:
+    def __init__(
+        self, config: RateLimitConfig | None = None, store: RateLimitStore | None = None
+    ) -> None:
         """Initialize the rate limiter.
 
         Args:
             config: Rate limit configuration. If None, loads from environment.
+            store: Token-bucket store. If None, uses a per-process InMemoryRateLimitStore.
 
         Raises:
             RateLimitConfigError: If configuration is invalid.
@@ -246,25 +377,12 @@ class TenantRateLimiter:
         if config is None:
             config = load_rate_limit_config()
         self._config = config
-        self._buckets: dict[tuple[str, RateLimitTier], _TokenBucket] = {}
-        self._lock = threading.Lock()
+        self._store: RateLimitStore = store if store is not None else InMemoryRateLimitStore()
 
     @property
     def config(self) -> RateLimitConfig:
         """Get the rate limit configuration."""
         return self._config
-
-    def _get_or_create_bucket(self, tenant_id: str, tier: RateLimitTier) -> _TokenBucket:
-        """Get or create a token bucket for the given tenant and tier."""
-        key = (tenant_id, tier)
-
-        with self._lock:
-            if key not in self._buckets:
-                rpm = self._config.get_rpm(tier)
-                capacity = self._config.get_capacity(tier)
-                refill_rate = rpm / SECONDS_PER_MINUTE
-                self._buckets[key] = _TokenBucket(capacity, refill_rate)
-            return self._buckets[key]
 
     def check(self, tenant_id: str, tier: RateLimitTier) -> RateLimitDecision:
         """Check and consume a rate limit token for the given tenant and tier.
@@ -276,22 +394,26 @@ class TenantRateLimiter:
         Returns:
             RateLimitDecision with the result.
         """
-        bucket = self._get_or_create_bucket(tenant_id, tier)
-        allowed, retry_after, remaining = bucket.try_consume(1)
+        rpm = self._config.get_rpm(tier)
+        capacity = self._config.get_capacity(tier)
+        refill_rate = rpm / SECONDS_PER_MINUTE
+        key = f"{tenant_id}:{tier.value}"
+        allowed, retry_after, remaining = self._store.consume(
+            key=key, capacity=capacity, refill_rate_per_sec=refill_rate, cost=1
+        )
 
         return RateLimitDecision(
             allowed=allowed,
             retry_after_seconds=retry_after if not allowed else None,
             remaining_tokens=remaining,
-            limit_rpm=self._config.get_rpm(tier),
+            limit_rpm=rpm,
             burst_multiplier=self._config.burst_multiplier,
             tier=tier,
         )
 
     def reset(self) -> None:
         """Reset all buckets (useful for testing)."""
-        with self._lock:
-            self._buckets.clear()
+        self._store.reset()
 
 
 def classify_tier(roles: frozenset[str]) -> RateLimitTier:

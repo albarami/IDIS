@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from idis.persistence.db import is_postgres_configured, set_tenant_local
 
@@ -19,6 +20,19 @@ if TYPE_CHECKING:
     from sqlalchemy import Connection
 
 logger = logging.getLogger(__name__)
+
+
+class RunAlreadyActiveError(Exception):
+    """Raised on run creation when an active (QUEUED/RUNNING) run already exists for the deal.
+
+    Enforces DEC-D "one active run per (tenant, deal)". The Postgres partial unique index
+    ``ux_runs_one_active_per_deal`` (migration 0023) is the race-safe backstop; this pre-check
+    surfaces the common case as a clean RUN_ALREADY_ACTIVE (409).
+    """
+
+
+# The partial unique index (migration 0023) enforcing one active run per (tenant, deal).
+_ACTIVE_RUN_INDEX = "ux_runs_one_active_per_deal"
 
 
 class PostgresRunsRepository:
@@ -67,33 +81,45 @@ class PostgresRunsRepository:
         Returns:
             Created run as dict.
         """
+        if self.has_active_run(deal_id):
+            raise RunAlreadyActiveError(deal_id)
         now = datetime.now(UTC)
-        self._conn.execute(
-            text(
-                """
-                INSERT INTO runs
-                    (run_id, tenant_id, deal_id, mode, status, started_at,
-                     idempotency_key, source, created_at,
-                     created_by_actor_id, created_by_actor_type)
-                VALUES
-                    (:run_id, :tenant_id, :deal_id, :mode, 'QUEUED', :started_at,
-                     :idempotency_key, CAST(:source AS JSONB), :created_at,
-                     :created_by_actor_id, :created_by_actor_type)
-                """
-            ),
-            {
-                "run_id": run_id,
-                "tenant_id": self._tenant_id,
-                "deal_id": deal_id,
-                "mode": mode,
-                "started_at": now,
-                "idempotency_key": idempotency_key,
-                "source": json.dumps(source) if source is not None else None,
-                "created_at": now,
-                "created_by_actor_id": created_by_actor_id,
-                "created_by_actor_type": created_by_actor_type,
-            },
-        )
+        try:
+            with self._conn.begin_nested():
+                self._conn.execute(
+                    text(
+                        """
+                        INSERT INTO runs
+                            (run_id, tenant_id, deal_id, mode, status, started_at,
+                             idempotency_key, source, created_at,
+                             created_by_actor_id, created_by_actor_type)
+                        VALUES
+                            (:run_id, :tenant_id, :deal_id, :mode, 'QUEUED', :started_at,
+                             :idempotency_key, CAST(:source AS JSONB), :created_at,
+                             :created_by_actor_id, :created_by_actor_type)
+                        """
+                    ),
+                    {
+                        "run_id": run_id,
+                        "tenant_id": self._tenant_id,
+                        "deal_id": deal_id,
+                        "mode": mode,
+                        "started_at": now,
+                        "idempotency_key": idempotency_key,
+                        "source": json.dumps(source) if source is not None else None,
+                        "created_at": now,
+                        "created_by_actor_id": created_by_actor_id,
+                        "created_by_actor_type": created_by_actor_type,
+                    },
+                )
+        except IntegrityError as exc:
+            # Concurrent race loser on the one-active-run partial unique index: the savepoint above
+            # rolls back only this INSERT (the outer transaction stays usable) and we surface the
+            # same safe RUN_ALREADY_ACTIVE the sequential pre-check does. Other constraint
+            # violations (e.g. a duplicate run_id PK) propagate unchanged.
+            if _ACTIVE_RUN_INDEX in str(exc.orig or exc):
+                raise RunAlreadyActiveError(deal_id) from exc
+            raise
         return {
             "run_id": run_id,
             "tenant_id": self._tenant_id,
@@ -107,6 +133,20 @@ class PostgresRunsRepository:
             "created_by_actor_id": created_by_actor_id,
             "created_by_actor_type": created_by_actor_type,
         }
+
+    def has_active_run(self, deal_id: str) -> bool:
+        """Return True when a QUEUED/RUNNING run already exists for the deal (RLS-scoped)."""
+        result = self._conn.execute(
+            text(
+                """
+                SELECT 1 FROM runs
+                WHERE deal_id = :deal_id AND status IN ('QUEUED', 'RUNNING')
+                LIMIT 1
+                """
+            ),
+            {"deal_id": deal_id},
+        )
+        return result.fetchone() is not None
 
     def get(self, run_id: str) -> dict[str, Any] | None:
         """Get a run by ID.
@@ -374,6 +414,12 @@ class PostgresRunsRepository:
         )
         return [self._row_to_dict(row) for row in result.fetchall()]
 
+    def count_queued_runs(self) -> int:
+        """Return the tenant-scoped count of QUEUED runs (queue depth; RLS enforced)."""
+        result = self._conn.execute(text("SELECT COUNT(*) FROM runs WHERE status = 'QUEUED'"))
+        row = result.fetchone()
+        return int(row[0]) if row is not None else 0
+
     def deal_exists(self, deal_id: str) -> bool:
         """Check if deal exists (RLS enforced).
 
@@ -486,6 +532,8 @@ class InMemoryRunsRepository:
         Returns:
             Created run as dict.
         """
+        if self.has_active_run(deal_id):
+            raise RunAlreadyActiveError(deal_id)
         now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         run = {
             "run_id": run_id,
@@ -503,6 +551,15 @@ class InMemoryRunsRepository:
         }
         _in_memory_runs_store[run_id] = run
         return run
+
+    def has_active_run(self, deal_id: str) -> bool:
+        """Return True when a QUEUED/RUNNING run already exists for the deal (tenant-scoped)."""
+        return any(
+            run.get("tenant_id") == self._tenant_id
+            and run.get("deal_id") == deal_id
+            and run.get("status") in {"QUEUED", "RUNNING"}
+            for run in _in_memory_runs_store.values()
+        )
 
     def get(self, run_id: str) -> dict[str, Any] | None:
         """Get a run by ID from memory.
@@ -679,6 +736,14 @@ class InMemoryRunsRepository:
             if run.get("tenant_id") == self._tenant_id and run.get("status") == "QUEUED"
         ]
         return sorted(queued, key=lambda item: item["created_at"])[:limit]
+
+    def count_queued_runs(self) -> int:
+        """Return the tenant-scoped count of QUEUED runs (queue depth)."""
+        return sum(
+            1
+            for run in _in_memory_runs_store.values()
+            if run.get("tenant_id") == self._tenant_id and run.get("status") == "QUEUED"
+        )
 
     def deal_exists(self, deal_id: str) -> bool:
         """Check if deal exists in memory.

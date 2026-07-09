@@ -2457,6 +2457,11 @@ def _layer2_live_runner_construction_wired() -> bool:
 
         runs_module = import_module("idis.api.routes.runs")
         route_source = inspect.getsource(runs_module._run_full_layer2_ic_challenge)
+        # Slice96 DEC-C: the live challenger/arbiter clients are constructed via the single
+        # budget-wrapping helper (_new_budgeted_llm_client), which builds a live AnthropicLLMClient
+        # under the per-tenant/provider hard cap -- so proof of live wiring is the helper call in
+        # the route plus the helper itself constructing an AnthropicLLMClient.
+        live_client_source = inspect.getsource(runs_module._new_budgeted_llm_client)
         service_module = import_module("idis.services.runs.layer2_ic_challenge")
         # ``run`` delegates to ``run_with_record`` (Slice93), which holds the strict branch.
         service_source = inspect.getsource(
@@ -2467,7 +2472,8 @@ def _layer2_live_runner_construction_wired() -> bool:
         )
         return (
             "build_live_layer2_ic_runners" in route_source
-            and "AnthropicLLMClient" in route_source
+            and "_new_budgeted_llm_client" in route_source
+            and "AnthropicLLMClient" in live_client_source
             and "challenger_runner=" in route_source
             and "arbiter_runner=" in route_source
             and "_run_strict_live" in service_source

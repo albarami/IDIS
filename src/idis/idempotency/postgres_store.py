@@ -69,6 +69,13 @@ class PostgresIdempotencyStore:
         """
     )
 
+    _DELETE_EXPIRED_SQL = text(
+        """
+        DELETE FROM idempotency_records
+        WHERE tenant_id = :tenant_id AND created_at < :older_than
+        """
+    )
+
     def __init__(self) -> None:
         """Initialize the PostgreSQL idempotency store."""
         pass
@@ -206,6 +213,48 @@ class PostgresIdempotencyStore:
             scope_key.operation_id,
             scope_key.idempotency_key,
         )
+
+    def delete_expired(
+        self, *, tenant_id: str, older_than: datetime, conn: Connection | None = None
+    ) -> int:
+        """Delete this tenant's records created strictly before ``older_than`` (tenant-safe).
+
+        DEC-E cleanup. Tenant isolation is enforced by RLS (the tenant context is set on the
+        connection) AND by the explicit ``tenant_id`` predicate, so another tenant's records are
+        never touched. Replay / conflict semantics are unchanged. Uses the provided connection when
+        given (in-transaction); otherwise opens its own tenant-scoped connection.
+
+        Args:
+            tenant_id: Tenant whose expired records should be removed.
+            older_than: UTC cutoff; records created before this are deleted.
+            conn: Optional connection with tenant context already set.
+
+        Returns:
+            Number of records deleted.
+
+        Raises:
+            IdempotencyStoreError: If cleanup fails.
+        """
+        if conn is not None:
+            return self._delete_expired_with_conn(tenant_id, older_than, conn)
+
+        from idis.persistence.db import begin_app_conn, set_tenant_local
+
+        try:
+            with begin_app_conn() as new_conn:
+                set_tenant_local(new_conn, tenant_id)
+                return self._delete_expired_with_conn(tenant_id, older_than, new_conn)
+        except SQLAlchemyError as e:
+            raise IdempotencyStoreError(f"Failed to clean up idempotency records: {e}") from e
+
+    def _delete_expired_with_conn(
+        self, tenant_id: str, older_than: datetime, conn: Connection
+    ) -> int:
+        """Delete expired records using the provided (tenant-scoped) connection."""
+        result = conn.execute(
+            self._DELETE_EXPIRED_SQL, {"tenant_id": tenant_id, "older_than": older_than}
+        )
+        return int(result.rowcount)
 
 
 def get_postgres_idempotency_store() -> PostgresIdempotencyStore:

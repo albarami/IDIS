@@ -16,6 +16,7 @@ import logging
 import os
 import sqlite3
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,6 +26,9 @@ logger = logging.getLogger(__name__)
 
 IDIS_IDEMPOTENCY_DB_PATH_ENV = "IDIS_IDEMPOTENCY_DB_PATH"
 DEFAULT_IDEMPOTENCY_DB_PATH = "./var/idempotency/idempotency.sqlite3"
+
+IDIS_IDEMPOTENCY_TTL_DAYS_ENV = "IDIS_IDEMPOTENCY_TTL_DAYS"
+DEFAULT_IDEMPOTENCY_TTL_DAYS = 30
 
 
 class ScopeKey(NamedTuple):
@@ -111,6 +115,11 @@ class SqliteIdempotencyStore:
         (tenant_id, actor_id, method, operation_id, idempotency_key,
          payload_sha256, status_code, media_type, body_bytes, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+
+    _DELETE_EXPIRED_SQL = """
+        DELETE FROM idempotency_records
+        WHERE tenant_id = ? AND created_at < ?
     """
 
     def __init__(self, db_path: str | None = None, in_memory: bool = False) -> None:
@@ -286,6 +295,33 @@ class SqliteIdempotencyStore:
         except sqlite3.Error as e:
             raise IdempotencyStoreError(f"Failed to store idempotency record: {e}") from e
 
+    def delete_expired(self, *, tenant_id: str, older_than: datetime) -> int:
+        """Delete this tenant's records created strictly before ``older_than`` (tenant-safe).
+
+        DEC-E cleanup: removes only rows for ``tenant_id`` whose ``created_at`` precedes the cutoff,
+        so expired records are reclaimed while another tenant's records are never touched. Replay /
+        conflict semantics are unchanged. ``older_than`` is compared in the canonical UTC ISO-8601
+        form used for ``created_at``.
+
+        Args:
+            tenant_id: Tenant whose expired records should be removed.
+            older_than: UTC cutoff; records created before this are deleted.
+
+        Returns:
+            Number of records deleted.
+
+        Raises:
+            IdempotencyStoreError: If cleanup fails.
+        """
+        cutoff = older_than.astimezone(UTC).isoformat().replace("+00:00", "Z")
+        try:
+            conn = self._get_connection()
+            cursor = conn.execute(self._DELETE_EXPIRED_SQL, (tenant_id, cutoff))
+            conn.commit()
+            return int(cursor.rowcount)
+        except sqlite3.Error as e:
+            raise IdempotencyStoreError(f"Failed to clean up idempotency records: {e}") from e
+
     def close(self) -> None:
         """Close the thread-local database connection if open."""
         import contextlib
@@ -317,3 +353,22 @@ def get_current_timestamp() -> str:
         UTC timestamp string (e.g., "2026-01-07T19:00:00Z")
     """
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def load_idempotency_ttl_days(env: Mapping[str, str] | None = None) -> int:
+    """Resolve the idempotency-record TTL in days (DEC-E; default ~30).
+
+    Reads ``IDIS_IDEMPOTENCY_TTL_DAYS``. Unset, empty, non-integer, or non-positive values fall back
+    to the default so a misconfigured TTL never deletes records early (fail-safe).
+    """
+    source: Mapping[str, str] = env if env is not None else os.environ
+    raw = source.get(IDIS_IDEMPOTENCY_TTL_DAYS_ENV)
+    if raw is None or not raw.strip():
+        return DEFAULT_IDEMPOTENCY_TTL_DAYS
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        return DEFAULT_IDEMPOTENCY_TTL_DAYS
+    if value <= 0:
+        return DEFAULT_IDEMPOTENCY_TTL_DAYS
+    return value

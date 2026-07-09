@@ -142,10 +142,14 @@ def test_run_snapshot_extraction_forwards_factory_to_builder() -> None:
     captured: dict[str, Any] = {}
 
     def fake_build(
-        *, extractor_client_factory: Any = None, strict_live_extraction_required: bool = False
+        *,
+        extractor_client_factory: Any = None,
+        strict_live_extraction_required: bool = False,
+        tenant_id: Any = None,
     ) -> Any:
-        # Task 3 made _run_snapshot_extraction forward the strict flag too; accept + ignore it.
+        # Task 3 forwards the strict flag; Slice96 DEC-C also forwards tenant_id (provider budget).
         captured["factory"] = extractor_client_factory
+        captured["tenant_id"] = tenant_id
         raise _StopForTest
 
     with (
@@ -161,3 +165,4 @@ def test_run_snapshot_extraction_forwards_factory_to_builder() -> None:
             extractor_client_factory=sentinel_factory,
         )
     assert captured["factory"] is sentinel_factory
+    assert captured["tenant_id"] == "tenant-1"  # tenant flows to the budget-wrapping helper

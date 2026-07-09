@@ -28,6 +28,7 @@ from starlette.types import ASGIApp
 
 from idis.api.auth import TenantContext
 from idis.api.error_model import make_error_response_no_request
+from idis.observability.runtime_signals import RATE_LIMIT_DENIED, emit_run_signal
 from idis.rate_limit.limiter import (
     RateLimitConfig,
     TenantRateLimiter,
@@ -125,6 +126,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         )
 
         retry_after = decision.retry_after_seconds or 1
+
+        audit_sink = getattr(getattr(request.app, "state", None), "audit_sink", None)
+        emit_run_signal(
+            audit_sink,
+            event_type=RATE_LIMIT_DENIED,
+            tenant_id=tenant_ctx.tenant_id,
+            details={
+                "tier": decision.tier.value,
+                "limit_rpm": decision.limit_rpm,
+                "retry_after_seconds": retry_after,
+                "code": "RATE_LIMIT_EXCEEDED",
+            },
+        )
 
         response = make_error_response_no_request(
             code="RATE_LIMIT_EXCEEDED",

@@ -57,7 +57,11 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
 
 def _seed_run(run_id: str, deal_id: str, mode: str) -> None:
-    InMemoryRunsRepository(_TENANT_ID).create(run_id=run_id, deal_id=deal_id, mode=mode)
+    # Seed terminal (historical) runs: Slice96 DEC-D allows at most one active run per (tenant,
+    # deal), so a deal's listable run history is terminal runs plus at most one active.
+    repo = InMemoryRunsRepository(_TENANT_ID)
+    repo.create(run_id=run_id, deal_id=deal_id, mode=mode)
+    repo.update_status(run_id, status="SUCCEEDED", finished_at=None)
 
 
 def test_list_deal_runs_requires_auth(client: TestClient) -> None:

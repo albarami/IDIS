@@ -190,9 +190,13 @@ def test_run_snapshot_extraction_forwards_strict_flag_to_builder() -> None:
     captured: dict[str, Any] = {}
 
     def fake_build(
-        *, extractor_client_factory: Any = None, strict_live_extraction_required: bool = False
+        *,
+        extractor_client_factory: Any = None,
+        strict_live_extraction_required: bool = False,
+        tenant_id: Any = None,
     ) -> Any:
         captured["strict"] = strict_live_extraction_required
+        captured["tenant_id"] = tenant_id
         raise _StopForTest
 
     with (
@@ -208,3 +212,4 @@ def test_run_snapshot_extraction_forwards_strict_flag_to_builder() -> None:
             strict_live_extraction_required=True,
         )
     assert captured["strict"] is True
+    assert captured["tenant_id"] == "tenant-1"  # tenant flows to the budget-wrapping helper

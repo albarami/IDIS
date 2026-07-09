@@ -127,7 +127,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         retry_after = decision.retry_after_seconds or 1
 
-        audit_sink = getattr(getattr(request.app, "state", None), "audit_sink", None)
+        # Best-effort observability sink lookup. Real requests always carry scope["app"], but a
+        # hand-built scope (e.g. driving dispatch directly) may not -- use scope.get so a missing
+        # "app" degrades to no sink instead of raising KeyError on the denial path.
+        app_obj = request.scope.get("app")
+        audit_sink = getattr(getattr(app_obj, "state", None), "audit_sink", None)
         emit_run_signal(
             audit_sink,
             event_type=RATE_LIMIT_DENIED,

@@ -277,7 +277,11 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
 
         # Opportunistic, throttled, best-effort TTL cleanup for this tenant (DEC-E). Runs before the
         # lookup and never affects replay/conflict: it removes only OTHER already-expired records.
-        cleanup_audit_sink = getattr(getattr(request.app, "state", None), "audit_sink", None)
+        # Best-effort observability sink lookup. Real requests always carry scope["app"], but a
+        # hand-built scope (e.g. driving dispatch directly) may not -- use scope.get so a missing
+        # "app" degrades to no sink instead of raising KeyError and breaking the request.
+        app_obj = request.scope.get("app")
+        cleanup_audit_sink = getattr(getattr(app_obj, "state", None), "audit_sink", None)
         if use_postgres and postgres_store is not None:
             self._maybe_cleanup(scope_key.tenant_id, postgres_store, cleanup_audit_sink)
         else:

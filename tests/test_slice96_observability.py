@@ -396,3 +396,93 @@ def test_retry_resume_cancel_requests_are_mapped_to_audit_events() -> None:
     assert OPERATION_ID_TO_EVENT_TYPE["cancelRun"][0] == "deal.run.cancelled"
     assert OPERATION_ID_TO_EVENT_TYPE["retryRun"][0] == "deal.run.requeued"
     assert OPERATION_ID_TO_EVENT_TYPE["resumeRun"][0] == "deal.run.requeued"
+
+
+# --- scope resilience: observability audit-sink lookup must not crash without scope["app"] ---
+# A real ASGI request always carries scope["app"], but hand-built scopes (and any caller driving a
+# middleware directly) may not. The best-effort observability lookup must degrade to "no sink", NOT
+# raise KeyError. Regression for the CI `KeyError: 'app'` in the Postgres dispatch proof.
+
+
+def test_rate_limit_denial_lookup_survives_missing_scope_app() -> None:
+    import asyncio
+
+    from starlette.requests import Request
+
+    from idis.api.middleware.rate_limit import RateLimitMiddleware
+
+    denied_decision = SimpleNamespace(
+        allowed=False,
+        tier=SimpleNamespace(value="USER"),
+        limit_rpm=600,
+        retry_after_seconds=1,
+        remaining_tokens=0,
+    )
+    limiter = SimpleNamespace(check=lambda tenant_id, tier: denied_decision)
+
+    async def _noop_app(scope: Any, receive: Any, send: Any) -> None:  # pragma: no cover
+        return None
+
+    async def _receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def _call_next(_req: Request) -> Any:  # pragma: no cover - denied before call_next
+        raise AssertionError("call_next must not run on a rate-limit denial")
+
+    mw = RateLimitMiddleware(_noop_app, limiter=limiter)
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/v1/deals",
+        "query_string": b"",
+        "headers": [],
+        # NB: deliberately NO "app" key -> the observability lookup must not KeyError.
+        "state": {
+            "tenant_context": SimpleNamespace(
+                tenant_id=_TENANT, actor_id="actor-1", roles=frozenset()
+            ),
+            "request_id": "req-1",
+        },
+    }
+    response = asyncio.run(mw.dispatch(Request(scope, _receive), _call_next))
+    assert response.status_code == 429  # denial still served; missing scope["app"] did not crash
+
+
+def test_idempotency_cleanup_lookup_survives_missing_scope_app() -> None:
+    import asyncio
+
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    from idis.api.middleware.idempotency import IdempotencyMiddleware
+    from idis.idempotency.store import SqliteIdempotencyStore
+
+    store = SqliteIdempotencyStore(in_memory=True)
+
+    async def _noop_app(scope: Any, receive: Any, send: Any) -> None:  # pragma: no cover
+        return None
+
+    async def _receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": b"{}", "more_body": False}
+
+    async def _call_next(_req: Request) -> Response:
+        return Response(content=b'{"ok":true}', status_code=200, media_type="application/json")
+
+    mw = IdempotencyMiddleware(_noop_app, store=store, cleanup_interval_seconds=0.0)
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/v1/deals",
+        "query_string": b"",
+        "headers": [(b"idempotency-key", b"resilience-key-1")],
+        # NB: deliberately NO "app" key, and no db_conn -> the SQLite path reaches the cleanup
+        # lookup at dispatch() where request.app would otherwise KeyError.
+        "state": {
+            "tenant_context": SimpleNamespace(tenant_id=_TENANT, actor_id="actor-1"),
+            "openapi_operation_id": "createDeal",
+            "request_body_sha256": "sha256:abc",
+            "request_id": "req-1",
+        },
+    }
+    response = asyncio.run(mw.dispatch(Request(scope, _receive), _call_next))
+    assert response.status_code == 200  # served normally; missing scope["app"] did not crash

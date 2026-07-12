@@ -303,11 +303,14 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | **Requirement** | Webhooks signed with HMAC; retries 10 attempts over 24 hours |
 | **Source Doc** | OpenAPI /v1/webhooks; API Contracts §6 |
 | **Source Section** | "Webhooks (Outbound Eventing)" |
-| **Enforcing Component** | `src/idis/services/webhooks/service.py` — WebhookService |
+| **Enforcing Component** | `src/idis/services/webhooks/dispatcher.py` — WebhookDispatcher (signs via `signing.py`, retries via `retry.py`, drains the `webhook_delivery_attempts` outbox) |
 | **Tests** | `tests/test_webhook_signing.py::test_hmac_correct` |
 | | `tests/test_webhook_retry.py::test_exponential_backoff` |
+| | `tests/test_slice97_webhook_dispatcher.py` (sign + deliver + retry + exhaustion) |
+| | `tests/test_slice97_webhook_dispatcher_postgres.py` (RLS secret load, no double-delivery) |
 | **Phase Gate** | Phase 2.8 |
 | **Evidence Artifact** | `webhook.delivery.succeeded/failed` audit events |
+| **Implementation Status** | ✅ Delivered (Slice97) — durable outbox + signed dispatch + delivery audit/metrics |
 
 ---
 
@@ -499,7 +502,7 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | API-001 | Idempotency | API §4.1 | `idempotency.py` | test_api_idempotency_middleware.py | 2.5 | ✅ Exists | request_id |
 | API-002 | Error model | API §8 | `errors.py` | test_error_model.py | 2.6 | ⏳ Planned | Error responses |
 | API-003 | Rate limiting | API §4.3 | `rate_limit.py` | test_rate_limiting.py | 2.7 | ⏳ Planned | 429 responses |
-| WH-001 | Webhook signing | API §6 | `webhooks/service.py` | test_webhook_signing.py | 2.8 | ⏳ Planned | delivery events |
+| WH-001 | Webhook signing | API §6 | `webhooks/dispatcher.py`, `webhooks/signing.py`, `webhooks/retry.py` | test_slice97_webhook_dispatcher.py, test_webhook_signing.py, test_webhook_retry.py | 2.8 | ✅ Delivered (Slice97) | `webhook.delivery.succeeded/failed` audit events |
 | DR-001 | Data residency | Residency §3 | `tenant.py` (data_region) | test_data_residency.py | 7 | ⏳ Planned | Region metadata |
 | BYOL-001 | BYOL isolation | Residency §7 | `enrichment/service.py` | test_byol_isolation.py | 7 | ⏳ Planned | EnrichmentRecord |
 | OPS-001 | Ops readiness | SLO §10 | Manual checklist | Manual | 7 | ⏳ Planned | Checklist sign-off |
@@ -552,8 +555,8 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | `tests/test_audit_immutability.py` | Audit logs are append-only | 2.3+ | `audit.py` (exists) |
 | `tests/test_error_model.py` | Error responses match schema | 2.6 | `errors.py` (exists) |
 | `tests/test_rate_limiting.py` | Rate limits enforced | 2.7 | `rate_limit.py` (planned) |
-| `tests/test_webhook_signing.py` | HMAC signature generation | 2.8 | `webhooks/service.py` (planned) |
-| `tests/test_webhook_retry.py` | Exponential backoff retry | 2.8 | `webhooks/service.py` (planned) |
+| `tests/test_webhook_signing.py` | HMAC signature generation | 2.8 | `webhooks/signing.py` (exists) |
+| `tests/test_webhook_retry.py` | Exponential backoff retry | 2.8 | `webhooks/retry.py` (exists) |
 | `tests/test_sanad_grade_algorithm.py` | Normative grading algorithm | 3 | `sanad/grader.py` (planned) |
 | `tests/test_independence_rules.py` | Corroboration independence | 3 | `sanad/independence.py` (planned) |
 | `tests/test_defect_severity.py` | FATAL/MAJOR/MINOR rules | 3 | `defects/service.py` (planned) |
@@ -589,7 +592,7 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | `src/idis/services/sanad/grader.py` | Sanad grading service | 3 | ⏳ Planned |
 | `src/idis/services/sanad/independence.py` | Independence checker | 3 | ⏳ Planned |
 | `src/idis/services/defects/service.py` | Defect service | 3 | ⏳ Planned |
-| `src/idis/services/webhooks/service.py` | Webhook service | 2.8 | ⏳ Planned |
+| `src/idis/services/webhooks/service.py` | Webhook service | 2.8 | ✅ Delivered (Slice97: emitter + durable outbox + dispatcher) |
 | `src/idis/services/enrichment/service.py` | Enrichment service | 7 | ⏳ Planned |
 | `src/idis/calc/engine.py` | Calculation engine | 4 | ⏳ Planned |
 

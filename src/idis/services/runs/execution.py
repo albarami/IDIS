@@ -17,6 +17,27 @@ from idis.models.run_step import RunStep
 from idis.observability.runtime_signals import RUN_CLAIMED, emit_run_signal
 from idis.persistence.repositories.run_steps import RunStepsRepo
 from idis.services.runs.orchestrator import OrchestratorResult, RunContext, RunOrchestrator
+from idis.services.webhooks import lifecycle as webhook_lifecycle
+
+_TERMINAL_RUN_WEBHOOK_EVENT = {
+    "SUCCEEDED": webhook_lifecycle.RUN_COMPLETED,
+    "COMPLETED": webhook_lifecycle.RUN_COMPLETED,
+    "FAILED": webhook_lifecycle.RUN_FAILED,
+    "CANCELLED": webhook_lifecycle.RUN_CANCELLED,
+}
+
+
+def _notify_run_webhook(
+    ctx: RunContext, event_type: str, data: dict[str, object] | None = None
+) -> None:
+    """Best-effort run lifecycle webhook (never raises; opens its own tenant-scoped conn)."""
+    webhook_lifecycle.notify_webhook_lifecycle(
+        tenant_id=ctx.tenant_id,
+        event_type=event_type,
+        resource_type="run",
+        resource_id=ctx.run_id,
+        data=data,
+    )
 
 
 class RunsExecutionRepository(Protocol):
@@ -84,6 +105,7 @@ class RunExecutionService:
             tenant_id=ctx.tenant_id,
             details={"run_id": ctx.run_id, "mode": ctx.mode},
         )
+        _notify_run_webhook(ctx, webhook_lifecycle.RUN_CLAIMED, {"mode": ctx.mode})
 
         orchestrator = RunOrchestrator(
             audit_sink=self._audit_sink,
@@ -96,15 +118,19 @@ class RunExecutionService:
         except Exception:
             finished_at = _utc_now()
             if self._is_currently_cancelled(ctx.run_id):
+                _notify_run_webhook(ctx, webhook_lifecycle.RUN_CANCELLED)
                 return _cancelled_execution_result(finished_at=finished_at)
             if not self._try_complete_running(ctx.run_id, status="FAILED", finished_at=finished_at):
                 if self._is_currently_cancelled(ctx.run_id):
+                    _notify_run_webhook(ctx, webhook_lifecycle.RUN_CANCELLED)
                     return _cancelled_execution_result(finished_at=finished_at)
                 self._complete(ctx.run_id, status="FAILED", finished_at=finished_at)
+            _notify_run_webhook(ctx, webhook_lifecycle.RUN_FAILED)
             raise
 
         finished_at = _utc_now()
         if self._is_currently_cancelled(ctx.run_id):
+            _notify_run_webhook(ctx, webhook_lifecycle.RUN_CANCELLED)
             return _cancelled_execution_result(
                 steps=orch_result.steps,
                 finished_at=finished_at,
@@ -113,11 +139,16 @@ class RunExecutionService:
             ctx.run_id, status=orch_result.status, finished_at=finished_at
         ):
             if self._is_currently_cancelled(ctx.run_id):
+                _notify_run_webhook(ctx, webhook_lifecycle.RUN_CANCELLED)
                 return _cancelled_execution_result(
                     steps=orch_result.steps,
                     finished_at=finished_at,
                 )
             self._complete(ctx.run_id, status=orch_result.status, finished_at=finished_at)
+        _notify_run_webhook(
+            ctx,
+            _TERMINAL_RUN_WEBHOOK_EVENT.get(orch_result.status, webhook_lifecycle.RUN_COMPLETED),
+        )
         return _to_execution_result(orch_result, finished_at=finished_at)
 
     @property

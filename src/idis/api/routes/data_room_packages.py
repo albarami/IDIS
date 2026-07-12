@@ -87,6 +87,19 @@ async def create_data_room_package_route(
         raise IdisHttpError(status_code=400, code=exc.reason_code, message=str(exc)) from exc
 
     request.state.audit_resource_id = summary["package_id"]
+
+    from idis.services.webhooks.lifecycle import (
+        DATA_ROOM_PACKAGE_CREATED,
+        notify_webhook_lifecycle,
+    )
+
+    notify_webhook_lifecycle(
+        tenant_id=tenant_ctx.tenant_id,
+        event_type=DATA_ROOM_PACKAGE_CREATED,
+        resource_type="data_room_package",
+        resource_id=summary["package_id"],
+        conn=db_conn,
+    )
     return summary
 
 

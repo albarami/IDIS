@@ -385,6 +385,20 @@ async def submit_human_gate_action(
 
     request.state.audit_resource_id = action_id
 
+    from idis.services.webhooks.lifecycle import (
+        HUMAN_GATE_ACTION_SUBMITTED,
+        notify_webhook_lifecycle,
+    )
+
+    notify_webhook_lifecycle(
+        tenant_id=tenant_ctx.tenant_id,
+        event_type=HUMAN_GATE_ACTION_SUBMITTED,
+        resource_type="human_gate",
+        resource_id=action_data["gate_id"],
+        data={"action": action_data["action"]},
+        conn=getattr(request.state, "db_conn", None),
+    )
+
     return HumanGateAction(
         action_id=action_data["action_id"],
         gate_id=action_data["gate_id"],

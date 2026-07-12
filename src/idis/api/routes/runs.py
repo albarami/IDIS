@@ -42,6 +42,19 @@ from idis.services.runs.strict_full_live import (
     is_strict_full_live_required,
 )
 
+# The run-summary sanitizer lives in one place (services.webhooks.safe_payload); re-export the
+# original private names here so existing importers of routes.runs keep resolving to that single
+# implementation.
+from idis.services.webhooks.safe_payload import (
+    SAFE_PUBLIC_STEP_ERROR_MESSAGE,
+)
+from idis.services.webhooks.safe_payload import (
+    safe_public_summary as _safe_public_run_summary,  # noqa: F401
+)
+from idis.services.webhooks.safe_payload import (
+    safe_public_summary_dict as _safe_public_run_summary_dict,
+)
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1", tags=["Runs"])
@@ -842,49 +855,6 @@ def _get_audit_sink(request: Request) -> AuditSink:
     return sink
 
 
-SAFE_PUBLIC_STEP_ERROR_MESSAGE = "Run step failed; see error code for details."
-SENSITIVE_SUMMARY_KEY_PARTS = frozenset(
-    {
-        "base64",
-        "bytes",
-        "content_b64",
-        "artifact",
-        "excerpt",
-        "file",
-        "file_content",
-        "filename",
-        "hash",
-        "header",
-        "html",
-        "local_path",
-        "path",
-        "raw",
-        "sha",
-        "span",
-        "text",
-        "transcript",
-        "uri",
-    }
-)
-SENSITIVE_SUMMARY_VALUE_PARTS = frozenset(
-    {
-        "content_b64",
-        "confidential",
-        "raw bytes",
-        "raw_bytes",
-        "raw text",
-        "raw_text",
-        "parsed text",
-        "parsed_text",
-        "text_excerpt",
-        "_marker",
-        "revenue was 10m",
-        "ebitda was 2m",
-    }
-)
-SAFE_PUBLIC_SUMMARY_KEYS = frozenset({"artifact_count", "manifest_uri"})
-
-
 def _build_step_responses(steps: list[Any]) -> list[RunStepResponse]:
     """Convert RunStep models to API response format.
 
@@ -971,125 +941,6 @@ def _run_source_from_storage(source: object) -> RunSource | None:
         except ValidationError:
             return None
     return None
-
-
-def _safe_public_run_summary_dict(value: dict[str, Any]) -> dict[str, Any]:
-    """Return a sanitized public summary object."""
-    safe = _safe_public_run_summary(value)
-    return safe if isinstance(safe, dict) else {}
-
-
-def _safe_public_run_summary(value: object) -> object:
-    """Sanitize persisted step summaries before exposing them publicly."""
-    if isinstance(value, dict):
-        sanitized: dict[str, object] = {}
-        for key, item in value.items():
-            key_text = str(key)
-            if key_text.startswith("_"):
-                continue
-            if key_text == "blocked_candidates":
-                continue
-            if key_text == "manifest_uri":
-                if isinstance(item, str):
-                    from idis.persistence.repositories.deliverables import (
-                        safe_public_deliverable_uri,
-                    )
-
-                    if safe_uri := safe_public_deliverable_uri(item):
-                        sanitized[key_text] = safe_uri
-                continue
-            if key_text == "artifact_count":
-                if isinstance(item, int | float) and not isinstance(item, bool):
-                    sanitized[key_text] = item
-                continue
-            if key_text == "reproducibility_hashes":
-                if isinstance(item, list):
-                    hashes = [value for value in item if _is_sha256_hex(value)]
-                    if hashes:
-                        sanitized[key_text] = hashes
-                    elif item == []:
-                        sanitized[key_text] = []
-                continue
-            if key_text == "blocked_candidate_reason_counts":
-                if isinstance(item, dict):
-                    reason_counts = _safe_reason_counts(item)
-                    if reason_counts:
-                        sanitized[key_text] = reason_counts
-                    elif item == {}:
-                        sanitized[key_text] = {}
-                continue
-            if key_text not in SAFE_PUBLIC_SUMMARY_KEYS and _is_sensitive_summary_key(key_text):
-                continue
-            safe_item = _safe_public_run_summary(item)
-            if safe_item is not None:
-                sanitized[key_text] = safe_item
-        return sanitized
-    if isinstance(value, list):
-        return [
-            safe_item for item in value if (safe_item := _safe_public_run_summary(item)) is not None
-        ]
-    if isinstance(value, str):
-        return value if _is_safe_public_summary_string(value) else None
-    if isinstance(value, int | float | bool) or value is None:
-        return value
-    return str(value)
-
-
-def _is_sensitive_summary_key(key: str) -> bool:
-    normalized = key.lower()
-    return any(part in normalized for part in SENSITIVE_SUMMARY_KEY_PARTS)
-
-
-def _is_safe_public_summary_string(value: str) -> bool:
-    normalized = value.lower()
-    if any(part in normalized for part in SENSITIVE_SUMMARY_VALUE_PARTS):
-        return False
-    if _looks_like_base64_blob(value):
-        return False
-    if "://" in value or "\\" in value or "/" in value:
-        return False
-    if len(value) > 512:
-        return False
-    if (
-        "error:" in normalized
-        or "exception:" in normalized
-        or normalized.startswith(("valueerror", "runtimeerror", "traceback"))
-    ):
-        return False
-    return not (len(value) > 1 and value[1] == ":")
-
-
-def _is_sha256_hex(value: object) -> bool:
-    if not isinstance(value, str) or len(value) != 64:
-        return False
-    return all(char in "0123456789abcdefABCDEF" for char in value)
-
-
-def _safe_reason_counts(value: dict[object, object]) -> dict[str, int]:
-    safe: dict[str, int] = {}
-    for key, item in value.items():
-        key_text = str(key)
-        if not key_text.replace("_", "").isalnum():
-            continue
-        if isinstance(item, int) and not isinstance(item, bool) and item >= 0:
-            safe[key_text] = item
-    return safe
-
-
-def _looks_like_base64_blob(value: str) -> bool:
-    """Return True for likely opaque base64 payloads."""
-    import base64
-    import binascii
-
-    stripped = value.strip()
-    if len(stripped) < 16 or len(stripped) % 4 != 0:
-        return False
-    try:
-        base64.b64decode(stripped, validate=True)
-    except (binascii.Error, ValueError):
-        return False
-    allowed = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
-    return all(char in allowed for char in stripped)
 
 
 def _emit_run_completed_audit(
@@ -1986,17 +1837,34 @@ def _run_full_deliverables(
             if isinstance(conclusions, dict):
                 graph_conclusions = conclusions
 
-    generated_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-    bundle = generator.generate(
-        ctx=analysis_context,
-        bundle=analysis_bundle,
-        scorecard=scorecard,
-        deal_name=deal_id,
-        generated_at=generated_at,
-        deliverable_id_prefix=f"del-{run_id[:8]}",
-        graph_conclusions=graph_conclusions,
-        layer2_evidence=layer2_evidence,
+    from idis.services.webhooks.lifecycle import (
+        DELIVERABLE_FAILED,
+        DELIVERABLE_PRODUCED,
+        notify_webhook_lifecycle,
     )
+
+    generated_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    try:
+        bundle = generator.generate(
+            ctx=analysis_context,
+            bundle=analysis_bundle,
+            scorecard=scorecard,
+            deal_name=deal_id,
+            generated_at=generated_at,
+            deliverable_id_prefix=f"del-{run_id[:8]}",
+            graph_conclusions=graph_conclusions,
+            layer2_evidence=layer2_evidence,
+        )
+    except Exception:
+        # Best-effort webhook (never raises); the generation failure itself still propagates.
+        notify_webhook_lifecycle(
+            tenant_id=tenant_id,
+            event_type=DELIVERABLE_FAILED,
+            resource_type="run",
+            resource_id=run_id,
+            conn=db_conn,
+        )
+        raise
 
     types: list[str] = [
         bundle.screening_snapshot.deliverable_type,
@@ -2014,6 +1882,15 @@ def _run_full_deliverables(
     if bundle.decline_letter is not None:
         types.append(bundle.decline_letter.deliverable_type)
         deliverable_ids.append(bundle.decline_letter.deliverable_id)
+
+    notify_webhook_lifecycle(
+        tenant_id=tenant_id,
+        event_type=DELIVERABLE_PRODUCED,
+        resource_type="run",
+        resource_id=run_id,
+        data={"deliverable_count": len(deliverable_ids)},
+        conn=db_conn,
+    )
 
     if db_conn is not None and object_store is not None:
         from idis.deliverables.product_bundle import ProductBundleExporter

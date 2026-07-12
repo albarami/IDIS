@@ -48,6 +48,10 @@ from idis.observability.tracing import configure_tracing, instrument_fastapi, in
 from idis.pipeline.worker import start_worker, stop_worker
 from idis.rate_limit.limiter import TenantRateLimiter, build_default_rate_limit_store
 from idis.services.ingestion.defaults import build_default_ingestion_service
+from idis.services.webhooks.dispatcher import (
+    start_webhook_dispatcher_worker,
+    stop_webhook_dispatcher_worker,
+)
 
 try:
     from idis.audit.postgres_sink import PostgresAuditSink
@@ -156,19 +160,21 @@ def create_app(
 
     instrument_fastapi(app)
 
-    # Lifecycle hooks for pipeline worker
+    # Lifecycle hooks for pipeline worker + webhook dispatcher worker
     @app.on_event("startup")
     async def startup_event() -> None:
-        """Start background pipeline worker on app startup."""
+        """Start background workers (pipeline + webhook dispatcher) on app startup."""
         from idis.persistence.db import is_postgres_configured
 
         if is_postgres_configured():
             await start_worker()
+            await start_webhook_dispatcher_worker()
 
     @app.on_event("shutdown")
     async def shutdown_event() -> None:
-        """Stop background pipeline worker on app shutdown."""
+        """Stop background workers on app shutdown."""
         await stop_worker()
+        await stop_webhook_dispatcher_worker()
 
     app.add_exception_handler(IdisHttpError, idis_http_error_handler)
     app.add_exception_handler(HTTPException, http_exception_handler)

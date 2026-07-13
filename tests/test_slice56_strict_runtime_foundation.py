@@ -22,6 +22,7 @@ from idis.services.runs.strict_full_live import (
     REQUIRED_STRICT_COMPONENTS,
     build_strict_full_live_readiness_report,
 )
+from tests.abac_seed import seed_deal_access
 
 TENANT_ID = "11111111-1111-1111-1111-111111111111"
 API_KEY = "slice56-test-key"
@@ -307,6 +308,7 @@ def test_strict_api_block_response_includes_inventory_and_no_env_values(
     )
     assert create_resp.status_code == 201
     deal_id = create_resp.json()["deal_id"]
+    seed_deal_access(TENANT_ID, deal_id, "slice56-actor")
     app.state.deal_documents[deal_id] = [_preflight_doc(deal_id=deal_id)]
 
     run_resp = client.post(
@@ -361,6 +363,7 @@ def test_strict_api_can_be_activated_from_explicit_dotenv(
     )
     assert create_resp.status_code == 201
     deal_id = create_resp.json()["deal_id"]
+    seed_deal_access(TENANT_ID, deal_id, "slice56-actor")
     app.state.deal_documents[deal_id] = [_preflight_doc(deal_id=deal_id)]
 
     run_resp = client.post(
@@ -471,6 +474,7 @@ def test_non_strict_api_run_still_reaches_execution_service(monkeypatch: Any) ->
     )
     assert create_resp.status_code == 201
     deal_id = create_resp.json()["deal_id"]
+    seed_deal_access(TENANT_ID, deal_id, "slice56-actor")
     app.state.deal_documents[deal_id] = [_preflight_doc(deal_id=deal_id)]
 
     run_resp = client.post(

@@ -18,7 +18,9 @@ import hashlib
 import json
 import logging
 import re
+import uuid
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import Request, Response
@@ -27,9 +29,11 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
 from idis.api.auth import authenticate_request
+from idis.api.auth_sso import MfaRequiredError
 from idis.api.error_model import make_error_response_no_request
 from idis.api.errors import IdisHttpError
 from idis.api.openapi_loader import load_openapi_spec
+from idis.validators.audit_event_validator import validate_audit_event
 
 logger = logging.getLogger(__name__)
 
@@ -328,6 +332,68 @@ def _build_error_response(
     )
 
 
+def _emit_mfa_denial_audit(
+    request: Request, error: MfaRequiredError, request_id: str | None
+) -> None:
+    """Emit exactly one schema-valid ``auth.mfa.failed`` audit event for an MFA-required denial.
+
+    Runs at the request boundary (request_id and the app's audit sink are in scope here; the pure
+    JWT helper stays side-effect free). Carries only safe identifiers from the error - never the
+    token, raw claims, or the amr array. NEVER raises: an audit/sink failure is logged loudly and
+    the caller still denies the request (auth fails closed regardless).
+    """
+    try:
+        sink = getattr(request.app.state, "audit_sink", None)
+        if sink is None:
+            logger.error(
+                "auth.mfa.failed audit skipped: no audit sink on app.state",
+                extra={"request_id": request_id},
+            )
+            return
+
+        event: dict[str, Any] = {
+            "event_id": str(uuid.uuid4()),
+            "occurred_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "tenant_id": error.tenant_id,
+            "actor": {
+                "actor_type": "HUMAN",
+                "actor_id": error.actor_id,
+                "ip": request.client.host if request.client else "unknown",
+                "user_agent": request.headers.get("User-Agent", "unknown"),
+            },
+            "request": {
+                "request_id": request_id or str(uuid.uuid4()),
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": 401,
+            },
+            "resource": {
+                "resource_type": "session",
+                "resource_id": request_id or "unknown",
+            },
+            "event_type": "auth.mfa.failed",
+            "severity": "MEDIUM",
+            "summary": "MFA-required denial: bearer token lacks accepted MFA proof",
+        }
+
+        result = validate_audit_event(event)
+        if not result.passed:
+            logger.error(
+                "auth.mfa.failed audit event failed validation: %s",
+                [e.code for e in result.errors],
+                extra={"request_id": request_id},
+            )
+            return
+
+        sink.emit(event)
+    except Exception as e:
+        logger.error(
+            "auth.mfa.failed audit emission failed: %s",
+            e,
+            extra={"request_id": request_id},
+        )
+
+
 class OpenAPIValidationMiddleware(BaseHTTPMiddleware):
     """Middleware for OpenAPI request validation on /v1 paths.
 
@@ -367,6 +433,9 @@ class OpenAPIValidationMiddleware(BaseHTTPMiddleware):
             tenant_ctx = authenticate_request(request)
             request.state.tenant_context = tenant_ctx
         except IdisHttpError as auth_err:
+            if isinstance(auth_err, MfaRequiredError):
+                # Audit failure cannot change the outcome: the 401 below is returned regardless.
+                _emit_mfa_denial_audit(request, auth_err, request_id)
             return _build_error_response(
                 auth_err.status_code, auth_err.code, auth_err.message, request_id
             )

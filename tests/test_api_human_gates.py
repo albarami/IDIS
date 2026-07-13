@@ -17,6 +17,7 @@ from idis.api.main import create_app
 from idis.api.routes.deals import clear_deals_store
 from idis.api.routes.human_gates import clear_human_gates_store, create_test_gate
 from idis.audit.sink import InMemoryAuditSink
+from tests.abac_seed import seed_deal_access
 
 TENANT_A_ID = "11111111-1111-1111-1111-111111111111"
 TENANT_B_ID = "22222222-2222-2222-2222-222222222222"
@@ -77,7 +78,9 @@ def deal_id(client: TestClient) -> str:
         headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
     )
     assert response.status_code == 201
-    return response.json()["deal_id"]
+    did = response.json()["deal_id"]
+    seed_deal_access(TENANT_A_ID, did, "actor-a")  # authorized deal workflow (Task 2.6)
+    return did
 
 
 @pytest.fixture
@@ -171,7 +174,12 @@ class TestHumanGatesAPITenantIsolation:
     def test_cross_tenant_list_returns_empty(
         self, client: TestClient, deal_id: str, gate_id: str
     ) -> None:
-        """GET /v1/deals/{dealId}/human-gates returns empty for cross-tenant."""
+        """GET /v1/deals/{dealId}/human-gates for a cross-tenant deal yields an empty 200.
+
+        The Tenant B actor cannot see Tenant A's deal, so the out-of-scope path deal falls through
+        to the route, which lists under Tenant B's RLS and returns no items - uniform with an empty
+        own-deal and a nonexistent deal, leaking no existence (ADR-011).
+        """
         response = client.get(
             f"/v1/deals/{deal_id}/human-gates",
             headers={"X-IDIS-API-Key": API_KEY_TENANT_B},
@@ -183,7 +191,12 @@ class TestHumanGatesAPITenantIsolation:
     def test_cross_tenant_submit_action_returns_404(
         self, client: TestClient, deal_id: str, gate_id: str
     ) -> None:
-        """POST /v1/deals/{dealId}/human-gates returns 404 for cross-tenant gate."""
+        """POST /v1/deals/{dealId}/human-gates for a cross-tenant deal returns 404.
+
+        The Tenant B actor cannot see Tenant A's deal, so the out-of-scope path deal falls through
+        to the route's gate lookup, which finds nothing under Tenant B's RLS and returns 404 - the
+        same response as a nonexistent deal, leaking no existence (ADR-011).
+        """
         response = client.post(
             f"/v1/deals/{deal_id}/human-gates",
             json={"gate_id": gate_id, "action": "APPROVE"},

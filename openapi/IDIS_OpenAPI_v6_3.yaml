@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: IDIS API (VC Edition) — v6.3
+  title: IDIS API (VC Edition) - v6.3
   version: "6.3"
   description: >
     Enterprise-grade API contract for IDIS (Institutional Deal Intelligence System), derived from IDIS v6.3.
@@ -112,7 +112,7 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateDealRequest"
             example:
-              name: "Series A — Acme Robotics"
+              name: "Series A - Acme Robotics"
               company_name: "Acme Robotics Inc."
               stage: "SERIES_A"
               tags: ["deep-tech", "robotics", "MENA"]
@@ -127,7 +127,7 @@ paths:
                 $ref: "#/components/schemas/Deal"
               example:
                 deal_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-                name: "Series A — Acme Robotics"
+                name: "Series A - Acme Robotics"
                 company_name: "Acme Robotics Inc."
                 status: "NEW"
                 stage: "SERIES_A"
@@ -1129,7 +1129,7 @@ paths:
       tags: [Readiness]
       summary: Get strict full-live readiness (reviewer-safe)
       description: >
-        Returns the safe strict full-live readiness review — component modes, blocker counts +
+        Returns the safe strict full-live readiness review - component modes, blocker counts +
         blocking component names, and required env-var names / service labels only. Excludes
         internal evidence, env sources, free-text blocker messages, and provider matrices.
       operationId: getStrictReadiness
@@ -1567,6 +1567,356 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /v1/deals/{dealId}/assignments:
+    post:
+      tags: [AccessAdmin]
+      summary: Assign an actor to a deal (ADMIN only)
+      operationId: createDealAssignment
+      responses:
+        "201": { description: Assignment created }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Forbidden }
+        "404": { $ref: "#/components/responses/NotFound" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [actor_id]
+              properties:
+                actor_id: { type: string, minLength: 1 }
+  /v1/deals/{dealId}/assignments/{actorId}:
+    delete:
+      tags: [AccessAdmin]
+      summary: Remove a direct deal assignment (ADMIN only)
+      operationId: deleteDealAssignment
+      responses:
+        "204": { description: Assignment removed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Forbidden }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/groups:
+    post:
+      tags: [AccessAdmin]
+      summary: Create a group (ADMIN only)
+      operationId: createGroup
+      responses:
+        "201": { description: Group created }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Forbidden }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name: { type: string }
+  /v1/groups/{groupId}/members:
+    post:
+      tags: [AccessAdmin]
+      summary: Add an actor to a group (ADMIN only)
+      operationId: addGroupMember
+      responses:
+        "201": { description: Member added }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Forbidden }
+        "404": { $ref: "#/components/responses/NotFound" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [actor_id]
+              properties:
+                actor_id: { type: string, minLength: 1 }
+  /v1/groups/{groupId}/members/{actorId}:
+    delete:
+      tags: [AccessAdmin]
+      summary: Remove an actor from a group (ADMIN only)
+      operationId: removeGroupMember
+      responses:
+        "204": { description: Member removed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Forbidden }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/deals/{dealId}/group-assignments:
+    post:
+      tags: [AccessAdmin]
+      summary: Assign a group to a deal (ADMIN only)
+      operationId: assignGroupToDeal
+      responses:
+        "201": { description: Group assigned }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Forbidden }
+        "404": { $ref: "#/components/responses/NotFound" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [group_id]
+              properties:
+                group_id: { type: string, minLength: 1 }
+  /v1/deals/{dealId}/group-assignments/{groupId}:
+    delete:
+      tags: [AccessAdmin]
+      summary: Unassign a group from a deal (ADMIN only)
+      operationId: unassignGroupFromDeal
+      responses:
+        "204": { description: Group unassigned }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Forbidden }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/break-glass/grants:
+    post:
+      tags: [BreakGlass]
+      summary: Issue a single-use break-glass grant for the requesting admin (ADMIN only)
+      operationId: createBreakGlassGrant
+      responses:
+        "201":
+          description: Grant issued; the token is returned once and never logged or audited raw
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [grant_id, token, expires_at, deal_id]
+                properties:
+                  grant_id: { type: string, format: uuid }
+                  token: { type: string }
+                  expires_at: { type: string, format: date-time }
+                  deal_id: { type: string, format: uuid }
+        "400": { description: Invalid justification }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Forbidden }
+        "404": { $ref: "#/components/responses/NotFound" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [deal_id, justification]
+              properties:
+                deal_id: { type: string, format: uuid }
+                justification: { type: string, minLength: 1 }
+                duration_seconds:
+                  type: integer
+                  description: Requested validity window; the core clamps to [60, 3600] seconds
+  /v1/byok/key:
+    post:
+      tags: [ComplianceAdmin]
+      summary: Configure the tenant BYOK key policy (ADMIN only; responses carry hash only)
+      operationId: configureByokKey
+      responses:
+        "201":
+          description: Key policy configured; the raw alias is never echoed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ByokKeyResponse"
+        "400": { description: Invalid key alias }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Forbidden }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [key_alias]
+              properties:
+                key_alias: { type: string, minLength: 1 }
+  /v1/byok/key/rotate:
+    post:
+      tags: [ComplianceAdmin]
+      summary: Rotate the tenant BYOK key to a new alias (ADMIN only)
+      operationId: rotateByokKey
+      responses:
+        "200":
+          description: Key rotated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ByokKeyResponse"
+        "400": { description: Invalid key alias }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Forbidden }
+        "404": { $ref: "#/components/responses/NotFound" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [key_alias]
+              properties:
+                key_alias: { type: string, minLength: 1 }
+  /v1/byok/key/revoke:
+    post:
+      tags: [ComplianceAdmin]
+      summary: Revoke the tenant BYOK key; Class2/3 access denies until re-keyed (ADMIN only)
+      operationId: revokeByokKey
+      responses:
+        "200":
+          description: Key revoked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ByokKeyResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Forbidden }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/legal-holds:
+    post:
+      tags: [ComplianceAdmin]
+      summary: Apply a legal hold; the target cannot be deleted until lifted (ADMIN only)
+      operationId: applyLegalHold
+      responses:
+        "201":
+          description: Hold applied; the reason is hashed immediately and never echoed
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [hold_id, target_type, target_id, applied_at]
+                properties:
+                  hold_id: { type: string, format: uuid }
+                  target_type: { type: string, enum: [DEAL, DOCUMENT, ARTIFACT] }
+                  target_id: { type: string }
+                  applied_at: { type: string, format: date-time }
+        "400": { description: Invalid hold request }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Forbidden }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [target_type, target_id, reason]
+              properties:
+                target_type: { type: string, enum: [DEAL, DOCUMENT, ARTIFACT] }
+                target_id: { type: string, minLength: 1 }
+                reason: { type: string }
+  /v1/legal-holds/{holdId}/lift:
+    post:
+      tags: [ComplianceAdmin]
+      summary: Lift a legal hold (ADMIN only; unknown or cross-tenant ids answer 404)
+      operationId: liftLegalHold
+      responses:
+        "200":
+          description: Hold lifted
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [hold_id, lifted_at]
+                properties:
+                  hold_id: { type: string, format: uuid }
+                  lifted_at: { type: string, format: date-time }
+        "400": { description: Hold already lifted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Forbidden }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/erasure-requests:
+    post:
+      tags: [Erasure]
+      summary: Create a durable per-deal erasure request (ADMIN only; executed separately)
+      operationId: createErasureRequest
+      responses:
+        "201":
+          description: Erasure request created; the reason is hashed and never echoed
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [request_id, deal_id, status, requested_at]
+                properties:
+                  request_id: { type: string, format: uuid }
+                  deal_id: { type: string, format: uuid }
+                  status: { type: string, enum: [REQUESTED] }
+                  requested_at: { type: string, format: date-time }
+        "400": { description: Invalid erasure request }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Forbidden }
+        "404": { $ref: "#/components/responses/NotFound" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [deal_id, reason]
+              properties:
+                deal_id: { type: string, format: uuid }
+                reason: { type: string }
+  /v1/erasure-requests/{requestId}/execute:
+    post:
+      tags: [Erasure]
+      summary: Execute a pending erasure request (ADMIN only; hold-aware, full deal removal)
+      operationId: executeErasureRequest
+      responses:
+        "200":
+          description: Erasure executed; counts are safe-shape totals
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [request_id, status, executed_at, counts]
+                properties:
+                  request_id: { type: string, format: uuid }
+                  status: { type: string, enum: [EXECUTED] }
+                  executed_at: { type: string, format: date-time }
+                  counts:
+                    type: object
+                    additionalProperties: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Forbidden or blocked by legal hold }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Already executed }
+        "500": { description: Execution failed (request marked FAILED, re-executable) }
+  /v1/compliance-exports:
+    post:
+      tags: [Erasure]
+      summary: Build the tenant's sanitized compliance export bundle (ADMIN only)
+      operationId: createComplianceExport
+      responses:
+        "201":
+          description: Export bundle written; manifest carries metadata and hashes only
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [export_id, object_key, manifest_sha256, counts]
+                properties:
+                  export_id: { type: string, format: uuid }
+                  object_key: { type: string }
+                  manifest_sha256: { type: string }
+                  counts:
+                    type: object
+                    additionalProperties: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Forbidden }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1682,7 +2032,17 @@ components:
         tenant_id: { type: string, format: uuid }
         name: { type: string }
         timezone: { type: string, example: "Asia/Qatar" }
-        data_region: { type: string, example: "me-south-1" }
+        data_region: { type: string, nullable: true, example: "me-south-1" }
+
+    ByokKeyResponse:
+      type: object
+      additionalProperties: false
+      required: [key_alias_hash, key_state]
+      properties:
+        key_alias_hash:
+          type: string
+          description: 16-hex SHA-256 prefix of the key alias; the raw alias is never returned
+        key_state: { type: string, enum: [ACTIVE, REVOKED] }
 
     DealStatus:
       type: string

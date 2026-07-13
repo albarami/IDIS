@@ -1,6 +1,6 @@
 """BYOK (Bring Your Own Key) policy enforcement for IDIS (v6.3 Task 7.5).
 
-Implements customer-managed key policies per Data Residency Model v6.3 §5.3:
+Implements customer-managed key policies per Data Residency Model v6.3 section 5.3:
 - Tenant may supply KMS key alias for encryption
 - Key rotation supported
 - Key revocation locks tenant content access until re-keyed
@@ -21,9 +21,10 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from idis.api.errors import IdisHttpError
+from idis.validators.audit_event_validator import validate_audit_event
 
 if TYPE_CHECKING:
     from idis.api.auth import TenantContext
@@ -44,7 +45,7 @@ class BYOKKeyState(StrEnum):
 
 
 class DataClass(StrEnum):
-    """Data classification per v6.3 Data Residency Model §2."""
+    """Data classification per v6.3 Data Residency Model section 2."""
 
     CLASS_0 = "CLASS_0"
     CLASS_1 = "CLASS_1"
@@ -58,11 +59,15 @@ class BYOKPolicy:
 
     Attributes:
         tenant_id: The tenant this policy applies to.
-        key_alias: The KMS key alias (safe identifier, not the actual key).
+        key_alias: The KMS key alias (safe identifier, not the actual key). Raw aliases live
+            only in process memory: the durable store persists hash+length, so a policy loaded
+            from Postgres carries key_alias="" and the fields below instead.
         key_state: Current state of the key (ACTIVE or REVOKED).
         created_at: When the key was configured.
         rotated_at: When the key was last rotated (None if never).
         revoked_at: When the key was revoked (None if active).
+        key_alias_sha256: Full SHA-256 of the alias (set when loaded from the durable store).
+        key_alias_length: Length of the raw alias (set when loaded from the durable store).
     """
 
     tenant_id: str
@@ -71,13 +76,43 @@ class BYOKPolicy:
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     rotated_at: datetime | None = None
     revoked_at: datetime | None = None
+    key_alias_sha256: str | None = None
+    key_alias_length: int | None = None
+
+
+def policy_alias_sha256(policy: BYOKPolicy) -> str:
+    """Full SHA-256 hex of the policy's alias, from raw alias or the stored hash."""
+    if policy.key_alias_sha256:
+        return policy.key_alias_sha256
+    return hashlib.sha256(policy.key_alias.encode()).hexdigest()
+
+
+def policy_alias_length(policy: BYOKPolicy) -> int:
+    """Length of the policy's raw alias, from the raw value or the stored length."""
+    if policy.key_alias_length is not None:
+        return policy.key_alias_length
+    return len(policy.key_alias)
+
+
+@runtime_checkable
+class BYOKPolicyStore(Protocol):
+    """Seam for tenant BYOK policy state (Slice98 Task 6).
+
+    Implementations MUST raise on backend failure - a resolution error can never surface as
+    "no policy" (which ``require_key_active`` treats as BYOK-not-configured = allow).
+    """
+
+    def get(self, tenant_id: str) -> BYOKPolicy | None:
+        """Return the tenant's policy, or None if BYOK is not configured."""
+        ...
+
+    def set(self, policy: BYOKPolicy) -> None:
+        """Persist (create or overwrite) the tenant's policy."""
+        ...
 
 
 class BYOKPolicyRegistry:
-    """In-memory registry of BYOK policies for testing/dev.
-
-    Production implementations should use a database-backed registry.
-    """
+    """In-memory twin of the BYOK policy store (tests and non-Postgres deployments)."""
 
     def __init__(self) -> None:
         self._policies: dict[str, BYOKPolicy] = {}
@@ -95,7 +130,128 @@ class BYOKPolicyRegistry:
         self._policies.clear()
 
 
-_default_registry = BYOKPolicyRegistry()
+class PostgresBYOKPolicyRegistry:
+    """Durable twin over ``byok_policies`` (migration 0029, guarded RLS).
+
+    Stores POLICY METADATA only - the customer's key material lives solely in their KMS (see
+    docs/architecture/slice98_byok_kms_decision.md for the recorded KMS-boundary seam). Reads
+    fail CLOSED (403 BYOK_RESOLUTION_FAILED) on backend errors so a DB outage can never read as
+    "no policy = allow"; writes fail loudly (500) and, being a single-statement transaction,
+    leave no durable state behind on failure.
+    """
+
+    def get(self, tenant_id: str) -> BYOKPolicy | None:
+        from sqlalchemy import text
+
+        from idis.persistence.db import begin_app_conn, set_tenant_local
+
+        try:
+            with begin_app_conn() as conn:
+                set_tenant_local(conn, tenant_id)
+                row = conn.execute(
+                    text(
+                        "SELECT tenant_id, key_alias_sha256, key_alias_length, key_state, "
+                        "created_at, rotated_at, revoked_at FROM byok_policies "
+                        "WHERE tenant_id = CAST(:tenant_id AS uuid)"
+                    ),
+                    {"tenant_id": tenant_id},
+                ).fetchone()
+        except Exception as e:
+            logger.error("PostgresBYOKPolicyRegistry get failed: %s", type(e).__name__)
+            raise IdisHttpError(
+                status_code=403,
+                code="BYOK_RESOLUTION_FAILED",
+                message="Access denied.",
+            ) from e
+        if row is None:
+            return None
+        return BYOKPolicy(
+            tenant_id=str(row.tenant_id),
+            key_alias="",  # raw aliases are never persisted; hash+length carry identity
+            key_state=BYOKKeyState(row.key_state),
+            created_at=row.created_at,
+            rotated_at=row.rotated_at,
+            revoked_at=row.revoked_at,
+            key_alias_sha256=row.key_alias_sha256,
+            key_alias_length=row.key_alias_length,
+        )
+
+    def set(self, policy: BYOKPolicy) -> None:
+        from sqlalchemy import text
+
+        from idis.persistence.db import begin_app_conn, set_tenant_local
+
+        try:
+            with begin_app_conn() as conn:
+                set_tenant_local(conn, policy.tenant_id)
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO byok_policies (
+                            tenant_id, key_alias_sha256, key_alias_length, key_state,
+                            created_at, rotated_at, revoked_at
+                        ) VALUES (
+                            CAST(:tenant_id AS uuid), :key_alias_sha256, :key_alias_length,
+                            :key_state, :created_at, :rotated_at, :revoked_at
+                        )
+                        ON CONFLICT (tenant_id) DO UPDATE SET
+                            key_alias_sha256 = EXCLUDED.key_alias_sha256,
+                            key_alias_length = EXCLUDED.key_alias_length,
+                            key_state = EXCLUDED.key_state,
+                            created_at = EXCLUDED.created_at,
+                            rotated_at = EXCLUDED.rotated_at,
+                            revoked_at = EXCLUDED.revoked_at
+                        """
+                    ),
+                    {
+                        "tenant_id": policy.tenant_id,
+                        "key_alias_sha256": policy_alias_sha256(policy),
+                        "key_alias_length": policy_alias_length(policy),
+                        "key_state": policy.key_state.value,
+                        "created_at": policy.created_at,
+                        "rotated_at": policy.rotated_at,
+                        "revoked_at": policy.revoked_at,
+                    },
+                )
+        except Exception as e:
+            logger.error("PostgresBYOKPolicyRegistry set failed: %s", type(e).__name__)
+            raise IdisHttpError(
+                status_code=500,
+                code="BYOK_POLICY_WRITE_FAILED",
+                message="BYOK policy could not be persisted",
+            ) from e
+
+
+_registry: BYOKPolicyStore | None = None
+
+
+def build_default_byok_policy_registry() -> BYOKPolicyStore:
+    """Select the durable Postgres store when configured, else the in-memory twin."""
+    from idis.persistence.db import is_postgres_configured
+
+    if is_postgres_configured():
+        return PostgresBYOKPolicyRegistry()
+    return BYOKPolicyRegistry()
+
+
+def get_byok_policy_registry() -> BYOKPolicyStore:
+    """Return the process-wide BYOK policy store, building the default on first use."""
+    global _registry
+    if _registry is None:
+        _registry = build_default_byok_policy_registry()
+    return _registry
+
+
+def set_byok_policy_registry(store: BYOKPolicyStore) -> None:
+    """Override the process-wide store (tests / explicit wiring)."""
+    global _registry
+    _registry = store
+
+
+def reset_byok_policy_registry() -> None:
+    """Clear the process-wide store so the next access rebuilds the default."""
+    global _registry
+    _registry = None
 
 
 def _validate_key_alias(key_alias: str) -> None:
@@ -137,15 +293,16 @@ def _build_byok_audit_event(
     tenant_id: str,
     actor_id: str,
     event_type: str,
-    key_alias: str,
+    key_alias_sha256: str,
+    key_alias_length: int,
     key_state: BYOKKeyState,
     details: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a BYOK audit event.
 
-    Note: Key alias is included but NO sensitive key material.
+    Note: only the alias hash/length are included - never the raw alias or key material.
     """
-    key_alias_hash = hashlib.sha256(key_alias.encode()).hexdigest()[:16]
+    key_alias_hash = key_alias_sha256[:16]
 
     event: dict[str, Any] = {
         "event_id": str(uuid.uuid4()),
@@ -160,8 +317,8 @@ def _build_byok_audit_event(
         },
         "request": {
             "request_id": str(uuid.uuid4()),
-            "method": "INTERNAL",
-            "path": "/compliance/byok",
+            "method": "POST",
+            "path": "/internal/compliance/byok",
             "status_code": 200,
         },
         "resource": {
@@ -172,9 +329,11 @@ def _build_byok_audit_event(
         "severity": "HIGH",
         "summary": f"{event_type} for tenant {tenant_id}",
         "payload": {
-            "key_alias_hash": key_alias_hash,
-            "key_alias_length": len(key_alias),
-            "key_state": key_state.value,
+            "safe": {
+                "key_alias_hash": key_alias_hash,
+                "key_alias_length": key_alias_length,
+                "key_state": key_state.value,
+            },
             "hashes": [],
             "refs": [],
         },
@@ -182,7 +341,7 @@ def _build_byok_audit_event(
 
     if details:
         safe_details = {k: v for k, v in details.items() if k not in ("key", "secret")}
-        event["payload"]["details"] = safe_details
+        event["payload"]["safe"].update(safe_details)
 
     return event
 
@@ -216,6 +375,19 @@ def _emit_audit_or_fail(
             message="Operation failed: audit requirement not met",
         )
 
+    validation = validate_audit_event(event)
+    if not validation.passed:
+        logger.error(
+            "BYOK audit event failed validation for %s (fail-closed): %s",
+            operation,
+            [error.code for error in validation.errors],
+        )
+        raise IdisHttpError(
+            status_code=500,
+            code="BYOK_AUDIT_FAILED",
+            message="Operation failed: audit requirement not met",
+        )
+
     try:
         audit_sink.emit(event)
     except Exception as e:
@@ -235,7 +407,7 @@ def configure_key(
     tenant_ctx: TenantContext,
     key_alias: str,
     audit_sink: AuditSink | None = None,
-    registry: BYOKPolicyRegistry | None = None,
+    registry: BYOKPolicyStore | None = None,
 ) -> BYOKPolicy:
     """Configure a BYOK key for a tenant.
 
@@ -253,7 +425,7 @@ def configure_key(
     """
     _validate_key_alias(key_alias)
 
-    reg = registry or _default_registry
+    reg = registry or get_byok_policy_registry()
 
     policy = BYOKPolicy(
         tenant_id=tenant_ctx.tenant_id,
@@ -266,7 +438,8 @@ def configure_key(
         tenant_id=tenant_ctx.tenant_id,
         actor_id=tenant_ctx.actor_id,
         event_type="byok.key.configured",
-        key_alias=key_alias,
+        key_alias_sha256=policy_alias_sha256(policy),
+        key_alias_length=policy_alias_length(policy),
         key_state=BYOKKeyState.ACTIVE,
     )
 
@@ -287,7 +460,7 @@ def rotate_key(
     tenant_ctx: TenantContext,
     new_key_alias: str,
     audit_sink: AuditSink | None = None,
-    registry: BYOKPolicyRegistry | None = None,
+    registry: BYOKPolicyStore | None = None,
 ) -> BYOKPolicy:
     """Rotate the BYOK key for a tenant.
 
@@ -306,7 +479,7 @@ def rotate_key(
     """
     _validate_key_alias(new_key_alias)
 
-    reg = registry or _default_registry
+    reg = registry or get_byok_policy_registry()
     existing = reg.get(tenant_ctx.tenant_id)
 
     if existing is None:
@@ -328,9 +501,10 @@ def rotate_key(
         tenant_id=tenant_ctx.tenant_id,
         actor_id=tenant_ctx.actor_id,
         event_type="byok.key.rotated",
-        key_alias=new_key_alias,
+        key_alias_sha256=policy_alias_sha256(policy),
+        key_alias_length=policy_alias_length(policy),
         key_state=BYOKKeyState.ACTIVE,
-        details={"previous_key_alias_length": len(existing.key_alias)},
+        details={"previous_key_alias_length": policy_alias_length(existing)},
     )
 
     _emit_audit_or_fail(audit_sink, event, "rotate_key")
@@ -349,7 +523,7 @@ def rotate_key(
 def revoke_key(
     tenant_ctx: TenantContext,
     audit_sink: AuditSink | None = None,
-    registry: BYOKPolicyRegistry | None = None,
+    registry: BYOKPolicyStore | None = None,
 ) -> BYOKPolicy:
     """Revoke the BYOK key for a tenant.
 
@@ -366,7 +540,7 @@ def revoke_key(
     Raises:
         IdisHttpError: 404 if no existing key, 500 if audit fails.
     """
-    reg = registry or _default_registry
+    reg = registry or get_byok_policy_registry()
     existing = reg.get(tenant_ctx.tenant_id)
 
     if existing is None:
@@ -383,13 +557,16 @@ def revoke_key(
         created_at=existing.created_at,
         rotated_at=existing.rotated_at,
         revoked_at=datetime.now(UTC),
+        key_alias_sha256=existing.key_alias_sha256,
+        key_alias_length=existing.key_alias_length,
     )
 
     event = _build_byok_audit_event(
         tenant_id=tenant_ctx.tenant_id,
         actor_id=tenant_ctx.actor_id,
         event_type="byok.key.revoked",
-        key_alias=existing.key_alias,
+        key_alias_sha256=policy_alias_sha256(existing),
+        key_alias_length=policy_alias_length(existing),
         key_state=BYOKKeyState.REVOKED,
     )
 
@@ -408,7 +585,7 @@ def revoke_key(
 def require_key_active(
     tenant_ctx: TenantContext,
     data_class: DataClass,
-    registry: BYOKPolicyRegistry | None = None,
+    registry: BYOKPolicyStore | None = None,
 ) -> None:
     """Require that BYOK key is active for Class2/3 data access.
 
@@ -432,7 +609,7 @@ def require_key_active(
     if data_class in (DataClass.CLASS_0, DataClass.CLASS_1):
         return
 
-    reg = registry or _default_registry
+    reg = registry or get_byok_policy_registry()
     policy = reg.get(tenant_ctx.tenant_id)
 
     if policy is None:
@@ -453,7 +630,7 @@ def require_key_active(
 
 def get_key_metadata(
     tenant_ctx: TenantContext,
-    registry: BYOKPolicyRegistry | None = None,
+    registry: BYOKPolicyStore | None = None,
 ) -> dict[str, Any] | None:
     """Get BYOK key metadata for object storage headers.
 
@@ -466,13 +643,13 @@ def get_key_metadata(
     Returns:
         Dict with kms_key_alias (hashed) and key_state, or None if no BYOK.
     """
-    reg = registry or _default_registry
+    reg = registry or get_byok_policy_registry()
     policy = reg.get(tenant_ctx.tenant_id)
 
     if policy is None:
         return None
 
-    key_alias_hash = hashlib.sha256(policy.key_alias.encode()).hexdigest()[:16]
+    key_alias_hash = policy_alias_sha256(policy)[:16]
 
     return {
         "kms_key_alias_hash": key_alias_hash,

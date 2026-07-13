@@ -20,6 +20,7 @@ from idis.evaluation.real_example_run_harness import (
     run_real_example_full_run_harness,
 )
 from idis.persistence.repositories.run_steps import clear_run_steps_store
+from tests.abac_seed import seed_deal_access
 
 TENANT_ID = "11111111-1111-1111-1111-111111111111"
 API_KEY = "slice54-test-key"
@@ -207,6 +208,7 @@ def test_strict_api_full_run_fails_before_execution_and_returns_structured_block
     )
     assert create_resp.status_code == 201
     deal_id = create_resp.json()["deal_id"]
+    seed_deal_access(TENANT_ID, deal_id, "actor-a")
     app.state.deal_documents[deal_id] = [_preflight_doc(deal_id=deal_id)]
 
     def fail_if_executed(*_args: Any, **_kwargs: Any) -> None:

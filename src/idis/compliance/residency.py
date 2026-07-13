@@ -1,6 +1,6 @@
 """Data residency enforcement for IDIS (v6.3 Task 7.5).
 
-Implements fail-closed region pinning per Data Residency Model v6.3 §3:
+Implements fail-closed region pinning per Data Residency Model v6.3 section 3:
 - Tenant data stays in assigned region
 - Cross-region operations forbidden by default
 - Missing service region config fails closed (deny, not "assume ok")
@@ -100,6 +100,30 @@ def _validate_tenant_region(tenant_ctx: TenantContext) -> str:
     return data_region
 
 
+def _enforce_region_match(
+    tenant_region: str, service_region: str, *, tenant_id: str = "unknown"
+) -> None:
+    """Compare an already-resolved tenant region against the service region (fail-closed).
+
+    The caller must have validated that ``service_region`` is non-empty. Comparison is
+    case-insensitive and whitespace-trimmed; a mismatch denies with a generic message (no leak).
+    """
+    tenant_region_normalized = tenant_region.strip().lower()
+    service_region_normalized = service_region.strip().lower()
+    if tenant_region_normalized != service_region_normalized:
+        logger.warning(
+            "Residency violation: tenant_id=%s, tenant_region=%s, service_region=%s",
+            tenant_id,
+            tenant_region_normalized,
+            service_region_normalized,
+        )
+        raise IdisHttpError(
+            status_code=403,
+            code="RESIDENCY_REGION_MISMATCH",
+            message="Access denied",
+        )
+
+
 def enforce_region_pin(tenant_ctx: TenantContext, service_region: str) -> None:
     """Enforce that tenant data_region matches service region.
 
@@ -144,21 +168,7 @@ def enforce_region_pin(tenant_ctx: TenantContext, service_region: str) -> None:
             message="Access denied",
         ) from None
 
-    service_region_normalized = service_region.strip().lower()
-    tenant_region_normalized = tenant_region.lower()
-
-    if tenant_region_normalized != service_region_normalized:
-        logger.warning(
-            "Residency violation: tenant_id=%s, tenant_region=%s, service_region=%s",
-            tenant_ctx.tenant_id,
-            tenant_region_normalized,
-            service_region_normalized,
-        )
-        raise IdisHttpError(
-            status_code=403,
-            code="RESIDENCY_REGION_MISMATCH",
-            message="Access denied",
-        )
+    _enforce_region_match(tenant_region, service_region, tenant_id=tenant_ctx.tenant_id)
 
 
 def enforce_region_pin_strict(tenant_ctx: TenantContext, service_region: str | None) -> None:
@@ -190,3 +200,74 @@ def enforce_region_pin_strict(tenant_ctx: TenantContext, service_region: str | N
         )
 
     enforce_region_pin(tenant_ctx, service_region)
+
+
+def resolve_durable_tenant_region(tenant_ctx: TenantContext) -> str:
+    """Resolve the tenant's region from the durable store (residency source of truth).
+
+    Fail-closed: an invalid tenant context, a missing/empty durable region (no row or NULL column),
+    or a store/backend failure each raise ResidencyViolationError so the caller denies. The durable
+    value - not the request claim - is authoritative when durable residency is enabled.
+    """
+    from idis.compliance.tenant_region import get_tenant_region_store
+
+    tenant_id = getattr(tenant_ctx, "tenant_id", None)
+    if not tenant_id or not isinstance(tenant_id, str):
+        raise ResidencyViolationError(
+            code="RESIDENCY_INVALID_TENANT_CONTEXT",
+            message="Access denied",
+        )
+    try:
+        region = get_tenant_region_store().get_data_region(tenant_id)
+    except Exception:
+        logger.warning("Durable residency resolution failed for tenant_id=%s", tenant_id)
+        raise ResidencyViolationError(
+            code="RESIDENCY_RESOLUTION_FAILED",
+            message="Access denied",
+        ) from None
+    if not region or not isinstance(region, str) or not region.strip():
+        raise ResidencyViolationError(
+            code="RESIDENCY_TENANT_REGION_UNSET",
+            message="Access denied",
+        )
+    return region.strip()
+
+
+def enforce_residency(tenant_ctx: TenantContext, service_region: str) -> None:
+    """Enforce data residency, preferring the durable tenant region when the cutover flag is on.
+
+    Flag off (default): the request claim region is authoritative - identical to
+    ``enforce_region_pin`` (legacy behavior, unchanged).
+
+    Flag on (``IDIS_ENABLE_DURABLE_RESIDENCY``): the tenant's region is read from the durable store
+    (the ``tenants.data_region`` source of truth) and the request claim is ignored; a missing/empty
+    durable region or a resolution failure denies fail-closed. Service-region config is always
+    required (empty -> deny).
+    """
+    from idis.compliance.tenant_region import is_durable_residency_enabled
+
+    if not is_durable_residency_enabled():
+        enforce_region_pin(tenant_ctx, service_region)
+        return
+
+    if not service_region or not service_region.strip():
+        logger.error(
+            "Residency enforcement DENIED: service region not configured (durable path). "
+            "Fail-closed: denying request."
+        )
+        raise IdisHttpError(
+            status_code=403,
+            code="RESIDENCY_CONFIG_ERROR",
+            message="Access denied",
+        )
+
+    try:
+        tenant_region = resolve_durable_tenant_region(tenant_ctx)
+    except ResidencyViolationError as e:
+        raise IdisHttpError(
+            status_code=403,
+            code=e.code,
+            message="Access denied",
+        ) from None
+
+    _enforce_region_match(tenant_region, service_region, tenant_id=tenant_ctx.tenant_id)

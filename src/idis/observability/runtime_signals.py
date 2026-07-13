@@ -25,6 +25,7 @@ RUN_CANCELLED = "run.cancelled"
 RUN_QUEUE_OBSERVED = "run.queue.observed"
 RATE_LIMIT_DENIED = "rate_limit.denied"
 IDEMPOTENCY_CLEANUP = "idempotency.cleanup"
+RETENTION_SWEEP_COMPLETED = "retention.sweep.completed"
 
 
 def emit_run_signal(

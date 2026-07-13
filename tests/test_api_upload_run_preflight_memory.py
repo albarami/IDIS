@@ -21,6 +21,7 @@ from idis.audit.sink import InMemoryAuditSink
 from idis.idempotency.store import SqliteIdempotencyStore
 from idis.services.runs.document_preflight import InMemoryRunDocumentPreflightService
 from idis.services.runs.execution import RunExecutionResult
+from tests.abac_seed import seed_deal_access
 
 try:
     from reportlab.lib.pagesizes import letter
@@ -178,7 +179,12 @@ def _create_deal(client: TestClient) -> str:
         json={"name": "Slice 43 Deal", "company_name": "Synthetic Co"},
     )
     assert response.status_code == 201
-    return str(response.json()["deal_id"])
+    deal_id = str(response.json()["deal_id"])
+    # Task 2.6: both tests drive this deal as the authorized actor (API_KEY -> "slice43-actor").
+    # uploadDealDocument and startRun are ABAC deny-by-default, so seed the operating actor's
+    # assignment through the app's default store before any deal-scoped call.
+    seed_deal_access(TENANT_ID, deal_id, "slice43-actor")
+    return deal_id
 
 
 def _upload_pdf(client: TestClient, *, deal_id: str, filename: str) -> dict[str, Any]:

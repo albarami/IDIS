@@ -25,20 +25,15 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
-from idis.api.abac import (
-    InMemoryDealAssignmentStore,
-    get_deal_assignment_store,
-)
 from idis.api.auth import IDIS_API_KEYS_ENV
 from idis.api.main import create_app
 from idis.persistence.db import set_tenant_local
+from tests.abac_seed import seed_deal_access
 
 
 def _assign_actor_to_deal(tenant_id: str, deal_id: str, actor_id: str) -> None:
-    """Helper to assign an actor to a deal for ABAC access."""
-    store = get_deal_assignment_store()
-    if isinstance(store, InMemoryDealAssignmentStore):
-        store.add_assignment(tenant_id, deal_id, actor_id)
+    """Assign an actor to a deal via the real default store seam (in-memory or durable Postgres)."""
+    seed_deal_access(tenant_id, deal_id, actor_id)
 
 
 if TYPE_CHECKING:
@@ -626,6 +621,9 @@ class TestClaimsAPIPostgresReadPath:
                     claim_text=f"Claim {i}",
                 )
 
+        # Deal-scoped ABAC is deny-by-default: assign the tenant-A actor to list its own deal.
+        _assign_actor_to_deal(TENANT_A_ID, deal_id, ACTOR_A_ID)
+
         response = client_with_postgres.get(
             f"/v1/deals/{deal_id}/claims",
             headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
@@ -656,6 +654,9 @@ class TestClaimsAPIPostgresWritePath:
         with app_engine.begin() as conn:
             set_tenant_local(conn, TENANT_A_ID)
             _create_deal_in_postgres(conn, TENANT_A_ID, deal_id)
+
+        # Deal-scoped ABAC is deny-by-default: assign the tenant-A actor to write to its own deal.
+        _assign_actor_to_deal(TENANT_A_ID, deal_id, ACTOR_A_ID)
 
         response = client_with_postgres.post(
             f"/v1/deals/{deal_id}/claims",
@@ -755,6 +756,9 @@ class TestClaimsAPITenantIsolation:
             set_tenant_local(conn, TENANT_B_ID)
             _create_deal_in_postgres(conn, TENANT_B_ID, deal_id_b)
 
+        # Tenant B is assigned to its own deal so it can list (and sees zero of A's claims).
+        _assign_actor_to_deal(TENANT_B_ID, deal_id_b, ACTOR_B_ID)
+
         response = client_with_postgres.get(
             f"/v1/deals/{deal_id_b}/claims",
             headers={"X-IDIS-API-Key": API_KEY_TENANT_B},
@@ -797,6 +801,10 @@ class TestClaimsAPITenantIsolation:
                 deal_id_b,
                 claim_text="Tenant B Only",
             )
+
+        # Each tenant actor is assigned to its own deal (deny-by-default deal-scoped ABAC).
+        _assign_actor_to_deal(TENANT_A_ID, deal_id_a, ACTOR_A_ID)
+        _assign_actor_to_deal(TENANT_B_ID, deal_id_b, ACTOR_B_ID)
 
         response_a = client_with_postgres.get(
             f"/v1/deals/{deal_id_a}/claims",

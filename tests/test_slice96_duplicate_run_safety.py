@@ -1,4 +1,4 @@
-"""Slice96 Task 2 — duplicate-run safety (DEC-D): one active run per (tenant, deal).
+"""Slice96 Task 2 - duplicate-run safety (DEC-D): one active run per (tenant, deal).
 
 RED-first. A second startRun while a QUEUED/RUNNING run exists for the deal must return a safe
 RUN_ALREADY_ACTIVE (409). Enforced race-safely in Postgres by a partial UNIQUE index (migration
@@ -26,6 +26,7 @@ from idis.persistence.repositories.runs import (
     PostgresRunsRepository,
     RunAlreadyActiveError,
 )
+from tests.abac_seed import seed_deal_access
 
 _TENANT = "11111111-1111-1111-1111-111111111111"
 _TENANT_B = "22222222-2222-2222-2222-222222222222"
@@ -98,6 +99,7 @@ def test_start_run_returns_409_when_active_run_exists(client: TestClient) -> Non
     )
     assert created.status_code == 201
     deal_id = created.json()["deal_id"]
+    seed_deal_access(_TENANT, deal_id, "actor-a")
     # Seed an active QUEUED run for the deal (the concurrent-active-run condition).
     InMemoryRunsRepository(_TENANT).create(run_id="seed-run", deal_id=deal_id, mode="FULL")
     dup = client.post(

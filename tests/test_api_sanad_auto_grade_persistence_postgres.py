@@ -15,6 +15,7 @@ from idis.audit.sink import InMemoryAuditSink
 from idis.idempotency.store import SqliteIdempotencyStore
 from idis.models.run_step import FULL_STEPS, StepName, StepStatus
 from tests import test_ingestion_persists_documents_postgres as pg_helpers
+from tests.abac_seed import seed_deal_access
 from tests.test_api_default_upload_ingestion_postgres import _configure_api_key
 from tests.test_api_selected_multidocument_full_acceptance_postgres import (
     KNOWN_SANAD_BLOCKER,
@@ -54,6 +55,8 @@ def test_slice28_selected_full_run_persists_sanad_grades_without_known_blocker(
     )
     assert deal_response.status_code == 201
     deal_id = str(deal_response.json()["deal_id"])
+    # Deal-scoped ABAC is deny-by-default: assign the creating actor to operate on its own deal.
+    seed_deal_access(str(pg_helpers.TENANT_ID), deal_id, pg_helpers.ACTOR_ID)
 
     document_ids: list[str] = []
     for path in _write_supported_data_room_like_fixture(room_root):

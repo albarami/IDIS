@@ -28,6 +28,7 @@ from idis.services.runs.execution import RunExecutionResult
 from idis.storage.compliant_store import ComplianceEnforcedStore
 from idis.storage.filesystem_store import FilesystemObjectStore
 from tests import test_ingestion_persists_documents_postgres as pg_helpers
+from tests.abac_seed import seed_deal_access
 
 pytest_plugins = ("tests.test_ingestion_persists_documents_postgres",)
 
@@ -103,7 +104,11 @@ def _create_deal(client: TestClient, *, name: str) -> str:
         json={"name": name, "company_name": "Synthetic Co"},
     )
     assert response.status_code == 201
-    return str(response.json()["deal_id"])
+    deal_id = str(response.json()["deal_id"])
+    # Deal-scoped ABAC is deny-by-default (Slice98): grant the creating actor access through the
+    # real store seam so this authorized single-tenant workflow can operate on its own deal.
+    seed_deal_access(str(pg_helpers.TENANT_ID), deal_id, pg_helpers.ACTOR_ID)
+    return deal_id
 
 
 def _upload_document(

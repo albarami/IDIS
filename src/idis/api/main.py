@@ -25,8 +25,11 @@ from idis.api.middleware.rbac import RBACMiddleware
 from idis.api.middleware.request_id import RequestIdMiddleware
 from idis.api.middleware.residency import ResidencyMiddleware
 from idis.api.middleware.tracing import TracingEnrichmentMiddleware
+from idis.api.routes.access_admin import router as access_admin_router
 from idis.api.routes.audit import router as audit_router
+from idis.api.routes.break_glass import router as break_glass_router
 from idis.api.routes.claims import router as claims_router
+from idis.api.routes.compliance_admin import router as compliance_admin_router
 from idis.api.routes.data_room_packages import router as data_room_packages_router
 from idis.api.routes.deals import router as deals_router
 from idis.api.routes.debate import router as debate_router
@@ -34,6 +37,7 @@ from idis.api.routes.defects import router as defects_router
 from idis.api.routes.deliverables import router as deliverables_router
 from idis.api.routes.documents import router as documents_router
 from idis.api.routes.enrichment import router as enrichment_router
+from idis.api.routes.erasure_export import router as erasure_export_router
 from idis.api.routes.health import router as health_router
 from idis.api.routes.human_gates import router as human_gates_router
 from idis.api.routes.overrides import router as overrides_router
@@ -160,21 +164,26 @@ def create_app(
 
     instrument_fastapi(app)
 
-    # Lifecycle hooks for pipeline worker + webhook dispatcher worker
+    # Lifecycle hooks for pipeline worker + webhook dispatcher worker + compliance janitor
     @app.on_event("startup")
     async def startup_event() -> None:
-        """Start background workers (pipeline + webhook dispatcher) on app startup."""
+        """Start background workers on app startup (janitor additionally needs its own flag)."""
         from idis.persistence.db import is_postgres_configured
+        from idis.services.compliance.janitor import start_compliance_janitor_worker
 
         if is_postgres_configured():
             await start_worker()
             await start_webhook_dispatcher_worker()
+            await start_compliance_janitor_worker(audit_sink=effective_audit_sink)
 
     @app.on_event("shutdown")
     async def shutdown_event() -> None:
         """Stop background workers on app shutdown."""
+        from idis.services.compliance.janitor import stop_compliance_janitor_worker
+
         await stop_worker()
         await stop_webhook_dispatcher_worker()
+        await stop_compliance_janitor_worker()
 
     app.add_exception_handler(IdisHttpError, idis_http_error_handler)
     app.add_exception_handler(HTTPException, http_exception_handler)
@@ -190,6 +199,10 @@ def create_app(
     app.include_router(sanad_router)
     app.include_router(defects_router)
     app.include_router(webhooks_router)
+    app.include_router(access_admin_router)
+    app.include_router(break_glass_router)
+    app.include_router(compliance_admin_router)
+    app.include_router(erasure_export_router)
     app.include_router(audit_router)
     app.include_router(runs_router)
     app.include_router(readiness_router)

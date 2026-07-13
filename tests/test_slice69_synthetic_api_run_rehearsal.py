@@ -7,6 +7,46 @@ import os
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
+
+from idis.evaluation import synthetic_strict_runtime_rehearsal as rehearsal
+from tests.abac_seed import seed_deal_access
+
+# actor_id from the rehearsal's own api-keys config
+# (see _upload_and_attempt_strict_blocked_run_via_api).
+_SYNTHETIC_RUN_ACTOR_ID = "slice69-synthetic-api-run"
+
+
+@pytest.fixture(autouse=True)
+def _seed_synthetic_deal_access(monkeypatch: Any) -> None:
+    """Grant the synthetic rehearsal actor a deal assignment right after each deal is created.
+
+    The bounded run rehearsal creates its deal inside the shared production helper and then uploads
+    to /documents/upload and posts to /runs - both deal-scoped and, after the Slice98 Task 2.5 ABAC
+    fix, deny-by-default. Deal creation is not reachable from the test to seed inline, so we observe
+    the /v1/deals 201 response through the same TestClient.post seam the rehearsal tests already use
+    and seed via the SAME default store the middleware consults (get_deal_assignment_store, Task
+    2.6). Test-only: no production change, no policy weakening, no side store. The run itself is
+    still expected to be strict-blocked (409 STRICT_FULL_LIVE_BLOCKED) once ABAC passes.
+    """
+    original_post = rehearsal.TestClient.post
+
+    def seeding_post(self: Any, url: str, *args: Any, **kwargs: Any) -> Any:
+        response = original_post(self, url, *args, **kwargs)
+        if url == "/v1/deals" and response.status_code == 201:
+            try:
+                deal_id = response.json()["deal_id"]
+            except (ValueError, KeyError, TypeError):
+                return response
+            seed_deal_access(
+                rehearsal.SYNTHETIC_API_REHEARSAL_TENANT_ID,
+                deal_id,
+                _SYNTHETIC_RUN_ACTOR_ID,
+            )
+        return response
+
+    monkeypatch.setattr(rehearsal.TestClient, "post", seeding_post)
+
 
 def test_synthetic_api_run_rehearsal_requires_explicit_run_permission() -> None:
     """Run-attempt rehearsal must not upload or run without explicit run opt-in."""

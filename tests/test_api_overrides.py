@@ -17,6 +17,7 @@ from idis.api.main import create_app
 from idis.api.routes.deals import clear_deals_store
 from idis.api.routes.overrides import clear_overrides_store
 from idis.audit.sink import InMemoryAuditSink
+from tests.abac_seed import seed_deal_access
 
 TENANT_A_ID = "11111111-1111-1111-1111-111111111111"
 TENANT_B_ID = "22222222-2222-2222-2222-222222222222"
@@ -86,7 +87,12 @@ def deal_id(client: TestClient) -> str:
         headers={"X-IDIS-API-Key": API_KEY_PARTNER_A},
     )
     assert response.status_code == 201
-    return response.json()["deal_id"]
+    did = response.json()["deal_id"]
+    # Task 2.6: PARTNER_A (the deal author) operates on this deal in every relied-on test;
+    # grant its deal-scoped ABAC assignment via the app's default store. The ANALYST RBAC
+    # test uses a different actor and is still denied (by RBAC, before ABAC).
+    seed_deal_access(TENANT_A_ID, did, "partner-a")
+    return did
 
 
 class TestOverridesAPIHappyPath:

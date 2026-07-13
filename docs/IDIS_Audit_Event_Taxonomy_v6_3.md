@@ -123,7 +123,7 @@ Audit events are **append-only** and must be emitted for every mutating operatio
 - `defect.cured` (MEDIUM)
 - `defect.waived` (HIGH)
 
-### 4.6 Deterministic Calculations (Calc‑Sanad)
+### 4.6 Deterministic Calculations (Calc-Sanad)
 - `calc.started` (LOW)
 - `calc.completed` (LOW)
 - `calc.failed` (MEDIUM)
@@ -139,7 +139,7 @@ Audit events are **append-only** and must be emitted for every mutating operatio
 - `debate.utility.awarded` (LOW)
 - `debate.utility.penalized` (MEDIUM)
 
-### 4.8 Muḥāsabah
+### 4.8 Muhasabah
 - `muhasabah.recorded` (LOW)
 - `muhasabah.rejected` (MEDIUM)
 - `muhasabah.override` (HIGH)
@@ -168,10 +168,10 @@ Audit events are **append-only** and must be emitted for every mutating operatio
 - `webhook.delivery.succeeded` (LOW)
 - `webhook.delivery.failed` (MEDIUM)
 
-### 4.12 Prompt Registry (Go-Live §4.4)
-- `prompt.version.promoted` (HIGH) — records version, risk_class, approver, gate_results, evaluation_results_ref, evaluation_results_sha256
-- `prompt.version.rolledback` (HIGH) — records version, reason, actor, rollback_target, incident_ticket_id
-- `prompt.version.retired` (MEDIUM) — records version, reason, actor
+### 4.12 Prompt Registry (Go-Live section 4.4)
+- `prompt.version.promoted` (HIGH) - records version, risk_class, approver, gate_results, evaluation_results_ref, evaluation_results_sha256
+- `prompt.version.rolledback` (HIGH) - records version, reason, actor, rollback_target, incident_ticket_id
+- `prompt.version.retired` (MEDIUM) - records version, reason, actor
 
 ### 4.13 Security Events
 - `auth.login.succeeded` (LOW)
@@ -179,9 +179,35 @@ Audit events are **append-only** and must be emitted for every mutating operatio
 - `auth.mfa.failed` (MEDIUM)
 - `auth.token.revoked` (HIGH)
 - `rbac.denied` (MEDIUM)
+- `rbac.assignment.created` (MEDIUM)
+- `rbac.assignment.deleted` (MEDIUM)
+- `rbac.group.created` (LOW)
+- `rbac.group.member_added` (MEDIUM)
+- `rbac.group.member_removed` (MEDIUM)
+- `rbac.group.assigned` (MEDIUM)
+- `rbac.group.unassigned` (MEDIUM)
 - `tenant.isolation.violation` (CRITICAL)
+- `break_glass.issued` (CRITICAL)
 - `break_glass.used` (CRITICAL)
 - `data.exfiltration.suspected` (CRITICAL)
+
+### 4.14 Compliance Controls (BYOK & Legal Holds)
+- `byok.key.configured` (HIGH)
+- `byok.key.rotated` (HIGH)
+- `byok.key.revoked` (HIGH)
+- `legal_hold.applied` (CRITICAL)
+- `legal_hold.lifted` (CRITICAL)
+
+### 4.15 Retention Enforcement (Compliance Janitor)
+- `retention.sweep.executed` (HIGH) - fail-closed, emitted BEFORE any destructive sweep work;
+  emission failure aborts all destruction for the sweep
+- `retention.sweep.completed` (LOW) - best-effort observability signal with safe-shape counts
+
+### 4.16 Erasure & Compliance Export
+- `erasure.requested` (HIGH) - fail-closed, emitted BEFORE the durable request row is written
+- `erasure.executed` (CRITICAL) - fail-closed, emitted BEFORE any destruction; emission failure
+  aborts the whole execution. Audit events survive erasure with their deal_id references.
+- `export.created` (HIGH) - fail-closed, emitted BEFORE the sanitized bundle is written
 
 ---
 

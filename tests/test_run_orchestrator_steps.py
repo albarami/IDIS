@@ -1,9 +1,9 @@
-"""Tests for RunOrchestrator step ledger — Phase 5 orchestration.
+"""Tests for RunOrchestrator step ledger - Phase 5 orchestration.
 
 Covers:
 - SNAPSHOT records seven steps in order
-  (DATA_ROOM_INVENTORY_PACKAGE → DATA_ROOM_INGESTION_HANDOFF → INGEST_CHECK → DOCUMENT_PREFLIGHT
-  → METHODOLOGY_COVERAGE_INIT → EXTRACT → GRADE → CALC)
+  (DATA_ROOM_INVENTORY_PACKAGE -> DATA_ROOM_INGESTION_HANDOFF -> INGEST_CHECK -> DOCUMENT_PREFLIGHT
+  -> METHODOLOGY_COVERAGE_INIT -> EXTRACT -> GRADE -> CALC)
 - Step errors persisted and returned
 - FULL completes all 12 steps in correct order
 - Cross-tenant run step read returns 404 (no existence leak)
@@ -33,6 +33,7 @@ from idis.persistence.repositories.run_steps import (
     clear_run_steps_store,
 )
 from idis.services.runs.orchestrator import RunContext, RunOrchestrator
+from tests.abac_seed import seed_deal_access
 
 TENANT_A = "11111111-1111-1111-1111-111111111111"
 TENANT_B = "22222222-2222-2222-2222-222222222222"
@@ -911,6 +912,7 @@ class TestCrossTenantRunStepReadReturns404:
         )
         assert create_resp.status_code == 201
         deal_id = create_resp.json()["deal_id"]
+        seed_deal_access(TENANT_A, deal_id, "actor-a")
         app.state.deal_documents[deal_id] = _make_documents()
 
         run_resp = client.post(
@@ -950,6 +952,7 @@ class TestStartRunPreflightCorpusBehavior:
         )
         assert create_resp.status_code == 201
         deal_id = create_resp.json()["deal_id"]
+        seed_deal_access(TENANT_A, deal_id, "actor-a")
 
         run_resp = client.post(
             f"/v1/deals/{deal_id}/runs",
@@ -980,6 +983,7 @@ class TestStartRunPreflightCorpusBehavior:
         )
         assert create_resp.status_code == 201
         deal_id = create_resp.json()["deal_id"]
+        seed_deal_access(TENANT_A, deal_id, "actor-a")
         failed_doc = _make_failed_preflight_document()
         failed_doc["deal_id"] = deal_id
         app.state.deal_documents[deal_id] = [failed_doc]
@@ -1019,6 +1023,7 @@ class TestStartRunPreflightCorpusBehavior:
         )
         assert create_resp.status_code == 201
         deal_id = create_resp.json()["deal_id"]
+        seed_deal_access(TENANT_A, deal_id, "actor-a")
         usable_doc = _make_preflight_document(document_id="doc-usable")
         usable_doc["deal_id"] = deal_id
         usable_doc["spans"][0]["deal_id"] = deal_id
@@ -1064,6 +1069,7 @@ class TestStartRunPreflightCorpusBehavior:
         )
         assert create_resp.status_code == 201
         deal_id = create_resp.json()["deal_id"]
+        seed_deal_access(TENANT_A, deal_id, "actor-a")
         app.state.deal_documents[deal_id] = [_make_preflight_document(document_id="doc-1")]
 
         unknown_resp = client.post(
@@ -1113,6 +1119,7 @@ class TestStartRunPreflightCorpusBehavior:
         )
         assert create_resp.status_code == 201
         deal_id = create_resp.json()["deal_id"]
+        seed_deal_access(TENANT_A, deal_id, "actor-a")
         doc_1 = _make_preflight_document(document_id="doc-1")
         doc_2 = _make_preflight_document(document_id="doc-2")
         for doc in (doc_1, doc_2):
@@ -1149,6 +1156,7 @@ class TestStartRunPreflightCorpusBehavior:
         )
         assert create_resp.status_code == 201
         deal_id = create_resp.json()["deal_id"]
+        seed_deal_access(TENANT_A, deal_id, "actor-a")
         app.state.deal_documents[deal_id] = [_make_preflight_document(document_id="doc-present")]
 
         run_resp = client.post(

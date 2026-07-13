@@ -28,6 +28,7 @@ from sqlalchemy import text
 from idis.api.auth import IDIS_API_KEYS_ENV
 from idis.api.main import create_app
 from idis.persistence.db import set_tenant_local
+from tests.abac_seed import seed_deal_access
 
 if TYPE_CHECKING:
     from sqlalchemy import Engine
@@ -188,6 +189,9 @@ class TestDealsAPIPostgresReadPath:
                     "created_at": now,
                 },
             )
+
+        # Deal-scoped ABAC is deny-by-default: assign the tenant-A actor to read its own deal.
+        seed_deal_access(TENANT_A_ID, deal_id, ACTOR_A_ID)
 
         response = client_with_postgres.get(
             f"/v1/deals/{deal_id}",

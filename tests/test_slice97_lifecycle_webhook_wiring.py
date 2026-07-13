@@ -1,4 +1,4 @@
-"""Slice97 Task 4 — lifecycle webhook wiring + A1 audit-safety.
+"""Slice97 Task 4 - lifecycle webhook wiring + A1 audit-safety.
 
 Drives the REAL shared execution path (``RunExecutionService.execute``, used by both the API and the
 worker) and asserts the best-effort webhook emit is wired at each run lifecycle moment (claimed,
@@ -25,6 +25,7 @@ from idis.persistence.repositories.runs import (
 from idis.services.runs.execution import RunExecutionService
 from idis.services.runs.orchestrator import RunContext
 from idis.services.webhooks import lifecycle as webhook_lifecycle
+from tests.abac_seed import seed_deal_access
 
 _TENANT = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 _DEAL = "dddddddd-dddd-dddd-dddd-dddddddddddd"
@@ -317,6 +318,7 @@ def test_human_gate_action_emits_via_real_route(monkeypatch: pytest.MonkeyPatch)
         headers={"X-IDIS-API-Key": _API_KEY},
     )
     assert deal.status_code == 201
+    seed_deal_access(_GATE_TENANT, deal.json()["deal_id"], "actor-97")
     gate_id = str(uuid_mod.uuid4())
     create_test_gate(
         gate_id=gate_id,
@@ -364,6 +366,7 @@ def test_data_room_package_created_emits_via_real_route(
         headers={"X-IDIS-API-Key": _API_KEY},
     )
     assert deal.status_code == 201
+    seed_deal_access(_GATE_TENANT, deal.json()["deal_id"], "actor-97")
     deal_id = deal.json()["deal_id"]
     app.state.deal_documents[deal_id] = [_corpus_doc(DOC1)]
 

@@ -24,11 +24,16 @@ from idis.persistence.repositories.deals import (
     clear_deals_in_memory_store,
     seed_deal_in_memory,
 )
+from tests.abac_seed import seed_deal_access
 
 TENANT_A_KEY = "test-api-key-tenant-a"
 TENANT_B_KEY = "test-api-key-tenant-b"
 TENANT_A_ID = "00000000-0000-0000-0000-000000000001"
 TENANT_B_ID = "00000000-0000-0000-0000-000000000002"
+
+# Actor id that _make_api_keys_json derives by default for TENANT_A_ID (its api key's actor).
+# Task 2.6: this is the actor seeded onto deals so authorized workflows pass deal-scoped ABAC.
+_ACTOR_A = f"actor-{TENANT_A_ID[:8]}"
 
 
 def _make_api_keys_json(
@@ -174,6 +179,7 @@ class TestListDealDefects:
                 "created_at": "2026-01-10T00:00:00Z",
             }
         )
+        seed_deal_access(TENANT_A_ID, deal_id, _ACTOR_A)  # authorized deal workflow (Task 2.6)
 
         response = client.get(
             f"/v1/deals/{deal_id}/defects",
@@ -186,8 +192,12 @@ class TestListDealDefects:
 
     def test_list_defects_returns_200_empty_for_nonexistent_deal(self, client: TestClient) -> None:
         """GET returns 200 empty for nonexistent deal (tenant isolation - no existence leak)."""
+        deal_id = str(uuid.uuid4())
+        # Task 2.6: authorized same-tenant actor (ABAC allows) so the route's masking
+        # (200 empty for an absent deal, no existence leak) is exercised, not an ABAC denial.
+        seed_deal_access(TENANT_A_ID, deal_id, _ACTOR_A)
         response = client.get(
-            f"/v1/deals/{uuid.uuid4()}/defects",
+            f"/v1/deals/{deal_id}/defects",
             headers={"X-IDIS-API-Key": TENANT_A_KEY},
         )
         # Per TI-001 tenant isolation: return 200 empty, not 404
@@ -213,6 +223,7 @@ class TestCreateDefect:
                 "created_at": "2026-01-10T00:00:00Z",
             }
         )
+        seed_deal_access(TENANT_A_ID, deal_id, _ACTOR_A)  # authorized deal workflow (Task 2.6)
 
         response = client.post(
             f"/v1/deals/{deal_id}/defects",
@@ -245,6 +256,7 @@ class TestCreateDefect:
                 "created_at": "2026-01-10T00:00:00Z",
             }
         )
+        seed_deal_access(TENANT_A_ID, deal_id, _ACTOR_A)  # authorized deal workflow (Task 2.6)
 
         fatal_response = client.post(
             f"/v1/deals/{deal_id}/defects",
@@ -284,8 +296,12 @@ class TestCreateDefect:
 
     def test_create_defect_returns_404_for_nonexistent_deal(self, client: TestClient) -> None:
         """POST returns 404 for nonexistent deal."""
+        deal_id = str(uuid.uuid4())
+        # Task 2.6: authorized same-tenant actor (ABAC allows) so the route's real
+        # deal-not-found path (404) is exercised, not an ABAC denial.
+        seed_deal_access(TENANT_A_ID, deal_id, _ACTOR_A)
         response = client.post(
-            f"/v1/deals/{uuid.uuid4()}/defects",
+            f"/v1/deals/{deal_id}/defects",
             headers={"X-IDIS-API-Key": TENANT_A_KEY},
             json={
                 "defect_type": "BROKEN_CHAIN",

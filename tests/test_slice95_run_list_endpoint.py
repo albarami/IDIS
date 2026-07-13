@@ -1,10 +1,10 @@
-"""Slice95 Task 4 — run-listing endpoint GET /v1/deals/{deal_id}/runs (G4 backend).
+"""Slice95 Task 4 - run-listing endpoint GET /v1/deals/{deal_id}/runs (G4 backend).
 
 A reviewer must be able to enumerate a deal's runs (the monitor entry point) without already
 knowing a run_id. Returns a paginated list of safe run summaries (ids/status/mode/timestamps);
 per-run blocker detail + step ledger stay in GET /v1/runs/{run_id}.
 
-Injected fakes only — no real LLM, no DB (in-memory runs store), no migration (DEC-E).
+Injected fakes only - no real LLM, no DB (in-memory runs store), no migration (DEC-E).
 PYTHONPATH is pinned to this worktree's src for every run.
 """
 
@@ -52,8 +52,16 @@ def _clear_runs() -> Iterator[None]:
 
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    from idis.api.abac import reset_deal_assignment_store
+    from tests.abac_seed import seed_deal_access
+
     monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(_KEYS))
-    return TestClient(create_app(service_region="us-east-1"))
+    reset_deal_assignment_store()
+    tc = TestClient(create_app(service_region="us-east-1"))
+    # authorized reviewer for both constant deals (Task 2.6); GET /v1/deals/{id}/runs is ABAC-gated
+    seed_deal_access(_TENANT_ID, _DEAL_ID, "actor-run-list")
+    seed_deal_access(_TENANT_ID, _OTHER_DEAL_ID, "actor-run-list")
+    return tc
 
 
 def _seed_run(run_id: str, deal_id: str, mode: str) -> None:
@@ -137,8 +145,8 @@ def test_pagination_does_not_drop_rows_with_equal_created_at(client: TestClient)
 
 
 def test_run_list_schemas_static_matches_generated_contract() -> None:
-    # Lock the FULL static-vs-generated contract for the run-list schemas — required, properties,
-    # and additionalProperties — so the YAML source of truth cannot drift from the runtime models.
+    # Lock the FULL static-vs-generated contract for the run-list schemas - required, properties,
+    # and additionalProperties - so the YAML source of truth cannot drift from the runtime models.
     static = load_openapi_spec()["components"]["schemas"]
     generated = create_app().openapi()["components"]["schemas"]
     for schema_name in ("RunListItem", "PaginatedRunList"):

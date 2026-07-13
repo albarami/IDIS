@@ -14,6 +14,7 @@ from idis.api.routes.documents import clear_document_store
 from idis.idempotency.store import SqliteIdempotencyStore
 from idis.models.run_step import StepName
 from tests import test_ingestion_persists_documents_postgres as pg_helpers
+from tests.abac_seed import seed_deal_access
 from tests.test_api_default_upload_ingestion_postgres import _configure_api_key
 
 pytest_plugins = ("tests.test_ingestion_persists_documents_postgres",)
@@ -61,6 +62,8 @@ def test_default_upload_selected_full_run_persists_long_step_name_without_sql_tr
     )
     assert deal_response.status_code == 201
     deal_id = deal_response.json()["deal_id"]
+    # Deal-scoped ABAC is deny-by-default: assign the creating actor to operate on its own deal.
+    seed_deal_access(str(pg_helpers.TENANT_ID), deal_id, pg_helpers.ACTOR_ID)
 
     data = pg_helpers._pdf_bytes()
     upload_response = client.post(

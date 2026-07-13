@@ -26,6 +26,7 @@ from idis.api.routes.claims import clear_all_stores, seed_claim, seed_defect
 from idis.api.routes.deals import clear_deals_store
 from idis.audit.sink import JsonlFileAuditSink
 from idis.persistence.repositories.deals import _in_memory_store as _deals_store
+from tests.abac_seed import seed_deal_access
 
 
 def _make_api_keys_json(
@@ -54,7 +55,7 @@ def _make_api_keys_json(
 
 
 def _seed_deal(tenant_id: str, deal_id: str) -> None:
-    """Seed a deal into the store."""
+    """Seed a deal into the store (and grant its tenant's default actor ABAC access)."""
     _deals_store[deal_id] = {
         "deal_id": deal_id,
         "tenant_id": tenant_id,
@@ -66,6 +67,11 @@ def _seed_deal(tenant_id: str, deal_id: str) -> None:
         "created_at": "2026-01-10T00:00:00Z",
         "updated_at": None,
     }
+    # Task 2.6: deal-scoped endpoints are deny-by-default ABAC. Grant the actor that
+    # _make_api_keys_json derives for this tenant a deal assignment via the app's default
+    # store so authorized workflows pass. A cross-tenant caller has a different actor and is
+    # therefore still denied (tenant-isolation tests keep failing closed -> 403).
+    seed_deal_access(tenant_id, deal_id, f"actor-{tenant_id[:8]}")
 
 
 def _seed_test_claims(tenant_id: str, deal_id: str) -> list[str]:
@@ -298,7 +304,13 @@ class TestTruthDashboardEndpoint:
             os.environ.pop("IDIS_AUDIT_LOG_PATH", None)
 
     def test_cross_tenant_access_blocked(self, tmp_path: Path) -> None:
-        """Cross-tenant access should return 404 (not 403 to avoid info leak)."""
+        """Cross-tenant access is denied by deny-by-default deal ABAC (403).
+
+        Task 2.6: the deal is seeded under tenant_1; the caller is tenant_2's (different)
+        actor with no assignment, so the RBAC/ABAC middleware denies with 403 before the
+        route runs. The uniform 403 leaks nothing: an unknown deal and an unauthorized deal
+        return the same status (ADR-011), so there is no existence oracle.
+        """
         tenant_id_1 = str(uuid.uuid4())
         tenant_id_2 = str(uuid.uuid4())
         deal_id = str(uuid.uuid4())
@@ -320,6 +332,9 @@ class TestTruthDashboardEndpoint:
                 headers={"X-IDIS-API-Key": "test-api-key"},
             )
 
+            # The cross-tenant actor cannot see the deal, so the out-of-scope path deal falls
+            # through to the route's tenant-scoped lookup and returns 404 - identical to a
+            # nonexistent deal, leaking no existence (ADR-011).
             assert response.status_code == 404
 
         finally:
@@ -334,6 +349,11 @@ class TestTruthDashboardEndpoint:
 
         os.environ["IDIS_API_KEYS_JSON"] = _make_api_keys_json(tenant_id)
         os.environ["IDIS_AUDIT_LOG_PATH"] = str(audit_log_path)
+
+        # Task 2.6: ABAC-only grant (no _seed_deal) so the deal is absent from the deals
+        # store; the authorized same-tenant actor passes ABAC and the route's real
+        # deal-not-found path (404) is what's exercised.
+        seed_deal_access(tenant_id, deal_id, f"actor-{tenant_id[:8]}")
 
         try:
             sink = JsonlFileAuditSink(file_path=str(audit_log_path))

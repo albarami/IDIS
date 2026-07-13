@@ -18,6 +18,7 @@ from idis.deliverables.artifact_catalog import MANIFEST_ARTIFACT_TYPE
 from idis.deliverables.generator import DeliverablesGenerator
 from idis.deliverables.product_bundle import ProductBundleExporter
 from idis.storage.filesystem_store import FilesystemObjectStore
+from tests.abac_seed import seed_deal_access
 from tests.test_deliverables_generator import (
     _TIMESTAMP,
     _make_bundle,
@@ -174,6 +175,7 @@ def test_package_surface_verification_walks_manifest_and_downloads_without_leaka
     app = create_app(audit_sink=InMemoryAuditSink(), service_region="me-south-1")
 
     with TestClient(app) as client:
+        seed_deal_access(TENANT_ID, DEAL_ID, "slice66-synthetic-actor")
         report = verify_package_surfaces(
             client=client,
             api_key=API_KEY,
@@ -231,6 +233,7 @@ def test_package_surface_verification_reports_missing_listed_row_without_crashin
     app = create_app(audit_sink=InMemoryAuditSink(), service_region="me-south-1")
 
     with TestClient(app) as client:
+        seed_deal_access(TENANT_ID, DEAL_ID, "slice66-synthetic-actor")
         report = verify_package_surfaces(
             client=client,
             api_key=API_KEY,
@@ -275,6 +278,7 @@ def test_package_surface_verification_reports_download_failure_without_crashing(
     app = create_app(audit_sink=InMemoryAuditSink(), service_region="me-south-1")
 
     with TestClient(app) as client:
+        seed_deal_access(TENANT_ID, DEAL_ID, "slice66-synthetic-actor")
         report = verify_package_surfaces(
             client=client,
             api_key=API_KEY,

@@ -17,6 +17,7 @@ from idis.api.main import create_app
 from idis.api.routes.deals import clear_deals_store
 from idis.api.routes.debate import clear_debates_store
 from idis.audit.sink import InMemoryAuditSink
+from tests.abac_seed import seed_deal_access
 
 TENANT_A_ID = "11111111-1111-1111-1111-111111111111"
 TENANT_B_ID = "22222222-2222-2222-2222-222222222222"
@@ -77,7 +78,9 @@ def deal_id(client: TestClient) -> str:
         headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
     )
     assert response.status_code == 201
-    return response.json()["deal_id"]
+    did = response.json()["deal_id"]
+    seed_deal_access(TENANT_A_ID, did, "actor-a")  # authorized deal workflow (Task 2.6)
+    return did
 
 
 class TestDebateAPIHappyPath:

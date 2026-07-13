@@ -8,6 +8,45 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import pytest
+
+from idis.evaluation import synthetic_strict_runtime_rehearsal as rehearsal
+from tests.abac_seed import seed_deal_access
+
+# actor_id from the rehearsal's own api-keys config (see _upload_selected_gdbs_cases_via_api).
+_SYNTHETIC_UPLOAD_ACTOR_ID = "slice68-synthetic-api-upload"
+
+
+@pytest.fixture(autouse=True)
+def _seed_synthetic_deal_access(monkeypatch: Any) -> None:
+    """Grant the synthetic rehearsal actor a deal assignment right after each deal is created.
+
+    The bounded rehearsal creates its deal inside the shared production helper and then uploads to
+    the deal-scoped /documents/upload endpoint, which after the Slice98 Task 2.5 ABAC fix is
+    deny-by-default. Deal creation is not reachable from the test to seed inline, so we observe the
+    /v1/deals 201 response through the same TestClient.post seam the rehearsal tests already use and
+    seed via the SAME default store the middleware consults (get_deal_assignment_store, Task 2.6).
+    Test-only: no production change, no policy weakening, no side store. Tests that wrap
+    TestClient.post themselves capture this seeding wrapper as their original and delegate to it, so
+    seeding still happens.
+    """
+    original_post = rehearsal.TestClient.post
+
+    def seeding_post(self: Any, url: str, *args: Any, **kwargs: Any) -> Any:
+        response = original_post(self, url, *args, **kwargs)
+        if url == "/v1/deals" and response.status_code == 201:
+            try:
+                deal_id = response.json()["deal_id"]
+            except (ValueError, KeyError, TypeError):
+                return response
+            seed_deal_access(
+                rehearsal.SYNTHETIC_API_REHEARSAL_TENANT_ID,
+                deal_id,
+                _SYNTHETIC_UPLOAD_ACTOR_ID,
+            )
+        return response
+
+    monkeypatch.setattr(rehearsal.TestClient, "post", seeding_post)
 
 
 def test_synthetic_api_upload_rehearsal_requires_explicit_max_cases() -> None:

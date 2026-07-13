@@ -1,7 +1,7 @@
 """Tests for IDIS Documents API endpoints.
 
 Tests cover:
-A) Happy path: createDealDocument → listDealDocuments → ingestDocument
+A) Happy path: createDealDocument -> listDealDocuments -> ingestDocument
 B) Tenant isolation: documents in tenant A not visible to tenant B
 C) Idempotency: same key returns same response, payload mismatch returns 409
 D) Pagination: limit=1 yields next_cursor, second page returns remaining
@@ -24,6 +24,7 @@ from idis.api.routes.deals import clear_deals_store
 from idis.api.routes.documents import clear_document_store
 from idis.audit.sink import InMemoryAuditSink
 from idis.idempotency.store import SqliteIdempotencyStore
+from tests.abac_seed import seed_deal_access
 
 DOCUMENT_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 ARTIFACT_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
@@ -66,9 +67,18 @@ def actor_b_id() -> str:
 
 
 @pytest.fixture
-def deal_id() -> str:
-    """Generate a deal UUID."""
-    return str(uuid.uuid4())
+def deal_id(tenant_a_id: str, actor_a_id: str) -> str:
+    """Generate a deal UUID and seed tenant A's actor as an authorized assignee (Task 2.6).
+
+    Nearly every test drives this deal as authorized tenant A (api_key_a). Deal-scoped ops
+    (createDealDocument / listDealDocuments / getDealDocumentSummary / uploadDealDocument) are now
+    ABAC deny-by-default, so the operating actor must hold an assignment. Seeding here through the
+    app's default store is the direct analog of the reference test_api_runs.py deal_id fixture.
+    Tenant B is never seeded, so cross-tenant tests still (correctly) get 403.
+    """
+    did = str(uuid.uuid4())
+    seed_deal_access(tenant_a_id, did, actor_a_id)
+    return did
 
 
 @pytest.fixture
@@ -739,8 +749,11 @@ class TestTenantIsolation:
         assert response_a.status_code == 200
         assert len(response_a.json()["items"]) == 1
 
+        # Tenant B cannot see Tenant A's deal, so its list falls through to the route and returns
+        # an empty page under Tenant B's RLS - cross-tenant isolation with no existence oracle
+        # (uniform with an empty own-deal and a nonexistent deal, ADR-011).
         assert response_b.status_code == 200
-        assert len(response_b.json()["items"]) == 0
+        assert response_b.json()["items"] == []
 
     def test_ingest_document_from_other_tenant_returns_404(
         self,
@@ -959,7 +972,7 @@ class TestHappyPath:
     def test_create_list_ingest_flow(
         self, client_single_tenant: TestClient, api_key_a: str, deal_id: str
     ) -> None:
-        """Full flow: create document → list shows it → ingest returns RunRef."""
+        """Full flow: create document -> list shows it -> ingest returns RunRef."""
         create_response = client_single_tenant.post(
             f"/v1/deals/{deal_id}/documents",
             headers={
@@ -1671,10 +1684,12 @@ class TestLegalHoldDeleteRealPath:
             registry=hold_registry,
         )
 
-        from idis.compliance import retention as retention_module
+        from idis.compliance.retention import (
+            reset_legal_hold_registry,
+            set_legal_hold_registry,
+        )
 
-        original_registry = retention_module._default_registry
-        retention_module._default_registry = hold_registry
+        set_legal_hold_registry(hold_registry)  # the seam the delete route consults (Task 6)
 
         try:
             delete_resp = client.delete(
@@ -1691,7 +1706,7 @@ class TestLegalHoldDeleteRealPath:
             assert body["code"] == "DELETION_BLOCKED_BY_HOLD"
             assert body["message"] == "Access denied."
         finally:
-            retention_module._default_registry = original_registry
+            reset_legal_hold_registry()
 
     def test_document_delete_succeeds_without_legal_hold(
         self,
@@ -2036,6 +2051,10 @@ class TestBYOKRevokeGetRealPath:
         monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys_config_single))
 
         deal_id = str(uuid.uuid4())
+        # Task 2.6: this test uses a local deal_id (not the seeded fixture). It creates the document
+        # as authorized tenant A via the deal-scoped createDealDocument, so seed that assignment;
+        # the asserted 404 is the route-level DOCUMENT_CONTENT_NOT_FOUND (storage bytes missing).
+        seed_deal_access(tenant_a_id, deal_id, actor_a_id)
         audit_sink = InMemoryAuditSink()
         idem_store = SqliteIdempotencyStore(in_memory=True)
         byok_registry = BYOKPolicyRegistry()

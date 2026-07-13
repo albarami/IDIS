@@ -70,6 +70,23 @@ OPERATION_ID_TO_EVENT_TYPE: dict[str, tuple[str, str, str]] = {
     "generateDeliverable": ("deliverable.requested", "LOW", "deliverable"),
     "createWebhook": ("webhook.created", "MEDIUM", "webhook"),
     "createDataRoomPackage": ("data_room_package.created", "MEDIUM", "data_room_package"),
+    # Slice98 ABAC assignment/group management (mutation audit completeness).
+    "createBreakGlassGrant": ("break_glass.issued", "CRITICAL", "deal"),
+    "configureByokKey": ("byok.key.configured", "HIGH", "byok_key"),
+    "rotateByokKey": ("byok.key.rotated", "HIGH", "byok_key"),
+    "revokeByokKey": ("byok.key.revoked", "HIGH", "byok_key"),
+    "applyLegalHold": ("legal_hold.applied", "CRITICAL", "legal_hold"),
+    "liftLegalHold": ("legal_hold.lifted", "CRITICAL", "legal_hold"),
+    "createErasureRequest": ("erasure.requested", "HIGH", "erasure_request"),
+    "executeErasureRequest": ("erasure.executed", "CRITICAL", "erasure_request"),
+    "createComplianceExport": ("export.created", "HIGH", "compliance_export"),
+    "createDealAssignment": ("rbac.assignment.created", "MEDIUM", "deal"),
+    "deleteDealAssignment": ("rbac.assignment.deleted", "MEDIUM", "deal"),
+    "createGroup": ("rbac.group.created", "LOW", "group"),
+    "addGroupMember": ("rbac.group.member_added", "MEDIUM", "group"),
+    "removeGroupMember": ("rbac.group.member_removed", "MEDIUM", "group"),
+    "assignGroupToDeal": ("rbac.group.assigned", "MEDIUM", "deal"),
+    "unassignGroupFromDeal": ("rbac.group.unassigned", "MEDIUM", "deal"),
 }
 
 

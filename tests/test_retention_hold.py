@@ -1,6 +1,6 @@
 """Tests for retention and legal hold enforcement (v6.3 Task 7.5).
 
-Requirements (per Data Residency Model v6.3 §6):
+Requirements (per Data Residency Model v6.3 section 6):
 - Legal hold apply/lift emits CRITICAL audit events
 - Held items cannot be deleted until hold is lifted
 - All hold actions audited with CRITICAL severity
@@ -46,7 +46,7 @@ class MockAuditSink:
         self.events.append(event)
 
 
-def make_tenant_ctx(tenant_id: str = "tenant-123") -> TenantContext:
+def make_tenant_ctx(tenant_id: str = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa") -> TenantContext:
     """Create a TenantContext for testing."""
     return TenantContext(
         tenant_id=tenant_id,
@@ -103,12 +103,12 @@ class TestApplyHold:
         )
 
         event = sink.events[0]
-        payload = event["payload"]
+        safe = event["payload"]["safe"]  # Task6 audit-core repair: safe-shape payload nesting
 
         assert "Confidential legal investigation" not in str(event)
-        assert "reason_hash" in payload
-        assert "reason_length" in payload
-        assert len(payload["reason_hash"]) == 64
+        assert "reason_hash" in safe
+        assert "reason_length" in safe
+        assert len(safe["reason_hash"]) == 64
 
     def test_audit_failure_blocks_hold(self) -> None:
         """Apply hold fails if audit emission fails."""
@@ -233,20 +233,25 @@ class TestLiftHold:
         assert exc_info.value.code == "HOLD_ALREADY_LIFTED"
 
     def test_cross_tenant_denied(self) -> None:
-        """Lift fails if different tenant."""
+        """Lift of another tenant's hold answers exactly like a nonexistent one (404).
+
+        Task 6: the lookup is tenant-scoped (get_for_tenant / RLS on the durable twin), so a
+        cross-tenant hold_id yields a uniform 404 HOLD_NOT_FOUND - no existence oracle
+        (ADR-011), matching what a Postgres/RLS store can even see.
+        """
         registry = LegalHoldRegistry()
         sink = MockAuditSink()
 
-        ctx1 = make_tenant_ctx("tenant-1")
-        ctx2 = make_tenant_ctx("tenant-2")
+        ctx1 = make_tenant_ctx("11111111-1111-1111-1111-111111111111")
+        ctx2 = make_tenant_ctx("22222222-2222-2222-2222-222222222222")
 
         hold = apply_hold(ctx1, HoldTarget.DEAL, "deal-123", "Legal reason", sink, registry)
 
         with pytest.raises(IdisHttpError) as exc_info:
             lift_hold(ctx2, hold.hold_id, sink, registry)
 
-        assert exc_info.value.status_code == 403
-        assert exc_info.value.code == "ACCESS_DENIED"
+        assert exc_info.value.status_code == 404
+        assert exc_info.value.code == "HOLD_NOT_FOUND"
 
 
 class TestBlockDeletionIfHeld:
@@ -305,8 +310,8 @@ class TestBlockDeletionIfHeld:
         registry = LegalHoldRegistry()
         sink = MockAuditSink()
 
-        ctx1 = make_tenant_ctx("tenant-1")
-        ctx2 = make_tenant_ctx("tenant-2")
+        ctx1 = make_tenant_ctx("11111111-1111-1111-1111-111111111111")
+        ctx2 = make_tenant_ctx("22222222-2222-2222-2222-222222222222")
 
         apply_hold(ctx1, HoldTarget.DEAL, "deal-123", "Reason", sink, registry)
 

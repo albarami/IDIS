@@ -44,7 +44,7 @@ class MockAuditSink:
         self.events.append(event)
 
 
-def make_tenant_ctx(tenant_id: str = "tenant-123") -> TenantContext:
+def make_tenant_ctx(tenant_id: str = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa") -> TenantContext:
     """Create a TenantContext for testing."""
     return TenantContext(
         tenant_id=tenant_id,
@@ -177,11 +177,11 @@ class TestConfigureKey:
         configure_key(ctx, "super-secret-key", sink, registry)
 
         event = sink.events[0]
-        payload = event["payload"]
+        safe = event["payload"]["safe"]  # Task6 audit-core repair: safe-shape payload nesting
         assert "super-secret-key" not in str(event)
-        assert "key_alias_hash" in payload
-        assert "key_alias_length" in payload
-        assert payload["key_alias_length"] == len("super-secret-key")
+        assert "key_alias_hash" in safe
+        assert "key_alias_length" in safe
+        assert safe["key_alias_length"] == len("super-secret-key")
 
 
 class TestRotateKey:
@@ -269,7 +269,7 @@ class TestRevokeKey:
         assert len(sink.events) == 1
         event = sink.events[0]
         assert event["event_type"] == "byok.key.revoked"
-        assert event["payload"]["key_state"] == "REVOKED"
+        assert event["payload"]["safe"]["key_state"] == "REVOKED"
 
     def test_revoke_fails_without_existing_key(self) -> None:
         """Revocation fails if no existing key configured."""
@@ -431,14 +431,14 @@ class TestBYOKPolicyRegistry:
         registry = BYOKPolicyRegistry()
         sink = MockAuditSink()
 
-        ctx1 = make_tenant_ctx("tenant-1")
-        ctx2 = make_tenant_ctx("tenant-2")
+        ctx1 = make_tenant_ctx("11111111-1111-1111-1111-111111111111")
+        ctx2 = make_tenant_ctx("22222222-2222-2222-2222-222222222222")
 
         configure_key(ctx1, "key-1", sink, registry)
         configure_key(ctx2, "key-2", sink, registry)
 
-        assert registry.get("tenant-1").key_alias == "key-1"
-        assert registry.get("tenant-2").key_alias == "key-2"
+        assert registry.get("11111111-1111-1111-1111-111111111111").key_alias == "key-1"
+        assert registry.get("22222222-2222-2222-2222-222222222222").key_alias == "key-2"
 
     def test_clear(self) -> None:
         """Clear removes all policies."""

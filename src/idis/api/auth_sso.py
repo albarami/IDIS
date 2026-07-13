@@ -531,6 +531,78 @@ def _validate_idis_claims(payload: dict[str, Any]) -> SsoIdentity:
     )
 
 
+IDIS_REQUIRE_MFA_ENV = "IDIS_REQUIRE_MFA"
+IDIS_MFA_AMR_VALUES_ENV = "IDIS_MFA_AMR_VALUES"
+DEFAULT_MFA_AMR_VALUES = frozenset({"mfa"})
+_MFA_FLAG_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+class MfaRequiredError(IdisHttpError):
+    """401 denial: the validated token carries no accepted MFA proof (fail-closed).
+
+    Carries ONLY safe identifiers (tenant_id / actor_id) as plain attributes so the request
+    boundary can attribute the ``auth.mfa.failed`` audit event. They are deliberately NOT placed
+    in ``details``, which serializes into the error response envelope.
+    """
+
+    def __init__(self, *, tenant_id: str, actor_id: str) -> None:
+        super().__init__(
+            status_code=401,
+            code="mfa_required",
+            message="Multi-factor authentication required",
+        )
+        self.tenant_id = tenant_id
+        self.actor_id = actor_id
+
+
+def is_mfa_required() -> bool:
+    """True when IDIS must verify IdP-issued MFA proof on Bearer/JWT auth (default off).
+
+    MFA itself is enforced at the IdP (docs: "MFA enforced via IdP (MUST)"); IDIS verifies the
+    proof only. API-key (SERVICE) auth never goes through JWT validation and is unaffected.
+    """
+    return os.environ.get(IDIS_REQUIRE_MFA_ENV, "").strip().lower() in _MFA_FLAG_TRUTHY
+
+
+def get_accepted_amr_values() -> frozenset[str]:
+    """Accepted RFC 8176 ``amr`` values that prove MFA (normalized lowercase).
+
+    Unset env means the default ``{"mfa"}``. A set env REPLACES the default entirely (so IdPs
+    that emit method tokens like otp/hwk/fido can be accommodated); if it parses to an empty set
+    (config error), MFA verification denies everything - fail closed, never an implicit default.
+    """
+    raw = os.environ.get(IDIS_MFA_AMR_VALUES_ENV)
+    if raw is None:
+        return DEFAULT_MFA_AMR_VALUES
+    return frozenset(value.strip().lower() for value in raw.split(",") if value.strip())
+
+
+def _enforce_mfa_proof(payload: dict[str, Any], identity: SsoIdentity) -> None:
+    """Deny (401 mfa_required) unless the token's ``amr`` proves MFA; no-op when the flag is off.
+
+    Fail-closed matrix: missing ``amr``, non-array ``amr``, an empty accepted set, or no
+    intersection with the accepted values all raise. Log lines are content-free by design: never
+    the token, raw claims, or the ``amr`` array itself.
+    """
+    if not is_mfa_required():
+        return
+
+    accepted = get_accepted_amr_values()
+    if not accepted:
+        logger.warning("MFA denial (fail-closed): configured accepted amr set is empty")
+        raise MfaRequiredError(tenant_id=identity.tenant_id, actor_id=identity.user_id)
+
+    amr = payload.get("amr")
+    if not isinstance(amr, list):
+        logger.warning("MFA denial (fail-closed): token amr claim missing or not an array")
+        raise MfaRequiredError(tenant_id=identity.tenant_id, actor_id=identity.user_id)
+
+    methods = {entry.strip().lower() for entry in amr if isinstance(entry, str)}
+    if not methods & accepted:
+        logger.warning("MFA denial (fail-closed): token amr has no accepted MFA method")
+        raise MfaRequiredError(tenant_id=identity.tenant_id, actor_id=identity.user_id)
+
+
 def validate_jwt(token: str, config: OidcConfig | None = None) -> SsoIdentity:
     """Validate a JWT and extract IDIS identity.
 
@@ -541,6 +613,7 @@ def validate_jwt(token: str, config: OidcConfig | None = None) -> SsoIdentity:
     4. Verify signature (fail on mismatch)
     5. Validate standard claims (iss, aud, exp, nbf)
     6. Validate and extract IDIS claims
+    7. Verify IdP-issued MFA proof (amr) when IDIS_REQUIRE_MFA is enabled
 
     Args:
         token: The raw JWT string (without "Bearer " prefix).
@@ -591,6 +664,8 @@ def validate_jwt(token: str, config: OidcConfig | None = None) -> SsoIdentity:
         policy_tags=identity.policy_tags,
         token_hash=token_hash,
     )
+
+    _enforce_mfa_proof(payload, identity)
 
     return identity
 

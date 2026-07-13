@@ -18,6 +18,7 @@ Middleware ordering (in main.py):
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections.abc import Awaitable, Callable
 
@@ -37,6 +38,10 @@ from idis.api.break_glass import (
     extract_break_glass_token,
     validate_actor_binding,
     validate_break_glass_token,
+)
+from idis.api.break_glass_grants import (
+    get_break_glass_grant_store,
+    is_durable_break_glass_enabled,
 )
 from idis.api.error_model import make_error_response_no_request
 from idis.api.errors import IdisHttpError
@@ -283,7 +288,52 @@ class RBACMiddleware(BaseHTTPMiddleware):
         )
 
         if abac_decision.allow:
-            if break_glass_valid and break_glass_token:
+            # Durable single-use consumption (flag-gated): burn the grant ONLY when the token
+            # actually supplied the override (ALLOWED_BREAK_GLASS) - an actor already allowed by
+            # assignment must not consume a grant merely by presenting a token. Consume BEFORE the
+            # CRITICAL audit: if the audit then fails, the request is denied and the grant stays
+            # burned (re-issuing is cheap; unaudited access is not).
+            if (
+                abac_decision.code == AbacDecisionCode.ALLOWED_BREAK_GLASS
+                and break_glass_token_str
+                and is_durable_break_glass_enabled()
+            ):
+                token_sha256 = hashlib.sha256(break_glass_token_str.encode("utf-8")).hexdigest()
+                try:
+                    consumed = get_break_glass_grant_store().consume_grant(
+                        tenant_ctx.tenant_id, token_sha256, request_id=request_id
+                    )
+                except IdisHttpError as e:
+                    logger.error(
+                        "Break-glass grant consumption failed closed: %s",
+                        e.code,
+                        extra={"request_id": request_id},
+                    )
+                    return make_error_response_no_request(
+                        code=e.code,
+                        message=e.message,
+                        http_status=e.status_code,
+                        request_id=request_id,
+                        details=None,
+                    )
+                if not consumed:
+                    # Unknown, already-consumed, or expired grant: uniform denial (no oracle).
+                    logger.warning(
+                        "Break-glass denied: no consumable grant for presented token",
+                        extra={"request_id": request_id},
+                    )
+                    return make_error_response_no_request(
+                        code="BREAK_GLASS_GRANT_INVALID",
+                        message="Break-glass denied",
+                        http_status=403,
+                        request_id=request_id,
+                        details=None,
+                    )
+
+            # CRITICAL break_glass.used is keyed on the SAME condition as consumption: the token
+            # actually supplied the override (ALLOWED_BREAK_GLASS). An actor already allowed by
+            # assignment who merely presents a token gets no "used" event - none happened.
+            if abac_decision.code == AbacDecisionCode.ALLOWED_BREAK_GLASS and break_glass_token:
                 already_emitted = getattr(request.state, "break_glass_audit_emitted", False)
                 if not already_emitted:
                     try:
@@ -397,14 +447,21 @@ class RBACMiddleware(BaseHTTPMiddleware):
             if value is not None and isinstance(value, str) and value.strip():
                 result[policy_name] = value.strip()
 
-        # Fallback: parse URL path directly for claim_id/run_id when not found in path_params
-        # This is needed because BaseHTTPMiddleware runs before route matching,
-        # and scoped operations need resource IDs for the resource→deal resolver.
-        # Note: We only extract claim_id/run_id here, not deal_id, to avoid breaking
-        # ABAC enforcement on deal endpoints that rely on path_params being
-        # properly populated by the router.
+        # Fallback: parse well-formed resource UUIDs directly from the URL path. Starlette
+        # BaseHTTPMiddleware runs before route matching, so request.path_params is empty here;
+        # without this, deal-, claim-, and run-scoped ABAC would silently never trigger for plain
+        # path endpoints. Only well-formed UUIDs match, so malformed ids fall through (fail closed:
+        # the route returns 404/422, never an ABAC bypass of a real resource). Whether ABAC runs is
+        # still gated by the operation's policy (is_deal_scoped / claim- / run-scoped), so
+        # non-deal-scoped routes on deal sub-paths (e.g. the ADMIN-only assignment-management
+        # routes) are unaffected by the deal_id fallback.
         path = request.url.path
         uuid_pattern = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+        if result["deal_id"] is None:
+            # Match /v1/deals/{uuid} or /v1/deals/{uuid}/...
+            deal_match = re.search(rf"/v1/deals/({uuid_pattern})", path, re.IGNORECASE)
+            if deal_match:
+                result["deal_id"] = deal_match.group(1)
         if result["claim_id"] is None:
             # Match /v1/claims/{uuid} or /v1/claims/{uuid}/...
             claim_match = re.search(rf"/v1/claims/({uuid_pattern})", path, re.IGNORECASE)

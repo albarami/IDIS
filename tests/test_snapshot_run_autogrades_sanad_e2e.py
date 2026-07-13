@@ -1,6 +1,6 @@
 """E2E test: SNAPSHOT run auto-grades Sanad for extracted claims [P3-T01].
 
-Full flow: create deal → create doc → ingest → start SNAPSHOT run.
+Full flow: create deal -> create doc -> ingest -> start SNAPSHOT run.
 Asserts:
 - Claims exist after extraction
 - Sanads exist for those claims
@@ -24,6 +24,7 @@ from idis.persistence.repositories.claims import (
     InMemorySanadsRepository,
     clear_all_claims_stores,
 )
+from tests.abac_seed import seed_deal_access
 
 TENANT_A_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 TENANT_B_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
@@ -76,7 +77,13 @@ def _create_deal(client: TestClient, api_key: str) -> str:
         headers={"X-IDIS-API-Key": api_key},
     )
     assert resp.status_code in (200, 201), f"Deal creation failed: {resp.text}"
-    return resp.json()["deal_id"]
+    deal_id = resp.json()["deal_id"]
+    _tenant, _actor = {
+        "key-tenant-a": (TENANT_A_ID, "actor-e2e-a"),
+        "key-tenant-b": (TENANT_B_ID, "actor-e2e-b"),
+    }[api_key]
+    seed_deal_access(_tenant, deal_id, _actor)  # the creator is authorized on their own deal
+    return deal_id
 
 
 def _inject_snapshot_documents(
@@ -161,27 +168,21 @@ class TestSnapshotRunAutogradesSanadE2E:
         )
         assert resp_a.status_code == 202
 
-        # Tenant B: cannot see Tenant A's sanads (404 = no existence leak)
+        # Tenant B: unassigned cross-tenant deal-scoped read is ABAC-denied (403).
         sanads_resp_b = client.get(
             f"/v1/deals/{deal_id_a}/sanads",
             headers={"X-IDIS-API-Key": "key-tenant-b"},
         )
-        if sanads_resp_b.status_code == 200:
-            assert sanads_resp_b.json()["items"] == []
-        else:
-            assert sanads_resp_b.status_code == 404
+        # cross-tenant (unassigned) deal-scoped read is ABAC-denied before the route (Task 2.5)
+        assert sanads_resp_b.status_code == 403
 
-        # Tenant B: cannot see Tenant A's claims (404 = no existence leak)
         claims_resp_b = client.get(
             f"/v1/deals/{deal_id_a}/claims",
             headers={"X-IDIS-API-Key": "key-tenant-b"},
         )
-        if claims_resp_b.status_code == 200:
-            assert claims_resp_b.json()["items"] == []
-        else:
-            assert claims_resp_b.status_code == 404
+        assert claims_resp_b.status_code == 403
 
-        # Tenant A's sanads repo is scoped — B's repo sees nothing
+        # Tenant A's sanads repo is scoped - B's repo sees nothing
         repo_b = InMemorySanadsRepository(TENANT_B_ID)
         sanads_b, _ = repo_b.list_by_deal(deal_id_a)
         assert sanads_b == []

@@ -30,9 +30,9 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | TI-001 |
 | **Requirement** | No cross-tenant querying; out-of-scope refs treated as unknown |
-| **Source Doc** | Security Threat Model §6; Data Residency §4; API Contracts §2.3 |
+| **Source Doc** | Security Threat Model section 6; Data Residency section 4; API Contracts section 2.3 |
 | **Source Section** | "Multi-Tenant Isolation Model", "Tenant-level Data Region" |
-| **Enforcing Component** | `src/idis/api/middleware/tenant.py` — TenantContextMiddleware |
+| **Enforcing Component** | `src/idis/api/middleware/tenant.py` - TenantContextMiddleware |
 | **Secondary Enforcement** | PostgreSQL RLS policies; Object store prefix IAM; Cache tenant-keying |
 | **Tests** | `tests/test_api_tenancy_auth.py::test_tenant_isolation` |
 | | `tests/test_tenant_rls.py::test_cross_tenant_query_blocked` |
@@ -49,9 +49,9 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | AI-001 |
 | **Requirement** | Audit coverage 100% for mutation endpoints; audit logs are append-only |
-| **Source Doc** | Audit Taxonomy §2; SLO §3.5; Security Threat Model §9 |
+| **Source Doc** | Audit Taxonomy section 2; SLO section 3.5; Security Threat Model section 9 |
 | **Source Section** | "Core Requirements (Non-negotiable)", "Trust-Invariant SLOs" |
-| **Enforcing Component** | `src/idis/api/middleware/audit.py` — AuditMiddleware |
+| **Enforcing Component** | `src/idis/api/middleware/audit.py` - AuditMiddleware |
 | **Secondary Enforcement** | Append-only database table; WORM storage (enterprise) |
 | **Tests** | `tests/test_audit_coverage.py::test_all_mutations_emit_audit` |
 | | `tests/test_audit_immutability.py::test_audit_no_update` |
@@ -68,10 +68,10 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | NFF-001 |
 | **Requirement** | Any factual statement in IC-bound outputs must reference claim_id or calc_id |
-| **Source Doc** | TDD §1.1, §4.4; API Contracts §2.1; Evaluation Harness §6.1 |
+| **Source Doc** | TDD section 1.1, section 4.4; API Contracts section 2.1; Evaluation Harness section 6.1 |
 | **Source Section** | "Non-Negotiable Invariants", "No-Free-Facts Validator" |
-| **Enforcing Component** | `src/idis/validators/no_free_facts.py` — NoFreeFacts validator |
-| **Secondary Enforcement** | Deliverable export gate; Muḥāsabah validator check |
+| **Enforcing Component** | `src/idis/validators/no_free_facts.py` - NoFreeFacts validator |
+| **Secondary Enforcement** | Deliverable export gate; Muhasabah validator check |
 | **Tests** | `tests/test_no_free_facts.py::test_rejects_unlinked_fact` |
 | | `tests/test_no_free_facts.py::test_accepts_linked_fact` |
 | | `tests/test_no_free_facts.py::test_subjective_allowed` |
@@ -82,16 +82,16 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 
 ---
 
-### 1.4 Muḥāsabah Deterministic Validator
+### 1.4 Muhasabah Deterministic Validator
 
 | Attribute | Value |
 |-----------|-------|
 | **Requirement ID** | MUH-001 |
-| **Requirement** | Every agent output must include valid MuḥāsabahRecord; validator rejects invalid |
-| **Source Doc** | TDD §4.4; Data Model §7.2; Evaluation Harness §6.2 |
-| **Source Section** | "MuḥāsabahRecord — Normative Output Contract", "Muḥāsabah Validator" |
-| **Enforcing Component** | `src/idis/validators/muhasabah.py` — MuhasabahValidator |
-| **Secondary Enforcement** | `src/idis/debate/muhasabah_gate.py` — MuhasabahGate (output boundary); `src/idis/debate/orchestrator.py` — gate enforcement point |
+| **Requirement** | Every agent output must include valid MuhasabahRecord; validator rejects invalid |
+| **Source Doc** | TDD section 4.4; Data Model section 7.2; Evaluation Harness section 6.2 |
+| **Source Section** | "MuhasabahRecord - Normative Output Contract", "Muhasabah Validator" |
+| **Enforcing Component** | `src/idis/validators/muhasabah.py` - MuhasabahValidator |
+| **Secondary Enforcement** | `src/idis/debate/muhasabah_gate.py` - MuhasabahGate (output boundary); `src/idis/debate/orchestrator.py` - gate enforcement point |
 | **Tests** | `tests/test_muhasabah_validator.py::test_rejects_empty_claim_ids` |
 | | `tests/test_muhasabah_validator.py::test_rejects_overconfident_no_uncertainty` |
 | | `tests/test_muhasabah_validator.py::test_rejects_missing_falsifiability` |
@@ -106,7 +106,7 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | **Phase Gate** | Phase 5.2 (debate gate); mandatory before any IC output |
 | **Evidence Artifact** | `muhasabah.recorded` event; `muhasabah.rejected` event with rejection reasons |
 | **Violation Severity** | SEV-2 (rejection); SEV-1 (bypass) |
-| **Implementation Status** | ✅ Gate enforced at output boundary (Phase 5.2)
+| **Implementation Status** | [x] Gate enforced at output boundary (Phase 5.2)
 
 **Validator Rules (Normative):**
 | Rule | Condition | Action |
@@ -123,10 +123,10 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | DN-001 |
 | **Requirement** | All numeric metrics from deterministic engines; reproducibility hash must match for identical inputs |
-| **Source Doc** | TDD §1.1; Implementation Plan §1; Tech Stack §1.4; SLO §3.5 |
+| **Source Doc** | TDD section 1.1; Implementation Plan section 1; Tech Stack section 1.4; SLO section 3.5 |
 | **Source Section** | "Zero Numerical Hallucination", "Deterministic Engines" |
-| **Enforcing Component** | `src/idis/calc/engine.py` — CalcEngine |
-| **Secondary Enforcement** | `src/idis/models/calc_sanad.py` — CalcSanad model with formula_hash |
+| **Enforcing Component** | `src/idis/calc/engine.py` - CalcEngine |
+| **Secondary Enforcement** | `src/idis/models/calc_sanad.py` - CalcSanad model with formula_hash |
 | **Tests** | `tests/test_calc_reproducibility.py::test_same_inputs_same_hash` |
 | | `tests/test_calc_reproducibility.py::test_formula_hash_stable` |
 | | `tests/test_calc_sanad.py::test_provenance_complete` |
@@ -134,7 +134,7 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | **Evidence Artifact** | `CalcSanad` record with formula_hash, code_version, reproducibility_hash; `calc.completed` audit event |
 | **Violation Severity** | SEV-2 |
 
-**SLO Target:** ≥ 99.9% reproducibility (failures ≤ 0.1%)
+**SLO Target:** >= 99.9% reproducibility (failures <= 0.1%)
 
 ---
 
@@ -144,19 +144,19 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | FC-001 |
 | **Requirement** | All validators, auth, tenant scoping, audit logging must fail closed |
-| **Source Doc** | TDD §10; Global Rules §3.3 |
+| **Source Doc** | TDD section 10; Global Rules section 3.3 |
 | **Source Section** | "Implementation Notes", "Fail Closed Rule" |
 | **Enforcing Component** | All validator classes; middleware; auth handlers |
 | **Secondary Enforcement** | Default deny in RBAC; extraction gate (`src/idis/validators/extraction_gate.py`) |
 | **Tests** | `tests/test_fail_closed.py::test_auth_fails_closed` |
 | | `tests/test_fail_closed.py::test_tenant_fails_closed` |
 | | `tests/test_fail_closed.py::test_validator_fails_closed` |
-| | `tests/test_extraction_gate.py::test_low_confidence_blocked` ✅ |
-| | `tests/test_extraction_gate.py::test_missing_values_fail_closed` ✅ |
+| | `tests/test_extraction_gate.py::test_low_confidence_blocked` [x] |
+| | `tests/test_extraction_gate.py::test_missing_values_fail_closed` [x] |
 | **Phase Gate** | All phases (from Phase 0) |
 | **Evidence Artifact** | Rejection events with explicit deny reason; `rbac.denied` audit events |
 | **Violation Severity** | Depends on context (SEV-1 for auth/tenant; SEV-2 for validators) |
-| **Implementation Status** | ✅ Extraction gate implemented (Phase 4.2) |
+| **Implementation Status** | [x] Extraction gate implemented (Phase 4.2) |
 
 ---
 
@@ -168,10 +168,10 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | SAN-001 |
 | **Requirement** | Every material claim has Sanad object with transmission_chain, grade, defects |
-| **Source Doc** | TDD §4.2, §5.1; Data Model §3.4; Requirements §3 |
+| **Source Doc** | TDD section 4.2, section 5.1; Data Model section 3.4; Requirements section 3 |
 | **Source Section** | "Sanad (Claim-Level)", "Claim Sanad Grade Algorithm" |
-| **Enforcing Component** | `src/idis/services/sanad/grader.py` — SanadGrader |
-| **Secondary Enforcement** | `src/idis/models/sanad.py` — Sanad model |
+| **Enforcing Component** | `src/idis/services/sanad/grader.py` - SanadGrader |
+| **Secondary Enforcement** | `src/idis/models/sanad.py` - Sanad model |
 | **Tests** | `tests/test_sanad_grade_algorithm.py::test_base_grade_min` |
 | | `tests/test_sanad_grade_algorithm.py::test_fatal_defect_forces_d` |
 | | `tests/test_sanad_grade_algorithm.py::test_major_downgrades` |
@@ -188,7 +188,7 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | min=A, AHAD_1, MAJOR(INCONSISTENCY) | B |
 | min=B, MUTAWATIR, FATAL(BROKEN_CHAIN) | D |
 | min=C, NONE, no defects | C |
-| min=B, AHAD_2, MAJOR×2 | D |
+| min=B, AHAD_2, MAJORx2 | D |
 
 ---
 
@@ -197,10 +197,10 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | Attribute | Value |
 |-----------|-------|
 | **Requirement ID** | SAN-002 |
-| **Requirement** | Mutawātir requires ≥3 independent sources; independence uses upstream_origin_id |
-| **Source Doc** | TDD §5.2; Data Model §4.3 |
-| **Source Section** | "Independence Rules for Corroboration (Mutawātir)" |
-| **Enforcing Component** | `src/idis/services/sanad/independence.py` — IndependenceChecker |
+| **Requirement** | Mutawatir requires >=3 independent sources; independence uses upstream_origin_id |
+| **Source Doc** | TDD section 5.2; Data Model section 4.3 |
+| **Source Section** | "Independence Rules for Corroboration (Mutawatir)" |
+| **Enforcing Component** | `src/idis/services/sanad/independence.py` - IndependenceChecker |
 | **Tests** | `tests/test_independence_rules.py::test_same_origin_not_independent` |
 | | `tests/test_independence_rules.py::test_mutawatir_requires_three` |
 | | `tests/test_independence_rules.py::test_chain_overlap_not_independent` |
@@ -223,10 +223,10 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | DEF-001 |
 | **Requirement** | Defects created with type, severity, cure protocol; FATAL forces grade D |
-| **Source Doc** | TDD §4.3; Data Model §3.4, §5.1, §6.3 |
-| **Source Section** | "Defect (ʿIlal-Inspired)", "Defects (normalized)" |
-| **Enforcing Component** | `src/idis/services/defects/service.py` — DefectService |
-| **Secondary Enforcement** | `src/idis/models/defect.py` — Defect model |
+| **Source Doc** | TDD section 4.3; Data Model section 3.4, section 5.1, section 6.3 |
+| **Source Section** | "Defect ('Ilal-Inspired)", "Defects (normalized)" |
+| **Enforcing Component** | `src/idis/services/defects/service.py` - DefectService |
+| **Secondary Enforcement** | `src/idis/models/defect.py` - Defect model |
 | **Tests** | `tests/test_defect_severity.py::test_fatal_types` |
 | | `tests/test_defect_severity.py::test_major_types` |
 | | `tests/test_defect_severity.py::test_minor_types` |
@@ -252,9 +252,9 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | API-001 |
 | **Requirement** | POST/PATCH endpoints accept Idempotency-Key; same key returns stored response |
-| **Source Doc** | OpenAPI IdempotencyKey parameter; API Contracts §4.1 |
+| **Source Doc** | OpenAPI IdempotencyKey parameter; API Contracts section 4.1 |
 | **Source Section** | "Idempotency & Retries" |
-| **Enforcing Component** | `src/idis/api/middleware/idempotency.py` — IdempotencyMiddleware |
+| **Enforcing Component** | `src/idis/api/middleware/idempotency.py` - IdempotencyMiddleware |
 | **Tests** | `tests/test_idempotency.py::test_replay_returns_stored` |
 | | `tests/test_idempotency.py::test_different_payload_409` |
 | **Phase Gate** | Phase 2.5 |
@@ -268,9 +268,9 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | API-002 |
 | **Requirement** | All errors return JSON with code, message, details, request_id |
-| **Source Doc** | OpenAPI Error schema; API Contracts §8 |
+| **Source Doc** | OpenAPI Error schema; API Contracts section 8 |
 | **Source Section** | "Error Model (Normative)" |
-| **Enforcing Component** | `src/idis/api/errors.py` — ErrorHandler |
+| **Enforcing Component** | `src/idis/api/errors.py` - ErrorHandler |
 | **Tests** | `tests/test_error_model.py::test_400_matches_schema` |
 | | `tests/test_error_model.py::test_401_matches_schema` |
 | | `tests/test_error_model.py::test_500_matches_schema` |
@@ -285,9 +285,9 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | API-003 |
 | **Requirement** | Rate limits enforced: 600 req/min/tenant (user), 1200 req/min/tenant (integration) |
-| **Source Doc** | API Contracts §4.3 |
+| **Source Doc** | API Contracts section 4.3 |
 | **Source Section** | "Rate Limits (Default)" |
-| **Enforcing Component** | `src/idis/api/middleware/rate_limit.py` — RateLimitMiddleware |
+| **Enforcing Component** | `src/idis/api/middleware/rate_limit.py` - RateLimitMiddleware |
 | **Tests** | `tests/test_rate_limiting.py::test_user_limit_enforced` |
 | | `tests/test_rate_limiting.py::test_429_returned` |
 | **Phase Gate** | Phase 2.7 |
@@ -301,16 +301,16 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | WH-001 |
 | **Requirement** | Webhooks signed with HMAC; retries 10 attempts over 24 hours |
-| **Source Doc** | OpenAPI /v1/webhooks; API Contracts §6 |
+| **Source Doc** | OpenAPI /v1/webhooks; API Contracts section 6 |
 | **Source Section** | "Webhooks (Outbound Eventing)" |
-| **Enforcing Component** | `src/idis/services/webhooks/dispatcher.py` — WebhookDispatcher (signs via `signing.py`, retries via `retry.py`, drains the `webhook_delivery_attempts` outbox) |
+| **Enforcing Component** | `src/idis/services/webhooks/dispatcher.py` - WebhookDispatcher (signs via `signing.py`, retries via `retry.py`, drains the `webhook_delivery_attempts` outbox) |
 | **Tests** | `tests/test_webhook_signing.py::test_hmac_correct` |
 | | `tests/test_webhook_retry.py::test_exponential_backoff` |
 | | `tests/test_slice97_webhook_dispatcher.py` (sign + deliver + retry + exhaustion) |
 | | `tests/test_slice97_webhook_dispatcher_postgres.py` (RLS secret load, no double-delivery) |
 | **Phase Gate** | Phase 2.8 |
 | **Evidence Artifact** | `webhook.delivery.succeeded/failed` audit events |
-| **Implementation Status** | ✅ Delivered (Slice97) — durable outbox + signed dispatch + delivery audit/metrics |
+| **Implementation Status** | [x] Delivered (Slice97) - durable outbox + signed dispatch + delivery audit/metrics |
 
 ---
 
@@ -322,13 +322,13 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | DR-001 |
 | **Requirement** | Tenant data stays in assigned region; cross-region operations forbidden by default |
-| **Source Doc** | Data Residency §3-4 |
+| **Source Doc** | Data Residency section 3-4 |
 | **Source Section** | "Tenant-level Data Region", "Storage Residency Rules" |
-| **Enforcing Component** | `src/idis/models/tenant.py` — data_region field |
-| **Secondary Enforcement** | Object store prefix per region; RLS with region checks |
-| **Tests** | `tests/test_data_residency.py::test_region_enforced` |
-| | `tests/test_data_residency.py::test_cross_region_blocked` |
-| **Phase Gate** | Phase 7 (full); Phase 2 (field present) |
+| **Enforcing Component** | `src/idis/compliance/residency.py` (`enforce_residency`); durable `tenants.data_region` (migration 0027); `middleware/residency.py` |
+| **Secondary Enforcement** | Flag-gated durable source of truth (`IDIS_ENABLE_DURABLE_RESIDENCY`); fail-closed 403 on missing/mismatch |
+| **Tests** | `tests/test_data_residency.py` |
+| | `tests/test_slice98_durable_residency.py`, `tests/test_slice98_durable_residency_postgres.py` |
+| **Phase Gate** | Phase 7 (Slice98: durable source of truth) |
 | **Evidence Artifact** | Tenant config; region metadata in storage |
 
 ---
@@ -339,9 +339,9 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | BYOL-001 |
 | **Requirement** | Enrichment data stored with provider, license_type, tenant_id; no cross-tenant redistribution |
-| **Source Doc** | Data Residency §7 |
+| **Source Doc** | Data Residency section 7 |
 | **Source Section** | "BYOL Provider Licensing Controls" |
-| **Enforcing Component** | `src/idis/services/enrichment/service.py` — EnrichmentService |
+| **Enforcing Component** | `src/idis/services/enrichment/service.py` - EnrichmentService |
 | **Tests** | `tests/test_byol_isolation.py::test_no_cross_tenant_enrichment` |
 | **Phase Gate** | Phase 7 |
 | **Evidence Artifact** | `EnrichmentRecord` with provider metadata; `enrichment.completed` audit events |
@@ -356,7 +356,7 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | OPS-001 |
 | **Requirement** | Go-live requires: dashboards, alerts, backups tested, DR drill, runbooks published |
-| **Source Doc** | SLO/Runbooks §10 |
+| **Source Doc** | SLO/Runbooks section 10 |
 | **Source Section** | "Operational Readiness Checklist (Go-Live Gate)" |
 | **Enforcing Component** | Manual checklist; automated dashboard checks |
 | **Tests** | Manual verification |
@@ -372,7 +372,7 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | DR failover drill completed | Drill report signed |
 | Audit coverage 100% | Automated test passes |
 | No-Free-Facts validator enforced | Test deliverable export |
-| Muḥāsabah gate enforced | Test debate output |
+| Muhasabah gate enforced | Test debate output |
 | Runbooks published | Doc review |
 | On-call rotation established | Schedule documented |
 
@@ -386,18 +386,18 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | PR-001 |
 | **Requirement** | Prompts versioned (semver), stored with metadata, promotion requires gates |
-| **Source Doc** | Prompt Registry §2-11; Go-Live Checklist §4.4 |
+| **Source Doc** | Prompt Registry section 2-11; Go-Live Checklist section 4.4 |
 | **Source Section** | "Prompt Registry Overview", "Promotion Pipeline", "Audited Promotion/Rollback" |
-| **Enforcing Component** | `src/idis/services/prompts/registry.py` — PromptRegistry |
-| | `src/idis/services/prompts/versioning.py` — PromptVersioningService |
+| **Enforcing Component** | `src/idis/services/prompts/registry.py` - PromptRegistry |
+| | `src/idis/services/prompts/versioning.py` - PromptVersioningService |
 | **Tests** | `tests/test_prompt_registry.py::test_version_loaded` |
 | | `tests/test_prompt_registry.py::test_rollback_works` |
 | | `tests/test_prompt_registry.py::TestPromptVersioningPromotion` |
 | | `tests/test_prompt_registry.py::TestPromptVersioningRollback` |
 | | `tests/test_prompt_registry.py::TestAuditFailureIsFatal` |
 | **Phase Gate** | Phase 7.2 |
-| **Evidence Artifact** | `prompt.version.promoted`, `prompt.version.rolledback`, `prompt.version.retired` audit events (per Go-Live §4.4) |
-| **Implementation Status** | ✅ Exists |
+| **Evidence Artifact** | `prompt.version.promoted`, `prompt.version.rolledback`, `prompt.version.retired` audit events (per Go-Live section 4.4) |
+| **Implementation Status** | [x] Exists |
 
 **Required Gates by Risk Class:**
 | Risk Class | Required Gates |
@@ -413,22 +413,22 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | Attribute | Value |
 |-----------|-------|
 | **Requirement ID** | EH-001 |
-| **Requirement** | Release gates enforce: No-Free-Facts 0 violations, Muḥāsabah ≥98%, audit 100%, reproducibility ≥99.9% |
-| **Source Doc** | Evaluation Harness §2, §8 |
+| **Requirement** | Release gates enforce: No-Free-Facts 0 violations, Muhasabah >=98%, audit 100%, reproducibility >=99.9% |
+| **Source Doc** | Evaluation Harness section 2, section 8 |
 | **Source Section** | "What must be evaluated", "Release Gates" |
 | **Enforcing Component** | CI pipeline; test harness CLI |
 | **Tests** | GDBS-S, GDBS-F, GDBS-A benchmark suites |
 | **Phase Gate** | Phase 5 (Gate 1-2); Phase 6 (Gate 3); Phase 7 (Gate 4) |
 | **Evidence Artifact** | Gate results in CI; evaluation_results_ref on prompt artifacts |
-| **Implementation Status** | Planned — Gate 0 in CI; Gates 1-4 pending harness build |
+| **Implementation Status** | Planned - Gate 0 in CI; Gates 1-4 pending harness build |
 
 **Gate Requirements (Hard vs Soft Classification):**
 | Gate | Type | Requirements | Environment | Failure Impact |
 |------|------|--------------|-------------|----------------|
 | Gate 0 | **HARD** | Schema validation, lint, type checks, unit tests | dev | Block merge |
-| Gate 1 | **HARD** | No-Free-Facts 0, Muḥāsabah ≥98%, audit 100%, tenant isolation | staging | Block staging deploy |
-| Gate 2 | **HARD** | Sanad coverage ≥95%, defect recall ≥90%, calc repro ≥99.9% | staging | Block preprod deploy |
-| Gate 3 | **SOFT** | GDBS-F end-to-end, debate completion ≥98% | preprod | Flag for review |
+| Gate 1 | **HARD** | No-Free-Facts 0, Muhasabah >=98%, audit 100%, tenant isolation | staging | Block staging deploy |
+| Gate 2 | **HARD** | Sanad coverage >=95%, defect recall >=90%, calc repro >=99.9% | staging | Block preprod deploy |
+| Gate 3 | **SOFT** | GDBS-F end-to-end, debate completion >=98% | preprod | Flag for review |
 | Gate 4 | **SOFT** | Human review (10 deal sample) | preprod | Flag for review |
 
 **Hard Gates:** Automated enforcement, no override without security approval.
@@ -444,13 +444,13 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | SEC-001 |
 | **Requirement** | TLS 1.2+ in transit; AES-256 at rest; BYOK option |
-| **Source Doc** | Security Threat Model §5; Data Residency §5 |
+| **Source Doc** | Security Threat Model section 5; Data Residency section 5 |
 | **Source Section** | "Encryption and Key Management" |
-| **Enforcing Component** | Infrastructure configuration; KMS integration |
-| **Tests** | `tests/test_encryption.py::test_tls_enforced` |
-| | `tests/test_byok.py::test_customer_key_used` |
-| **Phase Gate** | Phase 0 (TLS); Phase 7 (BYOK) |
-| **Evidence Artifact** | TLS certificates; KMS key metadata |
+| **Enforcing Component** | BYOK: `src/idis/compliance/byok.py` (durable policy registry, migration 0029; metadata-only, KMS-boundary seam per `docs/architecture/slice98_byok_kms_decision.md`). TLS 1.2+/AES-256 = infrastructure configuration |
+| **Tests** | `tests/test_byok.py`, `tests/test_slice98_byok_legal_hold_postgres.py` |
+| | (TLS/AES-at-rest verified at the infra layer, not in-repo) |
+| **Phase Gate** | Phase 7 (Slice98: durable BYOK); Phase 0 (TLS, infra) |
+| **Evidence Artifact** | `byok.*` audit events; KMS-boundary decision note |
 
 ---
 
@@ -460,14 +460,13 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | SEC-002 |
 | **Requirement** | Server-side RBAC; deny by default; roles: ANALYST, PARTNER, IC_MEMBER, ADMIN, AUDITOR |
-| **Source Doc** | Security Threat Model §4; API Contracts §3.2 |
+| **Source Doc** | Security Threat Model section 4; API Contracts section 3.2 |
 | **Source Section** | "Authorization (RBAC + ABAC)" |
-| **Enforcing Component** | `src/idis/api/middleware/auth.py` — AuthMiddleware |
-| **Tests** | `tests/test_rbac.py::test_analyst_cannot_approve_override` |
-| | `tests/test_rbac.py::test_partner_can_approve_override` |
-| | `tests/test_rbac.py::test_deny_by_default` |
-| **Phase Gate** | Phase 2 (basic); Phase 7 (full enterprise) |
-| **Evidence Artifact** | `rbac.denied` audit events |
+| **Enforcing Component** | `src/idis/api/middleware/rbac.py` (RBAC); `src/idis/api/abac.py` (deny-by-default deal ABAC, durable stores migration 0026) |
+| **Tests** | `tests/test_abac.py`, `tests/test_api_rbac_middleware.py` |
+| | `tests/test_slice98_abac_durable_store_postgres.py`, `tests/test_slice98_deal_abac_extraction.py` |
+| **Phase Gate** | Phase 2 (basic); Phase 7 (Slice98: durable ABAC) |
+| **Evidence Artifact** | `rbac.*` / ABAC_DENIED_* codes; break-glass CRITICAL audit |
 
 ---
 
@@ -475,45 +474,50 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 
 | Req ID | Requirement | Source Doc | Enforcing Component | Test File | Phase | Impl Status | Evidence |
 |--------|-------------|------------|---------------------|-----------|-------|-------------|----------|
-| TI-001 | Tenant isolation | Security §6 | `openapi_validate.py` | test_api_tenancy_auth.py | 0/2/7 | ✅ Exists | AuditEvent.tenant_id |
-| AI-001 | Audit 100% coverage | Audit §2 | `audit.py` | test_api_audit_middleware.py | 2.3 | ✅ Exists | AuditEvent records |
-| AI-002 | Audit event validation | Audit §3 | `audit_event_validator.py` | test_audit_event_validator.py | 2.3.1 | ✅ Exists | Schema validation |
-| NFF-001 | No-Free-Facts | TDD §1.1 | `no_free_facts.py` (validator) | test_no_free_facts.py | 2/6 | ✅ Exists | muhasabah.rejected |
-| MUH-001 | Muḥāsabah gate | TDD §4.4 | `muhasabah.py` (validator) | test_muhasabah_validator.py | 5 | ✅ Exists | muhasabah.recorded |
-| SAN-001 | Sanad integrity | TDD §4.2 | `sanad/grader.py` | test_sanad_integrity.py, test_sanad_methodology_v2_unit.py | 3 | ✅ Exists | Sanad records |
-| SAN-002 | Independence rules | TDD §5.2 | `sanad/tawatur.py` | test_sanad_methodology_v2_unit.py::TestTawatur | 3.3 | ✅ Exists | corroboration_status |
-| SAN-003 | Source tiers (6-level) | Methodology v2 §2 | `sanad/source_tiers.py` | test_sanad_methodology_v2_unit.py::TestSourceTiers | 3.3 | ✅ Exists | tier assignment |
-| SAN-004 | Dabt scoring | Methodology v2 §3 | `sanad/dabt.py` | test_sanad_methodology_v2_unit.py::TestDabt | 3.3 | ✅ Exists | dabt_score |
-| SAN-005 | Shudhudh detection | Methodology v2 §5 | `sanad/shudhudh.py` | test_sanad_methodology_v2_unit.py::TestShudhudh | 3.3 | ✅ Exists | SHUDHUDH_ANOMALY |
-| SAN-006 | I'lal defects | Methodology v2 §6 | `sanad/ilal.py` | test_sanad_methodology_v2_unit.py::TestIlal | 3.3 | ✅ Exists | ILAL_* defects |
-| SAN-007 | COI handling | Methodology v2 §7 | `sanad/coi.py` | test_sanad_methodology_v2_unit.py::TestCOI | 3.3 | ✅ Exists | COI_* defects |
-| SAN-008 | Grader v2 | Methodology v2 §8 | `sanad/grader.py` | test_sanad_methodology_v2_unit.py::TestGraderV2 | 3.3 | ✅ Exists | grade_sanad_v2() |
-| DEF-001 | Defect handling | TDD §4.3 | `sanad/defects.py`, `sanad/ilal.py` | test_sanad_methodology_v2_unit.py | 3 | ✅ Exists | Defect records |
-| DN-001 | Calc reproducibility | TDD §1.1 | `calc/engine.py` | test_calc_reproducibility.py, test_calc_sanad.py | 4.1 | ✅ Exists | CalcSanad record |
-| DN-002 | Calc-Sanad grade derivation | TDD §1.1 | `calc/engine.py` | test_calc_sanad.py::TestGradeDerivation* | 4.1 | ✅ Exists | material-aware calc_grade (non-material excluded) |
-| DN-003 | Calc RLS tenant isolation | Security §6 | migration 0005 | test_postgres_rls_and_audit_immutability.py::TestDeterministicCalculationsRLS | 4.1 | ✅ Exists | RLS policies |
-| DN-004 | CalcSanad RLS tenant isolation | Security §6 | migration 0005 | test_postgres_rls_and_audit_immutability.py::TestCalcSanadsRLS | 4.1 | ✅ Exists | RLS policies |
-| FC-001 | Fail-closed | TDD §10 | All validators, `extraction_gate.py` | test_extraction_gate.py | 0+/4.2 | ✅ Exists | Rejection events |
-| DB-001 | Debate orchestration | TDD §6, Appendix C-1 | `debate/orchestrator.py` | test_debate_node_graph.py, test_debate_stop_conditions.py | 5.1 | ✅ Exists | nodes_visited, stop_reason |
-| DB-002 | Stop condition priority | Go-Live §5, Appendix C-1 | `debate/stop_conditions.py` | test_debate_stop_conditions.py | 5.1 | ✅ Exists | StopReason enum |
-| DB-003 | Max rounds = 5 | Go-Live §5, TDD §6 | `debate/stop_conditions.py` | test_debate_stop_conditions.py::test_max_rounds* | 5.1 | ✅ Exists | DebateConfig.max_rounds |
-| DB-004 | Role runner injection | Implementation Plan §5.1 | `debate/roles/base.py` | test_debate_node_graph.py | 5.1 | ✅ Exists | RoleRunnerProtocol |
-| MUH-002 | Muḥāsabah gate at output boundary | TDD §4.4; Implementation Plan §5.2 | `debate/muhasabah_gate.py`, `debate/orchestrator.py` | test_muhasabah_gate.py, test_debate_muhasabah_integration.py | 5.2 | ✅ Exists | GateDecision, StopReason.CRITICAL_DEFECT |
-| API-001 | Idempotency | API §4.1 | `idempotency.py` | test_api_idempotency_middleware.py | 2.5 | ✅ Exists | request_id |
-| API-002 | Error model | API §8 | `errors.py` | test_error_model.py | 2.6 | ⏳ Planned | Error responses |
-| API-003 | Rate limiting | API §4.3 | `rate_limit.py` | test_rate_limiting.py | 2.7 | ⏳ Planned | 429 responses |
-| WH-001 | Webhook signing | API §6 | `webhooks/dispatcher.py`, `webhooks/signing.py`, `webhooks/retry.py` | test_slice97_webhook_dispatcher.py, test_webhook_signing.py, test_webhook_retry.py | 2.8 | ✅ Delivered (Slice97) | `webhook.delivery.succeeded/failed` audit events |
-| DR-001 | Data residency | Residency §3 | `tenant.py` (data_region) | test_data_residency.py | 7 | ⏳ Planned | Region metadata |
-| BYOL-001 | BYOL isolation | Residency §7 | `enrichment/service.py` | test_byol_isolation.py | 7 | ⏳ Planned | EnrichmentRecord |
-| OPS-001 | Ops readiness | SLO §10 | Manual checklist | Manual | 7 | ⏳ Planned | Checklist sign-off |
-| PR-001 | Prompt registry | Prompt §2; Go-Live §4.4 | `services/prompts/registry.py`, `services/prompts/versioning.py` | test_prompt_registry.py | 7.2 | ✅ Exists | prompt.version.promoted/rolledback/retired |
-| EH-001 | Eval harness | Eval §8 | CI pipeline | GDBS suites | 5/6/7 | ⏳ Planned | Gate results |
-| SEC-001 | Encryption | Security §5 | Infra config | test_encryption.py | 0/7 | ⏳ Planned | TLS certs |
-| SEC-002 | RBAC | Security §4 | `auth.py` | test_rbac.py | 2/7 | ⏳ Planned | rbac.denied |
+| TI-001 | Tenant isolation | Security section 6 | `openapi_validate.py` | test_api_tenancy_auth.py | 0/2/7 | [x] Exists | AuditEvent.tenant_id |
+| AI-001 | Audit 100% coverage | Audit section 2 | `audit.py` | test_api_audit_middleware.py | 2.3 | [x] Exists | AuditEvent records |
+| AI-002 | Audit event validation | Audit section 3 | `audit_event_validator.py` | test_audit_event_validator.py | 2.3.1 | [x] Exists | Schema validation |
+| NFF-001 | No-Free-Facts | TDD section 1.1 | `no_free_facts.py` (validator) | test_no_free_facts.py | 2/6 | [x] Exists | muhasabah.rejected |
+| MUH-001 | Muhasabah gate | TDD section 4.4 | `muhasabah.py` (validator) | test_muhasabah_validator.py | 5 | [x] Exists | muhasabah.recorded |
+| SAN-001 | Sanad integrity | TDD section 4.2 | `sanad/grader.py` | test_sanad_integrity.py, test_sanad_methodology_v2_unit.py | 3 | [x] Exists | Sanad records |
+| SAN-002 | Independence rules | TDD section 5.2 | `sanad/tawatur.py` | test_sanad_methodology_v2_unit.py::TestTawatur | 3.3 | [x] Exists | corroboration_status |
+| SAN-003 | Source tiers (6-level) | Methodology v2 section 2 | `sanad/source_tiers.py` | test_sanad_methodology_v2_unit.py::TestSourceTiers | 3.3 | [x] Exists | tier assignment |
+| SAN-004 | Dabt scoring | Methodology v2 section 3 | `sanad/dabt.py` | test_sanad_methodology_v2_unit.py::TestDabt | 3.3 | [x] Exists | dabt_score |
+| SAN-005 | Shudhudh detection | Methodology v2 section 5 | `sanad/shudhudh.py` | test_sanad_methodology_v2_unit.py::TestShudhudh | 3.3 | [x] Exists | SHUDHUDH_ANOMALY |
+| SAN-006 | I'lal defects | Methodology v2 section 6 | `sanad/ilal.py` | test_sanad_methodology_v2_unit.py::TestIlal | 3.3 | [x] Exists | ILAL_* defects |
+| SAN-007 | COI handling | Methodology v2 section 7 | `sanad/coi.py` | test_sanad_methodology_v2_unit.py::TestCOI | 3.3 | [x] Exists | COI_* defects |
+| SAN-008 | Grader v2 | Methodology v2 section 8 | `sanad/grader.py` | test_sanad_methodology_v2_unit.py::TestGraderV2 | 3.3 | [x] Exists | grade_sanad_v2() |
+| DEF-001 | Defect handling | TDD section 4.3 | `sanad/defects.py`, `sanad/ilal.py` | test_sanad_methodology_v2_unit.py | 3 | [x] Exists | Defect records |
+| DN-001 | Calc reproducibility | TDD section 1.1 | `calc/engine.py` | test_calc_reproducibility.py, test_calc_sanad.py | 4.1 | [x] Exists | CalcSanad record |
+| DN-002 | Calc-Sanad grade derivation | TDD section 1.1 | `calc/engine.py` | test_calc_sanad.py::TestGradeDerivation* | 4.1 | [x] Exists | material-aware calc_grade (non-material excluded) |
+| DN-003 | Calc RLS tenant isolation | Security section 6 | migration 0005 | test_postgres_rls_and_audit_immutability.py::TestDeterministicCalculationsRLS | 4.1 | [x] Exists | RLS policies |
+| DN-004 | CalcSanad RLS tenant isolation | Security section 6 | migration 0005 | test_postgres_rls_and_audit_immutability.py::TestCalcSanadsRLS | 4.1 | [x] Exists | RLS policies |
+| FC-001 | Fail-closed | TDD section 10 | All validators, `extraction_gate.py` | test_extraction_gate.py | 0+/4.2 | [x] Exists | Rejection events |
+| DB-001 | Debate orchestration | TDD section 6, Appendix C-1 | `debate/orchestrator.py` | test_debate_node_graph.py, test_debate_stop_conditions.py | 5.1 | [x] Exists | nodes_visited, stop_reason |
+| DB-002 | Stop condition priority | Go-Live section 5, Appendix C-1 | `debate/stop_conditions.py` | test_debate_stop_conditions.py | 5.1 | [x] Exists | StopReason enum |
+| DB-003 | Max rounds = 5 | Go-Live section 5, TDD section 6 | `debate/stop_conditions.py` | test_debate_stop_conditions.py::test_max_rounds* | 5.1 | [x] Exists | DebateConfig.max_rounds |
+| DB-004 | Role runner injection | Implementation Plan section 5.1 | `debate/roles/base.py` | test_debate_node_graph.py | 5.1 | [x] Exists | RoleRunnerProtocol |
+| MUH-002 | Muhasabah gate at output boundary | TDD section 4.4; Implementation Plan section 5.2 | `debate/muhasabah_gate.py`, `debate/orchestrator.py` | test_muhasabah_gate.py, test_debate_muhasabah_integration.py | 5.2 | [x] Exists | GateDecision, StopReason.CRITICAL_DEFECT |
+| API-001 | Idempotency | API section 4.1 | `idempotency.py` | test_api_idempotency_middleware.py | 2.5 | [x] Exists | request_id |
+| API-002 | Error model | API section 8 | `errors.py` | test_error_model.py | 2.6 | Planned | Error responses |
+| API-003 | Rate limiting | API section 4.3 | `rate_limit.py` | test_rate_limiting.py | 2.7 | Planned | 429 responses |
+| WH-001 | Webhook signing | API section 6 | `webhooks/dispatcher.py`, `webhooks/signing.py`, `webhooks/retry.py` | test_slice97_webhook_dispatcher.py, test_webhook_signing.py, test_webhook_retry.py | 2.8 | [x] Delivered (Slice97) | `webhook.delivery.succeeded/failed` audit events |
+| DR-001 | Data residency | Residency section 3 | `compliance/residency.py`, durable `tenants.data_region` (migration 0027, flag `IDIS_ENABLE_DURABLE_RESIDENCY`) | test_data_residency.py, test_slice98_durable_residency.py, test_slice98_durable_residency_postgres.py | 7 (Slice98) | [x] Delivered (Slice98) | Region source of truth; fail-closed 403 |
+| BYOL-001 | BYOL isolation | Residency section 7 | `enrichment/service.py` | test_byol_isolation.py | 7 | Planned | EnrichmentRecord |
+| OPS-001 | Ops readiness | SLO section 10 | Manual checklist | Manual | 7 | Planned | Checklist sign-off |
+| PR-001 | Prompt registry | Prompt section 2; Go-Live section 4.4 | `services/prompts/registry.py`, `services/prompts/versioning.py` | test_prompt_registry.py | 7.2 | [x] Exists | prompt.version.promoted/rolledback/retired |
+| EH-001 | Eval harness | Eval section 8 | CI pipeline | GDBS suites | 5/6/7 | Planned | Gate results |
+| SEC-001 | Encryption / BYOK | Security section 5 | BYOK: `compliance/byok.py` (durable, migration 0029). TLS 1.2+/AES-256 remain infra-config | test_byok.py, test_slice98_byok_legal_hold_postgres.py | 0/7 (Slice98 BYOK) | [x] BYOK delivered (Slice98); TLS/AES = infra | `byok.*` audit; KMS-boundary decision note |
+| SEC-002 | RBAC + ABAC | Security section 4 | `middleware/rbac.py`, `api/abac.py` (deny-by-default deal ABAC, durable stores, migration 0026) | test_abac.py, test_slice98_abac_durable_store_postgres.py, test_slice98_deal_abac_extraction.py | 2/7 (Slice98) | [x] Delivered (Slice98) | `rbac.*` audit; ABAC_DENIED_* |
+| AUTH-001 | SSO/JWT + IdP-MFA verification | Security section 4 | `api/auth_sso.py` (`validate_jwt`, `amr` MFA check, flag `IDIS_REQUIRE_MFA`) | test_auth_sso.py, test_slice98_mfa_enforcement.py | 7 (Slice98) | [x] Delivered (Slice98) | `auth.mfa.failed` audit |
+| BG-001 | Break-glass single-use grants | Security section 4; ADR-007 | `api/break_glass.py`, `api/break_glass_grants.py` (migration 0028, flag `IDIS_ENABLE_DURABLE_BREAK_GLASS`) | test_break_glass_audit.py, test_slice98_break_glass_workflow_postgres.py | 7 (Slice98) | [x] Delivered (Slice98) | `break_glass.issued/used` CRITICAL |
+| BYOK-001 | Durable BYOK + legal holds + mgmt API | Residency section 5-6; ADR-012 | `compliance/byok.py`, `compliance/retention.py`, `routes/compliance_admin.py` (migration 0029) | test_byok.py, test_retention_hold.py, test_slice98_byok_legal_hold_postgres.py | 7 (Slice98) | [x] Delivered (Slice98) | `byok.*`, `legal_hold.*` audit |
+| RET-001 | Retention enforcement janitor | Residency section 6 | `services/compliance/janitor.py` (dry-run default, double opt-in) | test_slice98_retention_janitor.py, test_slice98_retention_janitor_postgres.py | 7 (Slice98) | [x] Delivered (Slice98) | `retention.sweep.executed` HIGH |
+| ERZ-001 | Per-deal erasure + per-tenant export | Residency section 6.2 | `compliance/erasure.py`, `compliance/erasure_postgres.py`, `compliance/compliance_export.py`, `routes/erasure_export.py` (migration 0030) | test_slice98_erasure_export.py, test_slice98_erasure_export_postgres.py | 7 (Slice98) | [x] Delivered (Slice98) | `erasure.*`, `export.created` audit; full deal removal, audit survives |
 
 **Implementation Status Legend:**
-- ✅ Exists — Code and tests implemented in repo
-- ⏳ Planned — Scheduled for indicated phase gate
+- [x] Exists - Code and tests implemented in repo
+- Planned - Scheduled for indicated phase gate
 
 ---
 
@@ -523,29 +527,29 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 
 | Test File | Description | Phase | Status |
 |-----------|-------------|-------|--------|
-| `tests/test_api_health.py` | Health endpoint tests | 0 | ✅ Passing |
-| `tests/test_api_openapi_validation.py` | OpenAPI spec validation | 0 | ✅ Passing |
-| `tests/test_api_tenancy_auth.py` | Tenant authentication + isolation | 0/2 | ✅ Passing |
-| `tests/test_api_audit_middleware.py` | Audit middleware integration | 2.3 | ✅ Passing |
-| `tests/test_audit_event_validator.py` | Audit event schema validation | 2.3.1 | ✅ Passing |
-| `tests/test_api_idempotency_middleware.py` | Idempotency replay/collision/isolation | 2.5 | ✅ Passing |
-| `tests/test_no_free_facts.py` | No-Free-Facts validator | 2 | ✅ Passing |
-| `tests/test_muhasabah.py` | Muḥāsabah core tests | 5 | ✅ Passing |
-| `tests/test_muhasabah_validator.py` | Muḥāsabah validator | 5 | ✅ Passing |
-| `tests/test_sanad_integrity.py` | Sanad integrity tests | 3 | ✅ Passing |
-| `tests/test_schema_validator.py` | Schema validation utilities | 0 | ✅ Passing |
-| `tests/test_schema_registry.py` | Schema registry tests | 0 | ✅ Passing |
-| `tests/test_openapi_loader.py` | OpenAPI loader tests | 0 | ✅ Passing |
-| `tests/test_cli_validate.py` | CLI validation commands | 0 | ✅ Passing |
-| `tests/test_health.py` | Health module tests | 0 | ✅ Passing |
-| `tests/test_calc_reproducibility.py` | Calc engine hash stability | 4.1 | ✅ Passing |
-| `tests/test_calc_sanad.py` | Calc-Sanad grade derivation + tamper detection | 4.1 | ✅ Passing |
-| `tests/test_postgres_rls_and_audit_immutability.py` | RLS tenant isolation (incl. calc tables) | 2/4.1 | ✅ Passing |
-| `tests/test_extraction_gate.py` | Extraction confidence gate (fail-closed) | 4.2 | ✅ Passing |
-| `tests/test_debate_node_graph.py` | Debate node graph order matches v6.3 | 5.1 | ✅ Passing |
-| `tests/test_debate_stop_conditions.py` | Stop condition priority order + max rounds | 5.1 | ✅ Passing |
-| `tests/test_muhasabah_gate.py` | Muḥāsabah gate blocking/allowing tests | 5.2 | ✅ Passing |
-| `tests/test_debate_muhasabah_integration.py` | Orchestrator + gate integration tests | 5.2 | ✅ Passing |
+| `tests/test_api_health.py` | Health endpoint tests | 0 | [x] Passing |
+| `tests/test_api_openapi_validation.py` | OpenAPI spec validation | 0 | [x] Passing |
+| `tests/test_api_tenancy_auth.py` | Tenant authentication + isolation | 0/2 | [x] Passing |
+| `tests/test_api_audit_middleware.py` | Audit middleware integration | 2.3 | [x] Passing |
+| `tests/test_audit_event_validator.py` | Audit event schema validation | 2.3.1 | [x] Passing |
+| `tests/test_api_idempotency_middleware.py` | Idempotency replay/collision/isolation | 2.5 | [x] Passing |
+| `tests/test_no_free_facts.py` | No-Free-Facts validator | 2 | [x] Passing |
+| `tests/test_muhasabah.py` | Muhasabah core tests | 5 | [x] Passing |
+| `tests/test_muhasabah_validator.py` | Muhasabah validator | 5 | [x] Passing |
+| `tests/test_sanad_integrity.py` | Sanad integrity tests | 3 | [x] Passing |
+| `tests/test_schema_validator.py` | Schema validation utilities | 0 | [x] Passing |
+| `tests/test_schema_registry.py` | Schema registry tests | 0 | [x] Passing |
+| `tests/test_openapi_loader.py` | OpenAPI loader tests | 0 | [x] Passing |
+| `tests/test_cli_validate.py` | CLI validation commands | 0 | [x] Passing |
+| `tests/test_health.py` | Health module tests | 0 | [x] Passing |
+| `tests/test_calc_reproducibility.py` | Calc engine hash stability | 4.1 | [x] Passing |
+| `tests/test_calc_sanad.py` | Calc-Sanad grade derivation + tamper detection | 4.1 | [x] Passing |
+| `tests/test_postgres_rls_and_audit_immutability.py` | RLS tenant isolation (incl. calc tables) | 2/4.1 | [x] Passing |
+| `tests/test_extraction_gate.py` | Extraction confidence gate (fail-closed) | 4.2 | [x] Passing |
+| `tests/test_debate_node_graph.py` | Debate node graph order matches v6.3 | 5.1 | [x] Passing |
+| `tests/test_debate_stop_conditions.py` | Stop condition priority order + max rounds | 5.1 | [x] Passing |
+| `tests/test_muhasabah_gate.py` | Muhasabah gate blocking/allowing tests | 5.2 | [x] Passing |
+| `tests/test_debate_muhasabah_integration.py` | Orchestrator + gate integration tests | 5.2 | [x] Passing |
 
 ### 9.2 Planned Tests (By Phase Gate)
 
@@ -563,9 +567,9 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | `tests/test_defect_cure_protocol.py` | Cure workflows | 3 | `defects/service.py` (planned) |
 | `tests/test_defect_waiver.py` | Defect waiver process | 3 | `defects/service.py` (planned) |
 | `tests/test_sanad_coverage.py` | Material claims have Sanad | 3 | `sanad/` (planned) |
-| `tests/test_calc_reproducibility.py` | Same inputs → same hash | 4 | `calc/engine.py` ✅ |
-| `tests/test_calc_sanad.py` | Calc provenance to claim_ids | 4 | `calc_sanad.py` ✅ |
-| `tests/test_extraction_gate.py` | Blocks low-confidence calcs | 4.2 | `extraction_gate.py` ✅ |
+| `tests/test_calc_reproducibility.py` | Same inputs -> same hash | 4 | `calc/engine.py` [x] |
+| `tests/test_calc_sanad.py` | Calc provenance to claim_ids | 4 | `calc_sanad.py` [x] |
+| `tests/test_extraction_gate.py` | Blocks low-confidence calcs | 4.2 | `extraction_gate.py` [x] |
 | `tests/test_fail_closed.py` | Validators fail closed | 0+ | All validators |
 | `tests/test_tenant_rls.py` | Postgres RLS enforcement | 7 | Database config |
 | `tests/test_cache_tenant_keying.py` | Cache tenant isolation | 7 | Cache layer |
@@ -580,21 +584,21 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 
 | Module | Description | Phase Gate | Status |
 |--------|-------------|------------|--------|
-| `src/idis/api/middleware/audit.py` | Audit middleware | 2.3 | ✅ Exists |
-| `src/idis/api/middleware/idempotency.py` | Idempotency middleware | 2.5 | ✅ Exists |
-| `src/idis/api/middleware/rate_limit.py` | Rate limiting middleware | 2.7 | ⏳ Planned |
-| `src/idis/api/middleware/tenant.py` | Tenant context middleware | 2.1 | ⏳ Planned (partial in openapi_validate) |
-| `src/idis/api/middleware/auth.py` | Auth middleware (JWT/API key) | 2.1 | ⏳ Planned (partial in auth.py) |
-| `src/idis/models/sanad.py` | Sanad + TransmissionNode | 3 | ⏳ Planned |
-| `src/idis/models/defect.py` | Defect model | 3 | ⏳ Planned |
-| `src/idis/models/calc_sanad.py` | CalcSanad model | 4 | ⏳ Planned |
-| `src/idis/models/tenant.py` | Tenant model with data_region | 7 | ⏳ Planned |
-| `src/idis/services/sanad/grader.py` | Sanad grading service | 3 | ⏳ Planned |
-| `src/idis/services/sanad/independence.py` | Independence checker | 3 | ⏳ Planned |
-| `src/idis/services/defects/service.py` | Defect service | 3 | ⏳ Planned |
-| `src/idis/services/webhooks/service.py` | Webhook service | 2.8 | ✅ Delivered (Slice97: emitter + durable outbox + dispatcher) |
-| `src/idis/services/enrichment/service.py` | Enrichment service | 7 | ⏳ Planned |
-| `src/idis/calc/engine.py` | Calculation engine | 4 | ⏳ Planned |
+| `src/idis/api/middleware/audit.py` | Audit middleware | 2.3 | [x] Exists |
+| `src/idis/api/middleware/idempotency.py` | Idempotency middleware | 2.5 | [x] Exists |
+| `src/idis/api/middleware/rate_limit.py` | Rate limiting middleware | 2.7 | Planned |
+| `src/idis/api/middleware/tenant.py` | Tenant context middleware | 2.1 | Planned (partial in openapi_validate) |
+| `src/idis/api/middleware/auth.py` | Auth middleware (JWT/API key) | 2.1 | Planned (partial in auth.py) |
+| `src/idis/models/sanad.py` | Sanad + TransmissionNode | 3 | Planned |
+| `src/idis/models/defect.py` | Defect model | 3 | Planned |
+| `src/idis/models/calc_sanad.py` | CalcSanad model | 4 | Planned |
+| `src/idis/models/tenant.py` | Tenant model with data_region | 7 | Planned |
+| `src/idis/services/sanad/grader.py` | Sanad grading service | 3 | Planned |
+| `src/idis/services/sanad/independence.py` | Independence checker | 3 | Planned |
+| `src/idis/services/defects/service.py` | Defect service | 3 | Planned |
+| `src/idis/services/webhooks/service.py` | Webhook service | 2.8 | [x] Delivered (Slice97: emitter + durable outbox + dispatcher) |
+| `src/idis/services/enrichment/service.py` | Enrichment service | 7 | Planned |
+| `src/idis/calc/engine.py` | Calculation engine | 4 | Planned |
 
 ---
 
@@ -608,9 +612,9 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | 2026-01-10 | 1.3 | Cascade | Added Phase 4.1 Deterministic Calc Engine traceability (DN-001 through DN-004); added calc tests to test coverage matrix |
 | 2026-01-10 | 1.4 | Cascade | Added Phase 4.2 Extraction Confidence Gate (FC-001 updated); test_extraction_gate.py::test_low_confidence_blocked implemented |
 | 2026-01-10 | 1.5 | Cascade | Added Phase 5.1 LangGraph Orchestration Core traceability (DB-001 through DB-004); added debate tests to test coverage matrix |
-| 2026-01-11 | 1.6 | Cascade | Added Phase 5.2 Muḥāsabah Gate traceability (MUH-002); updated MUH-001 with gate enforcement; added test_muhasabah_gate.py and test_debate_muhasabah_integration.py to test coverage matrix |
+| 2026-01-11 | 1.6 | Cascade | Added Phase 5.2 Muhasabah Gate traceability (MUH-002); updated MUH-001 with gate enforcement; added test_muhasabah_gate.py and test_debate_muhasabah_integration.py to test coverage matrix |
 | 2026-01-11 | 1.7 | Cascade | Added Phase POST-5.2 Architecture Hardening: ValueStruct types (VS-001), Claim types & calc loop guardrail (CLT-001), NFF semantic extensions (NFF-002), Graph-Postgres saga (DW-001), Pattern matching spec (PM-001) |
-| 2026-01-11 | 1.8 | Cascade | DOC-ALIGN-001: Clarified claim_class vs claim_type distinction; updated CLT-001 with invariants and key fields; aligned with Data Model §5.5 |
+| 2026-01-11 | 1.8 | Cascade | DOC-ALIGN-001: Clarified claim_class vs claim_type distinction; updated CLT-001 with invariants and key fields; aligned with Data Model section 5.5 |
 | 2026-01-11 | 1.9 | Cascade | Added Phase 6.1 Deliverables Generator traceability (DG-001 through DG-004); added test coverage for screening snapshot, IC memo, deliverable validator, export formats |
 
 ---
@@ -623,11 +627,11 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | VS-001 |
 | **Requirement** | Typed value structures for claims/calcs replacing untyped dict |
-| **Source Doc** | Data Model §5.4 |
+| **Source Doc** | Data Model section 5.4 |
 | **Enforcing Component** | `src/idis/models/value_structs.py` |
 | **Tests** | `tests/test_value_structs.py`, `tests/test_calc_value_types_integration.py` |
 | **Phase Gate** | POST-5.2 |
-| **Implementation Status** | ✅ Exists |
+| **Implementation Status** | [x] Exists |
 
 ### 11.2 Claim Lineage Type & Calc Loop Guardrail
 
@@ -635,13 +639,13 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | CLT-001 |
 | **Requirement** | `claim_class` (category: FINANCIAL, etc.) vs `claim_type` (lineage: PRIMARY/DERIVED); derived claims cannot auto-trigger calcs; `source_calc_id` required for derived |
-| **Source Doc** | Data Model §5.5 |
-| **Enforcing Component** | `src/idis/models/claim.py` — `Claim`, `ClaimClass`, `ClaimType`, `CalcLoopGuard`, `CalcLoopGuardError` |
+| **Source Doc** | Data Model section 5.5 |
+| **Enforcing Component** | `src/idis/models/claim.py` - `Claim`, `ClaimClass`, `ClaimType`, `CalcLoopGuard`, `CalcLoopGuardError` |
 | **Key Fields** | `claim_class` (category), `claim_type` (lineage), `source_calc_id` (for derived claims) |
 | **Invariants** | CLG-1: PRIMARY claims trigger calcs; CLG-2: DERIVED cannot auto-trigger; CLG-3: Violation is fail-closed |
 | **Tests** | `tests/test_claim_type_enforcement.py`, `tests/test_calc_loop_guardrail.py` |
 | **Phase Gate** | POST-5.2 |
-| **Implementation Status** | ✅ Exists |
+| **Implementation Status** | [x] Exists |
 
 ### 11.3 No-Free-Facts Semantic Extensions
 
@@ -649,11 +653,11 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | NFF-002 |
 | **Requirement** | Semantic subject-predicate patterns for enhanced factual detection |
-| **Source Doc** | Data Model §5.7 |
-| **Enforcing Component** | `src/idis/validators/no_free_facts.py` — SEMANTIC_RULES |
+| **Source Doc** | Data Model section 5.7 |
+| **Enforcing Component** | `src/idis/validators/no_free_facts.py` - SEMANTIC_RULES |
 | **Tests** | `tests/test_no_free_facts_semantic_cases.py` |
 | **Phase Gate** | POST-5.2 |
-| **Implementation Status** | ✅ Exists |
+| **Implementation Status** | [x] Exists |
 
 ### 11.4 Graph-Postgres Dual-Write Consistency
 
@@ -661,11 +665,11 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | DW-001 |
 | **Requirement** | Saga pattern for Postgres + Graph DB consistency with compensation |
-| **Source Doc** | Data Model §5.6 |
-| **Enforcing Component** | `src/idis/persistence/saga.py` — DualWriteSagaExecutor |
+| **Source Doc** | Data Model section 5.6 |
+| **Enforcing Component** | `src/idis/persistence/saga.py` - DualWriteSagaExecutor |
 | **Tests** | `tests/test_graph_postgres_consistency_saga.py` |
 | **Phase Gate** | POST-5.2 |
-| **Implementation Status** | ✅ Exists |
+| **Implementation Status** | [x] Exists |
 
 ### 11.5 Pattern Matching (Spec Only)
 
@@ -673,11 +677,11 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | PM-001 |
 | **Requirement** | DealOutcome, SimilarityFeature, PatternMatch models for deal comparison |
-| **Source Doc** | Implementation Plan §Phase 6.5 |
+| **Source Doc** | Implementation Plan section Phase 6.5 |
 | **Enforcing Component** | N/A (spec only) |
 | **Tests** | Planned: `test_deal_outcome.py`, `test_similarity_feature.py`, `test_pattern_match.py` |
 | **Phase Gate** | Phase 6.5 (future) |
-| **Implementation Status** | ⏳ Spec documented, implementation pending |
+| **Implementation Status** | Spec documented, implementation pending |
 
 ---
 
@@ -689,18 +693,18 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | DG-001 |
 | **Requirement** | Evidence-linked deliverables generator: Screening Snapshot, IC Memo, PDF/DOCX export |
-| **Source Doc** | Implementation Plan §Phase 6; Go-Live §Phase 6; Requirements §8 |
+| **Source Doc** | Implementation Plan section Phase 6; Go-Live section Phase 6; Requirements section 8 |
 | **Source Section** | "Deliverables Generator", "Every fact in memo has claim_id/calc_id reference" |
-| **Enforcing Component** | `src/idis/deliverables/screening.py` — ScreeningSnapshotBuilder |
-| | `src/idis/deliverables/memo.py` — ICMemoBuilder |
-| | `src/idis/deliverables/export.py` — DeliverableExporter |
-| **Secondary Enforcement** | `src/idis/validators/deliverable.py` — DeliverableValidator |
-| **Tests** | `tests/test_screening_snapshot.py` — all facts include refs |
-| | `tests/test_ic_memo.py` — sections evidence-linked, dissent has refs |
-| | `tests/test_export_formats.py` — PDF/DOCX generation |
+| **Enforcing Component** | `src/idis/deliverables/screening.py` - ScreeningSnapshotBuilder |
+| | `src/idis/deliverables/memo.py` - ICMemoBuilder |
+| | `src/idis/deliverables/export.py` - DeliverableExporter |
+| **Secondary Enforcement** | `src/idis/validators/deliverable.py` - DeliverableValidator |
+| **Tests** | `tests/test_screening_snapshot.py` - all facts include refs |
+| | `tests/test_ic_memo.py` - sections evidence-linked, dissent has refs |
+| | `tests/test_export_formats.py` - PDF/DOCX generation |
 | **Phase Gate** | Phase 6.1 |
 | **Evidence Artifact** | `deliverable.exported` audit event; audit appendix in export |
-| **Implementation Status** | ✅ Exists |
+| **Implementation Status** | [x] Exists |
 
 **Deliverables Object Model:**
 | Type | Description |
@@ -720,15 +724,15 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | DG-002 |
 | **Requirement** | Every DeliverableFact with is_factual=True must have non-empty claim_refs; export blocked on violation |
-| **Source Doc** | TDD §1.1; Go-Live §Phase 6; Implementation Plan §Phase 6 |
+| **Source Doc** | TDD section 1.1; Go-Live section Phase 6; Implementation Plan section Phase 6 |
 | **Source Section** | "No-Free-Facts at deliverable export (hard gate)" |
-| **Enforcing Component** | `src/idis/validators/deliverable.py` — validate_deliverable_no_free_facts() |
-| **Secondary Enforcement** | `src/idis/deliverables/export.py` — validation before export |
-| **Tests** | `tests/test_deliverable_no_free_facts.py` — factual without refs raises |
-| | `tests/test_deliverable_no_free_facts.py` — valid deliverable passes |
+| **Enforcing Component** | `src/idis/validators/deliverable.py` - validate_deliverable_no_free_facts() |
+| **Secondary Enforcement** | `src/idis/deliverables/export.py` - validation before export |
+| **Tests** | `tests/test_deliverable_no_free_facts.py` - factual without refs raises |
+| | `tests/test_deliverable_no_free_facts.py` - valid deliverable passes |
 | **Phase Gate** | Phase 6.1 |
 | **Evidence Artifact** | Validation errors with stable code `NO_FREE_FACTS_UNREFERENCED_FACT` |
-| **Implementation Status** | ✅ Exists |
+| **Implementation Status** | [x] Exists |
 
 **Validator Rules (Normative):**
 | Rule | Condition | Action |
@@ -746,16 +750,16 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | DG-003 |
 | **Requirement** | Exports include audit appendix with all unique refs (stable ordering) |
-| **Source Doc** | Implementation Plan §Phase 6; Requirements §8.2 |
+| **Source Doc** | Implementation Plan section Phase 6; Requirements section 8.2 |
 | **Source Section** | "Exports include audit appendix (optional) for compliance" |
-| **Enforcing Component** | `src/idis/models/deliverables.py` — AuditAppendix, AuditAppendixEntry |
-| | `src/idis/deliverables/export.py` — _render_audit_appendix_text() |
+| **Enforcing Component** | `src/idis/models/deliverables.py` - AuditAppendix, AuditAppendixEntry |
+| | `src/idis/deliverables/export.py` - _render_audit_appendix_text() |
 | **Tests** | `tests/test_screening_snapshot.py::test_audit_appendix_contains_all_refs` |
 | | `tests/test_screening_snapshot.py::test_audit_appendix_entries_sorted` |
 | | `tests/test_export_formats.py::test_pdf_includes_audit_appendix_text` |
 | **Phase Gate** | Phase 6.1 |
 | **Evidence Artifact** | Audit appendix section in PDF/DOCX exports |
-| **Implementation Status** | ✅ Exists |
+| **Implementation Status** | [x] Exists |
 
 **Stable Ordering Rules:**
 | Element | Ordering |
@@ -772,19 +776,19 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | DG-004 |
 | **Requirement** | If debate state indicates stable dissent, include as structured section with explicit refs |
-| **Source Doc** | Implementation Plan §Phase 5; Requirements §6.3 |
+| **Source Doc** | Implementation Plan section Phase 5; Requirements section 6.3 |
 | **Source Section** | "Stable dissent produces deliverables with dissent section" |
-| **Enforcing Component** | `src/idis/models/deliverables.py` — DissentSection |
-| | `src/idis/deliverables/memo.py` — ICMemoBuilder.set_dissent() |
+| **Enforcing Component** | `src/idis/models/deliverables.py` - DissentSection |
+| | `src/idis/deliverables/memo.py` - ICMemoBuilder.set_dissent() |
 | **Tests** | `tests/test_ic_memo.py::test_stable_dissent_produces_dissent_section` |
 | | `tests/test_ic_memo.py::test_empty_dissent_refs_rejected` |
 | **Phase Gate** | Phase 6.1 |
 | **Evidence Artifact** | DissentSection in ICMemo with claim_refs |
-| **Implementation Status** | ✅ Exists |
+| **Implementation Status** | [x] Exists |
 
 ---
 
-## 13) Phase 6.2 — Frontend Backend Contracts Traceability
+## 13) Phase 6.2 - Frontend Backend Contracts Traceability
 
 ### 13.1 Truth Dashboard API
 
@@ -792,17 +796,17 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | FE-001 |
 | **Requirement** | GET /v1/deals/{dealId}/truth-dashboard returns aggregated claim statistics and paginated claims |
-| **Source Doc** | Implementation Plan §Phase 6.2; Roadmap §6.2 |
-| **Source Section** | "Frontend Backend Contracts — Truth Dashboard API" |
-| **Enforcing Component** | `src/idis/api/routes/claims.py` — get_deal_truth_dashboard() |
-| **Secondary Enforcement** | `src/idis/api/policy.py` — getDealTruthDashboard RBAC rule |
+| **Source Doc** | Implementation Plan section Phase 6.2; Roadmap section 6.2 |
+| **Source Section** | "Frontend Backend Contracts - Truth Dashboard API" |
+| **Enforcing Component** | `src/idis/api/routes/claims.py` - get_deal_truth_dashboard() |
+| **Secondary Enforcement** | `src/idis/api/policy.py` - getDealTruthDashboard RBAC rule |
 | **Tests** | `tests/test_api_truth_dashboard.py::test_returns_200_with_correct_schema` |
 | | `tests/test_api_truth_dashboard.py::test_summary_counts_match_seeded_data` |
 | | `tests/test_api_truth_dashboard.py::test_stable_ordering_determinism` |
 | | `tests/test_api_truth_dashboard.py::test_cross_tenant_access_blocked` |
 | **Phase Gate** | Phase 6.2 |
 | **Evidence Artifact** | TruthDashboard response with summary (by_grade, by_verdict, fatal_defects) |
-| **Implementation Status** | ✅ Exists |
+| **Implementation Status** | [x] Exists |
 
 **Response Schema (TruthDashboard):**
 | Field | Type | Description |
@@ -822,16 +826,16 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | FE-002 |
 | **Requirement** | GET /v1/claims/{claimId} returns full claim body with tenant isolation |
-| **Source Doc** | Implementation Plan §Phase 6.2; Roadmap §6.2 |
-| **Source Section** | "Frontend Backend Contracts — Claim Detail API" |
-| **Enforcing Component** | `src/idis/api/routes/claims.py` — get_claim() |
-| **Secondary Enforcement** | `src/idis/api/policy.py` — getClaim RBAC rule |
+| **Source Doc** | Implementation Plan section Phase 6.2; Roadmap section 6.2 |
+| **Source Section** | "Frontend Backend Contracts - Claim Detail API" |
+| **Enforcing Component** | `src/idis/api/routes/claims.py` - get_claim() |
+| **Secondary Enforcement** | `src/idis/api/policy.py` - getClaim RBAC rule |
 | **Tests** | `tests/test_api_claim_detail_and_sanad.py::test_returns_200_with_correct_body` |
 | | `tests/test_api_claim_detail_and_sanad.py::test_cross_tenant_read_blocked` |
 | | `tests/test_api_claim_detail_and_sanad.py::test_claim_not_found_returns_404` |
 | **Phase Gate** | Phase 6.2 |
 | **Evidence Artifact** | ClaimResponse with claim_id, corroboration, defect_ids, verdict |
-| **Implementation Status** | ✅ Exists |
+| **Implementation Status** | [x] Exists |
 
 ---
 
@@ -841,16 +845,16 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 |-----------|-------|
 | **Requirement ID** | FE-003 |
 | **Requirement** | GET /v1/claims/{claimId}/sanad returns transmission chain with deterministic ordering |
-| **Source Doc** | Implementation Plan §Phase 6.2; Roadmap §6.2 |
-| **Source Section** | "Frontend Backend Contracts — Sanad Chain API" |
-| **Enforcing Component** | `src/idis/api/routes/claims.py` — get_claim_sanad() |
-| **Secondary Enforcement** | `src/idis/api/policy.py` — getClaimSanad RBAC rule |
+| **Source Doc** | Implementation Plan section Phase 6.2; Roadmap section 6.2 |
+| **Source Section** | "Frontend Backend Contracts - Sanad Chain API" |
+| **Enforcing Component** | `src/idis/api/routes/claims.py` - get_claim_sanad() |
+| **Secondary Enforcement** | `src/idis/api/policy.py` - getClaimSanad RBAC rule |
 | **Tests** | `tests/test_api_claim_detail_and_sanad.py::test_returns_200_with_chain_structure` |
 | | `tests/test_api_claim_detail_and_sanad.py::test_stable_ordering_for_transmission_chain` |
 | | `tests/test_api_claim_detail_and_sanad.py::test_cross_tenant_read_blocked` |
 | **Phase Gate** | Phase 6.2 |
 | **Evidence Artifact** | SanadResponse with transmission_chain sorted by node_id |
-| **Implementation Status** | ✅ Exists |
+| **Implementation Status** | [x] Exists |
 
 **Determinism Guarantee:**
 | Aspect | Rule |

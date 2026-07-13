@@ -39,7 +39,7 @@ class TenantContext(BaseModel):
     actor_id: str
     name: str
     timezone: str
-    data_region: str
+    data_region: str | None
     roles: frozenset[str] = frozenset()
     actor_type: str = "SERVICE"
 
@@ -307,7 +307,9 @@ def _extract_tenant_from_jwt(token: str) -> TenantContext:
         actor_id=identity.user_id,
         name=identity.name or identity.email or identity.user_id,
         timezone="UTC",
-        data_region=identity.data_region or "default",
+        # No fabricated region: a missing data_region claim stays None so residency fails
+        # closed (deny) rather than silently pinning the identity to a "default" sentinel.
+        data_region=identity.data_region,
         roles=identity.roles,
         actor_type="HUMAN",
     )

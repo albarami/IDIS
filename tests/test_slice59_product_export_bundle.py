@@ -22,6 +22,7 @@ from idis.deliverables.generator import DeliverablesGenerator
 from idis.services.runs.steps import build_run_context
 from idis.services.runs.strict_full_live import build_strict_full_live_readiness_report
 from idis.storage.filesystem_store import FilesystemObjectStore
+from tests.abac_seed import seed_deal_access
 from tests.test_deliverables_generator import (
     _TIMESTAMP,
     _make_bundle,
@@ -386,6 +387,7 @@ def test_api_list_returns_completed_deliverable_rows_with_safe_uris(
     )
     assert deal_response.status_code == 201
     deal_id = str(deal_response.json()["deal_id"])
+    seed_deal_access(TENANT_ID, deal_id, "actor-slice59")
     _IN_MEMORY_DELIVERABLES["unsafe-row"] = {
         "deliverable_id": "unsafe-row",
         "tenant_id": TENANT_ID,

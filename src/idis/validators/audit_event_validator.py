@@ -44,6 +44,11 @@ VALID_EVENT_PREFIXES = {
     "data.",
     "prompt.",
     "data_room_package.",
+    "byok.",
+    "legal_hold.",
+    "retention.",
+    "erasure.",
+    "export.",
 }
 
 VALID_SEVERITIES = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
@@ -63,6 +68,13 @@ VALID_RESOURCE_TYPES = {
     "webhook",
     "prompt",
     "data_room_package",
+    "group",
+    "session",
+    "byok_key",
+    "legal_hold",
+    "retention_sweep",
+    "erasure_request",
+    "compliance_export",
 }
 
 VALID_ACTOR_TYPES = {"HUMAN", "SERVICE"}

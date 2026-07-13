@@ -214,6 +214,54 @@ POLICY_RULES: dict[str, PolicyRule] = {
         allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=False
     ),
     "createWebhook": PolicyRule(allowed_roles=ADMIN_ONLY, is_mutation=True, is_deal_scoped=False),
+    # Slice98 ABAC assignment/group management. ADMIN-only and NOT deal-scoped on purpose: an
+    # admin must be able to assign actors to a deal they are not themselves assigned to, so ABAC
+    # (which would require prior assignment) must not gate these; the route body verifies the
+    # target deal/group exists under the tenant (404 otherwise, no existence oracle).
+    "createDealAssignment": PolicyRule(
+        allowed_roles=ADMIN_ONLY, is_mutation=True, is_deal_scoped=False
+    ),
+    "deleteDealAssignment": PolicyRule(
+        allowed_roles=ADMIN_ONLY, is_mutation=True, is_deal_scoped=False
+    ),
+    "createGroup": PolicyRule(allowed_roles=ADMIN_ONLY, is_mutation=True, is_deal_scoped=False),
+    "addGroupMember": PolicyRule(allowed_roles=ADMIN_ONLY, is_mutation=True, is_deal_scoped=False),
+    "removeGroupMember": PolicyRule(
+        allowed_roles=ADMIN_ONLY, is_mutation=True, is_deal_scoped=False
+    ),
+    "assignGroupToDeal": PolicyRule(
+        allowed_roles=ADMIN_ONLY, is_mutation=True, is_deal_scoped=False
+    ),
+    "unassignGroupFromDeal": PolicyRule(
+        allowed_roles=ADMIN_ONLY, is_mutation=True, is_deal_scoped=False
+    ),
+    # Slice98 break-glass issuance. ADMIN-only and NOT deal-scoped on purpose: the requester is by
+    # definition unassigned to the deal (that is what break-glass is for), so ABAC must not gate
+    # issuance; the route verifies the deal exists under the tenant (404 otherwise, no oracle).
+    "createBreakGlassGrant": PolicyRule(
+        allowed_roles=ADMIN_ONLY, is_mutation=True, is_deal_scoped=False
+    ),
+    # Slice98 compliance management (BYOK keys, legal holds). ADMIN-only, tenant-wide controls -
+    # not deal-scoped by nature.
+    "configureByokKey": PolicyRule(
+        allowed_roles=ADMIN_ONLY, is_mutation=True, is_deal_scoped=False
+    ),
+    "rotateByokKey": PolicyRule(allowed_roles=ADMIN_ONLY, is_mutation=True, is_deal_scoped=False),
+    "revokeByokKey": PolicyRule(allowed_roles=ADMIN_ONLY, is_mutation=True, is_deal_scoped=False),
+    "applyLegalHold": PolicyRule(allowed_roles=ADMIN_ONLY, is_mutation=True, is_deal_scoped=False),
+    "liftLegalHold": PolicyRule(allowed_roles=ADMIN_ONLY, is_mutation=True, is_deal_scoped=False),
+    # Slice98 erasure/export workflows: ADMIN-only tenant-governance actions, not deal-scoped
+    # (an admin must be able to erase a deal they are not assigned to; the route verifies the
+    # target deal exists under the tenant - 404 otherwise, no existence oracle).
+    "createErasureRequest": PolicyRule(
+        allowed_roles=ADMIN_ONLY, is_mutation=True, is_deal_scoped=False
+    ),
+    "executeErasureRequest": PolicyRule(
+        allowed_roles=ADMIN_ONLY, is_mutation=True, is_deal_scoped=False
+    ),
+    "createComplianceExport": PolicyRule(
+        allowed_roles=ADMIN_ONLY, is_mutation=True, is_deal_scoped=False
+    ),
     "fetchEnrichment": PolicyRule(
         allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=False
     ),

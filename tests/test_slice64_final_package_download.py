@@ -26,6 +26,7 @@ from idis.deliverables.product_bundle import ProductBundleExporter
 from idis.persistence.repositories.deliverables import deterministic_deliverable_row_id
 from idis.services.runs.strict_full_live import build_strict_full_live_readiness_report
 from idis.storage.filesystem_store import FilesystemObjectStore
+from tests.abac_seed import seed_deal_access
 from tests.test_deliverables_generator import (
     _TIMESTAMP,
     _make_bundle,
@@ -113,6 +114,7 @@ def client(
     monkeypatch.setenv("IDIS_OBJECT_STORE_BASE_DIR", str(tmp_path / "objects"))
     clear_deals_store()
     clear_deliverables_store()
+    seed_deal_access(TENANT_ID, DEAL_ID, "actor-slice64")
     _IN_MEMORY_DELIVERABLES.clear()
     repository, _summary = exported_bundle
     for row in repository.rows:

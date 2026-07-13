@@ -1,6 +1,6 @@
 """E2E tests for IngestionService wired to Document API [P1-T02].
 
-Tests prove the full flow: create doc → trigger ingest → spans appear in GET response.
+Tests prove the full flow: create doc -> trigger ingest -> spans appear in GET response.
 All tests use real IngestionService with filesystem-backed compliant store.
 
 Required test coverage per Gate 3 mapping:
@@ -43,6 +43,7 @@ from idis.services.ingestion import IngestionService
 from idis.services.ingestion.service import IngestionResult, UploadIngestionPhaseRecorder
 from idis.storage.compliant_store import ComplianceEnforcedStore
 from idis.storage.filesystem_store import FilesystemObjectStore
+from tests.abac_seed import seed_deal_access
 
 
 class _RecordingPhaseRecorder:
@@ -210,9 +211,20 @@ def api_key_b() -> str:
 
 
 @pytest.fixture
-def deal_id() -> str:
-    """Generate a deal UUID."""
-    return str(uuid.uuid4())
+def deal_id(tenant_a_id: str, actor_a_id: str) -> str:
+    """Generate a deal UUID and grant tenant A's actor an assignment (Slice98 Task 2.6).
+
+    Every test here drives the deal as tenant A's authorized actor. After the Task 2.5
+    security fix, deal-scoped endpoints (/v1/deals/{dealId}/documents and
+    /documents/upload) are ABAC deny-by-default, so the authorized actor must hold an
+    assignment. We seed it through the same default store the middleware consults
+    (get_deal_assignment_store). Cross-tenant/unauthorized paths (e.g. tenant B in
+    test_get_document_tenant_isolation) are intentionally NOT seeded and keep returning
+    404/403.
+    """
+    did = str(uuid.uuid4())
+    seed_deal_access(tenant_a_id, did, actor_a_id)
+    return did
 
 
 @pytest.fixture
@@ -921,7 +933,7 @@ class TestIngestDocumentEmitsAuditEvents:
 
 
 class TestIngestDocumentFailClosedOnInvalidData:
-    """Proves bad input → structured error, no silent pass."""
+    """Proves bad input -> structured error, no silent pass."""
 
     def test_ingest_document_fail_closed_on_invalid_data(
         self,
@@ -1097,7 +1109,7 @@ class TestGetSpansAfterIngestion:
 
 
 class TestGetSpansBeforeIngestionReturnsEmpty:
-    """Proves spans before ingest → empty list."""
+    """Proves spans before ingest -> empty list."""
 
     def test_get_spans_before_ingestion_returns_empty(
         self,

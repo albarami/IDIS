@@ -19,6 +19,7 @@ from idis.api.routes.deals import clear_deals_store
 from idis.api.routes.runs import clear_runs_store
 from idis.audit.sink import AuditSinkError, InMemoryAuditSink
 from idis.services.runs.execution import RunExecutionResult
+from tests.abac_seed import seed_deal_access
 
 TENANT_A_ID = "11111111-1111-1111-1111-111111111111"
 TENANT_B_ID = "22222222-2222-2222-2222-222222222222"
@@ -81,6 +82,7 @@ def deal_id(client: TestClient) -> str:
     )
     assert response.status_code == 201
     did = response.json()["deal_id"]
+    seed_deal_access(TENANT_A_ID, did, "actor-a")  # authorized deal workflow (Task 2.6)
     client.app.state.deal_documents[did] = [
         {
             "document_id": "doc-test-001",
@@ -331,6 +333,7 @@ class TestNoIngestedDocumentsReturns400:
         )
         assert create_resp.status_code == 201
         empty_deal_id = create_resp.json()["deal_id"]
+        seed_deal_access(TENANT_A_ID, empty_deal_id, "actor-a")
 
         response = client.post(
             f"/v1/deals/{empty_deal_id}/runs",
@@ -351,6 +354,7 @@ class TestNoIngestedDocumentsReturns400:
         )
         assert create_resp.status_code == 201
         empty_deal_id = create_resp.json()["deal_id"]
+        seed_deal_access(TENANT_A_ID, empty_deal_id, "actor-a")
 
         response = client.post(
             f"/v1/deals/{empty_deal_id}/runs",
@@ -407,6 +411,7 @@ class TestAuditFailureOnRunCompletedReturns500:
         )
         assert create_resp.status_code == 201
         deal_id = create_resp.json()["deal_id"]
+        seed_deal_access(TENANT_A_ID, deal_id, "actor-a")
 
         app.state.deal_documents[deal_id] = [
             {

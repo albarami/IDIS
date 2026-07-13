@@ -1,6 +1,6 @@
 """Data residency enforcement middleware for IDIS API.
 
-Implements region pinning per v6.3 Data Residency Model §3:
+Implements region pinning per v6.3 Data Residency Model section 3:
 - Applies to all /v1 requests after tenant authentication
 - Enforces tenant data_region matches service region
 - Fails closed: missing config or mismatch returns 403
@@ -29,7 +29,7 @@ from idis.api.error_model import make_error_response_no_request
 from idis.api.errors import IdisHttpError
 from idis.compliance.residency import (
     IDIS_SERVICE_REGION_ENV,
-    enforce_region_pin,
+    enforce_residency,
 )
 
 logger = logging.getLogger(__name__)
@@ -101,7 +101,7 @@ class ResidencyMiddleware(BaseHTTPMiddleware):
             )
 
         try:
-            enforce_region_pin(tenant_ctx, service_region)
+            enforce_residency(tenant_ctx, service_region)
         except IdisHttpError as e:
             logger.info(
                 "Residency denied: code=%s tenant_id=%s",

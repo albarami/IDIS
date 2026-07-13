@@ -17,6 +17,7 @@ from idis.api.main import create_app
 from idis.api.routes.deals import clear_deals_store
 from idis.api.routes.deliverables import clear_deliverables_store
 from idis.audit.sink import InMemoryAuditSink
+from tests.abac_seed import seed_deal_access
 
 TENANT_A_ID = "11111111-1111-1111-1111-111111111111"
 TENANT_B_ID = "22222222-2222-2222-2222-222222222222"
@@ -77,7 +78,9 @@ def deal_id(client: TestClient) -> str:
         headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
     )
     assert response.status_code == 201
-    return response.json()["deal_id"]
+    did = response.json()["deal_id"]
+    seed_deal_access(TENANT_A_ID, did, "actor-a")  # authorized deal workflow (Task 2.6)
+    return did
 
 
 class TestDeliverablesAPIHappyPath:
@@ -136,8 +139,14 @@ class TestDeliverablesAPIHappyPath:
 class TestDeliverablesAPITenantIsolation:
     """Test tenant isolation for Deliverables API."""
 
-    def test_cross_tenant_list_returns_empty(self, client: TestClient, deal_id: str) -> None:
-        """GET /v1/deals/{dealId}/deliverables returns empty for cross-tenant."""
+    def test_cross_tenant_list_returns_403(self, client: TestClient, deal_id: str) -> None:
+        """GET /v1/deals/{dealId}/deliverables is ABAC deny-by-default for cross-tenant actor.
+
+        Task 2.6: Tenant A (assigned) generates a deliverable; the Tenant B actor has no
+        assignment on Tenant A's deal, so ABAC denies at the middleware (403) before the route.
+        Previously this returned 200 + empty items via the route's tenant filter (the old
+        pre-ABAC bypass on deal-scoped reads).
+        """
         client.post(
             f"/v1/deals/{deal_id}/deliverables",
             json={"deliverable_type": "SNAPSHOT"},
@@ -149,8 +158,7 @@ class TestDeliverablesAPITenantIsolation:
             headers={"X-IDIS-API-Key": API_KEY_TENANT_B},
         )
 
-        assert response.status_code == 200
-        assert response.json()["items"] == []
+        assert response.status_code == 403
 
 
 class TestDeliverablesAPIValidation:

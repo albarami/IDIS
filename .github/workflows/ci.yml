@@ -144,8 +144,8 @@ jobs:
           IDIS_REQUIRE_POSTGRES: "1"
         run: |
           echo "=== Postgres Integration Tests (IDIS_REQUIRE_POSTGRES=1) ==="
-          echo "Test files: test_postgres_rls_and_audit_immutability.py, test_api_deals_postgres.py, test_api_claims_postgres.py, test_postgres_break_attempts.py, test_api_run_observability_postgres.py, test_api_default_upload_ingestion_postgres.py, test_api_full_run_step_name_postgres.py, test_api_full_run_durable_evidence_postgres.py, test_api_selected_multidocument_full_acceptance_postgres.py, test_api_sanad_auto_grade_persistence_postgres.py, test_slice96_provider_budget_postgres.py (Slice96 DEC-C durable provider budget), test_slice96_idempotency_ttl_postgres.py (Slice96 DEC-E idempotency TTL cleanup), test_slice97_webhook_outbox_postgres.py (Slice97 durable webhook outbox), test_slice97_webhook_dispatcher_postgres.py (Slice97 webhook dispatcher)"
-          pytest tests/test_postgres_rls_and_audit_immutability.py tests/test_api_deals_postgres.py tests/test_api_claims_postgres.py tests/test_postgres_break_attempts.py tests/test_api_run_observability_postgres.py tests/test_api_default_upload_ingestion_postgres.py tests/test_api_full_run_step_name_postgres.py tests/test_api_full_run_durable_evidence_postgres.py tests/test_api_selected_multidocument_full_acceptance_postgres.py tests/test_api_sanad_auto_grade_persistence_postgres.py tests/test_slice96_provider_budget_postgres.py tests/test_slice96_idempotency_ttl_postgres.py tests/test_slice97_webhook_outbox_postgres.py tests/test_slice97_webhook_dispatcher_postgres.py -v --junitxml=postgres_integration_pytest.xml 2>&1 | tee postgres_integration_pytest.log
+          echo "Test files: test_postgres_rls_and_audit_immutability.py, test_api_deals_postgres.py, test_api_claims_postgres.py, test_postgres_break_attempts.py, test_api_run_observability_postgres.py, test_api_default_upload_ingestion_postgres.py, test_api_full_run_step_name_postgres.py, test_api_full_run_durable_evidence_postgres.py, test_api_selected_multidocument_full_acceptance_postgres.py, test_api_sanad_auto_grade_persistence_postgres.py, test_slice96_provider_budget_postgres.py (Slice96 DEC-C durable provider budget), test_slice96_idempotency_ttl_postgres.py (Slice96 DEC-E idempotency TTL cleanup), test_slice97_webhook_outbox_postgres.py (Slice97 durable webhook outbox), test_slice97_webhook_dispatcher_postgres.py (Slice97 webhook dispatcher), test_slice98_abac_durable_store_postgres.py, test_slice98_access_admin_api_postgres.py, test_slice98_break_glass_workflow_postgres.py, test_slice98_byok_legal_hold_postgres.py, test_slice98_durable_residency_postgres.py, test_slice98_erasure_export_postgres.py, test_slice98_retention_janitor_postgres.py (Slice98 durable auth/ABAC/compliance)"
+          pytest tests/test_postgres_rls_and_audit_immutability.py tests/test_api_deals_postgres.py tests/test_api_claims_postgres.py tests/test_postgres_break_attempts.py tests/test_api_run_observability_postgres.py tests/test_api_default_upload_ingestion_postgres.py tests/test_api_full_run_step_name_postgres.py tests/test_api_full_run_durable_evidence_postgres.py tests/test_api_selected_multidocument_full_acceptance_postgres.py tests/test_api_sanad_auto_grade_persistence_postgres.py tests/test_slice96_provider_budget_postgres.py tests/test_slice96_idempotency_ttl_postgres.py tests/test_slice97_webhook_outbox_postgres.py tests/test_slice97_webhook_dispatcher_postgres.py tests/test_slice98_abac_durable_store_postgres.py tests/test_slice98_access_admin_api_postgres.py tests/test_slice98_break_glass_workflow_postgres.py tests/test_slice98_byok_legal_hold_postgres.py tests/test_slice98_durable_residency_postgres.py tests/test_slice98_erasure_export_postgres.py tests/test_slice98_retention_janitor_postgres.py -v --junitxml=postgres_integration_pytest.xml 2>&1 | tee postgres_integration_pytest.log
           exit ${PIPESTATUS[0]}
 
       - name: Upload bootstrap log artifact
@@ -198,11 +198,11 @@ jobs:
                   f.write("## Postgres Integration Pytest Results\n\n")
                   f.write(f"**Postgres integration pytest: {passed} passed, {skipped} skipped**\n\n")
                   if failures > 0 or errors > 0:
-                      f.write(f"⚠️ Failures: {failures}, Errors: {errors}\n\n")
+                      f.write(f"[WARN] Failures: {failures}, Errors: {errors}\n\n")
           except Exception as e:
               with open(summary_file, "a") as f:
                   f.write(f"## Postgres Integration Pytest Results\n\n")
-                  f.write(f"⚠️ Could not parse JUnit XML: {e}\n\n")
+                  f.write(f"[WARN] Could not parse JUnit XML: {e}\n\n")
           EOF
 
       - name: Write logs summary to job summary
@@ -243,12 +243,12 @@ jobs:
           exit_code=$?
           echo "Exit code: $exit_code"
           if [ $exit_code -eq 0 ]; then
-            echo "✅ GDBS-S validation PASSED"
+            echo "[OK] GDBS-S validation PASSED"
           elif [ $exit_code -eq 1 ]; then
-            echo "❌ GDBS-S validation FAILED"
+            echo "[FAIL] GDBS-S validation FAILED"
             exit 1
           elif [ $exit_code -eq 2 ]; then
-            echo "⏸️ GDBS-S validation BLOCKED"
+            echo "[BLOCKED] GDBS-S validation BLOCKED"
             exit 2
           fi
 
@@ -312,14 +312,14 @@ jobs:
           for i in {1..30}; do
             if curl -sf http://localhost:8000/health; then
               echo ""
-              echo "✅ Health check passed"
+              echo "[OK] Health check passed"
               exit 0
             fi
             echo "Attempt $i: waiting..."
             sleep 2
           done
           
-          echo "❌ Health check failed"
+          echo "[FAIL] Health check failed"
           docker logs idis-test
           exit 1
 
@@ -349,7 +349,7 @@ jobs:
           echo "## Container Build Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Image:** idis:ci-${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Health Check:** ✅ Passed" >> $GITHUB_STEP_SUMMARY
+          echo "- **Health Check:** [OK] Passed" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           if [ -f release_manifest.json ]; then
             echo "### Release Manifest" >> $GITHUB_STEP_SUMMARY
@@ -383,10 +383,10 @@ jobs:
           
           # Check for errors
           if grep -q '"status": "statusError"' k8s_validation.json || grep -q '"status": "statusInvalid"' k8s_validation.json; then
-            echo "❌ Kubernetes manifest validation failed"
+            echo "[FAIL] Kubernetes manifest validation failed"
             exit 1
           fi
-          echo "✅ All Kubernetes manifests are valid"
+          echo "[OK] All Kubernetes manifests are valid"
 
       - name: Upload validation results
         if: always()
@@ -448,8 +448,8 @@ jobs:
         run: |
           echo "## Terraform Validation" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Format Check:** ${{ steps.fmt.outcome == 'success' && '✅ Passed' || '⚠️ Needs formatting' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Validate:** ✅ Passed" >> $GITHUB_STEP_SUMMARY
+          echo "- **Format Check:** ${{ steps.fmt.outcome == 'success' && '[OK] Passed' || '[WARN] Needs formatting' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Validate:** [OK] Passed" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Files Validated" >> $GITHUB_STEP_SUMMARY
           for f in deploy/terraform/*.tf; do

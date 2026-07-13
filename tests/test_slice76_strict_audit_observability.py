@@ -2,7 +2,7 @@
 
 A safe, typed provenance model plus a helper that maps existing strict readiness
 truth (StrictComponentReadiness / StrictComponentInventory / env_sources) into
-StepProvenance using classes/statuses only — never raw env values or secrets.
+StepProvenance using classes/statuses only - never raw env values or secrets.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from idis.services.runs.strict_full_live import (
     StrictComponentStatus,
     build_step_provenance,
 )
+from tests.abac_seed import seed_deal_access
 
 ALL_ENV_SOURCE_CLASSES = {
     EnvSourceClass.PROCESS_ENV,
@@ -527,6 +528,7 @@ def _post_strict_blocked_full_run(monkeypatch: Any, *, report: Any = None) -> An
     create_resp = client.post("/v1/deals", headers=headers, content=json.dumps(_DEAL_BODY))
     assert create_resp.status_code == 201, create_resp.text
     deal_id = create_resp.json()["deal_id"]
+    seed_deal_access(tenant_id, deal_id, f"actor-{tenant_id[:8]}")
     app.state.deal_documents[deal_id] = [
         _cluster7_preflight_doc(deal_id=deal_id, tenant_id=tenant_id)
     ]
@@ -564,7 +566,7 @@ def test_api_start_run_strict_block_details_are_operator_safe(monkeypatch: Any) 
     # Required env var names are not surfaced (prefer classes/statuses over names).
     assert "ANTHROPIC_API_KEY" not in encoded
     # No unsafe raw-field tokens leak through nested structures. (Distinctive compound
-    # tokens only — bare "blocker" would false-match the safe "blocker_count" key.)
+    # tokens only - bare "blocker" would false-match the safe "blocker_count" key.)
     for unsafe_key in ("evidence_files", "blocker_message", "implementation_slice", "env_sources"):
         assert unsafe_key not in encoded
 

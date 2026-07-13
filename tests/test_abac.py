@@ -264,7 +264,7 @@ class TestCheckDealAccessWithBreakGlass:
         )
 
         assert decision.allow is True
-        assert decision.code == AbacDecisionCode.ALLOWED
+        assert decision.code == AbacDecisionCode.ALLOWED_BREAK_GLASS
         assert "break-glass" in decision.message.lower()
 
     def test_admin_without_break_glass_denied(self, store: InMemoryDealAssignmentStore) -> None:

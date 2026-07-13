@@ -27,6 +27,7 @@ from idis.pipeline.worker import (
     _default_run_context_factory,
 )
 from idis.services.runs.execution import RunExecutionResult
+from tests.abac_seed import seed_deal_access
 
 API_KEY = "slice75a-red-key"
 TENANT_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
@@ -136,6 +137,7 @@ def test_api_and_worker_share_strict_readiness_helper_inputs(
     )
     assert create_resp.status_code == 201
     deal_id = create_resp.json()["deal_id"]
+    seed_deal_access(TENANT_A, deal_id, "actor-a")
     app.state.deal_documents[deal_id] = [_preflight_doc(deal_id=deal_id)]
 
     with patch(
@@ -347,6 +349,7 @@ def test_api_and_worker_full_paths_produce_same_strict_block_ledger(
     )
     assert create_resp.status_code == 201
     deal_id = create_resp.json()["deal_id"]
+    seed_deal_access(TENANT_A, deal_id, "actor-a")
     app.state.deal_documents[deal_id] = [_preflight_doc(deal_id=deal_id)]
 
     api_resp = client.post(
@@ -460,6 +463,7 @@ def test_api_queue_race_returns_deterministic_run_already_claimed(
     )
     assert create_resp.status_code == 201
     deal_id = create_resp.json()["deal_id"]
+    seed_deal_access(TENANT_A, deal_id, "actor-a")
     app.state.deal_documents[deal_id] = [_preflight_doc(deal_id=deal_id)]
 
     with patch(

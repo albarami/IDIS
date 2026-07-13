@@ -6,7 +6,7 @@
 
 ## 1) Purpose
 
-Maps v6.3 requirements/invariants → implementation → tests → phase gates.
+Maps v6.3 requirements/invariants -> implementation -> tests -> phase gates.
 Ensures deterministic, phase-disciplined delivery aligned to v6.3 spec.
 
 ---
@@ -15,21 +15,21 @@ Ensures deterministic, phase-disciplined delivery aligned to v6.3 spec.
 
 | ID | Requirement / Invariant | Spec Reference | Implementation | Tests | Status | Phase | Notes |
 |----|------------------------|----------------|----------------|-------|--------|-------|-------|
-| **INV-01** | Tenant Isolation (Leakage Rule) | Security §6, API §3 | `api/auth.py`, `middleware/idempotency.py` | `test_api_tenancy_auth.py`, `test_api_idempotency_middleware.py` | DONE | 2.1, 2.5 | Actor scoping added 2.5 |
-| **INV-02** | Audit Coverage (Mutations) | Audit Taxonomy §2 | `middleware/audit.py`, `audit/sink.py` | `test_api_audit_middleware.py`, `test_audit_event_validator.py` | DONE | 2.3 | JSONL sink; DB=Stage B |
-| **INV-03** | No-Free-Facts Enforcement | TDD §1.1, §3.2 | `validators/no_free_facts.py` | `test_no_free_facts.py` | DONE | 0 | Validator complete |
-| **INV-04** | Sanad Integrity Validator | TDD §4.2-4.3, §5 | `validators/sanad_integrity.py` | `test_sanad_integrity.py` | DONE | 0 | Validator; services=Phase 3 |
-| **INV-05** | Sanad Defect Rules | TDD §4.3, Data Model §3.4 | `validators/sanad_integrity.py` | `test_sanad_integrity.py` | DONE | 0 | FATAL/MAJOR/MINOR rules |
-| **INV-06** | Muḥāsabah Gate | TDD §4.4, Eval §2.1 | `validators/muhasabah.py` | `test_muhasabah.py`, `test_muhasabah_validator.py` | DONE | 0 | Validator complete |
-| **INV-07** | Calc-Sanad Determinism | TDD §1.1, §6 | `calc/engine.py`, `models/calc_sanad.py` | `test_calc_reproducibility.py`, `test_calc_sanad.py`, `test_postgres_rls_and_audit_immutability.py` | DONE | 4.1 | DN-001: material-aware calc_grade, FK constraints, RLS tests |
-| **INV-08** | Request ID Propagation | API §4 | `middleware/request_id.py` | `test_api_openapi_validation.py` | DONE | 2.1 | |
-| **INV-09** | OpenAPI Validation | API §5 | `middleware/openapi_validate.py` | `test_api_openapi_validation.py` | DONE | 2.2 | |
-| **INV-10** | Idempotency-Key | API §4.3 | `middleware/idempotency.py`, `idempotency/store.py` | `test_api_idempotency_middleware.py` | DONE | 2.4-2.5 | Tenant+actor scoped |
-| **INV-11** | Fail-Closed (store.put) | API §4.3 | `middleware/idempotency.py` | `test_api_idempotency_middleware.py::TestStorePutFailure` | DONE | 2.5 | Returns 500 |
-| **INV-12** | Prompt Registry + Rollback | Prompt Registry §4 | `services/prompts/registry.py`, `services/prompts/versioning.py` | `test_prompt_registry.py`, `test_prompt_rollback.py` | PLANNED | 7 | Exit: Gate 4; audit events required |
-| **INV-13** | Evaluation Harness | Eval Harness §3-7 | `evaluation/harness.py`, `evaluation/benchmarks/` | `test_evaluation_harness.py`, `test_gdbs_runner.py` | PLANNED | 7 | Exit: Gate 4; GDBS-S/F/A |
-| **INV-14** | Frontend Evidence-First UI | Frontend §2-3 | — | — | PLANNED | 6 | Backend deps only |
-| **INV-15** | SLO/SLA Compliance | SLO/SLA §3 | `monitoring/slo_dashboard.py`, `monitoring/alerts.py` | `test_slo_metrics.py`, `test_alert_rules.py` | PLANNED | 7 | Exit: Gate 4; SLO dashboards |
+| **INV-01** | Tenant Isolation (Leakage Rule) | Security section 6, API section 3 | `api/auth.py`, `middleware/idempotency.py` | `test_api_tenancy_auth.py`, `test_api_idempotency_middleware.py` | DONE | 2.1, 2.5 | Actor scoping added 2.5 |
+| **INV-02** | Audit Coverage (Mutations) | Audit Taxonomy section 2 | `middleware/audit.py`, `audit/sink.py` | `test_api_audit_middleware.py`, `test_audit_event_validator.py` | DONE | 2.3 | JSONL sink; DB=Stage B |
+| **INV-03** | No-Free-Facts Enforcement | TDD section 1.1, section 3.2 | `validators/no_free_facts.py` | `test_no_free_facts.py` | DONE | 0 | Validator complete |
+| **INV-04** | Sanad Integrity Validator | TDD section 4.2-4.3, section 5 | `validators/sanad_integrity.py` | `test_sanad_integrity.py` | DONE | 0 | Validator; services=Phase 3 |
+| **INV-05** | Sanad Defect Rules | TDD section 4.3, Data Model section 3.4 | `validators/sanad_integrity.py` | `test_sanad_integrity.py` | DONE | 0 | FATAL/MAJOR/MINOR rules |
+| **INV-06** | Muhasabah Gate | TDD section 4.4, Eval section 2.1 | `validators/muhasabah.py` | `test_muhasabah.py`, `test_muhasabah_validator.py` | DONE | 0 | Validator complete |
+| **INV-07** | Calc-Sanad Determinism | TDD section 1.1, section 6 | `calc/engine.py`, `models/calc_sanad.py` | `test_calc_reproducibility.py`, `test_calc_sanad.py`, `test_postgres_rls_and_audit_immutability.py` | DONE | 4.1 | DN-001: material-aware calc_grade, FK constraints, RLS tests |
+| **INV-08** | Request ID Propagation | API section 4 | `middleware/request_id.py` | `test_api_openapi_validation.py` | DONE | 2.1 | |
+| **INV-09** | OpenAPI Validation | API section 5 | `middleware/openapi_validate.py` | `test_api_openapi_validation.py` | DONE | 2.2 | |
+| **INV-10** | Idempotency-Key | API section 4.3 | `middleware/idempotency.py`, `idempotency/store.py` | `test_api_idempotency_middleware.py` | DONE | 2.4-2.5 | Tenant+actor scoped |
+| **INV-11** | Fail-Closed (store.put) | API section 4.3 | `middleware/idempotency.py` | `test_api_idempotency_middleware.py::TestStorePutFailure` | DONE | 2.5 | Returns 500 |
+| **INV-12** | Prompt Registry + Rollback | Prompt Registry section 4 | `services/prompts/registry.py`, `services/prompts/versioning.py` | `test_prompt_registry.py`, `test_prompt_rollback.py` | PLANNED | 7 | Exit: Gate 4; audit events required |
+| **INV-13** | Evaluation Harness | Eval Harness section 3-7 | `evaluation/harness.py`, `evaluation/benchmarks/` | `test_evaluation_harness.py`, `test_gdbs_runner.py` | PLANNED | 7 | Exit: Gate 4; GDBS-S/F/A |
+| **INV-14** | Frontend Evidence-First UI | Frontend section 2-3 | - | - | PLANNED | 6 | Backend deps only |
+| **INV-15** | SLO/SLA Compliance | SLO/SLA section 3 | `monitoring/slo_dashboard.py`, `monitoring/alerts.py` | `test_slo_metrics.py`, `test_alert_rules.py` | PLANNED | 7 | Exit: Gate 4; SLO dashboards |
 
 ---
 
@@ -42,7 +42,7 @@ Ensures deterministic, phase-disciplined delivery aligned to v6.3 spec.
 | Auth scoping | Every request has tenant_id | `TenantContext` in `auth.py` | `test_api_tenancy_auth.py` |
 | Actor identity | Idempotency scoped by actor | `actor_id` in `TenantContext` | `test_api_idempotency_middleware.py::TestActorIsolation` |
 | Cache isolation | Caches keyed by tenant | Planned (Stage B) | Planned |
-| RLS | DB queries filtered by tenant | Planned (Phase 3) | Planned |
+| RLS | DB queries filtered by tenant | Guarded RLS policies on all tenant tables (migrations 0001+; Slice98 0026-0030) | DONE |
 
 ### 3.2 Audit Coverage (INV-02)
 
@@ -50,7 +50,7 @@ Ensures deterministic, phase-disciplined delivery aligned to v6.3 spec.
 |--------|-------------|----------------|------|
 | 100% mutation coverage | All POST/PATCH/DELETE emit event | `AuditMiddleware` | `test_audit_emitted_on_valid_request` |
 | Append-only | No event modification | `JsonlFileAuditSink.write` | `test_audit_event_validator.py` |
-| Fail-closed | Sink failure → 500 | `AuditMiddleware` | `test_fail_closed_on_sink_write_failure` |
+| Fail-closed | Sink failure -> 500 | `AuditMiddleware` | `test_fail_closed_on_sink_write_failure` |
 | Schema validation | Events match schema | `validate_audit_event()` | `test_audit_event_validator.py` |
 
 ### 3.3 No-Free-Facts (INV-03)
@@ -66,27 +66,27 @@ Ensures deterministic, phase-disciplined delivery aligned to v6.3 spec.
 | Aspect | Requirement | Implementation | Test |
 |--------|-------------|----------------|------|
 | Grade computation | A/B/C/D per algorithm | `validate_sanad_integrity()` | `test_sanad_integrity.py` |
-| FATAL → D | BROKEN_CHAIN, etc. | `validate_sanad_integrity()` | `test_fatal_defect_forces_grade_d` |
+| FATAL -> D | BROKEN_CHAIN, etc. | `validate_sanad_integrity()` | `test_fatal_defect_forces_grade_d` |
 | Corroboration | AHAD/MUTAWATIR rules | `validate_sanad_integrity()` | `test_sanad_integrity.py` |
 | Independence | upstream_origin_id check | Planned (Phase 3) | Planned |
 
-### 3.5 Muḥāsabah Gate (INV-06)
+### 3.5 Muhasabah Gate (INV-06)
 
 | Aspect | Requirement | Implementation | Test |
 |--------|-------------|----------------|------|
 | Record required | All agent outputs | `validate_muhasabah()` | `test_muhasabah_validator.py` |
 | Claim refs | supported_claim_ids | `MuhasabahValidator` | `test_muhasabah.py` |
 | Uncertainty | uncertainty_register | `MuhasabahValidator` | `test_muhasabah.py` |
-| Reject rules | Missing record → REJECT | `MuhasabahValidator` | `test_reject_on_missing_record` |
+| Reject rules | Missing record -> REJECT | `MuhasabahValidator` | `test_reject_on_missing_record` |
 
 ### 3.6 Calc-Sanad (INV-07)
 
 | Aspect | Requirement | Implementation | Test |
 |--------|-------------|----------------|------|
-| Reproducibility | Same input → same hash | `calc/engine.py` | `test_calc_reproducibility.py` |
+| Reproducibility | Same input -> same hash | `calc/engine.py` | `test_calc_reproducibility.py` |
 | Formula hash | Tracked in Calc-Sanad | `models/calc_sanad.py` | `test_calc_sanad.py` |
 | Input tracing | Links to claim_ids | `models/calc_sanad.py` | `test_calc_sanad.py` |
-| **Exit Gate** | Gate 2: repro≥99.9% | Eval Harness integration | `test_evaluation_harness.py` |
+| **Exit Gate** | Gate 2: repro>=99.9% | Eval Harness integration | `test_evaluation_harness.py` |
 
 ---
 
@@ -120,10 +120,10 @@ Ensures deterministic, phase-disciplined delivery aligned to v6.3 spec.
 | 2.4-2.5 | Gate 1 | INV-10, INV-11 (idempotency) |
 | 3 | Gate 2 | INV-04, INV-05 (Sanad services) |
 | 4 | Gate 2 | INV-07 (Calc-Sanad engine) |
-| 5 | Gate 3 | INV-06 (Muḥāsabah integration) |
+| 5 | Gate 3 | INV-06 (Muhasabah integration) |
 | POST-5.2 | Gate 3 | VS-001 (ValueStruct), CLT-001 (Claim types), NFF-002 (Semantic), DW-001 (Saga) |
 | 6 | Gate 3 | INV-14 (Frontend contracts) |
-| 6.5 | SPEC | PM-001 (Pattern matching — spec only, no implementation) |
+| 6.5 | SPEC | PM-001 (Pattern matching - spec only, no implementation) |
 | 7 | Gate 4 | INV-12, INV-13, INV-15 (hardening) |
 
 ---

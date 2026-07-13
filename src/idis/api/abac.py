@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from idis.api.errors import IdisHttpError
 from idis.api.policy import Role
@@ -35,6 +35,7 @@ class AbacDecisionCode(StrEnum):
     """ABAC decision codes for audit and error responses."""
 
     ALLOWED = "ABAC_ALLOWED"
+    ALLOWED_BREAK_GLASS = "ABAC_ALLOWED_BREAK_GLASS"
     DENIED_NO_ASSIGNMENT = "ABAC_DENIED_NO_ASSIGNMENT"
     DENIED_AUDITOR_MUTATION = "ABAC_DENIED_AUDITOR_MUTATION"
     DENIED_BREAK_GLASS_REQUIRED = "ABAC_DENIED_BREAK_GLASS_REQUIRED"
@@ -230,7 +231,13 @@ class InMemoryDealAssignmentStore:
 
     def __init__(self) -> None:
         self._assignments: dict[tuple[str, str, str], bool] = {}
+        # Legacy direct deal-group membership keyed by (tenant, deal, actor) - preserved for
+        # existing callers. The richer group model below (used by the Slice98 management API)
+        # adds group entities, actor membership, and group->deal assignment.
         self._group_memberships: dict[tuple[str, str, str], bool] = {}
+        self._groups: set[tuple[str, str]] = set()  # (tenant, group_id)
+        self._group_members: set[tuple[str, str, str]] = set()  # (tenant, group_id, actor_id)
+        self._deal_groups: set[tuple[str, str, str]] = set()  # (tenant, deal_id, group_id)
 
     def add_assignment(self, tenant_id: str, deal_id: str, actor_id: str) -> None:
         """Add a deal assignment for an actor."""
@@ -263,13 +270,226 @@ class InMemoryDealAssignmentStore:
         deal_id: str,
         actor_id: str,
     ) -> bool:
-        """Check if actor is in a group assigned to deal."""
-        return self._group_memberships.get((tenant_id, deal_id, actor_id), False)
+        """Check if actor is in a group assigned to deal (legacy direct or group model)."""
+        if self._group_memberships.get((tenant_id, deal_id, actor_id), False):
+            return True
+        return any(
+            (tenant_id, deal_id, group_id) in self._deal_groups
+            and (tenant_id, group_id, actor_id) in self._group_members
+            for (t, group_id) in self._groups
+            if t == tenant_id
+        )
+
+    # --- group management (Slice98 Task 2; twin of PostgresDealAssignmentStore) ---
+
+    def create_group(self, tenant_id: str, group_id: str, name: str = "") -> None:
+        """Create a tenant-scoped group (idempotent)."""
+        self._groups.add((tenant_id, group_id))
+
+    def group_exists(self, tenant_id: str, group_id: str) -> bool:
+        """Check whether a group exists for the tenant."""
+        return (tenant_id, group_id) in self._groups
+
+    def add_group_member(self, tenant_id: str, group_id: str, actor_id: str) -> None:
+        """Add an actor to a tenant-scoped group (idempotent)."""
+        self._group_members.add((tenant_id, group_id, actor_id))
+
+    def remove_group_member(self, tenant_id: str, group_id: str, actor_id: str) -> None:
+        """Remove an actor from a group."""
+        self._group_members.discard((tenant_id, group_id, actor_id))
+
+    def assign_group_to_deal(self, tenant_id: str, deal_id: str, group_id: str) -> None:
+        """Assign a group to a deal (idempotent)."""
+        self._deal_groups.add((tenant_id, deal_id, group_id))
+
+    def unassign_group_from_deal(self, tenant_id: str, deal_id: str, group_id: str) -> None:
+        """Remove a group's deal assignment."""
+        self._deal_groups.discard((tenant_id, deal_id, group_id))
 
     def clear(self) -> None:
         """Clear all assignments. For testing only."""
         self._assignments.clear()
         self._group_memberships.clear()
+        self._groups.clear()
+        self._group_members.clear()
+        self._deal_groups.clear()
+
+
+class PostgresDealAssignmentStore:
+    """Durable, RLS-scoped deal assignment store (Slice98 Task 1).
+
+    Backed by the ``deal_assignments`` / ``groups`` / ``group_memberships`` tables
+    (migration 0026). Checks are tenant-scoped via RLS on a per-call tenant-scoped connection and
+    return False for unknown deals (no existence leak per ADR-011). A database failure during a
+    check DENIES loudly (403 ``ABAC_RESOLUTION_FAILED``, mirroring the resolver precedent above) -
+    never an allow, never a silent swallow. Writers are idempotent (``ON CONFLICT DO NOTHING`` on
+    the unique indexes) and exist for tests and the future assignment-management API.
+    """
+
+    def _query_exists(self, tenant_id: str, sql: str, params: dict[str, str]) -> bool:
+        from sqlalchemy import text
+
+        from idis.persistence.db import begin_app_conn, set_tenant_local
+
+        try:
+            with begin_app_conn() as conn:
+                set_tenant_local(conn, tenant_id)
+                row = conn.execute(text(sql), params).fetchone()
+                return row is not None
+        except Exception as e:
+            logger.error(
+                "PostgresDealAssignmentStore query failed: %s",
+                str(e),
+                extra={"tenant_id": tenant_id},
+            )
+            raise IdisHttpError(
+                status_code=403,
+                code="ABAC_RESOLUTION_FAILED",
+                message="Access denied.",
+            ) from e
+
+    def _execute(self, tenant_id: str, sql: str, params: dict[str, str]) -> None:
+        from sqlalchemy import text
+
+        from idis.persistence.db import begin_app_conn, set_tenant_local
+
+        with begin_app_conn() as conn:
+            set_tenant_local(conn, tenant_id)
+            conn.execute(text(sql), params)
+
+    def is_actor_assigned(self, tenant_id: str, deal_id: str, actor_id: str) -> bool:
+        """Check direct assignment. Fail-closed on DB errors."""
+        return self._query_exists(
+            tenant_id,
+            """
+            SELECT 1 FROM deal_assignments
+            WHERE tenant_id = CAST(:tenant_id AS uuid)
+                AND deal_id = CAST(:deal_id AS uuid)
+                AND assignee_type = 'ACTOR'
+                AND assignee_id = :actor_id
+            LIMIT 1
+            """,
+            {"tenant_id": tenant_id, "deal_id": deal_id, "actor_id": actor_id},
+        )
+
+    def is_actor_in_deal_group(self, tenant_id: str, deal_id: str, actor_id: str) -> bool:
+        """Check membership in a group assigned to the deal. Fail-closed on DB errors."""
+        return self._query_exists(
+            tenant_id,
+            """
+            SELECT 1
+            FROM deal_assignments da
+            JOIN group_memberships gm
+                ON gm.tenant_id = da.tenant_id AND gm.group_id = da.assignee_id
+            WHERE da.tenant_id = CAST(:tenant_id AS uuid)
+                AND da.deal_id = CAST(:deal_id AS uuid)
+                AND da.assignee_type = 'GROUP'
+                AND gm.actor_id = :actor_id
+            LIMIT 1
+            """,
+            {"tenant_id": tenant_id, "deal_id": deal_id, "actor_id": actor_id},
+        )
+
+    def add_assignment(self, tenant_id: str, deal_id: str, actor_id: str) -> None:
+        """Add a direct deal assignment (idempotent)."""
+        self._execute(
+            tenant_id,
+            """
+            INSERT INTO deal_assignments (tenant_id, deal_id, assignee_type, assignee_id)
+            VALUES (CAST(:tenant_id AS uuid), CAST(:deal_id AS uuid), 'ACTOR', :assignee_id)
+            ON CONFLICT (tenant_id, deal_id, assignee_type, assignee_id) DO NOTHING
+            """,
+            {"tenant_id": tenant_id, "deal_id": deal_id, "assignee_id": actor_id},
+        )
+
+    def remove_assignment(self, tenant_id: str, deal_id: str, actor_id: str) -> None:
+        """Remove a direct deal assignment."""
+        self._execute(
+            tenant_id,
+            """
+            DELETE FROM deal_assignments
+            WHERE tenant_id = CAST(:tenant_id AS uuid)
+                AND deal_id = CAST(:deal_id AS uuid)
+                AND assignee_type = 'ACTOR'
+                AND assignee_id = :assignee_id
+            """,
+            {"tenant_id": tenant_id, "deal_id": deal_id, "assignee_id": actor_id},
+        )
+
+    def create_group(self, tenant_id: str, group_id: str, name: str = "") -> None:
+        """Create a group (idempotent on group_id)."""
+        self._execute(
+            tenant_id,
+            """
+            INSERT INTO groups (tenant_id, group_id, name)
+            VALUES (CAST(:tenant_id AS uuid), :group_id, :name)
+            ON CONFLICT (tenant_id, group_id) DO NOTHING
+            """,
+            {"tenant_id": tenant_id, "group_id": group_id, "name": name},
+        )
+
+    def group_exists(self, tenant_id: str, group_id: str) -> bool:
+        """Check whether a group exists for the tenant (RLS-scoped; fail-closed on DB error)."""
+        return self._query_exists(
+            tenant_id,
+            """
+            SELECT 1 FROM groups
+            WHERE tenant_id = CAST(:tenant_id AS uuid) AND group_id = :group_id
+            LIMIT 1
+            """,
+            {"tenant_id": tenant_id, "group_id": group_id},
+        )
+
+    def add_group_member(self, tenant_id: str, group_id: str, actor_id: str) -> None:
+        """Add an actor to a group (idempotent)."""
+        self._execute(
+            tenant_id,
+            """
+            INSERT INTO group_memberships (tenant_id, group_id, actor_id)
+            VALUES (CAST(:tenant_id AS uuid), :group_id, :actor_id)
+            ON CONFLICT (tenant_id, group_id, actor_id) DO NOTHING
+            """,
+            {"tenant_id": tenant_id, "group_id": group_id, "actor_id": actor_id},
+        )
+
+    def remove_group_member(self, tenant_id: str, group_id: str, actor_id: str) -> None:
+        """Remove an actor from a group."""
+        self._execute(
+            tenant_id,
+            """
+            DELETE FROM group_memberships
+            WHERE tenant_id = CAST(:tenant_id AS uuid)
+                AND group_id = :group_id
+                AND actor_id = :actor_id
+            """,
+            {"tenant_id": tenant_id, "group_id": group_id, "actor_id": actor_id},
+        )
+
+    def assign_group_to_deal(self, tenant_id: str, deal_id: str, group_id: str) -> None:
+        """Assign a group to a deal (idempotent)."""
+        self._execute(
+            tenant_id,
+            """
+            INSERT INTO deal_assignments (tenant_id, deal_id, assignee_type, assignee_id)
+            VALUES (CAST(:tenant_id AS uuid), CAST(:deal_id AS uuid), 'GROUP', :assignee_id)
+            ON CONFLICT (tenant_id, deal_id, assignee_type, assignee_id) DO NOTHING
+            """,
+            {"tenant_id": tenant_id, "deal_id": deal_id, "assignee_id": group_id},
+        )
+
+    def unassign_group_from_deal(self, tenant_id: str, deal_id: str, group_id: str) -> None:
+        """Remove a group's deal assignment."""
+        self._execute(
+            tenant_id,
+            """
+            DELETE FROM deal_assignments
+            WHERE tenant_id = CAST(:tenant_id AS uuid)
+                AND deal_id = CAST(:deal_id AS uuid)
+                AND assignee_type = 'GROUP'
+                AND assignee_id = :assignee_id
+            """,
+            {"tenant_id": tenant_id, "deal_id": deal_id, "assignee_id": group_id},
+        )
 
 
 _default_store: DealAssignmentStore | None = None
@@ -409,15 +629,24 @@ def resolve_deal_id_for_run(
     return str(deal_id) if deal_id else None
 
 
-def get_deal_assignment_store() -> DealAssignmentStore:
-    """Get the configured deal assignment store.
+def build_default_deal_assignment_store() -> DealAssignmentStore:
+    """Durable Postgres assignment store when configured, else the in-memory dev/test fallback.
 
-    Returns in-memory store by default. Production should configure
-    a database-backed store.
+    Production must never silently rely on the in-memory store: with a database configured the
+    durable, RLS-scoped store is selected (Slice98 Task 1).
     """
+    from idis.persistence.db import is_postgres_configured
+
+    if is_postgres_configured():
+        return PostgresDealAssignmentStore()
+    return InMemoryDealAssignmentStore()
+
+
+def get_deal_assignment_store() -> DealAssignmentStore:
+    """Get the configured deal assignment store (lazy default via the factory above)."""
     global _default_store
     if _default_store is None:
-        _default_store = InMemoryDealAssignmentStore()
+        _default_store = build_default_deal_assignment_store()
     return _default_store
 
 
@@ -425,6 +654,46 @@ def set_deal_assignment_store(store: DealAssignmentStore) -> None:
     """Set the deal assignment store. For testing and configuration."""
     global _default_store
     _default_store = store
+
+
+def reset_deal_assignment_store() -> None:
+    """Reset the default store so the next access re-selects it (tests only)."""
+    global _default_store
+    _default_store = None
+
+
+@runtime_checkable
+class ManageableDealAssignmentStore(DealAssignmentStore, Protocol):
+    """The management surface used by the Slice98 assignment/group admin API.
+
+    Both durable and in-memory twins implement it. Kept distinct from the read-only
+    ``DealAssignmentStore`` (which the RBAC/ABAC decision path consumes) so read callers are not
+    forced to depend on mutators.
+    """
+
+    def add_assignment(self, tenant_id: str, deal_id: str, actor_id: str) -> None: ...
+    def remove_assignment(self, tenant_id: str, deal_id: str, actor_id: str) -> None: ...
+    def create_group(self, tenant_id: str, group_id: str, name: str = ...) -> None: ...
+    def group_exists(self, tenant_id: str, group_id: str) -> bool: ...
+    def add_group_member(self, tenant_id: str, group_id: str, actor_id: str) -> None: ...
+    def remove_group_member(self, tenant_id: str, group_id: str, actor_id: str) -> None: ...
+    def assign_group_to_deal(self, tenant_id: str, deal_id: str, group_id: str) -> None: ...
+    def unassign_group_from_deal(self, tenant_id: str, deal_id: str, group_id: str) -> None: ...
+
+
+def get_manageable_deal_assignment_store() -> ManageableDealAssignmentStore:
+    """Return the default store as the management surface, fail-closed if it cannot manage.
+
+    Uses the SAME default store the RBAC/ABAC decision path consults (no side store).
+    """
+    store = get_deal_assignment_store()
+    if not isinstance(store, ManageableDealAssignmentStore):
+        raise IdisHttpError(
+            status_code=500,
+            code="ASSIGNMENT_STORE_NOT_MANAGEABLE",
+            message="Assignment management is unavailable.",
+        )
+    return store
 
 
 def check_deal_access(
@@ -540,9 +809,11 @@ def check_deal_access_with_break_glass(
     )
 
     if decision.requires_break_glass and break_glass_valid:
+        # Distinct code: the caller must know the token SUPPLIED the override (vs. allowed by
+        # assignment) - durable single-use consumption is keyed on exactly this distinction.
         return AbacDecision(
             allow=True,
-            code=AbacDecisionCode.ALLOWED,
+            code=AbacDecisionCode.ALLOWED_BREAK_GLASS,
             message="Access granted via break-glass override",
         )
 

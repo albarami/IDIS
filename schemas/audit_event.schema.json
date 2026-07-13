@@ -160,7 +160,14 @@
             "override",
             "integration",
             "webhook",
-            "data_room_package"
+            "data_room_package",
+            "group",
+            "session",
+            "byok_key",
+            "legal_hold",
+            "retention_sweep",
+            "erasure_request",
+            "compliance_export"
           ],
           "description": "Type of resource affected"
         },

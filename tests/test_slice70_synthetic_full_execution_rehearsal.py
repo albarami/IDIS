@@ -7,7 +7,38 @@ import os
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from idis.models.run_step import FULL_STEPS, StepName
+from tests.abac_seed import seed_deal_access
+
+_SLICE70_ACTOR = "slice70-synthetic-full-execution"
+
+
+@pytest.fixture(autouse=True)
+def _seed_synthetic_deal_access(monkeypatch: Any) -> None:
+    """Seed the rehearsal actor's deal assignment after each deal is created (Task 2.6).
+
+    The bounded full-execution rehearsal creates its deal inside a production helper then drives
+    deal-scoped upload/run endpoints, which are ABAC deny-by-default after Task 2.5. Deal creation
+    isn't reachable to seed inline, so we observe the /v1/deals 201 through the same
+    ``TestClient.post`` seam and seed via the SAME default store the middleware consults. Test-only.
+    """
+    from idis.evaluation import synthetic_strict_runtime_rehearsal as rehearsal
+
+    original_post = rehearsal.TestClient.post
+
+    def seeding_post(self: Any, url: str, *args: Any, **kwargs: Any) -> Any:
+        response = original_post(self, url, *args, **kwargs)
+        if url == "/v1/deals" and response.status_code == 201:
+            try:
+                deal_id = response.json()["deal_id"]
+            except (ValueError, KeyError, TypeError):
+                return response
+            seed_deal_access(rehearsal.SYNTHETIC_API_REHEARSAL_TENANT_ID, deal_id, _SLICE70_ACTOR)
+        return response
+
+    monkeypatch.setattr(rehearsal.TestClient, "post", seeding_post)
 
 
 def _fake_upload_and_execution_result(

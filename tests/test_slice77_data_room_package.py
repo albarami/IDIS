@@ -2,7 +2,7 @@
 
 RED-first tests for the durable data-room package header + per-file ledger
 models. Package is keyed by package_id only (no name). The file ledger stores a
-path_hash + safe extension only — raw paths, filenames, storage keys, and
+path_hash + safe extension only - raw paths, filenames, storage keys, and
 content never reach the safe/public dicts.
 """
 
@@ -29,6 +29,7 @@ from idis.models.data_room_package import (
 )
 from idis.models.document import ParseStatus
 from idis.models.document_classification import DocumentSupportStatus, DocumentTriageStatus
+from tests.abac_seed import seed_deal_access
 
 TENANT = UUID("11111111-1111-1111-1111-111111111111")
 DEAL = UUID("22222222-2222-2222-2222-222222222222")
@@ -353,7 +354,7 @@ def test_cross_tenant_and_cross_deal_reads_are_isolated() -> None:
     assert other_tenant.list_packages_by_deal(str(DEAL)) == []
     assert other_tenant.list_files_by_package(str(PACKAGE), str(DEAL)) == []
 
-    # Same tenant, wrong deal → masked None / empty (no cross-deal oracle).
+    # Same tenant, wrong deal -> masked None / empty (no cross-deal oracle).
     assert repo.get_package(str(PACKAGE), str(DEAL_B)) is None
     assert repo.list_packages_by_deal(str(DEAL_B)) == []
 
@@ -765,6 +766,12 @@ def _setup_data_room_api(monkeypatch: Any, corpus: list[dict[str, Any]]) -> tupl
     )
     assert create.status_code == 201, create.text
     deal_id = create.json()["deal_id"]
+    # Task 2.6: deal-scoped endpoints are deny-by-default ABAC. Seed BOTH actors that must be
+    # allowed on this deal via the app's default store: the ANALYST author and the AUDITOR
+    # reader. AUDITOR *mutation* stays denied by RBAC (before ABAC), which is correct.
+    seed_deal_access(tenant_id, deal_id, "analyst-1", "auditor-1")
+    # Stash the tenant so inline cross-deal tests can seed additional same-tenant deals.
+    app.state.test_tenant_id = tenant_id
     app.state.deal_documents[deal_id] = corpus
     return client, deal_id, sink
 
@@ -885,6 +892,10 @@ def test_api_get_masks_cross_deal_and_unknown_package_as_404(monkeypatch: Any) -
         headers=_ANALYST,
         content=json.dumps({"name": "Other", "company_name": "Other"}),
     ).json()["deal_id"]
+    # Task 2.6: same-tenant cross-DEAL masking test. analyst-1 legitimately owns other_deal
+    # (it just created it), so grant ABAC access; the 404 then comes from the route masking a
+    # package that lives under a different deal (not from an ABAC denial). Keep both 404s.
+    seed_deal_access(client.app.state.test_tenant_id, other_deal, "analyst-1")
 
     cross = client.get(
         f"/v1/deals/{other_deal}/data-room-packages/{created['package_id']}", headers=_ANALYST
@@ -988,7 +999,7 @@ def test_openapi_declares_deal_scoped_paths_and_rejects_unsafe_fields(monkeypatc
 def test_api_get_record_and_list_responses_are_leakage_safe(monkeypatch: Any) -> None:
     """T7 regression guard: public GET-record + LIST responses leak no raw markers.
 
-    Green-on-arrival by design — Tasks 1/3/4 already redact via ``safe_dict()``
+    Green-on-arrival by design - Tasks 1/3/4 already redact via ``safe_dict()``
     whitelists, so this cannot fail red against the current code. It locks the
     API-layer behaviour (incl. the GET ``files`` ledger array, the richest leak
     surface) so a future change cannot reintroduce a storage/path/name leak.

@@ -126,13 +126,15 @@ def test_access_admin_route_not_blocked_by_deal_id_fallback(
     assert api.get(f"/v1/deals/{deal_id}", headers=_hdr(_ANALYST)).status_code == 200
 
 
-def test_unassigned_analyst_unknown_deal_is_denied_no_oracle(
+def test_unassigned_analyst_unknown_deal_returns_404_no_oracle(
     ctx: tuple[TestClient, InMemoryDealAssignmentStore],
 ) -> None:
-    # A nonexistent deal returns the same 403 as an unauthorized one (ABAC runs before the route;
-    # no existence oracle) - not a 404 that would leak nonexistence differently.
+    # A nonexistent (or cross-tenant) path deal falls through to the route's uniform 404 - the
+    # deal-scoped ABAC 403 applies only to deals the caller can actually see (ADR-011). This keeps
+    # a missing deal indistinguishable from another tenant's, and never leaks a break-glass
+    # affordance for a deal that does not exist in the caller's tenant.
     api, _store = ctx
     import uuid
 
     resp = api.get(f"/v1/deals/{uuid.uuid4()}", headers=_hdr(_ANALYST))
-    assert resp.status_code == 403, resp.text
+    assert resp.status_code == 404, resp.text

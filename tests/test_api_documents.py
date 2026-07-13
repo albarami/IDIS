@@ -749,11 +749,11 @@ class TestTenantIsolation:
         assert response_a.status_code == 200
         assert len(response_a.json()["items"]) == 1
 
-        # Task 2.6: tenant B holds no assignment on this deal, so ABAC denies before the route
-        # (previously 200 with an empty list under the pre-2.5 route-level bypass). Cross-tenant
-        # isolation is now enforced deny-by-default at the ABAC layer.
-        assert response_b.status_code == 403
-        assert response_b.json()["code"] == "ABAC_DENIED_NO_ASSIGNMENT"
+        # Tenant B cannot see Tenant A's deal, so its list falls through to the route and returns
+        # an empty page under Tenant B's RLS - cross-tenant isolation with no existence oracle
+        # (uniform with an empty own-deal and a nonexistent deal, ADR-011).
+        assert response_b.status_code == 200
+        assert response_b.json()["items"] == []
 
     def test_ingest_document_from_other_tenant_returns_404(
         self,

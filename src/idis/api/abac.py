@@ -629,6 +629,59 @@ def resolve_deal_id_for_run(
     return str(deal_id) if deal_id else None
 
 
+def is_deal_visible_to_tenant(
+    tenant_id: str,
+    deal_id: str,
+    request: Request | None = None,
+) -> bool:
+    """Return True if ``deal_id`` exists and is visible under the caller's tenant scope.
+
+    ADR-011: a ``deal_id`` taken straight from the request path that is cross-tenant or
+    nonexistent must fall through to the route's uniform 404 - never a deal-scoped ABAC 403
+    that would distinguish an out-of-scope deal from a truly missing one or advertise a
+    break-glass affordance for a deal the caller cannot see. A VISIBLE but unassigned deal
+    still flows through deny-by-default ABAC (403 / break-glass); only invisible deals 404.
+
+    Consults the SAME deals repository surface the deal routes use, so in-memory and Postgres
+    paths compute identical visibility. Fail-closed: a DB error denies (raises IdisHttpError
+    403 ``ABAC_RESOLUTION_FAILED``) - never a silent "visible".
+    """
+    if not tenant_id or not deal_id:
+        return False
+
+    import os
+
+    db_conn = getattr(request.state, "db_conn", None) if request is not None else None
+    if request is not None and db_conn is None and os.environ.get("IDIS_DATABASE_URL"):
+        logger.warning(
+            "Deal visibility check unavailable: db_conn missing but DATABASE_URL set",
+            extra={"tenant_id": tenant_id, "deal_id": deal_id},
+        )
+        raise IdisHttpError(
+            status_code=403,
+            code="ABAC_RESOLUTION_FAILED",
+            message="Access denied.",
+        )
+
+    try:
+        from idis.persistence.repositories.deals import get_deals_repository
+
+        deal = get_deals_repository(db_conn, tenant_id).get(deal_id)
+    except Exception as e:
+        logger.error(
+            "Deal visibility check failed: %s",
+            str(e),
+            extra={"tenant_id": tenant_id, "deal_id": deal_id},
+        )
+        raise IdisHttpError(
+            status_code=403,
+            code="ABAC_RESOLUTION_FAILED",
+            message="Access denied.",
+        ) from e
+
+    return deal is not None
+
+
 def build_default_deal_assignment_store() -> DealAssignmentStore:
     """Durable Postgres assignment store when configured, else the in-memory dev/test fallback.
 

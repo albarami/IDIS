@@ -29,6 +29,7 @@ from starlette.types import ASGIApp
 from idis.api.abac import (
     AbacDecisionCode,
     check_deal_access_with_break_glass,
+    is_deal_visible_to_tenant,
     resolve_deal_id_for_claim,
     resolve_deal_id_for_run,
 )
@@ -165,6 +166,10 @@ class RBACMiddleware(BaseHTTPMiddleware):
             Response if ABAC denied, None if allowed (continue processing).
         """
         deal_id = resource_ctx.get("deal_id")
+        # Whether deal_id came directly from the path (vs. resolved from a claim/run below). A
+        # path deal_id needs an existence/visibility check before deal-scoped ABAC (ADR-011);
+        # a resolved deal is already known to exist in the tenant.
+        deal_id_from_path = deal_id is not None
         claim_id = resource_ctx.get("claim_id")
         run_id = resource_ctx.get("run_id")
         is_claim_scoped_op = operation_id in ABAC_CLAIM_SCOPED_OPS
@@ -244,6 +249,27 @@ class RBACMiddleware(BaseHTTPMiddleware):
         # At this point, deal_id is guaranteed to be non-None (checked in requires_abac)
         # and rule is guaranteed for claim-scoped ops
         assert deal_id is not None, "deal_id must be set when requires_abac is True"
+
+        # ADR-011: a deal_id taken straight from the path must be visible in this tenant before
+        # deal-scoped ABAC applies. A cross-tenant or nonexistent path deal falls through to the
+        # route's uniform 404 (no existence oracle, no break-glass affordance leaked); a deal
+        # resolved from a claim/run is already known-existing, so this is limited to path deal_ids.
+        # A visible-but-unassigned deal still flows into deny-by-default ABAC below.
+        if deal_id_from_path:
+            try:
+                deal_visible = is_deal_visible_to_tenant(
+                    tenant_ctx.tenant_id, deal_id, request=request
+                )
+            except IdisHttpError as e:
+                return make_error_response_no_request(
+                    code=e.code,
+                    message=e.message,
+                    http_status=e.status_code,
+                    request_id=request_id,
+                    details=None,
+                )
+            if not deal_visible:
+                return None
 
         # For scoped ops, rule may be None but we default is_mutation to False.
         is_mutation = rule.is_mutation if rule is not None else False

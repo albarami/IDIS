@@ -25,12 +25,9 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
-from idis.api.abac import (
-    InMemoryDealAssignmentStore,
-    get_deal_assignment_store,
-)
 from idis.api.auth import IDIS_API_KEYS_ENV
 from idis.api.main import create_app
+from tests.abac_seed import seed_deal_access
 
 if TYPE_CHECKING:
     from sqlalchemy import Engine
@@ -179,10 +176,8 @@ def _create_deal_in_postgres(conn: object, tenant_id: str, deal_id: str) -> None
 
 
 def _assign_actor_to_deal(tenant_id: str, deal_id: str, actor_id: str) -> None:
-    """Helper to assign an actor to a deal for ABAC access."""
-    store = get_deal_assignment_store()
-    if isinstance(store, InMemoryDealAssignmentStore):
-        store.add_assignment(tenant_id, deal_id, actor_id)
+    """Assign an actor to a deal via the real default store seam (in-memory or durable Postgres)."""
+    seed_deal_access(tenant_id, deal_id, actor_id)
 
 
 class TestJSONBRoundTrip:
@@ -349,6 +344,9 @@ class TestTenantIsolationBreakAttempts:
         with admin_engine.begin() as conn:
             _create_deal_in_postgres(conn, TENANT_A_ID, deal_id)
 
+        # Authorized tenant-A actor must be assigned to operate on its own deal (deny-by-default).
+        _assign_actor_to_deal(TENANT_A_ID, deal_id, ACTOR_A_ID)
+
         create_response = client_with_postgres.post(
             f"/v1/deals/{deal_id}/claims",
             json={
@@ -386,6 +384,10 @@ class TestTenantIsolationBreakAttempts:
         with admin_engine.begin() as conn:
             _create_deal_in_postgres(conn, TENANT_A_ID, deal_id_a)
             _create_deal_in_postgres(conn, TENANT_B_ID, deal_id_b)
+
+        # Each authorized tenant actor is assigned to its own deal (deny-by-default ABAC).
+        _assign_actor_to_deal(TENANT_A_ID, deal_id_a, ACTOR_A_ID)
+        _assign_actor_to_deal(TENANT_B_ID, deal_id_b, ACTOR_B_ID)
 
         for i in range(3):
             client_with_postgres.post(
@@ -430,6 +432,10 @@ class TestTenantIsolationBreakAttempts:
         with admin_engine.begin() as conn:
             _create_deal_in_postgres(conn, TENANT_A_ID, deal_id)
 
+        # Tenant A is assigned to its own deal so the same-tenant GET below is authorized (200);
+        # tenant B stays unassigned and cannot see the deal, so its access is a uniform 404.
+        _assign_actor_to_deal(TENANT_A_ID, deal_id, ACTOR_A_ID)
+
         get_deal_b = client_with_postgres.get(
             f"/v1/deals/{deal_id}",
             headers={"X-IDIS-API-Key": API_KEY_TENANT_B},
@@ -456,11 +462,11 @@ class TestTenantIsolationBreakAttempts:
 
 
 class TestPostgresClaimDealResolution:
-    """Tests proving claim→deal resolution works under Postgres RLS.
+    """Tests proving claim->deal resolution works under Postgres RLS.
 
     These tests verify that:
     1. PostgresClaimDealResolver correctly queries claim_id column
-    2. Claim→deal resolution is tenant-scoped via RLS
+    2. Claim->deal resolution is tenant-scoped via RLS
     3. Cross-tenant claim access returns 404 (no existence leak)
     """
 
@@ -470,7 +476,7 @@ class TestPostgresClaimDealResolution:
         admin_engine: Engine,
         clean_tables: None,
     ) -> None:
-        """Verify claim→deal resolution returns correct deal_id under RLS."""
+        """Verify claim->deal resolution returns correct deal_id under RLS."""
         deal_id = str(uuid.uuid4())
         with admin_engine.begin() as conn:
             _create_deal_in_postgres(conn, TENANT_A_ID, deal_id)
@@ -556,7 +562,7 @@ class TestPostgresClaimDealResolution:
         admin_engine: Engine,
         clean_tables: None,
     ) -> None:
-        """Verify /claims/{claimId}/sanad endpoint uses claim→deal resolution."""
+        """Verify /claims/{claimId}/sanad endpoint uses claim->deal resolution."""
         deal_id = str(uuid.uuid4())
         with admin_engine.begin() as conn:
             _create_deal_in_postgres(conn, TENANT_A_ID, deal_id)
@@ -578,7 +584,7 @@ class TestPostgresClaimDealResolution:
         assert create_response.status_code == 201
         claim_id = create_response.json()["claim_id"]
 
-        # Access sanad endpoint - exercises claim→deal resolution
+        # Access sanad endpoint - exercises claim->deal resolution
         sanad_response = client_with_postgres.get(
             f"/v1/claims/{claim_id}/sanad",
             headers={"X-IDIS-API-Key": API_KEY_TENANT_A},
@@ -595,7 +601,7 @@ class TestPostgresClaimDealResolution:
         admin_engine: Engine,
         clean_tables: None,
     ) -> None:
-        """Verify /claims/{claimId}/defects endpoint uses claim→deal resolution."""
+        """Verify /claims/{claimId}/defects endpoint uses claim->deal resolution."""
         deal_id = str(uuid.uuid4())
         with admin_engine.begin() as conn:
             _create_deal_in_postgres(conn, TENANT_A_ID, deal_id)
@@ -617,7 +623,7 @@ class TestPostgresClaimDealResolution:
         assert create_response.status_code == 201
         claim_id = create_response.json()["claim_id"]
 
-        # Access defects endpoint - exercises claim→deal resolution
+        # Access defects endpoint - exercises claim->deal resolution
         defects_response = client_with_postgres.get(
             f"/v1/claims/{claim_id}/defects",
             headers={"X-IDIS-API-Key": API_KEY_TENANT_A},

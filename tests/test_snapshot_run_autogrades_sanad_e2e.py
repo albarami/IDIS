@@ -168,19 +168,22 @@ class TestSnapshotRunAutogradesSanadE2E:
         )
         assert resp_a.status_code == 202
 
-        # Tenant B: unassigned cross-tenant deal-scoped read is ABAC-denied (403).
+        # Tenant B cannot see Tenant A's deal, so cross-tenant deal-scoped lists fall through to
+        # the route and return empty pages under Tenant B's RLS (no existence oracle, ADR-011).
         sanads_resp_b = client.get(
             f"/v1/deals/{deal_id_a}/sanads",
             headers={"X-IDIS-API-Key": "key-tenant-b"},
         )
-        # cross-tenant (unassigned) deal-scoped read is ABAC-denied before the route (Task 2.5)
-        assert sanads_resp_b.status_code == 403
+        assert sanads_resp_b.status_code == 200
+        assert sanads_resp_b.json()["items"] == []
 
+        # The claims list route validates deal visibility, so a cross-tenant deal is a uniform 404
+        # (same as a nonexistent deal); the sanads route above lists empty. Both leak no existence.
         claims_resp_b = client.get(
             f"/v1/deals/{deal_id_a}/claims",
             headers={"X-IDIS-API-Key": "key-tenant-b"},
         )
-        assert claims_resp_b.status_code == 403
+        assert claims_resp_b.status_code == 404
 
         # Tenant A's sanads repo is scoped - B's repo sees nothing
         repo_b = InMemorySanadsRepository(TENANT_B_ID)

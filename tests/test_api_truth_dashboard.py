@@ -332,9 +332,10 @@ class TestTruthDashboardEndpoint:
                 headers={"X-IDIS-API-Key": "test-api-key"},
             )
 
-            # Task 2.6: was 404 (route-level tenant mask); ABAC now denies the cross-tenant
-            # actor with 403 before the route. Not seeded (would grant cross-tenant access).
-            assert response.status_code == 403
+            # The cross-tenant actor cannot see the deal, so the out-of-scope path deal falls
+            # through to the route's tenant-scoped lookup and returns 404 - identical to a
+            # nonexistent deal, leaking no existence (ADR-011).
+            assert response.status_code == 404
 
         finally:
             os.environ.pop("IDIS_API_KEYS_JSON", None)

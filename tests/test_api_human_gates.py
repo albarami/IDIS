@@ -171,30 +171,31 @@ class TestHumanGatesAPIHappyPath:
 class TestHumanGatesAPITenantIsolation:
     """Test tenant isolation for Human Gates API."""
 
-    def test_cross_tenant_list_returns_403(
+    def test_cross_tenant_list_returns_empty(
         self, client: TestClient, deal_id: str, gate_id: str
     ) -> None:
-        """GET /v1/deals/{dealId}/human-gates is ABAC deny-by-default for cross-tenant actor.
+        """GET /v1/deals/{dealId}/human-gates for a cross-tenant deal yields an empty 200.
 
-        Task 2.6: the Tenant B actor has no assignment on Tenant A's deal, so ABAC denies at
-        the middleware (403) before the route. Previously this returned 200 + empty items via
-        the route's tenant filter (the old pre-ABAC bypass on deal-scoped reads).
+        The Tenant B actor cannot see Tenant A's deal, so the out-of-scope path deal falls through
+        to the route, which lists under Tenant B's RLS and returns no items - uniform with an empty
+        own-deal and a nonexistent deal, leaking no existence (ADR-011).
         """
         response = client.get(
             f"/v1/deals/{deal_id}/human-gates",
             headers={"X-IDIS-API-Key": API_KEY_TENANT_B},
         )
 
-        assert response.status_code == 403
+        assert response.status_code == 200
+        assert response.json()["items"] == []
 
-    def test_cross_tenant_submit_action_returns_403(
+    def test_cross_tenant_submit_action_returns_404(
         self, client: TestClient, deal_id: str, gate_id: str
     ) -> None:
-        """POST /v1/deals/{dealId}/human-gates is ABAC deny-by-default for cross-tenant actor.
+        """POST /v1/deals/{dealId}/human-gates for a cross-tenant deal returns 404.
 
-        Task 2.6: the Tenant B actor has no assignment on Tenant A's deal, so ABAC denies at
-        the middleware (403) before the route's gate lookup. Previously this returned 404 (the
-        old pre-ABAC bypass, where the route reached its cross-tenant gate lookup).
+        The Tenant B actor cannot see Tenant A's deal, so the out-of-scope path deal falls through
+        to the route's gate lookup, which finds nothing under Tenant B's RLS and returns 404 - the
+        same response as a nonexistent deal, leaking no existence (ADR-011).
         """
         response = client.post(
             f"/v1/deals/{deal_id}/human-gates",
@@ -202,7 +203,7 @@ class TestHumanGatesAPITenantIsolation:
             headers={"X-IDIS-API-Key": API_KEY_TENANT_B},
         )
 
-        assert response.status_code == 403
+        assert response.status_code == 404
 
 
 class TestHumanGatesAPIValidation:

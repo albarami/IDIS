@@ -139,13 +139,12 @@ class TestDeliverablesAPIHappyPath:
 class TestDeliverablesAPITenantIsolation:
     """Test tenant isolation for Deliverables API."""
 
-    def test_cross_tenant_list_returns_403(self, client: TestClient, deal_id: str) -> None:
-        """GET /v1/deals/{dealId}/deliverables is ABAC deny-by-default for cross-tenant actor.
+    def test_cross_tenant_list_returns_empty(self, client: TestClient, deal_id: str) -> None:
+        """GET /v1/deals/{dealId}/deliverables for a cross-tenant deal yields an empty 200.
 
-        Task 2.6: Tenant A (assigned) generates a deliverable; the Tenant B actor has no
-        assignment on Tenant A's deal, so ABAC denies at the middleware (403) before the route.
-        Previously this returned 200 + empty items via the route's tenant filter (the old
-        pre-ABAC bypass on deal-scoped reads).
+        Tenant A (assigned) generates a deliverable; the Tenant B actor cannot see Tenant A's deal,
+        so the out-of-scope path deal falls through to the route, which lists under Tenant B's RLS
+        and returns no items - uniform with an empty own-deal, leaking no existence (ADR-011).
         """
         client.post(
             f"/v1/deals/{deal_id}/deliverables",
@@ -158,7 +157,8 @@ class TestDeliverablesAPITenantIsolation:
             headers={"X-IDIS-API-Key": API_KEY_TENANT_B},
         )
 
-        assert response.status_code == 403
+        assert response.status_code == 200
+        assert response.json()["items"] == []
 
 
 class TestDeliverablesAPIValidation:

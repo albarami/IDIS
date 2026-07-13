@@ -17,6 +17,7 @@ from idis.audit.sink import InMemoryAuditSink
 from idis.idempotency.store import SqliteIdempotencyStore
 from idis.models.run_step import StepName, StepStatus
 from tests import test_ingestion_persists_documents_postgres as pg_helpers
+from tests.abac_seed import seed_deal_access
 from tests.test_api_default_upload_ingestion_postgres import _configure_api_key
 from tests.test_docx_parser import create_test_docx
 from tests.test_pptx_parser import create_test_pptx
@@ -67,6 +68,8 @@ def test_selected_full_run_persists_durable_claims_and_evidence_for_uploaded_roo
     )
     assert deal_response.status_code == 201
     deal_id = str(deal_response.json()["deal_id"])
+    # Deal-scoped ABAC is deny-by-default: assign the creating actor to operate on its own deal.
+    seed_deal_access(str(pg_helpers.TENANT_ID), deal_id, pg_helpers.ACTOR_ID)
 
     fixture_files = _write_supported_fixture_tree(tmp_path / "room")
     document_ids: list[str] = []

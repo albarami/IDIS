@@ -225,6 +225,53 @@ def test_newly_required_request_field_is_breaking(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 3b. hashing is platform-canonical (CI fix): newline style must never count as drift
+# ---------------------------------------------------------------------------
+
+
+def test_contract_hashing_is_newline_canonical(tmp_path: Path) -> None:
+    """Identical text content must hash identically whether checked out LF, CRLF, or CR.
+
+    Git autocrlf gives Windows working copies CRLF and Linux CI working copies LF for the
+    SAME committed blob; the lock must hash canonical content, not raw working-tree bytes."""
+    from idis.contracts import _sha256_file
+
+    content = 'openapi: "3.0.0"\ninfo:\n  title: probe\n'
+    lf = tmp_path / "lf.yaml"
+    crlf = tmp_path / "crlf.yaml"
+    cr = tmp_path / "cr.yaml"
+    lf.write_bytes(content.encode("utf-8"))
+    crlf.write_bytes(content.replace("\n", "\r\n").encode("utf-8"))
+    cr.write_bytes(content.replace("\n", "\r").encode("utf-8"))
+
+    assert _sha256_file(lf) == _sha256_file(crlf) == _sha256_file(cr), (
+        "newline style must never change a contract hash"
+    )
+
+
+def test_lock_verification_passes_across_checkout_newline_styles(tmp_path: Path) -> None:
+    """THE CI failure scenario: lock generated against one newline style must verify against
+    the other (LF-locked repo re-checked-out as CRLF, and vice versa)."""
+    repo = _tmp_repo(tmp_path)
+    write_lock_document(repo)
+    assert verify_contract_lock(repo)["ok"] is True
+
+    # Rewrite every locked text contract with flipped line endings (content unchanged).
+    targets = [repo / _SPEC_RELATIVE] + sorted((repo / "schemas").rglob("*.json"))
+    for target in targets:
+        raw = target.read_bytes()
+        flipped = raw.replace(b"\r\n", b"\n") if b"\r\n" in raw else raw.replace(b"\n", b"\r\n")
+        target.write_bytes(flipped)
+
+    result = verify_contract_lock(repo)
+
+    assert result["ok"] is True, (
+        "a newline-style flip is not contract drift; findings: "
+        f"{[f for f in result['findings'] if f['code'] == 'CONTRACT_HASH_MISMATCH']}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # 4. UI sync check against the locked spec
 # ---------------------------------------------------------------------------
 

@@ -51,8 +51,11 @@ Document/malware quarantine is explicitly NOT implemented in Slice99 (Q2) - see
 `docs/architecture/slice99_quarantine_policy.md`.
 
 ## Task 5 - OpenAPI/schema/client contract lock (Q6: no codegen)
-Committed `contracts/contract_lock.json`: sha256 of the OpenAPI spec + every
-`schemas/**/*.json` (13 files) plus a surface snapshot (59 paths -> methods -> operation id,
+Committed `contracts/contract_lock.json`: CANONICAL-content sha256 (CRLF/CR normalized to LF
+before hashing - a raw working-tree byte hash proved platform-dependent under git autocrlf and
+false-drifted every file on Linux CI; CI fix) of the OpenAPI spec + every
+`schemas/**/*.json` (13 locked files total: 12 schemas + the spec) plus a surface snapshot
+(59 paths -> methods -> operation id,
 response codes, required request fields with one-level `$ref` resolution). Fail-closed verify
 (`src/idis/contracts.py`, `scripts/contract_lock.py verify` in the CI check job): hash drift,
 unlocked/deleted files, BREAKING changes vs the LOCKED surface (removed paths/operations/

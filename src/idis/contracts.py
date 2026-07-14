@@ -43,11 +43,16 @@ def _finding(code: str, detail: str) -> dict[str, str]:
 
 
 def _sha256_file(path: Path) -> str:
-    hasher = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            hasher.update(chunk)
-    return hasher.hexdigest()
+    """CANONICAL content hash - not a raw working-tree byte hash.
+
+    All locked contracts are text (YAML/JSON), and git autocrlf gives the SAME committed blob
+    CRLF working copies on Windows and LF working copies on Linux CI. Hashing raw bytes made
+    the lock platform-dependent (every file 'drifted' on CI); normalizing CRLF/CR to LF first
+    makes the hash a property of the contract CONTENT, identical on every checkout style.
+    """
+    raw = path.read_bytes()
+    canonical = raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def _lockable_files(repo_root: Path) -> list[str]:

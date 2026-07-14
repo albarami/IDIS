@@ -3,6 +3,7 @@
 Usage:
     python -m idis validate --validator <name> [--input PATH]
     python -m idis schemas check
+    python -m idis prompts validate [--prompts-root DIR] [--repo-root DIR] [--out FILE]
     python -m idis test gdbs-s --dataset <path> [--execute --base-url URL] [--out FILE]
     python -m idis test gdbs-f --dataset <path> [--execute --base-url URL] [--out FILE]
     python -m idis test gdbs-a --dataset <path> [--execute --base-url URL] [--out FILE]
@@ -172,6 +173,39 @@ def cmd_schemas_check(args: argparse.Namespace) -> int:
     return 0 if result["pass"] else 2
 
 
+def cmd_prompts_validate(args: argparse.Namespace) -> int:
+    """Execute prompt registry governance validation (Slice99 Task 1).
+
+    Exit codes:
+        0: ok=True (warnings such as declared-only entries or missing eval evidence allowed)
+        2: ok=False (invalid/partial/unregistered artifacts - fail-closed)
+    """
+    from idis.services.prompts.validate_cli import validate_prompt_tree
+
+    prompts_root = Path(args.prompts_root)
+    repo_root = Path(args.repo_root)
+
+    report = validate_prompt_tree(prompts_root, repo_root)
+
+    print(
+        f"prompts validate: ok={report['ok']} checked={report['prompts_checked']} "
+        f"errors={len(report['errors'])} warnings={len(report['warnings'])}",
+        file=sys.stderr,
+    )
+    for finding in report["errors"]:
+        print(f"  ERROR {finding['code']}: {finding['detail']}", file=sys.stderr)
+    for finding in report["warnings"]:
+        print(f"  WARN  {finding['code']}: {finding['detail']}", file=sys.stderr)
+
+    if getattr(args, "out", None):
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        print(f"Report written to: {out_path}", file=sys.stderr)
+
+    return 0 if report["ok"] else 2
+
+
 def cmd_test_gdbs(args: argparse.Namespace) -> int:
     """Execute GDBS test suite command.
 
@@ -191,6 +225,39 @@ def cmd_test_gdbs(args: argparse.Namespace) -> int:
     out_path = Path(args.out) if getattr(args, "out", None) else None
 
     mode: Literal["validate", "execute"] = "execute" if execute_mode else "validate"
+    baseline_arg = getattr(args, "baseline", None)
+
+    if baseline_arg is None:
+        result = run_suite(
+            dataset_root=dataset_path,
+            suite=suite,
+            mode=mode,
+            base_url=base_url,
+            api_key=api_key,
+            out_path=out_path,
+        )
+
+        print(format_summary(result), file=sys.stderr)
+
+        if out_path:
+            print(f"Report written to: {out_path}", file=sys.stderr)
+
+        return get_exit_code(result)
+
+    # Drift-gated path (Slice99 Task 3): hermetic validate-mode only, fail-closed baseline.
+    from idis.evaluation.baseline import (
+        collect_current_metrics,
+        compare_to_baseline,
+        load_baseline,
+    )
+
+    if mode != "validate":
+        print(
+            "baseline drift gate: FAIL [BASELINE_VALIDATE_MODE_ONLY] "
+            "(--baseline is a hermetic validate-mode gate; drop --execute)",
+            file=sys.stderr,
+        )
+        return 1
 
     result = run_suite(
         dataset_root=dataset_path,
@@ -198,15 +265,41 @@ def cmd_test_gdbs(args: argparse.Namespace) -> int:
         mode=mode,
         base_url=base_url,
         api_key=api_key,
-        out_path=out_path,
+        out_path=None,
     )
 
+    baseline_doc, error_code = load_baseline(Path(baseline_arg))
+    if error_code is not None:
+        comparison: dict[str, Any] = {
+            "ok": False,
+            "error_code": error_code,
+            "detail": "baseline missing or malformed (fail-closed)",
+            "drifts": [],
+        }
+    else:
+        assert baseline_doc is not None
+        current = collect_current_metrics(dataset_path, suite, result)
+        comparison = compare_to_baseline(baseline_doc, current, suite=suite)
+
+    report = result.to_dict()
+    report["baseline_comparison"] = comparison
+
     print(format_summary(result), file=sys.stderr)
+    if comparison.get("ok"):
+        print("baseline drift gate: PASS", file=sys.stderr)
+    else:
+        reason = comparison.get("error_code") or ",".join(comparison.get("exceeded_metrics", []))
+        print(f"baseline drift gate: FAIL [{reason}]", file=sys.stderr)
 
     if out_path:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         print(f"Report written to: {out_path}", file=sys.stderr)
 
-    return get_exit_code(result)
+    suite_exit = get_exit_code(result)
+    if suite_exit != 0:
+        return suite_exit
+    return 0 if comparison.get("ok") else 1
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -248,6 +341,37 @@ def create_parser() -> argparse.ArgumentParser:
     schemas_subparsers.add_parser(
         "check",
         help="Check schema registry completeness and loadability",
+    )
+
+    # prompts command with validate subcommand (Slice99 governance)
+    prompts_parser = subparsers.add_parser(
+        "prompts",
+        help="Prompt registry governance operations",
+    )
+    prompts_subparsers = prompts_parser.add_subparsers(
+        dest="prompts_command",
+        help="Prompt subcommands",
+    )
+    prompts_validate_parser = prompts_subparsers.add_parser(
+        "validate",
+        help="Validate prompts/registry.yaml + on-disk prompt artifacts (fail-closed)",
+    )
+    prompts_validate_parser.add_argument(
+        "--prompts-root",
+        default="prompts",
+        metavar="DIR",
+        help="Prompt tree root containing registry.yaml (default: prompts)",
+    )
+    prompts_validate_parser.add_argument(
+        "--repo-root",
+        default=".",
+        metavar="DIR",
+        help="Repo root for resolving schema/evidence refs (default: .)",
+    )
+    prompts_validate_parser.add_argument(
+        "--out",
+        metavar="FILE",
+        help="Path to write the JSON validation report",
     )
 
     # test command with gdbs-s, gdbs-f, gdbs-a subcommands
@@ -296,6 +420,15 @@ def create_parser() -> argparse.ArgumentParser:
             metavar="FILE",
             help="Path to write JSON report",
         )
+        suite_parser.add_argument(
+            "--baseline",
+            metavar="FILE",
+            help=(
+                "Pinned drift baseline JSON (validate mode): compare case counts, status "
+                "distribution, dataset manifest hash, and expected sanad-grade distribution "
+                "against explicit thresholds; drift or a missing/malformed baseline fails"
+            ),
+        )
         suite_parser.set_defaults(suite=suite_id)
 
     return parser
@@ -325,6 +458,13 @@ def main(argv: list[str] | None = None) -> int:
                 return cmd_schemas_check(args)
             else:
                 parser.parse_args(["schemas", "--help"])
+                return 0
+
+        if args.command == "prompts":
+            if getattr(args, "prompts_command", None) == "validate":
+                return cmd_prompts_validate(args)
+            else:
+                parser.parse_args(["prompts", "--help"])
                 return 0
 
         if args.command == "test":

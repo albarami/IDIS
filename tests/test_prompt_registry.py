@@ -11,7 +11,7 @@ Tests cover:
 Required by:
 - docs/12_IDIS_End_to_End_Implementation_Roadmap_v6_3.md (Phase 7.2)
 - docs/11_IDIS_Traceability_Matrix_v6_3.md (PR-001)
-- docs/IDIS_Master_Execution_Plan_v6_3.md (Go-Live §4.4)
+- docs/IDIS_Master_Execution_Plan_v6_3.md (Go-Live section 4.4)
 """
 
 from __future__ import annotations
@@ -429,7 +429,11 @@ class TestPromptVersioningPromotion:
 
         registry = PromptRegistry(tmp_path)
         audit_sink = InMemoryAuditSink()
-        service = PromptVersioningService(registry, audit_sink=audit_sink, tenant_id="tenant-123")
+        service = PromptVersioningService(
+            registry,
+            audit_sink=audit_sink,
+            tenant_id="12312312-1231-1231-1231-123123123123",
+        )
 
         request = PromotionRequest(
             prompt_id="audit-prompt",
@@ -451,16 +455,17 @@ class TestPromptVersioningPromotion:
         assert len(audit_sink.events) == 1
         event = audit_sink.events[0]
         assert event["event_type"] == "prompt.version.promoted"
-        assert event["tenant_id"] == "tenant-123"
+        assert event["tenant_id"] == "12312312-1231-1231-1231-123123123123"
         assert event["resource"]["resource_type"] == "prompt"
         assert event["resource"]["resource_id"] == "audit-prompt"
-        assert event["payload"]["new_version"] == "2.0.0"
-        assert event["payload"]["old_version"] == "1.0.0"
-        assert event["payload"]["risk_class"] == "MEDIUM"
-        assert "approvals" in event["payload"]
-        assert "approver" in event["payload"]
-        assert event["payload"]["evaluation_results_ref"] == "s3://bucket/eval/audit.json"
-        assert event["payload"]["evaluation_results_sha256"] == "sha256abc"
+        safe = event["payload"]["safe"]
+        assert safe["new_version"] == "2.0.0"
+        assert safe["old_version"] == "1.0.0"
+        assert safe["risk_class"] == "MEDIUM"
+        assert "approvals" in safe
+        assert "approver" in safe
+        assert "s3://bucket/eval/audit.json" in event["payload"]["refs"]
+        assert "sha256:sha256abc" in event["payload"]["hashes"]
 
     def test_promote_with_sha256_evidence(self, tmp_path: Path) -> None:
         """Test that promotion includes sha256 evidence in audit."""
@@ -489,8 +494,8 @@ class TestPromptVersioningPromotion:
         service.promote(request)
 
         event = audit_sink.events[0]
-        assert event["payload"]["evaluation_results_sha256"] == sha256
-        assert event["payload"]["evaluation_results_ref"] == "s3://bucket/eval.json"
+        assert f"sha256:{sha256}" in event["payload"]["hashes"]
+        assert "s3://bucket/eval.json" in event["payload"]["refs"]
 
     def test_promote_fails_missing_gates_low_risk(self, tmp_path: Path) -> None:
         """Test that promotion fails when Gate 1 is missing for LOW risk."""
@@ -691,10 +696,12 @@ class TestPromptVersioningRollback:
         assert len(audit_sink.events) == 1
         event = audit_sink.events[0]
         assert event["event_type"] == "prompt.version.rolledback"
-        assert event["payload"]["rollback_target"] == "1.0.0"
-        assert event["payload"]["old_version"] == "2.0.0"
-        assert event["payload"]["incident_ticket_id"] == "INC-999"
-        assert event["payload"]["reason"] == "Performance issue"
+        safe = event["payload"]["safe"]
+        assert safe["rollback_target"] == "1.0.0"
+        assert safe["old_version"] == "2.0.0"
+        assert safe["incident_ticket_id"] == "INC-999"
+        assert safe["reason"] == "Performance issue"
+        assert "incident_ticket:INC-999" in event["payload"]["refs"]
 
     def test_rollback_fails_missing_reason(self, tmp_path: Path) -> None:
         """Test that rollback fails when reason is missing."""
@@ -761,8 +768,8 @@ class TestPromptVersioningRetire:
         assert len(audit_sink.events) == 1
         event = audit_sink.events[0]
         assert event["event_type"] == "prompt.version.retired"
-        assert event["payload"]["version"] == "1.0.0"
-        assert event["payload"]["reason"] == "Superseded by v2"
+        assert event["payload"]["safe"]["version"] == "1.0.0"
+        assert event["payload"]["safe"]["reason"] == "Superseded by v2"
 
     def test_retire_does_not_delete_content(self, tmp_path: Path) -> None:
         """Test that retire does NOT delete prompt content (per spec)."""
@@ -1017,13 +1024,13 @@ class TestPR001Traceability:
         assert len(audit_sink.events) == 1
         event = audit_sink.events[0]
         assert event["event_type"] == "prompt.version.rolledback"
-        assert event["payload"]["incident_ticket_id"] == "INC-2026-001"
+        assert event["payload"]["safe"]["incident_ticket_id"] == "INC-2026-001"
 
 
 class TestFailClosedRequiredFields:
     """Tests that missing required PromptArtifact fields fail closed.
 
-    Per spec §2.1, these fields are required (no defaults):
+    Per spec section 2.1, these fields are required (no defaults):
     - status, risk_class, validation_gates_required, evaluation_results_ref
     """
 

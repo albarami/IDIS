@@ -1,4 +1,4 @@
-"""Slice97 Task 5 — webhook dispatcher / drainer: claim -> sign -> deliver -> retry.
+"""Slice97 Task 5 - webhook dispatcher / drainer: claim -> sign -> deliver -> retry.
 
 ``WebhookDispatcher.drain_once`` claims due pending rows from the durable outbox (Task 2), loads
 the webhook's (url, secret) ONLY at dispatch time via ``load_webhook_dispatch_target`` (the one
@@ -11,7 +11,7 @@ so the ``FOR UPDATE SKIP LOCKED`` claim lock is held across claim -> deliver -> 
 drainers can never double-deliver a row.
 
 ``WebhookDispatcherWorker`` mirrors the pipeline worker: an asyncio poll loop over the configured
-worker tenants (``get_worker_tenant_ids`` — fail-safe: empty means no global scan), errors
+worker tenants (``get_worker_tenant_ids`` - fail-safe: empty means no global scan), errors
 swallowed so the loop survives. It is started with the app when Postgres is configured.
 """
 
@@ -233,15 +233,17 @@ class WebhookDispatcher:
         """Best-effort delivery audit + metrics (Task 6): safe metadata only, never breaks dispatch.
 
         The audit payload carries ONLY webhook_id / event_id / event_type / attempt_count /
-        status_code / outcome — never the url, secret, body, headers, or any request/response
+        status_code / outcome - never the url, secret, body, headers, or any request/response
         content. Validation failures or sink errors are logged and swallowed; Task 5 dispatch
         semantics are unchanged.
         """
         try:
-            labels = {"tenant_id": tenant_id}
-            increment_counter(WEBHOOK_DELIVERY_ATTEMPTS_TOTAL, labels=labels)
+            # GLOBAL aggregates by design: /metrics is an unauthenticated operational surface,
+            # so delivery counters carry NO tenant label - no tenant UUID or per-tenant volume
+            # is scrapeable. Per-tenant delivery evidence lives in the audit events below.
+            increment_counter(WEBHOOK_DELIVERY_ATTEMPTS_TOTAL)
             if outcome == "succeeded":
-                increment_counter(WEBHOOK_DELIVERY_SUCCESS_TOTAL, labels=labels)
+                increment_counter(WEBHOOK_DELIVERY_SUCCESS_TOTAL)
 
             safe: dict[str, Any] = {
                 "webhook_id": row.webhook_id,
@@ -315,7 +317,7 @@ class WebhookDispatcherWorker:
         while self._running:
             try:
                 # Off-loop, like the pipeline worker: the drain does blocking DB I/O and outbound
-                # HTTP deliveries (up to 30s per attempt) — running it on the event loop would
+                # HTTP deliveries (up to 30s per attempt) - running it on the event loop would
                 # freeze the whole API whenever a subscriber endpoint is slow.
                 await asyncio.to_thread(self._drain_all_tenants)
             except Exception:  # the poll loop must survive any drain failure

@@ -514,6 +514,12 @@ def build_strict_full_live_readiness_report(
         _live("deliverable_generation", "src/idis/deliverables/generator.py"),
         _product_export_bundle(env=values, product_export_ready=product_export_ready),
     ]
+    # Slice99: promoted-prompts governance policy (flag-gated, default OFF). With the flag off
+    # the component is absent and the report is byte-identical to prior behavior; with
+    # IDIS_REQUIRE_PROMOTED_PROMPTS=1 every runtime prompt must resolve through the governed
+    # prod pointer at the stamped version with PROD status, or admission blocks fail-closed.
+    if _is_promoted_prompts_required(values):
+        components.append(_prompt_governance())
     component_inventory = _build_component_inventory(
         env_source=env_source,
         preflight_corpus=preflight_corpus,
@@ -552,6 +558,56 @@ def build_strict_full_live_readiness_report(
         env_sources=_env_source_map(env_source),
         byol_providers=byol_providers,
         enrichment_provider_matrix=enrichment_provider_matrix,
+    )
+
+
+def _is_promoted_prompts_required(env: Mapping[str, str]) -> bool:
+    """Whether the Slice99 promoted-prompts policy is enabled (literal "1" only)."""
+    from idis.services.prompts.promotion_policy import is_promoted_prompts_required
+
+    return is_promoted_prompts_required(env)
+
+
+def _prompt_governance() -> StrictComponentReadiness:
+    """Evaluate the promoted-prompts policy as a strict full-live component.
+
+    Blocks (fail-closed) unless every runtime prompt id resolves through the governed
+    prod pointer (prompts/registry.prod.json) at the stamped version with PROD status.
+    Blocker text carries safe reason codes and prompt ids/versions only.
+    """
+    from idis.services.prompts.promotion_policy import (
+        IDIS_REQUIRE_PROMOTED_PROMPTS_ENV,
+        evaluate_promoted_prompts_policy,
+    )
+
+    result = evaluate_promoted_prompts_policy()
+    if result.may_proceed:
+        return StrictComponentReadiness(
+            component_name="prompt_governance",
+            status=StrictComponentStatus.LIVE_WIRED_AND_USED,
+            blocker_message="",
+            required_env_vars=[f"{IDIS_REQUIRE_PROMOTED_PROMPTS_ENV}=1"],
+            required_services=["prompts/registry.prod.json"],
+            evidence=(
+                f"all {result.checked} runtime prompts resolve through the governed prod "
+                "pointer with PROD status (src/idis/services/prompts/promotion_policy.py)"
+            ),
+            may_proceed=True,
+        )
+
+    codes = sorted({finding["code"] for finding in result.findings})
+    details = "; ".join(str(finding["detail"]) for finding in result.findings[:5])
+    return StrictComponentReadiness(
+        component_name="prompt_governance",
+        status=StrictComponentStatus.MISSING_INFRASTRUCTURE,
+        blocker_message=(
+            f"{len(result.findings)} promoted-prompt policy blocker(s) "
+            f"[{', '.join(codes)}]: {details}"
+        ),
+        required_env_vars=[f"{IDIS_REQUIRE_PROMOTED_PROMPTS_ENV}=1"],
+        required_services=["prompts/registry.prod.json"],
+        evidence="src/idis/services/prompts/promotion_policy.py",
+        may_proceed=False,
     )
 
 
@@ -1301,7 +1357,7 @@ def _partial_blocking_step_provenance(
     """Safe StepProvenance for a component matched on only one strict surface.
 
     Dimensions from the unavailable surface fall back to UNKNOWN/"unknown" so the
-    component is never dropped. Uses only classes/statuses — never raw env values,
+    component is never dropped. Uses only classes/statuses - never raw env values,
     paths, evidence strings, or provider payloads.
     """
     if readiness is not None:
@@ -1343,7 +1399,7 @@ def _partial_blocking_step_provenance(
 def build_strict_block_operator_safe_details(report: Any) -> dict[str, Any]:
     """Build operator-safe ``details`` for a strict-blocked FULL run response.
 
-    Surfaces only safe summary fields — ``may_proceed``, ``blocker_count``, the
+    Surfaces only safe summary fields - ``may_proceed``, ``blocker_count``, the
     safe blocking component names, and per-component :class:`StepProvenance`
     classes/statuses (via :func:`build_blocking_step_provenance`). It never copies
     raw readiness fields such as ``evidence``, ``evidence_files``,

@@ -477,6 +477,192 @@ prompts:
       - GATE_1
       - GATE_2
 
+  # ============================================
+  # Runtime Scoring & Analysis Prompts
+  # (registry keys match the ids the runtime stamps into step provenance)
+  # ============================================
+
+  scoring_agent:
+    id: "scoring_agent"
+    name: "Scoring Agent"
+    version: "1.0.0"
+    status: DRAFT
+    risk_class: HIGH
+    owner:
+      team: "scoring"
+      person: "TBD"
+    model_requirements:
+      model_class: reasoning
+      min_context_window: 16000
+      json_mode: required
+      tool_calling: false
+    file_path: "prompts/scoring_agent/1.0.0/prompt.md"
+    metadata_path: "prompts/scoring_agent/1.0.0/metadata.json"
+    validation_gates:
+      - GATE_1
+      - GATE_2
+      - GATE_3
+
+  financial_agent:
+    id: "financial_agent"
+    name: "Financial Analysis Agent"
+    version: "1.0.0"
+    status: DRAFT
+    risk_class: MEDIUM
+    owner:
+      team: "analysis"
+      person: "TBD"
+    model_requirements:
+      model_class: reasoning
+      min_context_window: 16000
+      json_mode: required
+      tool_calling: false
+    file_path: "prompts/financial_agent/1.0.0/prompt.md"
+    metadata_path: "prompts/financial_agent/1.0.0/metadata.json"
+    validation_gates:
+      - GATE_1
+      - GATE_2
+
+  historian_agent:
+    id: "historian_agent"
+    name: "Historian Analysis Agent"
+    version: "1.0.0"
+    status: DRAFT
+    risk_class: MEDIUM
+    owner:
+      team: "analysis"
+      person: "TBD"
+    model_requirements:
+      model_class: reasoning
+      min_context_window: 16000
+      json_mode: required
+      tool_calling: false
+    file_path: "prompts/historian_agent/1.0.0/prompt.md"
+    metadata_path: "prompts/historian_agent/1.0.0/metadata.json"
+    validation_gates:
+      - GATE_1
+      - GATE_2
+
+  market_agent:
+    id: "market_agent"
+    name: "Market Analysis Agent"
+    version: "1.0.0"
+    status: DRAFT
+    risk_class: MEDIUM
+    owner:
+      team: "analysis"
+      person: "TBD"
+    model_requirements:
+      model_class: reasoning
+      min_context_window: 16000
+      json_mode: required
+      tool_calling: false
+    file_path: "prompts/market_agent/1.0.0/prompt.md"
+    metadata_path: "prompts/market_agent/1.0.0/metadata.json"
+    validation_gates:
+      - GATE_1
+      - GATE_2
+
+  risk_officer_agent:
+    id: "risk_officer_agent"
+    name: "Risk Officer Analysis Agent"
+    version: "1.0.0"
+    status: DRAFT
+    risk_class: MEDIUM
+    owner:
+      team: "analysis"
+      person: "TBD"
+    model_requirements:
+      model_class: reasoning
+      min_context_window: 16000
+      json_mode: required
+      tool_calling: false
+    file_path: "prompts/risk_officer_agent/1.0.0/prompt.md"
+    metadata_path: "prompts/risk_officer_agent/1.0.0/metadata.json"
+    validation_gates:
+      - GATE_1
+      - GATE_2
+
+  sector_specialist_agent:
+    id: "sector_specialist_agent"
+    name: "Sector Specialist Analysis Agent"
+    version: "1.0.0"
+    status: DRAFT
+    risk_class: MEDIUM
+    owner:
+      team: "analysis"
+      person: "TBD"
+    model_requirements:
+      model_class: reasoning
+      min_context_window: 16000
+      json_mode: required
+      tool_calling: false
+    file_path: "prompts/sector_specialist_agent/1.0.0/prompt.md"
+    metadata_path: "prompts/sector_specialist_agent/1.0.0/metadata.json"
+    validation_gates:
+      - GATE_1
+      - GATE_2
+
+  team_agent:
+    id: "team_agent"
+    name: "Team Analysis Agent"
+    version: "1.0.0"
+    status: DRAFT
+    risk_class: MEDIUM
+    owner:
+      team: "analysis"
+      person: "TBD"
+    model_requirements:
+      model_class: reasoning
+      min_context_window: 16000
+      json_mode: required
+      tool_calling: false
+    file_path: "prompts/team_agent/1.0.0/prompt.md"
+    metadata_path: "prompts/team_agent/1.0.0/metadata.json"
+    validation_gates:
+      - GATE_1
+      - GATE_2
+
+  technical_agent:
+    id: "technical_agent"
+    name: "Technical Analysis Agent"
+    version: "1.0.0"
+    status: DRAFT
+    risk_class: MEDIUM
+    owner:
+      team: "analysis"
+      person: "TBD"
+    model_requirements:
+      model_class: reasoning
+      min_context_window: 16000
+      json_mode: required
+      tool_calling: false
+    file_path: "prompts/technical_agent/1.0.0/prompt.md"
+    metadata_path: "prompts/technical_agent/1.0.0/metadata.json"
+    validation_gates:
+      - GATE_1
+      - GATE_2
+
+  terms_agent:
+    id: "terms_agent"
+    name: "Terms Analysis Agent"
+    version: "1.0.0"
+    status: DRAFT
+    risk_class: MEDIUM
+    owner:
+      team: "analysis"
+      person: "TBD"
+    model_requirements:
+      model_class: reasoning
+      min_context_window: 16000
+      json_mode: required
+      tool_calling: false
+    file_path: "prompts/terms_agent/1.0.0/prompt.md"
+    metadata_path: "prompts/terms_agent/1.0.0/metadata.json"
+    validation_gates:
+      - GATE_1
+      - GATE_2
+
 # Model class definitions
 model_classes:
   fast:

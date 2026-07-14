@@ -1,0 +1,893 @@
+{
+  "files": {
+    "openapi/IDIS_OpenAPI_v6_3.yaml": "e36402889fc0b89edb51859b2da907bbc1c0bcb3358b64340e5dc0aa0ebe1d6c",
+    "schemas/audit_event.schema.json": "ccaf1b3022c4c26b30a703ea4504cf5983e355c4f9cc3cbd425e12e97e293330",
+    "schemas/calc_sanad.schema.json": "10af14aa1d0329ef9de386adb702e3b55797b73c731150aade441af40297e3a5",
+    "schemas/claim.schema.json": "9411359acdaa19d25871a5493325b4f1bfea6407a2c5016b895ba6ac4b849586",
+    "schemas/debate_state.schema.json": "cbd226aca114a6fc9437b8a81d2acc95519dbf1c5d01c8868894442b56ef1c17",
+    "schemas/defect.schema.json": "6c119b1fea55e5bae659d64efc8de5408c9b4846eb6a52dabdfb876de5331701",
+    "schemas/evidence_item.schema.json": "aa39517176d8123d6e386f6899be2eaab6746b763bac6f79ae2d223bce6c0e04",
+    "schemas/extraction/extract_claims_input.json": "26df2513a87add5b802e3da868e41dfccc1e995be47d60ebbb0187c5411ff30e",
+    "schemas/extraction/extract_claims_output.json": "0d6dc96ce5444bff3e28b43c022c9274c276c8f2c096636ebd0ddd62d3b64dde",
+    "schemas/muhasabah_record.schema.json": "de2b5fc12253c5feb65ef234550bebdc50152c669f6afcbc43ed747d55b0fa1d",
+    "schemas/sanad.schema.json": "98d9633e62298969f5177241e834ef5246d20a205fe423436ba073d9c04f29b3",
+    "schemas/transmission_node.schema.json": "88a8c3094aa39ea9305fa840d5005df8a67629446aabdad501c3b95f12d64aaa",
+    "schemas/value_struct.schema.json": "ba7e858fddade215599fce8d6c4a0f26af80d67e7ec984980e2d95fea2d118a6"
+  },
+  "lock_version": 1,
+  "openapi_surface": {
+    "/health": {
+      "get": {
+        "operation_id": "getHealth",
+        "required_request_fields": [],
+        "responses": [
+          "200"
+        ]
+      }
+    },
+    "/v1/audit/events": {
+      "get": {
+        "operation_id": "listAuditEvents",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401"
+        ]
+      }
+    },
+    "/v1/break-glass/grants": {
+      "post": {
+        "operation_id": "createBreakGlassGrant",
+        "required_request_fields": [
+          "deal_id",
+          "justification"
+        ],
+        "responses": [
+          "201",
+          "400",
+          "401",
+          "403",
+          "404"
+        ]
+      }
+    },
+    "/v1/byok/key": {
+      "post": {
+        "operation_id": "configureByokKey",
+        "required_request_fields": [
+          "key_alias"
+        ],
+        "responses": [
+          "201",
+          "400",
+          "401",
+          "403"
+        ]
+      }
+    },
+    "/v1/byok/key/revoke": {
+      "post": {
+        "operation_id": "revokeByokKey",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401",
+          "403",
+          "404"
+        ]
+      }
+    },
+    "/v1/byok/key/rotate": {
+      "post": {
+        "operation_id": "rotateByokKey",
+        "required_request_fields": [
+          "key_alias"
+        ],
+        "responses": [
+          "200",
+          "400",
+          "401",
+          "403",
+          "404"
+        ]
+      }
+    },
+    "/v1/claims/{claimId}": {
+      "get": {
+        "operation_id": "getClaim",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401",
+          "404"
+        ]
+      },
+      "patch": {
+        "operation_id": "updateClaim",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "400",
+          "401",
+          "404"
+        ]
+      }
+    },
+    "/v1/claims/{claimId}/defects": {
+      "get": {
+        "operation_id": "listClaimDefects",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401"
+        ]
+      }
+    },
+    "/v1/claims/{claimId}/sanad": {
+      "get": {
+        "operation_id": "getClaimSanad",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401",
+          "404"
+        ]
+      }
+    },
+    "/v1/compliance-exports": {
+      "post": {
+        "operation_id": "createComplianceExport",
+        "required_request_fields": [],
+        "responses": [
+          "201",
+          "401",
+          "403"
+        ]
+      }
+    },
+    "/v1/deals": {
+      "get": {
+        "operation_id": "listDeals",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401"
+        ]
+      },
+      "post": {
+        "operation_id": "createDeal",
+        "required_request_fields": [
+          "company_name",
+          "name"
+        ],
+        "responses": [
+          "201",
+          "400",
+          "401",
+          "409"
+        ]
+      }
+    },
+    "/v1/deals/{dealId}": {
+      "get": {
+        "operation_id": "getDeal",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401",
+          "404"
+        ]
+      },
+      "patch": {
+        "operation_id": "updateDeal",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "400",
+          "401",
+          "404"
+        ]
+      }
+    },
+    "/v1/deals/{dealId}/assignments": {
+      "post": {
+        "operation_id": "createDealAssignment",
+        "required_request_fields": [
+          "actor_id"
+        ],
+        "responses": [
+          "201",
+          "401",
+          "403",
+          "404"
+        ]
+      }
+    },
+    "/v1/deals/{dealId}/assignments/{actorId}": {
+      "delete": {
+        "operation_id": "deleteDealAssignment",
+        "required_request_fields": [],
+        "responses": [
+          "204",
+          "401",
+          "403",
+          "404"
+        ]
+      }
+    },
+    "/v1/deals/{dealId}/calcs": {
+      "get": {
+        "operation_id": "listDealCalcs",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401"
+        ]
+      },
+      "post": {
+        "operation_id": "runCalc",
+        "required_request_fields": [
+          "calc_name"
+        ],
+        "responses": [
+          "202",
+          "400",
+          "401"
+        ]
+      }
+    },
+    "/v1/deals/{dealId}/claims": {
+      "get": {
+        "operation_id": "listDealClaims",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401",
+          "404"
+        ]
+      },
+      "post": {
+        "operation_id": "createClaim",
+        "required_request_fields": [
+          "claim_class",
+          "claim_text"
+        ],
+        "responses": [
+          "201",
+          "400",
+          "401",
+          "409"
+        ]
+      }
+    },
+    "/v1/deals/{dealId}/data-room-packages": {
+      "get": {
+        "operation_id": "listDataRoomPackages",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401",
+          "404"
+        ]
+      },
+      "post": {
+        "operation_id": "createDataRoomPackage",
+        "required_request_fields": [
+          "document_ids"
+        ],
+        "responses": [
+          "201",
+          "400",
+          "401",
+          "404"
+        ]
+      }
+    },
+    "/v1/deals/{dealId}/data-room-packages/{packageId}": {
+      "get": {
+        "operation_id": "getDataRoomPackage",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401",
+          "404"
+        ]
+      }
+    },
+    "/v1/deals/{dealId}/debate": {
+      "post": {
+        "operation_id": "startDebate",
+        "required_request_fields": [
+          "protocol_version"
+        ],
+        "responses": [
+          "202",
+          "400",
+          "401"
+        ]
+      }
+    },
+    "/v1/deals/{dealId}/defects": {
+      "get": {
+        "operation_id": "listDealDefects",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401",
+          "404"
+        ]
+      },
+      "post": {
+        "operation_id": "createDefect",
+        "required_request_fields": [
+          "cure_protocol",
+          "defect_type",
+          "description"
+        ],
+        "responses": [
+          "201",
+          "400",
+          "401",
+          "404"
+        ]
+      }
+    },
+    "/v1/deals/{dealId}/deliverables": {
+      "get": {
+        "operation_id": "listDeliverables",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401"
+        ]
+      },
+      "post": {
+        "operation_id": "generateDeliverable",
+        "required_request_fields": [
+          "deliverable_type"
+        ],
+        "responses": [
+          "202",
+          "400",
+          "401"
+        ]
+      }
+    },
+    "/v1/deals/{dealId}/documents": {
+      "get": {
+        "operation_id": "listDealDocuments",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401",
+          "404"
+        ]
+      },
+      "post": {
+        "operation_id": "createDealDocument",
+        "required_request_fields": [
+          "doc_type",
+          "title"
+        ],
+        "responses": [
+          "201",
+          "400",
+          "401",
+          "404",
+          "409"
+        ]
+      }
+    },
+    "/v1/deals/{dealId}/documents/upload": {
+      "post": {
+        "operation_id": "uploadDealDocument",
+        "required_request_fields": [],
+        "responses": [
+          "201",
+          "400",
+          "401",
+          "404",
+          "409",
+          "413",
+          "415"
+        ]
+      }
+    },
+    "/v1/deals/{dealId}/documents/{documentId}": {
+      "get": {
+        "operation_id": "getDealDocumentSummary",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401",
+          "404"
+        ]
+      }
+    },
+    "/v1/deals/{dealId}/group-assignments": {
+      "post": {
+        "operation_id": "assignGroupToDeal",
+        "required_request_fields": [
+          "group_id"
+        ],
+        "responses": [
+          "201",
+          "401",
+          "403",
+          "404"
+        ]
+      }
+    },
+    "/v1/deals/{dealId}/group-assignments/{groupId}": {
+      "delete": {
+        "operation_id": "unassignGroupFromDeal",
+        "required_request_fields": [],
+        "responses": [
+          "204",
+          "401",
+          "403",
+          "404"
+        ]
+      }
+    },
+    "/v1/deals/{dealId}/human-gates": {
+      "get": {
+        "operation_id": "listHumanGates",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401"
+        ]
+      },
+      "post": {
+        "operation_id": "submitHumanGateAction",
+        "required_request_fields": [
+          "action",
+          "gate_id"
+        ],
+        "responses": [
+          "201",
+          "400",
+          "401"
+        ]
+      }
+    },
+    "/v1/deals/{dealId}/overrides": {
+      "post": {
+        "operation_id": "createOverride",
+        "required_request_fields": [
+          "justification",
+          "override_type"
+        ],
+        "responses": [
+          "201",
+          "400",
+          "401"
+        ]
+      }
+    },
+    "/v1/deals/{dealId}/runs": {
+      "get": {
+        "operation_id": "listDealRuns",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401"
+        ]
+      },
+      "post": {
+        "operation_id": "startRun",
+        "required_request_fields": [
+          "mode"
+        ],
+        "responses": [
+          "202",
+          "400",
+          "401"
+        ]
+      }
+    },
+    "/v1/deals/{dealId}/runs/{runId}/product-bundle/manifest": {
+      "get": {
+        "operation_id": "getProductBundleManifest",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401",
+          "404",
+          "503"
+        ]
+      }
+    },
+    "/v1/deals/{dealId}/sanads": {
+      "get": {
+        "operation_id": "listDealSanads",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401",
+          "404"
+        ]
+      },
+      "post": {
+        "operation_id": "createSanad",
+        "required_request_fields": [
+          "claim_id",
+          "primary_evidence_id"
+        ],
+        "responses": [
+          "201",
+          "400",
+          "401",
+          "404"
+        ]
+      }
+    },
+    "/v1/deals/{dealId}/truth-dashboard": {
+      "get": {
+        "operation_id": "getDealTruthDashboard",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401",
+          "404"
+        ]
+      }
+    },
+    "/v1/debate/{debateId}": {
+      "get": {
+        "operation_id": "getDebate",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401",
+          "404"
+        ]
+      }
+    },
+    "/v1/defects/{defect_id}": {
+      "get": {
+        "operation_id": "getDefect",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401",
+          "404"
+        ]
+      }
+    },
+    "/v1/defects/{defect_id}/cure": {
+      "post": {
+        "operation_id": "cureDefect",
+        "required_request_fields": [
+          "actor",
+          "reason"
+        ],
+        "responses": [
+          "200",
+          "400",
+          "401",
+          "404"
+        ]
+      }
+    },
+    "/v1/defects/{defect_id}/waive": {
+      "post": {
+        "operation_id": "waiveDefect",
+        "required_request_fields": [
+          "actor",
+          "reason"
+        ],
+        "responses": [
+          "200",
+          "400",
+          "401",
+          "404"
+        ]
+      }
+    },
+    "/v1/deliverables/{deliverableId}/content": {
+      "get": {
+        "operation_id": "downloadDeliverableContent",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401",
+          "404",
+          "503"
+        ]
+      }
+    },
+    "/v1/documents/{docId}": {
+      "delete": {
+        "operation_id": "deleteDocument",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401",
+          "403",
+          "404"
+        ]
+      },
+      "get": {
+        "operation_id": "getDocument",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401",
+          "403",
+          "404"
+        ]
+      }
+    },
+    "/v1/documents/{docId}/ingest": {
+      "post": {
+        "operation_id": "ingestDocument",
+        "required_request_fields": [],
+        "responses": [
+          "202",
+          "401",
+          "404"
+        ]
+      }
+    },
+    "/v1/documents/{docId}/spans": {
+      "get": {
+        "operation_id": "getDocumentSpans",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401",
+          "404"
+        ]
+      }
+    },
+    "/v1/enrichment/fetch": {
+      "post": {
+        "operation_id": "fetchEnrichment",
+        "required_request_fields": [
+          "entity_type",
+          "provider_id",
+          "query"
+        ],
+        "responses": [
+          "200",
+          "401",
+          "500"
+        ]
+      }
+    },
+    "/v1/enrichment/providers": {
+      "get": {
+        "operation_id": "listEnrichmentProviders",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401"
+        ]
+      }
+    },
+    "/v1/erasure-requests": {
+      "post": {
+        "operation_id": "createErasureRequest",
+        "required_request_fields": [
+          "deal_id",
+          "reason"
+        ],
+        "responses": [
+          "201",
+          "400",
+          "401",
+          "403",
+          "404"
+        ]
+      }
+    },
+    "/v1/erasure-requests/{requestId}/execute": {
+      "post": {
+        "operation_id": "executeErasureRequest",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401",
+          "403",
+          "404",
+          "409",
+          "500"
+        ]
+      }
+    },
+    "/v1/groups": {
+      "post": {
+        "operation_id": "createGroup",
+        "required_request_fields": [],
+        "responses": [
+          "201",
+          "401",
+          "403"
+        ]
+      }
+    },
+    "/v1/groups/{groupId}/members": {
+      "post": {
+        "operation_id": "addGroupMember",
+        "required_request_fields": [
+          "actor_id"
+        ],
+        "responses": [
+          "201",
+          "401",
+          "403",
+          "404"
+        ]
+      }
+    },
+    "/v1/groups/{groupId}/members/{actorId}": {
+      "delete": {
+        "operation_id": "removeGroupMember",
+        "required_request_fields": [],
+        "responses": [
+          "204",
+          "401",
+          "403",
+          "404"
+        ]
+      }
+    },
+    "/v1/integrations": {
+      "get": {
+        "operation_id": "listIntegrations",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401"
+        ]
+      }
+    },
+    "/v1/legal-holds": {
+      "post": {
+        "operation_id": "applyLegalHold",
+        "required_request_fields": [
+          "reason",
+          "target_id",
+          "target_type"
+        ],
+        "responses": [
+          "201",
+          "400",
+          "401",
+          "403"
+        ]
+      }
+    },
+    "/v1/legal-holds/{holdId}/lift": {
+      "post": {
+        "operation_id": "liftLegalHold",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "400",
+          "401",
+          "403",
+          "404"
+        ]
+      }
+    },
+    "/v1/runs/{runId}": {
+      "get": {
+        "operation_id": "getRun",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401",
+          "404"
+        ]
+      }
+    },
+    "/v1/runs/{runId}/cancel": {
+      "post": {
+        "operation_id": "cancelRun",
+        "required_request_fields": [],
+        "responses": [
+          "202",
+          "401",
+          "404",
+          "409"
+        ]
+      }
+    },
+    "/v1/runs/{runId}/resume": {
+      "post": {
+        "operation_id": "resumeRun",
+        "required_request_fields": [],
+        "responses": [
+          "202",
+          "401",
+          "404",
+          "409"
+        ]
+      }
+    },
+    "/v1/runs/{runId}/retry": {
+      "post": {
+        "operation_id": "retryRun",
+        "required_request_fields": [],
+        "responses": [
+          "202",
+          "401",
+          "404",
+          "409"
+        ]
+      }
+    },
+    "/v1/sanads/{sanad_id}": {
+      "get": {
+        "operation_id": "getSanad",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401",
+          "404"
+        ]
+      },
+      "patch": {
+        "operation_id": "updateSanad",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "400",
+          "401",
+          "404"
+        ]
+      }
+    },
+    "/v1/sanads/{sanad_id}/corroboration": {
+      "post": {
+        "operation_id": "setSanadCorroboration",
+        "required_request_fields": [
+          "corroborating_evidence_ids"
+        ],
+        "responses": [
+          "200",
+          "400",
+          "401",
+          "404"
+        ]
+      }
+    },
+    "/v1/strict-readiness": {
+      "get": {
+        "operation_id": "getStrictReadiness",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401"
+        ]
+      }
+    },
+    "/v1/tenants/me": {
+      "get": {
+        "operation_id": "getTenantMe",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401"
+        ]
+      }
+    },
+    "/v1/webhooks": {
+      "post": {
+        "operation_id": "createWebhook",
+        "required_request_fields": [
+          "events",
+          "url"
+        ],
+        "responses": [
+          "201",
+          "400",
+          "401"
+        ]
+      }
+    }
+  }
+}

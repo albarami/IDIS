@@ -26,10 +26,10 @@ Ensures deterministic, phase-disciplined delivery aligned to v6.3 spec.
 | **INV-09** | OpenAPI Validation | API section 5 | `middleware/openapi_validate.py` | `test_api_openapi_validation.py` | DONE | 2.2 | |
 | **INV-10** | Idempotency-Key | API section 4.3 | `middleware/idempotency.py`, `idempotency/store.py` | `test_api_idempotency_middleware.py` | DONE | 2.4-2.5 | Tenant+actor scoped |
 | **INV-11** | Fail-Closed (store.put) | API section 4.3 | `middleware/idempotency.py` | `test_api_idempotency_middleware.py::TestStorePutFailure` | DONE | 2.5 | Returns 500 |
-| **INV-12** | Prompt Registry + Rollback | Prompt Registry section 4 | `services/prompts/registry.py`, `services/prompts/versioning.py` | `test_prompt_registry.py`, `test_prompt_rollback.py` | PLANNED | 7 | Exit: Gate 4; audit events required |
-| **INV-13** | Evaluation Harness | Eval Harness section 3-7 | `evaluation/harness.py`, `evaluation/benchmarks/` | `test_evaluation_harness.py`, `test_gdbs_runner.py` | PLANNED | 7 | Exit: Gate 4; GDBS-S/F/A |
+| **INV-12** | Prompt Registry + Rollback | Prompt Registry section 4 | `services/prompts/registry.py`, `services/prompts/versioning.py`, `services/prompts/validate_cli.py`, `services/prompts/promotion_policy.py` | `test_prompt_registry.py`, `test_slice99_prompt_governance.py`, `test_slice99_prompt_model_linkage.py` | DELIVERED (Slice99) | 7 | Validation CLI wired into CI; schema-valid `prompt.version.*` events; `IDIS_REQUIRE_PROMOTED_PROMPTS` strict policy (default off); actual promotions await real eval evidence |
+| **INV-13** | Evaluation Harness | Eval Harness section 3-7 | `evaluation/harness.py`, `evaluation/benchmarks/`, `evaluation/baseline.py` | `test_evaluation_harness.py`, `test_slice99_gdbs_drift_gate.py` | PARTIAL (Slice99) | 7 | Hermetic GDBS-S drift gate (pinned baseline + explicit thresholds) LIVE in CI; live execute-mode Gate 1-4 evaluation pending |
 | **INV-14** | Frontend Evidence-First UI | Frontend section 2-3 | - | - | PLANNED | 6 | Backend deps only |
-| **INV-15** | SLO/SLA Compliance | SLO/SLA section 3 | `monitoring/slo_dashboard.py`, `monitoring/alerts.py` | `test_slo_metrics.py`, `test_alert_rules.py` | PLANNED | 7 | Exit: Gate 4; SLO dashboards |
+| **INV-15** | SLO/SLA Compliance | SLO/SLA section 3 | `monitoring/slo_dashboard.py`, `monitoring/alerts.py`, `observability/metrics.py`, `api/routes/metrics.py` | `test_slo_metrics.py`, `test_alert_rules.py`, `test_slice99_metrics_endpoint.py` | PARTIAL (Slice99) | 7 | Definitions exported to `deploy/monitoring/`; `/metrics` serves the measured subset; LIVE vs NOT-YET-EMITTED mapping test-enforced; full SLO metric emission pending |
 
 ---
 

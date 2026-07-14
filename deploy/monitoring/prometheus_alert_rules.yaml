@@ -1,0 +1,158 @@
+groups:
+- name: idis-critical-alerts
+  rules:
+  - alert: IDISMissingAuditEvents
+    annotations:
+      description: Mutating operations are occurring without corresponding audit events. This is a SEV-1 compliance incident.
+        Immediate investigation required.
+      runbook: docs/runbooks/RB-08_audit_lag.md
+      summary: Missing audit events detected - potential compliance violation
+      tenant_scope: global
+    expr: increase(audit_events_missing_total[5m]) > 0
+    for: 1m
+    labels:
+      component: audit
+      severity: SEV-1
+      team: security
+  - alert: IDISNoFreeFactsViolation
+    annotations:
+      description: A deliverable containing unlinked factual statements has been detected. This is a SEV-1 trust invariant
+        violation. Affected deliverables must be blocked and investigated.
+      runbook: docs/runbooks/RB-03_claim_validator_spike.md
+      summary: No-Free-Facts violation in IC deliverables pipeline
+    expr: increase(deliverable_no_free_facts_failures_total{pipeline="ic_deliverables"}[5m]) > 0
+    for: 1m
+    labels:
+      component: deliverables
+      severity: SEV-1
+      team: backend
+  - alert: IDISTenantIsolationViolation
+    annotations:
+      description: Cross-tenant data access has been detected. This is a SEV-1 security incident requiring immediate containment.
+        Freeze affected credentials, preserve evidence, notify security leads.
+      runbook: docs/runbooks/RB-10_security_incident.md
+      summary: Tenant isolation violation detected - CRITICAL SECURITY INCIDENT
+    expr: increase(tenant_isolation_violations_total[5m]) > 0
+    for: 1m
+    labels:
+      component: isolation
+      severity: SEV-1
+      team: security
+- name: idis-high-alerts
+  rules:
+  - alert: IDISApi5xxErrorRate
+    annotations:
+      description: 'The API is returning more than 1% 5xx errors over the last 5 minutes. Current rate: {{ $value | printf
+        "%.2f" }}%. Check API gateway health, database connectivity, and recent deployments.'
+      runbook: docs/runbooks/RB-01_api_outage.md
+      summary: API 5xx error rate exceeds 1% for tenant {{ $labels.tenant_id }}
+    expr: (sum by (tenant_id) (rate(http_requests_total{status=~"5.."}[5m])) / sum by (tenant_id) (rate(http_requests_total[5m])))
+      * 100 > 1
+    for: 5m
+    labels:
+      component: api
+      severity: SEV-2
+      team: platform
+  - alert: IDISIngestionFailureRate
+    annotations:
+      description: 'Document ingestion is failing at more than 2% over the last 15 minutes. Current rate: {{ $value | printf
+        "%.2f" }}%. Check OCR workers, object store access, and parser health.'
+      runbook: docs/runbooks/RB-02_ingestion_failure.md
+      summary: Ingestion failure rate exceeds 2% for tenant {{ $labels.tenant_id }}
+    expr: (sum by (tenant_id) (rate(ingestion_errors_total[15m])) / sum by (tenant_id) (rate(ingestion_attempts_total[15m])))
+      * 100 > 2
+    for: 15m
+    labels:
+      component: ingestion
+      severity: SEV-2
+      team: data
+  - alert: IDISAuditIngestionLag
+    annotations:
+      description: 'Audit events are being ingested with more than 5 minutes of lag. Current lag: {{ $value | humanizeDuration
+        }}. This may indicate audit pipeline issues and potential compliance risk.'
+      runbook: docs/runbooks/RB-08_audit_lag.md
+      summary: Audit event ingestion lag exceeds 5 minutes
+      tenant_scope: global
+    expr: audit_ingestion_lag_seconds > 300
+    for: 5m
+    labels:
+      component: audit
+      severity: SEV-2
+      team: security
+  - alert: IDISCalcReproducibilityFailure
+    annotations:
+      description: 'Deterministic calculations are producing inconsistent results. Current failure rate: {{ $value | printf
+        "%.3f" }}%. Check calc service dependencies, environment drift, and formula versions.'
+      runbook: docs/runbooks/RB-05_calc_failure.md
+      summary: Calc reproducibility failure rate exceeds 0.1% for tenant {{ $labels.tenant_id }}
+    expr: (sum by (tenant_id) (increase(calc_reproducibility_failures_total[24h])) / sum by (tenant_id) (increase(calc_reproducibility_checks_total[24h])))
+      * 100 > 0.1
+    for: 1h
+    labels:
+      component: calc
+      severity: SEV-2
+      team: data
+  - alert: IDISSanadRetrievalLatencyHigh
+    annotations:
+      description: 'Sanad graph queries are taking too long. Current p95: {{ $value | humanizeDuration }}. Check graph DB
+        health, indexes, and query patterns.'
+      runbook: docs/runbooks/RB-04_sanad_degradation.md
+      summary: Sanad retrieval p95 latency exceeds 1.2s for tenant {{ $labels.tenant_id }}
+    expr: histogram_quantile(0.95, sum by (tenant_id, le) (rate(sanad_retrieval_duration_seconds_bucket[5m]))) > 1.2
+    for: 10m
+    labels:
+      component: sanad
+      severity: SEV-2
+      team: data
+  - alert: IDISDebateCompletionRateLow
+    annotations:
+      description: 'Multi-agent debates are not completing at the expected rate. Current rate: {{ $value | printf "%.1f" }}%.
+        Check debate orchestrator, agent health, and evidence retrieval.'
+      runbook: docs/runbooks/RB-06_debate_stuck.md
+      summary: Debate completion rate below 98% for tenant {{ $labels.tenant_id }}
+    expr: (sum by (tenant_id) (rate(debate_completed_total[1h])) / sum by (tenant_id) (rate(debate_started_total[1h]))) *
+      100 < 98
+    for: 30m
+    labels:
+      component: debate
+      severity: SEV-2
+      team: ml
+  - alert: IDISDeliverableGenerationFailure
+    annotations:
+      description: 'PDF/DOCX deliverable generation is failing above threshold. Current failure rate: {{ $value | printf "%.2f"
+        }}%. Check template engine, object store permissions, and claim/calc references.'
+      runbook: docs/runbooks/RB-07_deliverable_failure.md
+      summary: Deliverable generation failure rate exceeds 1% for tenant {{ $labels.tenant_id }}
+    expr: (sum by (tenant_id) (rate(deliverable_failures_total[1h])) / sum by (tenant_id) (rate(deliverable_attempts_total[1h])))
+      * 100 > 1
+    for: 15m
+    labels:
+      component: deliverables
+      severity: SEV-2
+      team: backend
+- name: idis-medium-alerts
+  rules:
+  - alert: IDISOCRQueueTimeHigh
+    annotations:
+      description: 'Documents are waiting more than 60 minutes (p95) in the OCR queue. Current p95: {{ $value | humanizeDuration
+        }}. Check OCR worker capacity and scaling.'
+      runbook: docs/runbooks/RB-02_ingestion_failure.md
+      summary: OCR queue p95 wait time exceeds 60 minutes for tenant {{ $labels.tenant_id }}
+    expr: histogram_quantile(0.95, sum by (tenant_id, le) (rate(ocr_queue_wait_seconds_bucket[30m]))) > 3600
+    for: 30m
+    labels:
+      component: ocr
+      severity: SEV-3
+      team: data
+  - alert: IDISIntegrationProviderErrors
+    annotations:
+      description: External integration is experiencing elevated error rates. Check provider status, rate limits, and authentication
+        tokens.
+      runbook: docs/runbooks/RB-09_integration_outage.md
+      summary: Integration errors for provider {{ $labels.provider }} affecting tenant {{ $labels.tenant_id }}
+    expr: sum by (tenant_id, provider) (rate(integration_errors_total[15m])) > 0.1
+    for: 15m
+    labels:
+      component: external
+      severity: SEV-3
+      team: integrations

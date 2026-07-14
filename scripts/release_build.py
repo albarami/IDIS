@@ -257,7 +257,34 @@ def validate_manifest(manifest: dict[str, Any]) -> list[str]:
     return errors
 
 
-def main() -> int:
+REQUIRED_CHECKSUM_SECTIONS = (
+    "source",
+    "schemas",
+    "openapi",
+    "dockerfile",
+    "kubernetes",
+    "terraform",
+)
+
+
+def manifest_completeness_errors(manifest: dict[str, Any]) -> list[str]:
+    """Fail-closed completeness check for the release promotion gate (Slice99 Task 8).
+
+    Every required checksum section must be present and a real sha256 - a missing artifact
+    surface ("none") means the release evidence is incomplete and promotion must not proceed.
+    """
+    errors: list[str] = []
+    checksums = manifest.get("checksums", {}) or {}
+    for section in REQUIRED_CHECKSUM_SECTIONS:
+        value = checksums.get(section)
+        if value is None:
+            errors.append(f"missing checksum section: {section}")
+        elif not isinstance(value, str) or len(value) != 64:
+            errors.append(f"checksum section '{section}' is not a real sha256: {value!r}")
+    return errors
+
+
+def main(argv: list[str] | None = None) -> int:
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Generate IDIS release build manifest")
     parser.add_argument(
@@ -273,13 +300,21 @@ def main() -> int:
         help="Validate only, do not write manifest",
     )
     parser.add_argument(
+        "--require-complete",
+        action="store_true",
+        help=(
+            "Fail (exit 2) unless every checksum section (source, schemas, openapi, "
+            "dockerfile, kubernetes, terraform) is a real sha256 - the release promotion gate"
+        ),
+    )
+    parser.add_argument(
         "--quiet",
         "-q",
         action="store_true",
         help="Suppress output except errors",
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # Find repository root
     repo_root = Path(__file__).parent.parent.resolve()
@@ -309,6 +344,16 @@ def main() -> int:
         for error in hard_errors:
             print(f"  - {error}", file=sys.stderr)
         return 2
+
+    if args.require_complete:
+        completeness_errors = manifest_completeness_errors(manifest)
+        if completeness_errors:
+            print("Release promotion gate: manifest INCOMPLETE", file=sys.stderr)
+            for error in completeness_errors:
+                print(f"  - {error}", file=sys.stderr)
+            return 2
+        if not args.quiet:
+            print("Release promotion gate: manifest complete (all checksum sections real)")
 
     if args.check:
         if not args.quiet:

@@ -18,6 +18,7 @@ from idis.api.errors import (
 )
 from idis.api.middleware.audit import AuditMiddleware
 from idis.api.middleware.db_tx import DBTransactionMiddleware
+from idis.api.middleware.http_metrics import HttpMetricsMiddleware
 from idis.api.middleware.idempotency import IdempotencyMiddleware
 from idis.api.middleware.openapi_validate import OpenAPIValidationMiddleware
 from idis.api.middleware.rate_limit import RateLimitMiddleware
@@ -40,6 +41,7 @@ from idis.api.routes.enrichment import router as enrichment_router
 from idis.api.routes.erasure_export import router as erasure_export_router
 from idis.api.routes.health import router as health_router
 from idis.api.routes.human_gates import router as human_gates_router
+from idis.api.routes.metrics import router as metrics_router
 from idis.api.routes.overrides import router as overrides_router
 from idis.api.routes.readiness import router as readiness_router
 from idis.api.routes.runs import router as runs_router
@@ -161,6 +163,9 @@ def create_app(
     )
     app.add_middleware(DBTransactionMiddleware)
     app.add_middleware(RequestIdMiddleware)
+    # Outermost (added last): measures every request through the full stack with safe labels
+    # (method + status class only - never paths/tenant content). Served at GET /metrics.
+    app.add_middleware(HttpMetricsMiddleware)
 
     instrument_fastapi(app)
 
@@ -191,6 +196,7 @@ def create_app(
     app.add_exception_handler(Exception, generic_exception_handler)
 
     app.include_router(health_router)
+    app.include_router(metrics_router)
     app.include_router(tenancy_router)
     app.include_router(deals_router)
     app.include_router(documents_router)

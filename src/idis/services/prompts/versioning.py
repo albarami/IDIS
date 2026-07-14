@@ -1,18 +1,18 @@
 """Prompt Versioning Service - atomic promotion/rollback/retire with audit.
 
-Implements promotion pipeline from IDIS_Prompt_Registry_and_Model_Policy_v6_3.md §8:
+Implements promotion pipeline from IDIS_Prompt_Registry_and_Model_Policy_v6_3.md section 8:
 - Required gates by risk class (LOW/MEDIUM/HIGH)
 - Atomic pointer updates (temp file + os.replace)
 - Deterministic JSON serialization (sorted keys)
 
-Audit events per Go-Live checklist (IDIS_Master_Execution_Plan_v6_3.md §4.4):
+Audit events per Go-Live checklist (IDIS_Master_Execution_Plan_v6_3.md section 4.4):
 - prompt.version.promoted
 - prompt.version.rolledback
 - prompt.version.retired
 
 Design requirements:
 - Fail-closed: missing gates, invalid versions, audit failure => hard fail
-- Atomic updates: write temp → os.replace
+- Atomic updates: write temp -> os.replace
 - Deterministic: stable JSON ordering
 """
 
@@ -40,8 +40,14 @@ from idis.services.prompts.registry import (
     RiskClass,
     validate_semver,
 )
+from idis.validators.audit_event_validator import validate_audit_event
 
 logger = logging.getLogger(__name__)
+
+# Platform/system tenant for governance events: prompt promotion is a platform-level operation
+# (not tenant-scoped), but the audit contract requires a UUID tenant_id. The all-zeros UUID is
+# the documented sentinel for platform governance actors.
+SYSTEM_TENANT_ID = "00000000-0000-0000-0000-000000000000"
 
 
 class PromptVersioningError(Exception):
@@ -112,7 +118,7 @@ class MissingFieldError(PromptVersioningError):
 
 
 class ApprovalRole(StrEnum):
-    """Approval roles per spec §8.1."""
+    """Approval roles per spec section 8.1."""
 
     OWNER = "OWNER"
     SECURITY_COMPLIANCE = "SECURITY_COMPLIANCE"
@@ -121,8 +127,8 @@ class ApprovalRole(StrEnum):
 class Approval(BaseModel):
     """Approval record for promotion/rollback.
 
-    Per spec §8.1: prompt owner approval required for all promotions.
-    Per spec §8.2: security/compliance reviewer required for HIGH risk.
+    Per spec section 8.1: prompt owner approval required for all promotions.
+    Per spec section 8.2: security/compliance reviewer required for HIGH risk.
     """
 
     approver_id: str = Field(..., description="ID of the approver")
@@ -141,7 +147,7 @@ class GateResult(BaseModel):
 class PromotionRequest(BaseModel):
     """Request to promote a prompt version.
 
-    Per Go-Live checklist §4.4:
+    Per Go-Live checklist section 4.4:
     - evaluation_results_ref and evaluation_results_sha256 are REQUIRED
     - approvals must include at least OWNER role
     - HIGH risk requires SECURITY_COMPLIANCE approval
@@ -234,30 +240,40 @@ class PromptVersioningService:
         """
         self._registry = registry
         self._audit_sink = audit_sink or InMemoryAuditSink()
-        self._tenant_id = tenant_id or "system"
+        self._tenant_id = tenant_id or SYSTEM_TENANT_ID
 
     def _emit_audit_event(
         self,
         event_type: str,
         prompt_id: str,
         version: str,
-        details: dict[str, Any],
         actor: str,
+        *,
+        safe: dict[str, Any],
+        hashes: list[str] | None = None,
+        refs: list[str] | None = None,
     ) -> None:
-        """Emit an audit event for prompt operations.
+        """Emit a schema-valid audit event for prompt operations.
 
-        FAIL-CLOSED: If audit emission fails, raise AuditEmissionError.
-        The calling operation MUST NOT proceed if audit fails.
+        Follows the compliance core-audit convention: method POST, an ``/internal/prompts/...``
+        path with a status_code, a ``{safe, hashes, refs}`` payload, a UUID tenant, and
+        ``validate_audit_event()`` BEFORE ``audit_sink.emit``.
+
+        FAIL-CLOSED: if the event does not validate, or emission fails, raise
+        AuditEmissionError. The calling operation MUST NOT proceed (callers roll back the
+        registry pointer).
 
         Args:
             event_type: One of prompt.version.{promoted,rolledback,retired}
             prompt_id: Prompt identifier
             version: Version being operated on
-            details: Additional details for the audit payload
             actor: Actor performing the operation
+            safe: Safe payload fields (IDs, versions, envs, roles, short reasons - no secrets)
+            hashes: Content hashes (e.g. "sha256:<hex>") tied to the operation
+            refs: References to related artifacts (evaluation results, incident tickets)
 
         Raises:
-            AuditEmissionError: If audit emission fails
+            AuditEmissionError: If validation or emission fails
         """
         event_id = str(uuid.uuid4())
         occurred_at = _now_iso8601()
@@ -278,17 +294,23 @@ class PromptVersioningService:
                 "request_id": f"prompt-{event_id[:8]}",
                 "method": "POST",
                 "path": f"/internal/prompts/{prompt_id}/versions/{version}",
+                "status_code": 200,
             },
             "resource": {
                 "resource_type": "prompt",
                 "resource_id": prompt_id,
             },
             "payload": {
-                "prompt_id": prompt_id,
-                "version": version,
-                **details,
+                "safe": {"prompt_id": prompt_id, "version": version, **safe},
+                "hashes": list(hashes or []),
+                "refs": list(refs or []),
             },
         }
+
+        validation = validate_audit_event(event)
+        if not validation.passed:
+            codes = "; ".join(f"{e.code}: {e.message}" for e in validation.errors)
+            raise AuditEmissionError(event_type, f"event failed validation: {codes}")
 
         try:
             self._audit_sink.emit(event)
@@ -371,7 +393,7 @@ class PromptVersioningService:
     ) -> None:
         """Validate that required gates are present and passing.
 
-        Gate requirements by risk class (per spec §8.2):
+        Gate requirements by risk class (per spec section 8.2):
         - LOW: Gate 1
         - MEDIUM: Gate 1 + Gate 2
         - HIGH: Gate 1 + Gate 2 + Gate 3 + Gate 4
@@ -407,7 +429,7 @@ class PromptVersioningService:
     ) -> None:
         """Validate that required approvals are present.
 
-        Per spec §8.1:
+        Per spec section 8.1:
         - All promotions require OWNER approval
         - HIGH risk requires SECURITY_COMPLIANCE approval in addition
 
@@ -459,7 +481,7 @@ class PromptVersioningService:
     def promote(self, request: PromotionRequest) -> dict[str, Any]:
         """Promote a prompt version to an environment.
 
-        Process (per spec §8.1-8.2 and Go-Live §4.4):
+        Process (per spec section 8.1-8.2 and Go-Live section 4.4):
         1. Validate prompt artifact exists
         2. Validate approval requirements (OWNER for all, +SECURITY_COMPLIANCE for HIGH)
         3. Validate gate requirements (union of risk_class + artifact gates)
@@ -499,17 +521,17 @@ class PromptVersioningService:
         owner_approval = next((a for a in request.approvals if a.role == ApprovalRole.OWNER), None)
         approver_id = owner_approval.approver_id if owner_approval else request.actor
 
-        audit_details: dict[str, Any] = {
+        safe_details: dict[str, Any] = {
             "env": request.env,
             "old_version": old_version,
             "new_version": request.new_version,
             "risk_class": artifact.risk_class.value,
             "approver": approver_id,
-            "approvals": [a.model_dump() for a in request.approvals],
+            "approvals": [
+                {"approver_id": a.approver_id, "role": a.role.value} for a in request.approvals
+            ],
             "reason": request.reason,
-            "gate_results": [gr.model_dump() for gr in request.gate_results],
-            "evaluation_results_ref": request.evaluation_results_ref,
-            "evaluation_results_sha256": request.evaluation_results_sha256,
+            "gate_results": [{"gate": gr.gate, "passed": gr.passed} for gr in request.gate_results],
         }
 
         try:
@@ -517,8 +539,10 @@ class PromptVersioningService:
                 event_type="prompt.version.promoted",
                 prompt_id=request.prompt_id,
                 version=request.new_version,
-                details=audit_details,
                 actor=request.actor,
+                safe=safe_details,
+                hashes=[f"sha256:{request.evaluation_results_sha256}"],
+                refs=[request.evaluation_results_ref],
             )
         except AuditEmissionError:
             if old_version is not None:
@@ -572,24 +596,30 @@ class PromptVersioningService:
 
         self._write_registry_pointer_atomic(request.env, pointer)
 
-        audit_details: dict[str, Any] = {
+        safe_details: dict[str, Any] = {
             "env": request.env,
             "old_version": old_version,
             "rollback_target": request.rollback_target_version,
             "reason": request.reason,
-            "approvals": [a.model_dump() for a in request.approvals],
+            "approvals": [
+                {"approver_id": a.approver_id, "role": a.role.value} for a in request.approvals
+            ],
         }
-
         if request.incident_ticket_id:
-            audit_details["incident_ticket_id"] = request.incident_ticket_id
+            safe_details["incident_ticket_id"] = request.incident_ticket_id
+
+        refs: list[str] = []
+        if request.incident_ticket_id:
+            refs.append(f"incident_ticket:{request.incident_ticket_id}")
 
         try:
             self._emit_audit_event(
                 event_type="prompt.version.rolledback",
                 prompt_id=request.prompt_id,
                 version=request.rollback_target_version,
-                details=audit_details,
                 actor=request.actor,
+                safe=safe_details,
+                refs=refs,
             )
         except AuditEmissionError:
             if old_version is not None:
@@ -627,17 +657,12 @@ class PromptVersioningService:
         """
         self._validate_prompt_exists(request.prompt_id, request.version)
 
-        audit_details: dict[str, Any] = {
-            "version": request.version,
-            "reason": request.reason,
-        }
-
         self._emit_audit_event(
             event_type="prompt.version.retired",
             prompt_id=request.prompt_id,
             version=request.version,
-            details=audit_details,
             actor=request.actor,
+            safe={"reason": request.reason},
         )
 
         return {

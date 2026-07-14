@@ -358,22 +358,22 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | **Requirement** | Go-live requires: dashboards, alerts, backups tested, DR drill, runbooks published |
 | **Source Doc** | SLO/Runbooks section 10 |
 | **Source Section** | "Operational Readiness Checklist (Go-Live Gate)" |
-| **Enforcing Component** | Manual checklist; automated dashboard checks |
-| **Tests** | Manual verification |
+| **Enforcing Component** | Manual checklist; `scripts/db_backup_restore.py` + monitoring exports (Slice99) |
+| **Tests** | `tests/test_slice99_backup_restore_postgres.py` - CI-ENFORCED via the dedicated `backup-restore-drill` job (disposable Postgres, `IDIS_REQUIRE_POSTGRES=1`), which the `release-gate` job depends on; `tests/test_slice99_metrics_endpoint.py` (export parity + /metrics deploy truth); remaining items manual |
 | **Phase Gate** | Phase 7 (go-live gate) |
-| **Evidence Artifact** | Checklist sign-off; DR drill reports; backup test results |
+| **Evidence Artifact** | Checklist sign-off; DR drill reports; backup test results; RB-11 drill runbook |
 
 **Checklist Items:**
 | Item | Verification Method |
 |------|---------------------|
-| SLO dashboards exist | Dashboard URL accessible |
-| Paging alerts configured | Alert test fired successfully |
-| Backup/restore tested | Restore drill completed |
+| SLO dashboards exist | Definitions exported to `deploy/monitoring/dashboards/` (Slice99); Grafana deployment pending |
+| Paging alerts configured | Rules exported to `deploy/monitoring/prometheus_alert_rules.yaml` (Slice99); alerting deployment pending |
+| Backup/restore tested | CI-enforced restore drill: `backup-restore-drill` job runs `tests/test_slice99_backup_restore_postgres.py` on every CI run and gates `release-gate` (RB-11 covers the manual/local drill procedure) |
 | DR failover drill completed | Drill report signed |
 | Audit coverage 100% | Automated test passes |
 | No-Free-Facts validator enforced | Test deliverable export |
 | Muhasabah gate enforced | Test debate output |
-| Runbooks published | Doc review |
+| Runbooks published | RB-01..RB-11 in `docs/runbooks/` (RB-11 added Slice99) |
 | On-call rotation established | Schedule documented |
 
 ---
@@ -390,14 +390,18 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | **Source Section** | "Prompt Registry Overview", "Promotion Pipeline", "Audited Promotion/Rollback" |
 | **Enforcing Component** | `src/idis/services/prompts/registry.py` - PromptRegistry |
 | | `src/idis/services/prompts/versioning.py` - PromptVersioningService |
+| | `src/idis/services/prompts/validate_cli.py` - `python -m idis prompts validate` (CI-wired, Slice99) |
+| | `src/idis/services/prompts/promotion_policy.py` - `IDIS_REQUIRE_PROMOTED_PROMPTS` strict policy (Slice99) |
 | **Tests** | `tests/test_prompt_registry.py::test_version_loaded` |
 | | `tests/test_prompt_registry.py::test_rollback_works` |
 | | `tests/test_prompt_registry.py::TestPromptVersioningPromotion` |
 | | `tests/test_prompt_registry.py::TestPromptVersioningRollback` |
 | | `tests/test_prompt_registry.py::TestAuditFailureIsFatal` |
+| | `tests/test_slice99_prompt_governance.py` (tree validation, schema-valid events) |
+| | `tests/test_slice99_prompt_model_linkage.py` (runtime linkage + promoted-prompts policy) |
 | **Phase Gate** | Phase 7.2 |
-| **Evidence Artifact** | `prompt.version.promoted`, `prompt.version.rolledback`, `prompt.version.retired` audit events (per Go-Live section 4.4) |
-| **Implementation Status** | [x] Exists |
+| **Evidence Artifact** | `prompt.version.promoted`, `prompt.version.rolledback`, `prompt.version.retired` audit events - schema-valid via `validate_audit_event` with `prompt` registered in BOTH the Python validator and `schemas/audit_event.schema.json` (Slice99) |
+| **Implementation Status** | [x] Exists - hardened in Slice99 (validation CLI in CI, core-audit-convention events, promoted-prompts strict policy default-off; actual promotions await real eval evidence) |
 
 **Required Gates by Risk Class:**
 | Risk Class | Required Gates |
@@ -416,11 +420,11 @@ This document provides a **traceability matrix** that maps IDIS v6.3 requirement
 | **Requirement** | Release gates enforce: No-Free-Facts 0 violations, Muhasabah >=98%, audit 100%, reproducibility >=99.9% |
 | **Source Doc** | Evaluation Harness section 2, section 8 |
 | **Source Section** | "What must be evaluated", "Release Gates" |
-| **Enforcing Component** | CI pipeline; test harness CLI |
-| **Tests** | GDBS-S, GDBS-F, GDBS-A benchmark suites |
+| **Enforcing Component** | CI pipeline; `python -m idis test gdbs-*` CLI; `evaluation/baseline.py` drift gate (Slice99) |
+| **Tests** | GDBS-S, GDBS-F, GDBS-A benchmark suites; `tests/test_slice99_gdbs_drift_gate.py` |
 | **Phase Gate** | Phase 5 (Gate 1-2); Phase 6 (Gate 3); Phase 7 (Gate 4) |
-| **Evidence Artifact** | Gate results in CI; evaluation_results_ref on prompt artifacts |
-| **Implementation Status** | Planned - Gate 0 in CI; Gates 1-4 pending harness build |
+| **Evidence Artifact** | Gate results in CI; evaluation_results_ref on prompt artifacts; pinned `tests/fixtures/gdbs_baseline/gdbs_mini_gdbs_s_baseline.json` |
+| **Implementation Status** | Partial - Gate 0 in CI; Slice99 adds the hermetic GDBS-S drift gate (pinned baseline + explicit thresholds) to the evaluation-harness job and the release-gate aggregation; live execute-mode Gates 1-4 evidence pending |
 
 **Gate Requirements (Hard vs Soft Classification):**
 | Gate | Type | Requirements | Environment | Failure Impact |

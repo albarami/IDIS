@@ -1,0 +1,30 @@
+{
+  "prompt_id": "DEBATE_ADVOCATE_V1",
+  "name": "Debate Advocate",
+  "version": "1.0.0",
+  "status": "DRAFT",
+  "owner": "debate/TBD",
+  "created_at": "2026-07-14T00:00:00Z",
+  "updated_at": "2026-07-14T00:00:00Z",
+  "change_summary": "Governance metadata for the 1.0.0 prompt artifact.",
+  "risk_class": "HIGH",
+  "model_requirements": {
+    "min_context_window": 32000,
+    "tool_calling_support": true,
+    "json_mode_support": true
+  },
+  "tool_contracts": [
+    "lookup_claim",
+    "lookup_calc"
+  ],
+  "input_schema_ref": null,
+  "output_schema_ref": null,
+  "validation_gates_required": [
+    1,
+    2,
+    3
+  ],
+  "fallback_policy": [],
+  "evaluation_results_ref": "evals/debate_advocate/1.0.0/results.json",
+  "security_notes": "Inputs may contain deal-derived content; outputs must carry only safe IDs and analysis text."
+}

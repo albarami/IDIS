@@ -1,10 +1,11 @@
-"""Slice97 Task 6 — webhook delivery audit metadata + Prometheus counters.
+"""Slice97 Task 6 - webhook delivery audit metadata + Prometheus counters.
 
 RED-first. Each dispatched outbox row emits a ``webhook.delivery.succeeded`` / ``.failed`` audit
 event carrying SAFE METADATA ONLY (webhook_id, event_id, event_type, attempt_count, status_code,
-outcome — never url, secret, body, headers, or paths), validated by ``validate_audit_event``; and
+outcome - never url, secret, body, headers, or paths), validated by ``validate_audit_event``; and
 increments the Prometheus counters the SLO dashboard already queries
-(``webhook_delivery_success_total`` / ``webhook_delivery_attempts_total``, labeled by tenant_id).
+(``webhook_delivery_success_total`` / ``webhook_delivery_attempts_total``, GLOBAL aggregates -
+no tenant label, because the /metrics scrape surface is unauthenticated).
 Audit/metrics are best-effort and must not change Task 5 dispatch semantics. PYTHONPATH pinned to
 this worktree's src.
 """
@@ -136,9 +137,9 @@ def test_success_emits_succeeded_audit_and_increments_counters() -> None:
     assert safe["status_code"] == 200
     assert safe["outcome"] == "succeeded"
 
-    labels = {"tenant_id": _TENANT}
-    assert get_counter(WEBHOOK_DELIVERY_ATTEMPTS_TOTAL, labels=labels) == 1
-    assert get_counter(WEBHOOK_DELIVERY_SUCCESS_TOTAL, labels=labels) == 1
+    # Global aggregates by design: no tenant label on the unauthenticated scrape surface.
+    assert get_counter(WEBHOOK_DELIVERY_ATTEMPTS_TOTAL) == 1
+    assert get_counter(WEBHOOK_DELIVERY_SUCCESS_TOTAL) == 1
 
 
 def test_failed_delivery_emits_failed_audit_and_increments_attempts_only() -> None:
@@ -151,9 +152,9 @@ def test_failed_delivery_emits_failed_audit_and_increments_attempts_only() -> No
     assert safe["outcome"] == "failed" and safe["status_code"] == 503
     assert safe["attempt_count"] == 1
 
-    labels = {"tenant_id": _TENANT}
-    assert get_counter(WEBHOOK_DELIVERY_ATTEMPTS_TOTAL, labels=labels) == 1
-    assert get_counter(WEBHOOK_DELIVERY_SUCCESS_TOTAL, labels=labels) == 0
+    # Global aggregates by design: no tenant label on the unauthenticated scrape surface.
+    assert get_counter(WEBHOOK_DELIVERY_ATTEMPTS_TOTAL) == 1
+    assert get_counter(WEBHOOK_DELIVERY_SUCCESS_TOTAL) == 0
     # Task 5 semantics preserved: the row is rescheduled, not terminal
     (row,) = outbox._rows.values()
     assert row.status == "pending" and row.attempt_count == 1
@@ -211,8 +212,9 @@ def test_connection_error_without_status_code_omits_it() -> None:
 def test_counters_render_in_prometheus_exposition_format() -> None:
     _drain(success=True, status_code=200)
     text = render_prometheus_text()
-    assert f'webhook_delivery_attempts_total{{tenant_id="{_TENANT}"}} 1' in text
-    assert f'webhook_delivery_success_total{{tenant_id="{_TENANT}"}} 1' in text
+    assert "webhook_delivery_attempts_total 1" in text
+    assert "webhook_delivery_success_total 1" in text
+    assert _TENANT not in text, "no tenant UUID may reach the scrape surface"
 
 
 def test_audit_and_metrics_failures_do_not_break_dispatch() -> None:

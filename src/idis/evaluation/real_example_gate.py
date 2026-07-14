@@ -248,7 +248,50 @@ def run_real_example_gate(
             )
 
     save_ledger(ledger_file, ledger)
-    return _safe_summary(mode=resolved_mode, records=records, ledger=ledger)
+    summary = _safe_summary(mode=resolved_mode, records=records, ledger=ledger)
+    _append_gate_reconciliation_entry(
+        summary=summary,
+        mode=resolved_mode,
+        records=records,
+        ledger_file=ledger_file,
+    )
+    return summary
+
+
+def _append_gate_reconciliation_entry(
+    *,
+    summary: dict[str, object],
+    mode: GateMode,
+    records: list[dict[str, object]],
+    ledger_file: Path,
+) -> None:
+    """Record the completed gate run in the append-only reconciliation log (Slice99 Task 4).
+
+    Carries only the safe summary's sha256, aggregate counts, and status codes - never the
+    data-room root, ledger path, or any private filename. The log lives next to the ledger
+    (``.local_reports/reconciliation_log.jsonl`` under the default layout). Fail-closed: a
+    reconciliation failure fails the gate run.
+    """
+    from idis.evaluation.local_reports_log import (
+        RECONCILIATION_LOG_FILENAME,
+        append_reconciliation_entry,
+    )
+
+    summary_sha256 = hashlib.sha256(
+        json.dumps(summary, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    counts: dict[str, int] = {"files_total": len(records)}
+    for status, count in sorted(Counter(str(r["status"]) for r in records).items()):
+        counts[f"status_{status.lower()}"] = count
+
+    append_reconciliation_entry(
+        artifact_type="real_example_gate_summary",
+        artifact_id=f"real_example_gate:{mode.value}",
+        sha256=summary_sha256,
+        counts=counts,
+        status_code="GATE_COMPLETED",
+        log_path=ledger_file.parent / RECONCILIATION_LOG_FILENAME,
+    )
 
 
 def build_data_room_package_inventory_summary(
@@ -935,8 +978,8 @@ _EVIDENCE_CLASS_BY_EXTENSION: dict[str, str] = {
 }
 _EVIDENCE_CLASS_OTHER = "OTHER"
 
-# Locked intended terminal blockers (safe, expected). Everything else — retryable/transient
-# codes, ``unknown_format``, empty/missing, or any unrecognized future code — is an UNINTENDED
+# Locked intended terminal blockers (safe, expected). Everything else - retryable/transient
+# codes, ``unknown_format``, empty/missing, or any unrecognized future code - is an UNINTENDED
 # deferral (fail-safe: parse readiness must never silently accept an unknown blocker).
 _INTENDED_REASON_CODES: frozenset[str] = frozenset(
     {
@@ -967,7 +1010,7 @@ _DEFERRAL_CLASS_UNINTENDED = "unintended"
 def _evidence_class_for_extension(extension: str) -> str:
     """Map a file extension to a safe evidence class.
 
-    Derived from the extension token only — never a filename or content. Case-insensitive;
+    Derived from the extension token only - never a filename or content. Case-insensitive;
     a leading dot is optional. Unknown/empty tokens map to ``OTHER``.
     """
     token = str(extension).strip().lower().lstrip(".")
@@ -994,8 +1037,8 @@ def _aggregate_counts_by(
 ) -> dict[str, int]:
     """Re-bucket an existing ``{key: count}`` aggregate by a classifier, count-weighted.
 
-    Emits only classifier labels (evidence class / deferral class) — never the original
-    keys — so reason/extension strings are not echoed beyond the gate's already-safe counts.
+    Emits only classifier labels (evidence class / deferral class) - never the original
+    keys - so reason/extension strings are not echoed beyond the gate's already-safe counts.
     """
     aggregated: Counter[str] = Counter()
     for key, count in counts.items():

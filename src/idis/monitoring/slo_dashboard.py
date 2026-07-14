@@ -1,6 +1,6 @@
 """IDIS Golden SLO Dashboards - Grafana-compatible dashboard specifications.
 
-Implements the 10 required golden dashboards from IDIS_SLO_SLA_Runbooks_v6_3.md §8.1:
+Implements the 10 required golden dashboards from IDIS_SLO_SLA_Runbooks_v6_3.md section 8.1:
 1. API Availability/Latency
 2. Ingestion Throughput + Error Rates
 3. Queue Depth/Backlog
@@ -28,6 +28,15 @@ from idis.monitoring.types import (
     DashboardSpec,
     MonitoringValidationError,
     validate_dashboard_specs,
+)
+
+# Metrics that are deliberately GLOBAL aggregates (no tenant_id label): they are served on the
+# unauthenticated /metrics scrape surface, so per-tenant labels would let any scraper enumerate
+# tenant UUIDs and per-tenant volumes. Panels querying ONLY these metrics are exempt from the
+# tenant_id-filter convention; per-tenant delivery evidence lives in audit events instead.
+GLOBAL_AGGREGATE_METRICS = (
+    "webhook_delivery_attempts_total",
+    "webhook_delivery_success_total",
 )
 
 GOLDEN_DASHBOARD_TITLES = (
@@ -522,14 +531,16 @@ def _create_integration_health_dashboard() -> DashboardSpec:
             ),
             DashboardPanelSpec(
                 id=3,
-                title="Webhook Delivery Success Rate",
+                title="Webhook Delivery Success Rate (global)",
                 panel_type="stat",
                 expr=(
-                    'sum(rate(webhook_delivery_success_total{tenant_id="$tenant_id"}[1h]))'
-                    " / sum(rate(webhook_delivery_attempts_total{"
-                    'tenant_id="$tenant_id"}[1h])) * 100'
+                    "sum(rate(webhook_delivery_success_total[1h]))"
+                    " / sum(rate(webhook_delivery_attempts_total[1h])) * 100"
                 ),
-                description="Webhook delivery success rate",
+                description=(
+                    "Webhook delivery success rate - GLOBAL aggregate: these counters carry no "
+                    "tenant label because /metrics is an unauthenticated scrape surface"
+                ),
             ),
             DashboardPanelSpec(
                 id=4,
@@ -547,7 +558,7 @@ def _create_integration_health_dashboard() -> DashboardSpec:
 
 
 def get_golden_dashboards() -> tuple[DashboardSpec, ...]:
-    """Return the 10 required golden dashboards per SLO/Runbooks §8.1.
+    """Return the 10 required golden dashboards per SLO/Runbooks section 8.1.
 
     Returns:
         Tuple of 10 DashboardSpec objects with deterministic ordering.

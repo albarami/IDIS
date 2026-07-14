@@ -160,6 +160,7 @@
             "override",
             "integration",
             "webhook",
+            "prompt",
             "data_room_package",
             "group",
             "session",

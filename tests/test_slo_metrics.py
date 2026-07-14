@@ -1,4 +1,4 @@
-"""Tests for IDIS SLO dashboards per IDIS_SLO_SLA_Runbooks_v6_3.md §8.1.
+"""Tests for IDIS SLO dashboards per IDIS_SLO_SLA_Runbooks_v6_3.md section 8.1.
 
 Verifies:
 - Exactly 10 golden dashboards exist
@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from idis.monitoring.slo_dashboard import (
+    GLOBAL_AGGREGATE_METRICS,
     GOLDEN_DASHBOARD_TITLES,
     export_grafana_json_bundle,
     get_golden_dashboards,
@@ -31,7 +32,7 @@ from idis.monitoring.types import (
 
 
 class TestGoldenDashboardCount:
-    """Test that exactly 10 golden dashboards exist per §8.1."""
+    """Test that exactly 10 golden dashboards exist per section 8.1."""
 
     def test_exactly_10_dashboards_exist(self) -> None:
         """Verify the exact count of golden dashboards."""
@@ -51,7 +52,7 @@ class TestGoldenDashboardCount:
         )
 
     def test_all_required_categories_present(self) -> None:
-        """Verify all 10 required dashboard categories from §8.1 are present."""
+        """Verify all 10 required dashboard categories from section 8.1 are present."""
         required_categories = [
             "API Availability and Latency",
             "Ingestion Throughput and Error Rates",
@@ -100,11 +101,22 @@ class TestTenantIsolation:
             )
 
     def test_panel_expressions_reference_tenant_id(self) -> None:
-        """Verify panel expressions include tenant_id filtering."""
+        """Verify panel expressions include tenant_id filtering.
+
+        Exemption: panels querying ONLY the documented GLOBAL aggregate metrics
+        (GLOBAL_AGGREGATE_METRICS - counters deliberately unlabeled because /metrics is an
+        unauthenticated scrape surface) carry no tenant filter by design.
+        """
         dashboards = get_golden_dashboards()
 
         for dashboard in dashboards:
             for panel in dashboard.panels:
+                if any(metric in panel.expr for metric in GLOBAL_AGGREGATE_METRICS):
+                    assert "tenant_id" not in panel.expr, (
+                        f"Panel '{panel.title}' queries a global-aggregate metric and must "
+                        "not pretend to filter by tenant_id"
+                    )
+                    continue
                 assert "tenant_id" in panel.expr, (
                     f"Panel '{panel.title}' in dashboard '{dashboard.title}' "
                     f"missing tenant_id in expression"

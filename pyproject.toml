@@ -93,6 +93,8 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "scripts/run_task7_v11_current_guard_census.py" = ["B009", "B010", "F401"]
 "scripts/run_task7_v9_current_guard_census.py" = ["I001"]
+"scripts/run_task8_v26_sql_authority_census.py" = ["E501", "I001"]
+"tests/slice100_task8/test_v26_sql_authority_postgres_census_red.py" = ["E501", "F841", "I001", "SIM300"]
 
 [tool.ruff.format]
 exclude = [
@@ -104,6 +106,12 @@ exclude = [
     "scripts/run_task7_v21_current_guard_census.py",
     "scripts/run_task7_v9_current_guard_census.py",
     "tests/slice100_task7/test_full_strict_v9_native_schema_red.py",
+    "scripts/materialize_full_strict_v26_preimage.py",
+    "scripts/run_task8_v26_signed_census.py",
+    "scripts/run_task8_v26_sql_authority_census.py",
+    "tests/slice100_task8/test_full_strict_v26_materialization_red.py",
+    "tests/slice100_task8/test_v26_bound_runtime_graph_red.py",
+    "tests/slice100_task8/test_v26_sql_authority_postgres_census_red.py",
 ]
 quote-style = "double"
 indent-style = "space"

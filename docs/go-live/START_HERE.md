@@ -1,6 +1,8 @@
 # IDIS execution package — start here
 
-Status: continuous engineering under AUTH-CONTINUE-20261016; current authorization, model availability and acceptance state are recorded in RUN_STATE. This package is not go-live acceptance. Updated 2026-10-16.
+Status: continuous engineering under AUTH-CONTINUE-20261016; current authorization, model availability and acceptance state are recorded in RUN_STATE. This package is not go-live acceptance. Updated 2026-10-17 for the owner-directed Cursor handoff.
+
+Current owner-directed continuation: open `C:\Projects\IDIS\IDIS-implementation-batch-20261016` in **Cursor with Sol 6.1** as orchestrator, planner and implementer. Use an actual **Claude CLI Opus 5.5** as independent reviewer. Read RUN_STATE's Cursor checkpoint first for exact code/CI identities, local evidence, released writer ownership and the next action. Do not open the older main checkout or restart a broad audit.
 
 ## Objective
 

@@ -363,3 +363,32 @@ Reviewer limits remain explicit: existing executor/function-owner replication fl
 - Container image construction succeeds; runtime health still fails `STRICT_PROFILE_LOAD_FAILED`. No health/profile control was bypassed.
 
 Safe summaries above are durable; raw CI captures remain ignored at `.local_reports/continuation-20261016/ci-17f-{jobs.json,postgres.log,backup.log,container-failed.log}`. CIR-04A/C/E/F and full-system/financial/fund/release conditions remain open. Reuse these verified results for unchanged inputs; rerun only affected verification for subsequent changes.
+
+## 12. Final in-flight packets and Cursor checkpoint evidence
+
+**CIR-04C1:** source331782056a0ac8dcaea9309d291f6e443636fe69, reviewed tree1b4d1dc1d8221eb31cf238088d894453b6b796ab, integrated05a1f44813b91b1ebf2d0dc77aaf480450a22d2c. Sol6.1 session `abounding-plough`; actual Opus5.5 reviewer `059cb06a-f018-4524-9c25-b73f6b0e6ad5`, scoped PASS. Thirteen failures were corrected using legitimate UNBOUND storage inputs and spans' real deal IDs. All47 original cases,62 assertions,5 fixtures and11 comments are conserved; the full entry passes47/47 and11 additional binding/RLS probes pass, zero skips. No production/schema/default/trigger/native-parent changes. All10 maintained files are below500 lines. Exact owned container/tmpfs were removed.
+
+The completed [C1 CI run38963087641](https://github.com/albarami/IDIS/actions/runs/38963087641) targets05a1f44, synthetic merge65e094e89d9dba19f1cd4206da91f0a8baba5e5c. It has5 successes/3 failures/release skipped; PostgreSQL improves from129/33/1 to **142 passed,20 failed,1 skipped**. This closes the13 affected cases but leaves the other20 failures open.
+
+**Corrected CIR-04A:** source8f7642b2520e3cffd11f9cac2e20baadabf75b4a, reviewed tree75e754ee200f57c27e150b3253e59dc34c019bd5, integrated7dbebdc9b5bded42127dba4005a263ef6f80f855. Sol6.1 session `gigantic-philosophy`; actual Opus5.5 reviewer `a6c10c5e-f417-4f7c-b34a-38486234ddd5`, superseding scoped PASS. Owner-pinned historical bytes remain unchanged. The actual check targets no longer format source; six historical formatter exclusions/two precise lint-code exceptions are independently hash-guarded. Three exact archived-negative acknowledgements cannot mask secret/SQL findings. The current v27 filename correction and two-file split preserve71 logical cases; follow-up guards protect split-module presence/LF/48-case collection and exact canonical rejection reason.
+
+Qualified303 affected tests and five controlled RED/GREEN counterexamples pass, zero skips. All16 tracked v26 owner rows, archived v24 source and9 recovered originals remain unchanged; verification mutates0/2952 source paths. Superseding review SHA256 `c105fd953985f63be3ff459cace1b11fbb47d5fba839319d18d3f6c961e87cee`; correction-handoff `9c8f33a873093667d7054d8373efc36c6f7265a2c50f1530f2f92b900eddbaaa`. Raw evidence remains under the A worktree's ignored `.local_reports/cir04a/`.
+
+### Exact final product-code CI — remaining failures
+
+[Run38964431536](https://github.com/albarami/IDIS/actions/runs/38964431536), head7dbebdc9b5bded42127dba4005a263ef6f80f855, actual checkout7bd7390c69da6e9887d154b08a6c99c8869bdc92 against main4594ecabc4d7b598b42a67bf999b894d510f0ec9: **completed FAILURE**,5 successes/3 failures/release skipped.
+
+- `check`: `ruff format --check .` passes (1,546 files), then lint passes. Linux mypy now exposes9 errors before pytest: `secure_files.py:101–103,172` lacks `ctypes.WinDLL/windll`; `filesystem_store.py:187,201` lacks `msvcrt.locking/LK_LOCK/LK_UNLCK`; `real_example_source_lookup.py:181` lacks `WinDLL`. All3 files are unchanged fromc0aeca. Windows full-source success is not a Linux typing pass; correct the actual platform boundary, not the checker.
+- PostgreSQL: both role preparation and bootstrap remain successful; broader suite142 passed/20 failed/1 skipped.
+- Backup/restore, UI, evaluation, Kubernetes and Terraform succeed. Image build succeeds; strict runtime health fails. No profile/admission/health shortcut was added.
+- Private-policy and historical-receipt CI admission remains open but was not reached by this `check` run, which stops at typing.
+
+Retained coordinator capture hashes: `ci-7db-check-failed.log` `842078b1dfc426176b7b159ecfdd22d50565f86875add5d8e6aeca780e105696`; `ci-7db-postgres.log` `a3c2ae870e093da04f440086e2b37922d7ccaa96d584d458128a8d18fc63ef16`; C1 `ci-05a1-postgres.log` `f76c034ef2df509a94efb3f071c17083cace4fe87a9984ab618d737ed8d5e674`.
+
+### Main-checkout raw-byte repair, not a new implementation
+
+The integrated guard initially reported68 passes/1 failure because the old main worktree retained CRLF in the Task7 v21 runner. A focused14-path protected-source preflight reconciled actual owner digests (not manifest byte-count fields), HEAD blobs and original raw source. Eight CRLF-only copies were restored exactly, with their old local bytes retained privately. No Git source content, frozen expectation or historical receipt changed. Persistent `core.autocrlf=false` remains set; index stat refresh records no source diff.
+
+The original Task7 receipt was restored to its ignored main-checkout path and retained SHA256 `3f36f7b66a53aa74047608f842e29988a7d6cc745904e34fdea681655946513f`. Corrected integrated verification passes69/69 guard/scanner tests and the scanner; whole-tree format/lint had already passed. The failed first result and byte-restoration/reverification receipts remain in `.local_reports/continuation-20261016/`. This focused repair is not a repeated whole recovery audit or a change to the reviewed code.
+
+Cursor uses the final checkpoint in RUN_STATE. All implementation writers/resources are released; original dirty work and private evidence remain preserved. Whole-system, financial, live, fund and release conditions remain distinct and unresolved as recorded.

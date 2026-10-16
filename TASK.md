@@ -10,7 +10,7 @@ Packet scope: [IMPLEMENTATION_BACKLOG](docs/go-live/IMPLEMENTATION_BACKLOG.md).
 - [x] Search all94 Git checkouts plus loose source/configuration and the preservation archive before new absence claims; retain private inventories and distinguish existing, unintegrated and unverified work.
 - [x] Verify Claude subscription CLI repository access: pre-upgrade CLI2.1.63 probe resolved `claude-sonnet-4-6`; updated CLI2.1.301 verified `claude-opus-5-5`. Re-resolve Sonnet when selected for a routine review.
 - [x] Verify Sol 6.1 identity and supported implementation invocation: ACP `authenticate` succeeded; actual session `chief-banjo` selected `gpt-6-1-sol-xhigh`.
-- [ ] Independently review and publish the coordination/recovery checkpoint.
+- [x] Independently review and publish coordination/recovery and owner-instruction records: `16da8c5` and `e204b6f`, with actual Opus5.5 and Sonnet5.5 reviews.
 - [ ] Complete bounded CI-baseline corrections with Sol and independent Claude review.
 - [ ] Execute GL-P02, then GL-P03 and subsequent dependency-ready packets.
 
@@ -19,9 +19,15 @@ Packet scope: [IMPLEMENTATION_BACKLOG](docs/go-live/IMPLEMENTATION_BACKLOG.md).
 - [x] Qualify a fresh `.venv` against the existing CIR-04 constraints: all138 distributions match, `pip check` passes and the234 recovery/materialization consumer tests pass. Preserve the borrowed SDK1.15.0 results separately; product repairs still require their own qualified checks.
 - [x] Resolve implementation access through the supported ACP host-authentication method; no model substitution. Standalone command authentication remains a tool limitation.
 - [x] Restore the historical v27 candidate and verify its raw hash against both oracles. The materialization module passed19 tests, of which only the LF/newline check reads the restored file; consumer verification and independent review are tracked separately.
-- [ ] Reconcile hash-owned Task8 lint and intentional negative-fixture scanner findings through legitimate ownership/successor review.
+- [x] Reconcile Task8 quality/scanner findings with frozen bytes preserved: corrected source8f7642b, integrated/published7dbebdc; actual Opus superseding PASS,303 targeted tests, and real CI format/lint success.
+- [x] Finish/review/publish the already-dispatched CIR-04A and CIR-04C1 packets and release all four Devin writer sessions. No new implementation packet started after the owner requested the Cursor handoff.
 - [x] Prepare all3 migration0038 CI roles: reviewed source `a31e7f4`, published integration `17f55dc`,69 qualified local role/ceiling tests plus5 recovery tests pass. Exact CI run38951041704 confirms both fresh role steps, bootstrap/security verification and the backup job succeed; migration0039 stays held.
 - [ ] Diagnose legacy PostgreSQL fixtures against actual current schema and behavior.
+- [x] CIR-04C1 source repair independently reviewed and published: source `3317820`, integration `05a1f44`; focused15/full47/boundary11 tests pass, all47 original nodes and62 assertions preserved. Completed exact CI run38963087641 reports142 passed/20 failed/1 skipped; the remaining20 database failures stay open.
 - [x] Correct the cold-import cycle: Sol candidate `4d6abaa8eb1c0635ee2b9dedc6b6f67dc625880f` is remotely preserved, qualified142 tests/full528-file mypy pass, independent Opus review PASS; integrated locally as `93a2dcde6fd7073c78e93832064d241808e36008`. Whole-system CI remains open.
 - [x] Finish the missing guard-function-owner prerequisite without altering frozen cleanliness/posture guards; preserve failed two-role evidence and verify fresh three-role bootstrap/recovery locally and in CI.
 - [ ] Preserve successful image construction versus failed strict profile admission/health as separate results.
+- [ ] Cursor next: correct9 Linux-only mypy diagnostics exposed by run38964431536 in the3 unchanged platform-specific source files; preserve security behavior and independent review.
+- [ ] Remaining CIR-04C:20 PostgreSQL failures and1 skipped case remain in exact CI; C1's13 document-fixture failures are resolved.
+- [ ] Remaining quality-tool observations: `scripts/run_gates.py` check/all still mutates formatting; non-acknowledged scanner `REDACTED`/example bypasses and old pre-commit Ruff pin require separate disposition.
+- [ ] Publish the owner-directed Cursor checkpoint and verify its final remote head/CI, private-evidence access map and released ownership.

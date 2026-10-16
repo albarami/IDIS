@@ -6,10 +6,10 @@ State date: 2026-10-16. This is the current authority/status entry point. Reconc
 
 | Field | State |
 |---|---|
-| Active milestone | M0: documentation package published in [PR #118](https://github.com/albarami/IDIS/pull/118); open for owner review, not merged |
-| Product implementation | **Not authorized by this task; not started** |
+| Active milestone | Authorized staged batch: PUB-IMPL-01 → CIR-01..04 → GL-P01; documentation package remains in open PR #118 |
+| Product implementation | **Authorized only for this staged batch** under AUTH-IMPL-20261016 below; preservation/admission in progress |
 | Next product packet | **GL-P01 — financial-schema compatibility**, after the authorization/baseline prerequisites below |
-| Next eligible action now | Inspect the corrected PR #118 and its exact-head CI receipt; await the owner's separate scoped decision on PUB-IMPL-01 + CIR-01..04 + GL-P01. Do not repeat publication, begin product work or merge under this documentation grant |
+| Next eligible action now | Review full outgoing history and CI/migration admission, preserve the baseline in isolation, verify private artifact recovery, then execute dependency-ready CIR repairs and GL-P01. Keep all PRs unmerged |
 | Documentation branch | `docs/go-live-execution-package-2026-10-16` |
 | Baselines | Exact main/implementation SHAs and local file hashes: [BASELINE_MANIFEST](BASELINE_MANIFEST.md) |
 | Implementation checkpoint | Local committed Task7 checkpoint plus later uncommitted Task8/9-related work; no fresh product verification claimed |
@@ -19,6 +19,27 @@ State date: 2026-10-16. This is the current authority/status entry point. Reconc
 | Completed CI at `52c830e` | **FAILURE**: `check` (seven typing diagnostics) and `postgres-integration` (missing selected `psycopg` driver); six successes, `release-gate` skipped. [Exact run](https://github.com/albarami/IDIS/actions/runs/38923212479); diagnosis/repair proposal in [runbook section9](VERIFICATION_AND_RUNBOOKS.md#9-completed-documentation-head-ci-diagnosis--52c830e). Not green |
 
 ## Authorization ledger
+
+### AUTH-IMPL-20261016 — active staged implementation batch
+
+Source: the owner's explicit authorization in this conversation, using execution package `070fb57e4485e2ff6101cf7d7f26b60f38e9ecbe`. This supersedes earlier documentation-only restrictions **only within the following scope**. No routine reconfirmation is required.
+
+| Boundary | Authorized scope / restriction |
+|---|---|
+| Packets and order | PUB-IMPL-01 baseline recovery/publication; CIR-01..04 compatibility repairs and reproducible verification; GL-P01 after recovery and compatibility verification. Stop this batch after GL-P01 acceptance; no GL-P02/03 |
+| Baseline preservation | Preserve original 26 commits and all174 manifest states. Review complete outgoing history. Use a separate implementation PR; a sanitized publication branch is authorized if restricted history requires it, with originals preserved and explicit provenance |
+| Private recovery | May create a private repository under the owner's GitHub account for the four specified fund-derived artifacts and recovery metadata. Verify private visibility before upload; preserve exact bytes; prove restoration in a fresh authorized checkout. No original workbook/case uploads or credentials |
+| Repairs and checks | Install required development dependencies; bounded CIR repairs; necessary offline tests and unchanged CI checks; verify actual request, sanitized-error and PostgreSQL behavior, not merely typing |
+| Disposable databases | Authorized only through the existing approved migration boundary. Migration0039 remains excluded; inspect automatic CI and every migration entry point before publication/execution |
+| Git/integration | Separate preservation and repair commits; independent review and correction; commit/push exact reviewed checkpoints and record exact-revision CI. Reviewed integration of these repairs into implementation branch is delegated to the coordinating agent. Keep PRs unmerged |
+| Tools/spending | Existing development tools and subscriptions only. No new paid services, IDIS live model/provider calls, deployment, activation or fund communications |
+| Contracts | Frozen contracts and legacy behavior preserved. If no permitted GL-P01 route exists, report the precise ruling needed and continue other eligible work; do not invent authority |
+| Private CI | Any necessary restoration restricted to trusted authorized runs; never expose artifacts or credentials to untrusted PR code |
+| End condition | GL-P01 acceptance or a material boundary requiring owner decision after other eligible work is exhausted; final handoff includes functionality, recovery evidence, exact tested/published revisions, failures and next packet |
+
+Coordinator: this Codex task. Read-only parallel roles initially cover publication privacy/history, CI/migration admission and GL-P01 frozen ownership. Original implementation worktree remains read-only; implementation writers receive isolated paths/worktrees before editing. Owner review/decision time and agent/runtime cost will be reported only where observed; no productivity multiplier or invented savings.
+
+Batch checklist: [ ] complete-history privacy clearance; [ ] isolated source preservation; [ ] private visibility/upload/restoration; [ ] public implementation PR and recovery receipt; [ ] CIR RED/GREEN, independent reviews and exact CI; [ ] GL-P01 ownership/golden bytes/RED/GREEN/reviews/exact CI; [ ] final recoverable handoff. Existing failures remain visible until verified repaired.
 
 ### AUTH-DOC-20261016 — effective for this documentation task
 
@@ -68,7 +89,9 @@ Within a valid grant, agents continue routine eligible actions without repeated 
 
 | Packet / scope | Implemented | Verified/reviewed | Accepted/synchronized | Blocker / next action |
 |---|---|---|---|---|
-| GL-P01 compatibility | No new work by this task | No new evidence | No | Owner authorization; reconcile local baseline; verify exact frozen-schema ownership before change |
+| PUB-IMPL-01 preservation | In progress: history/privacy and CI admission inspection | No recovery acceptance yet | No | Preserve exact source; private artifact repository and fresh restoration; safe outgoing history |
+| CIR-01..04 compatibility | Authorized, awaiting isolated preserved baseline | Prior failing CI is RED diagnosis, not repair acceptance | No | Request/error/driver behavior and reproducible dependency resolution; unchanged checks |
+| GL-P01 compatibility | Authorized, ownership inspection only | No new execution evidence | No | Baseline recovery and CIR verification; exact frozen ownership before change |
 | GL-P02 calculation/support path | No | No | No | GL-P01 and approved formula/reference/evidence scope; may prepare reference rubric read-only under separate grant |
 | GL-P03 answer/correction/export path | No | No | No | GL-P02 typed supported-answer seam; fund output assumptions explicit |
 | GL-04 separate live admission | Not selected | Not evaluated as implemented | No | Compare full canonical-route work versus complete separate admission/persistence/recovery cost after M1 |
@@ -104,7 +127,7 @@ Documentation checkpoint: [reviewed original commit](https://github.com/albarami
 
 For future accepted checkpoints append the template in [AGENT_EXECUTION](AGENT_EXECUTION.md): tested code SHA, review identity, complete diff range, exact-head CI, durable safe evidence, private access owner, acceptance authority, actual costs/user time, and exact next action. Keep code candidate and later evidence-only commit identities separate. A checkpoint missing required GitHub recovery or evidence is **pending**, not accepted synchronized.
 
-## Proposed combined next authorization — not granted
+## Authorized batch decomposition — AUTH-IMPL-20261016
 
 | Order | Concrete scope | Required boundary / completion evidence |
 |---|---|---|
@@ -112,7 +135,7 @@ For future accepted checkpoints append the template in [AGENT_EXECUTION](AGENT_E
 | 2. CIR-01..04 | Repair SDK request, HTTP response/error-family and PostgreSQL driver compatibility; record reproducible dependency resolution in existing mechanisms | Explicit code/test/install and disposable-CI-database permissions as needed; RED/GREEN/review and complete exact-head CI. No migration0039, activation, provider calls or check weakening. Apply to both release/main and advanced implementation as reviewed, without overwriting local work |
 | 3. GL-P01 | Establish frozen expected-answer ownership and implement the smallest approved version-bound financial-schema compatibility route | Reconciled/recoverable source; required private artifacts; explicit implementation/test authority; independent review and conservation evidence. No GL-P02/03 execution implicitly added |
 
-Preservation/privacy review and repair design may proceed in parallel under a future grant; integrate preservation before new repairs into the advanced source. A minimal base repair PR may be separately reviewed for main, then integrated by an explicit merge/cherry-pick decision. No merge permission is implied by commit/push authority. The owner can authorize this batch together while retaining each stop point and separate migration, activation, live/priced and fund-acceptance holds.
+Preservation/privacy review and repair design may proceed in parallel under the active grant; integrate preservation before new repairs into the advanced source. Reviewed repair integration is authorized, while all PRs remain unmerged. Each stop point and the separate migration0039, activation, live/priced and fund-acceptance holds remain in force. The earlier proposal table is now bounded by the exact active grant above, not additional implied authority.
 
 ## Exact GL-P01 action after authorization and baseline reconciliation
 

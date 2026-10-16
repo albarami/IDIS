@@ -24,9 +24,9 @@ Repository: [albarami/IDIS](https://github.com/albarami/IDIS), **public**. The p
 
 Before acting, inspect the actual working tree, applicable project instructions, branch, HEAD, status and current remote state. Preserve all uncommitted work. Code paths in this package are repository-relative and refer to the assessed Slice100 implementation unless explicitly labelled otherwise; many are absent from main. Do not invent missing files or treat old main as an equivalent baseline.
 
-Current milestone: **M0 documentation publication and handoff**. No product packet is currently authorized. The next product milestone is the three-packet offline calibration cycle, beginning with GL-P01 after explicit owner authority and baseline reconciliation.
+Current milestone: **authorized staged implementation batch PUB-IMPL-01 → CIR-01..04 → GL-P01**, bounded by AUTH-IMPL-20261016 in RUN_STATE. Preserve the approved package at `070fb57e4485e2ff6101cf7d7f26b60f38e9ecbe`; no broad replanning. GL-P02/03, merge, migration0039, activation and live execution remain outside this batch.
 
-Focused handoff correction: GL-11 preserves the source Muḥāsibī disciplines; completed CI at `52c830e` is **failed**, not pending/green; and PUB-IMPL-01 specifies public-code/private-artifact recovery. Read the updated RUN_STATE for the proposed combined preservation, compatibility-repair and GL-P01 authorization. These corrections do not authorize any of those product actions.
+Historical handoff correction: GL-11 preserves the source Muḥāsibī disciplines; completed CI at `52c830e` is **failed**, not pending/green; and PUB-IMPL-01 specifies public-code/private-artifact recovery. Those documentation corrections did not authorize product actions. The subsequent owner grant AUTH-IMPL-20261016 in RUN_STATE now authorizes only the bounded preservation, compatibility-repair and GL-P01 batch above.
 
 ## Authority and conflict resolution
 

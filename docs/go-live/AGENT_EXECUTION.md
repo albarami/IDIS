@@ -4,7 +4,7 @@ This is the common working protocol for Cursor, Devin, Codex, Claude Code, other
 
 ## 1. Authority and the implementation baseline
 
-**Current permission is documentation creation, documentation verification, a documentation-only commit and push, and opening a PR. Product implementation, product tests, service starts, migrations, contract activation, provider spending, deployment, and merge are not authorized by this publication request.** Existing GitHub CI may run automatically on the authorized PR; do not modify or disable its workflows to avoid that behavior. Publication is not product acceptance.
+**Current permission is the bounded AUTH-IMPL-20261016 grant in RUN_STATE: PUB-IMPL-01, CIR-01..04, then GL-P01.** Earlier documentation-only restrictions remain historical; the new grant permits named repairs, development dependency installation, offline tests, disposable databases only through the approved migration boundary, reviewed integration and publication. Migration0039, activation, live providers, new paid services, deployment and merge remain prohibited. Inspect automatic CI before pushing; do not disable or weaken checks. Publication is not product acceptance.
 
 The documentation publication branch deliberately starts from GitHub `main`, not from the locally advanced implementation branch. It does not publish the local implementation baseline or make a fresh GitHub checkout sufficient for Slice100 work. Before later implementation, reconcile the exact baseline and local-only dependencies recorded in START_HERE and RUN_STATE. Do not implement against the older documentation worktree merely because it contains this package. Do not copy private source data into Git to make a checkout appear complete.
 

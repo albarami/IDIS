@@ -292,32 +292,37 @@ def verify_connectivity(admin_url: str, app_url: str) -> None:
 def run_migrations(db_url: str) -> None:
     """Run Alembic migrations on the target database using programmatic API."""
     print("Running database migrations...")
-    url = _normalize_url_for_psycopg2(db_url)
 
     try:
-        import os
-
         from alembic import command
         from alembic.config import Config
+    except ImportError:
+        print("ERROR: Alembic dependency import failed", file=sys.stderr)
+        sys.exit(1)
 
+    try:
         # Find migrations directory relative to idis package
         import idis.persistence.migrations
+        from idis.persistence.db import _ensure_psycopg_driver
 
         migrations_dir = os.path.dirname(idis.persistence.migrations.__file__)
 
         # Create Alembic config programmatically
         config = Config()
         config.set_main_option("script_location", migrations_dir)
-        config.set_main_option("sqlalchemy.url", url)
+        # This is a SQLAlchemy URL, not a raw psycopg2 connection string.
+        # ConfigParser interpolation requires literal percent signs to be escaped.
+        url = _ensure_psycopg_driver(db_url)
+        config.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
 
         # Run upgrade to head
         command.upgrade(config, "head")
         print("  Migrations completed successfully")
-    except ImportError as e:
-        print(f"ERROR: Could not import alembic: {e}", file=sys.stderr)
+    except ImportError:
+        print("ERROR: Migration dependency import failed", file=sys.stderr)
         sys.exit(1)
-    except Exception as e:
-        print(f"ERROR: Migration failed: {e}", file=sys.stderr)
+    except Exception:
+        print("ERROR: Migration failed", file=sys.stderr)
         sys.exit(1)
 
 

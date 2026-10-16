@@ -59,10 +59,10 @@ def is_postgres_configured() -> bool:
 
 
 def _ensure_psycopg_driver(url: str) -> str:
-    """Ensure the database URL uses psycopg2 driver.
+    """Use the declared psycopg2 driver for bare PostgreSQL URLs.
 
-    SQLAlchemy defaults to psycopg2 for postgresql:// URLs.
-    We explicitly use psycopg2 for better compatibility.
+    SQLAlchemy's default PostgreSQL driver can change between releases.
+    Explicit driver choices and the remainder of the URL are preserved.
 
     Args:
         url: Original database URL.
@@ -70,8 +70,9 @@ def _ensure_psycopg_driver(url: str) -> str:
     Returns:
         URL with correct driver specification.
     """
-    if url.startswith("postgres://"):
-        return url.replace("postgres://", "postgresql://", 1)
+    for prefix in ("postgres://", "postgresql://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg2://" + url[len(prefix) :]
     return url
 
 

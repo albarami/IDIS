@@ -109,7 +109,7 @@ def _emit_audit(
         raise AuditSinkError("Sanad grading audit taxonomy is unsupported")
     if not resource_id:
         raise AuditSinkError("Sanad grading audit resource correlation missing")
-    safe = {
+    safe: dict[str, object] = {
         key: details[key]
         for key in ("claim_id", "grade", "defect_type", "severity")
         if key in details

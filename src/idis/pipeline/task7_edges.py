@@ -424,7 +424,7 @@ def _selector_instance_from_rows(
         selector_ordinal=selector_ordinal,
         parameter_tuple=tuple(parameters),
         selector_ast=frozen_ast,
-        selector_sha256=cast(str, selector_sha256),
+        selector_sha256=selector_sha256,
         base_selector_id=cast(str, base_selector_id),
         relations=tuple(cast(list[str], body[4])),
         joins=tuple(joins),

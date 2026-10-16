@@ -189,7 +189,7 @@ class DefectService:
         """Emit an audit event for defect operations with request correlation."""
         source = details or {}
         human_actor = source.get("waived_by") or source.get("cured_by")
-        safe = {
+        safe: dict[str, object] = {
             key: source[key]
             for key in ("defect_type", "severity", "claim_id", "previous_status")
             if key in source

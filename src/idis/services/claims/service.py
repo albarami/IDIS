@@ -179,7 +179,9 @@ class ClaimService:
     ) -> None:
         """Emit an audit event for claim operations with request correlation."""
         source = details or {}
-        safe = {key: source[key] for key in ("claim_class", "fields_updated") if key in source}
+        safe: dict[str, object] = {
+            key: source[key] for key in ("claim_class", "fields_updated") if key in source
+        }
         deal_id = str(source["deal_id"]) if source.get("deal_id") else None
         event = build_canonical_audit_event(
             tenant_id=self._tenant_id,

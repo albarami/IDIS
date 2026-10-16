@@ -393,7 +393,7 @@ class ScoringEngine:
         """
         suffix = event_type.removeprefix("analysis.scoring.")
         canonical_type = f"integration.scoring.{suffix}"
-        safe = {
+        safe: dict[str, object] = {
             key: data[key]
             for key in (
                 "stage",

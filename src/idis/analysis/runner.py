@@ -179,7 +179,7 @@ class AnalysisEngine:
             AuditSinkError: If the audit sink fails.
         """
         canonical_type = f"integration.{event_type}"
-        safe = {
+        safe: dict[str, object] = {
             key: data[key]
             for key in (
                 "agent_ids",

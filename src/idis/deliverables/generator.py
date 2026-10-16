@@ -1050,7 +1050,7 @@ class DeliverablesGenerator:
         Raises:
             AuditSinkError: If the audit sink fails.
         """
-        safe = {
+        safe: dict[str, object] = {
             key: data[key]
             for key in ("routing", "has_decline_letter", "deliverable_count", "error_type")
             if key in data

@@ -621,8 +621,8 @@ def _load_usage_authority() -> tuple[
             extractor_version=cast(str, extractor_version),
             program=tuple(cast(list[str], program_raw)),
             accepted_route_ordinals=ordinals,
-            accepted_consumer_sha256=cast(str, accepted_hash),
-            extractor_sha256=cast(str, row_hash),
+            accepted_consumer_sha256=accepted_hash,
+            extractor_sha256=row_hash,
         )
 
     if sorted(covered_ordinals) != list(range(1_756)) or len(extractors) != 19:

@@ -305,7 +305,7 @@ class EnrichmentService:
         canonical_type = (
             event_type if event_type.startswith("integration.") else f"integration.{event_type}"
         )
-        safe = {
+        safe: dict[str, object] = {
             key: details[key]
             for key in ("status", "entity_type", "purpose", "has_provenance")
             if key in details

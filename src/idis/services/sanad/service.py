@@ -169,7 +169,7 @@ class SanadService:
     ) -> None:
         """Emit an audit event for sanad operations with request correlation."""
         source = details or {}
-        safe = {
+        safe: dict[str, object] = {
             key: source[key]
             for key in (
                 "claim_id",

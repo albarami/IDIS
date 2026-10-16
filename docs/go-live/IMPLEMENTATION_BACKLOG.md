@@ -10,7 +10,7 @@
 
 ## 1. Baseline and use of this backlog
 
-This package is published separately from the implementation tree. Its publication baseline is GitHub main `4594ecabc4d7b598b42a67bf999b894d510f0ec9`. Implementation planning references local `C:\Projects\IDIS\IDIS-slice100`, HEAD `445c3c844630ab232faea24d2e5ad02abdd1d3c6` **plus existing uncommitted and local-only source**. A checkout of the documentation PR is not that implementation baseline. GL-01 must reconcile and preserve the actual source before implementation. Exact local dependencies and snapshot evidence belong in RUN_STATE and [BASELINE_MANIFEST](BASELINE_MANIFEST.md#pub-impl-01--proposed-implementation-recoverypublication-packet); PUB-IMPL-01 specifies the concrete preservation/publication boundary, including four private fund-derived artifacts that must not enter public Git. The bounded CI repair proposal CIR-01..04 in [runbook section9](VERIFICATION_AND_RUNBOOKS.md#9-completed-documentation-head-ci-diagnosis--52c830e) is separate from both preservation commits and GL-P01; none is authorized here.
+The original documentation package was published from GitHub main `4594ecabc4d7b598b42a67bf999b894d510f0ec9`; its source assessment used the original local Slice100 checkout. PUB-IMPL-01 subsequently preserved/published the cleared implementation through PR #119 and four separately controlled private artifacts. Current engineering starts from `go-live/implementation-batch-2026-10-16` at the reconciled head in RUN_STATE, not the older documentation PR/main. Historical identities remain in [BASELINE_MANIFEST](BASELINE_MANIFEST.md#pub-impl-01--proposed-implementation-recoverypublication-packet). AUTH-CONTINUE-20261016 authorizes the bounded CI-baseline follow-up and GL-P02/03 onward; earlier source-preservation and CIR evidence remains scoped to its recorded bytes.
 
 All code paths below are repository-relative. Paths were inspected in the implementation tree during documentation preparation, not assumed present at the publication commit. New paths are explicitly marked **proposed**. Function names describe inspected seams; implementations must recheck their signatures against the authorized revision. The actual task planner is `src/idis/services/extraction/task_planner.py`, not `src/idis/methodology/task_planner.py`.
 
@@ -24,6 +24,21 @@ The controlling technical plan is `docs/plans/2026-07-15-slice100-strict-real-ex
 - A prerequisite marked **design-only** permits interface review, not dependent runtime integration. Accepted evidence must identify the exact producer and consumer revisions.
 - Conditional `GL-04` is not on the mandatory critical path. Choose it only by a separate decision; replay does not require it.
 - No implementation packet is currently authorized merely by being listed here. Documentation publication authorization does not authorize implementation commits, tests, migrations, services or provider calls.
+
+### Current CI-baseline follow-up
+
+These are bounded children of CIR-04's still-open whole-system acceptance, authorized by AUTH-CONTINUE-20261016. Diagnose/review each actual cause before correction; do not turn an absent private or operational prerequisite into a blanket stop. [Runbook section10](VERIFICATION_AND_RUNBOOKS.md#10-continuation-ci-baseline-diagnosis-and-recovery) records evidence. Each child needs its own role briefs, owned paths and affected verification before implementation.
+
+| Child | Scope / acceptance boundary | Current state |
+|---|---|---|
+| CIR-04A | Task8 lint and negative-fixture scan: trace immutable source/census hashes; use legitimate ownership/successor review, never casually reformat/repin frozen evidence or weaken scanning | Diagnosed; no repair |
+| CIR-04B | Disposable PostgreSQL preparation: provision0038's exact two erasure roles, zero memberships, preserve app-role isolation and migration ceiling; verify bootstrap and recovery drill | Missing preparation confirmed in actual CI; no repair |
+| CIR-04C | Older database fixtures: reconcile explicit document source-binding and run contract fields, real UUID/data shapes and remaining behavior failures; preserve schema invariants | Historical33 failures classified; no fresh integration run or repair |
+| CIR-04D | Cold import: remove the eager initialization dependency cycle while preserving exported interfaces and normal/cold import behavior | Reproduced on the current source; no repair |
+| CIR-04E | Container: retain successful image construction as separate evidence; require genuine profile admission and health. No entrypoint/health shortcut or fabricated profile | CI missing-profile rejection confirmed; admitted environment unavailable |
+| CIR-04F | Missing historical candidate: recover exact original bytes or follow legitimate successor/review procedure | Local evidence gap: original v27 candidate restored and raw hash matched both oracles;19 materialization tests pass but only one reads its LF/newline bytes. This CI run stopped before pytest; private-input consumer/CI admission remains separate |
+
+Continue GL-P02 preparation using the existing calculation/Calc-Sanad interfaces while operational admission is blocked; preserve CIR-04's failed required CI state. GL-P03 requires GL-P02's accepted supported-answer producer. GL-02 mapping and GL-05 design may proceed independently where their own inputs and ownership permit; no full-product requirement is dropped.
 
 ### Common completion protocol — applies to every packet below
 

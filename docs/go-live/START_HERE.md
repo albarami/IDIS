@@ -1,6 +1,6 @@
 # IDIS execution package — start here
 
-Status: execution handoff; bounded owner authorization and current acceptance state are recorded in RUN_STATE. This package is not go-live acceptance. Updated 2026-10-16.
+Status: continuous engineering under AUTH-CONTINUE-20261016; current authorization, model availability and acceptance state are recorded in RUN_STATE. This package is not go-live acceptance. Updated 2026-10-16.
 
 ## Objective
 
@@ -11,7 +11,7 @@ Complete the existing Institutional Deal Intelligence System (VC Edition) so a f
 1. [RUN_STATE.md](RUN_STATE.md): current permissions, decisions, blockers and exact next action.
 2. [BASELINE_MANIFEST.md](BASELINE_MANIFEST.md): GitHub versus local implementation identity and private prerequisites.
 3. [GO_LIVE_MASTER_PLAN.md](GO_LIVE_MASTER_PLAN.md): authoritative scope, architecture, requirements, modernization choices and estimates.
-4. [IMPLEMENTATION_BACKLOG.md](IMPLEMENTATION_BACKLOG.md): executable packets and dependencies; first implementation packet is **GL-P01**.
+4. [IMPLEMENTATION_BACKLOG.md](IMPLEMENTATION_BACKLOG.md): executable packets and dependencies; bounded CI-baseline corrections precede **GL-P02**, then GL-P03. GL-P01 retains scoped compatibility acceptance.
 5. [VERIFICATION_AND_RUNBOOKS.md](VERIFICATION_AND_RUNBOOKS.md): acceptance evidence, release and operations.
 6. [AGENT_EXECUTION.md](AGENT_EXECUTION.md): choose Mode A (one agent/application), B (two cooperating CLIs) or C (overnight CLI); use its startup/resume prompt.
 7. [DOCUMENTATION_REVIEW.md](DOCUMENTATION_REVIEW.md): documentation checks and independent review findings; not product test evidence.
@@ -20,13 +20,13 @@ No prior chat is required to understand the plan. The sanitized implementation i
 
 ## Repository identity and safe entry
 
-Repository: [albarami/IDIS](https://github.com/albarami/IDIS), **public**. The publication branch is based on freshly verified GitHub main, not on unpublished implementation commits. Exact SHAs and local paths live only in the baseline manifest to avoid conflicting copies.
+Repository: [albarami/IDIS](https://github.com/albarami/IDIS), **public**. Use implementation branch `go-live/implementation-batch-2026-10-16` and open PR #119. The older documentation branch and main are not equivalent implementation baselines. RUN_STATE records the current checkpoint; BASELINE_MANIFEST preserves historical source identities and private prerequisites.
 
 Before acting, inspect the actual working tree, applicable project instructions, branch, HEAD, status and current remote state. Preserve all uncommitted work. Code paths in this package are repository-relative and refer to the assessed Slice100 implementation unless explicitly labelled otherwise; many are absent from main. Do not invent missing files or treat old main as an equivalent baseline.
 
-Current milestone: **authorized staged implementation batch PUB-IMPL-01 → CIR-01..04 → GL-P01**, bounded by AUTH-IMPL-20261016 in RUN_STATE. Preserve the approved package at `070fb57e4485e2ff6101cf7d7f26b60f38e9ecbe`; no broad replanning. GL-P02/03, merge, migration0039, activation and live execution remain outside this batch.
+Current milestone: **authorized CI-baseline corrections → GL-P02 → GL-P03 → subsequent dependency-ready packets**, under AUTH-CONTINUE-20261016 in RUN_STATE. Preserve the existing master plan and scoped GL-P01 acceptance. Main merges, migration0039, production activation/deployment, IDIS live model/provider spending and fund communications remain outside this engineering grant.
 
-Historical handoff correction: GL-11 preserves the source Muḥāsibī disciplines; completed CI at `52c830e` is **failed**, not pending/green; and PUB-IMPL-01 specifies public-code/private-artifact recovery. Those documentation corrections did not authorize product actions. The subsequent owner grant AUTH-IMPL-20261016 in RUN_STATE now authorizes only the bounded preservation, compatibility-repair and GL-P01 batch above.
+Historical handoff correction: GL-11 preserves the source Muḥāsibī disciplines; completed CI at `52c830e` is **failed**, not pending/green; and PUB-IMPL-01 specifies public-code/private-artifact recovery. AUTH-IMPL-20261016 subsequently authorized the completed bounded preservation, compatibility-repair and GL-P01 batch. AUTH-CONTINUE-20261016 now supersedes its stop-after-GL-P01 restriction; historical evidence and acceptance scopes remain unchanged.
 
 ## Authority and conflict resolution
 

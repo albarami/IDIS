@@ -3,6 +3,18 @@
 Authorization: AUTH-IMPL-20261016 in `docs/go-live/RUN_STATE.md`; execution package `070fb57e4485e2ff6101cf7d7f26b60f38e9ecbe`.
 Status: source preservation and private recovery, not product acceptance. CIR and GL-P01 changes are separate subsequent commits.
 
+## Published recovery checkpoint
+
+- Public implementation PR: [#119](https://github.com/albarami/IDIS/pull/119), open and unmerged; branch `go-live/implementation-batch-2026-10-16`.
+- Published preservation/metadata head: `96293ab3fc850d41a8d86622681bbb77565c6bd7`; remote head independently queried after push.
+- Fresh public clone at that exact head plus four files restored from private recovery commit `775aa7d0d88a1705c7c37805a0b2194eec436407`: **174/174 raw manifest hashes match**, zero mismatches, public working tree remains clean because the private paths are ignored.
+- Original source, originals of all26 commits and all174 states remain in the original worktree; no checkout/reset/edit was applied there. Original intermediate commits are not claimed recoverable from public GitHub. Their cleared final source is recoverable through the sanitized snapshot and provenance mapping below.
+- Independent publication reviewer checked all outgoing preservation objects and metadata, exact170 public overlay blobs, private visibility/restoration and both restricted-object exclusions: PASS. Requested authorization wording and `.gitignore` line-ending corrections were applied and re-reviewed.
+- Automatic CI [run38930455889](https://github.com/albarami/IDIS/actions/runs/38930455889) targets this preservation head and completed **FAILURE**: four successes (UI, evaluation, Kubernetes, Terraform), four failures (`check`, PostgreSQL integration, container build/health, backup/restore drill), release gate skipped. `check` stopped at five lint diagnostics in the preserved Task8 source; PostgreSQL bootstrap selected missing `psycopg`; the backup drill lacked required pre-provisioned0038 roles; strict container startup refused the absent runtime profile. These results belong to this exact SHA, not later repairs. No checks were weakened.
+- Before publication: static AST inspection found exactly38 migrations, single head `0038`, no `0039`. The existing CI still executes its original checks; no frozen migration or execution contract was changed.
+
+Required original workbook/cases, credentials/profiles, signing material, databases and historical local reports remain private/local and are not recovered by either repository. This recovery establishes the implementation source and four policy-artifact prerequisites, not a portable live environment or real-case acceptance.
+
 ## Identities and privacy route
 
 - Public base: `4594ecabc4d7b598b42a67bf999b894d510f0ec9`.

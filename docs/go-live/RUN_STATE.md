@@ -12,7 +12,7 @@ State date: 2026-10-16. This is the current authority/status entry point. Reconc
 | Next eligible action now | Review full outgoing history and CI/migration admission, preserve the baseline in isolation, verify private artifact recovery, then execute dependency-ready CIR repairs and GL-P01. Keep all PRs unmerged |
 | Documentation branch | `docs/go-live-execution-package-2026-10-16` |
 | Baselines | Exact main/implementation SHAs and local file hashes: [BASELINE_MANIFEST](BASELINE_MANIFEST.md) |
-| Implementation checkpoint | Local committed Task7 checkpoint plus later uncommitted Task8/9-related work; no fresh product verification claimed |
+| Implementation checkpoint | Preservation head `96293ab3fc850d41a8d86622681bbb77565c6bd7` in open [PR #119](https://github.com/albarami/IDIS/pull/119); fresh public-plus-private recovery matches all174 file states. [Recovery evidence](../evidence/2026-10-16-batch-recovery.md). No product acceptance claimed |
 | Strict execution | `full-strict-v21` INACTIVE in assessed registry; v27 successor work not activation or full acceptance |
 | Pilot route | Production-relevant components plus explicitly labelled replay first; GL-04 separate live admission remains conditional |
 | Documentation review | Original package independent PASS at `7ed25424125dd4d90db3700095c27410e0591046`; focused correction review/remote receipt tracked in [DOCUMENTATION_REVIEW](DOCUMENTATION_REVIEW.md) and PR #118. Review identities are not interchangeable |
@@ -39,7 +39,7 @@ Source: the owner's explicit authorization in this conversation, using execution
 
 Coordinator: this Codex task. Read-only parallel roles initially cover publication privacy/history, CI/migration admission and GL-P01 frozen ownership. Original implementation worktree remains read-only; implementation writers receive isolated paths/worktrees before editing. Owner review/decision time and agent/runtime cost will be reported only where observed; no productivity multiplier or invented savings.
 
-Batch checklist: [ ] complete-history privacy clearance; [ ] isolated source preservation; [ ] private visibility/upload/restoration; [ ] public implementation PR and recovery receipt; [ ] CIR RED/GREEN, independent reviews and exact CI; [ ] GL-P01 ownership/golden bytes/RED/GREEN/reviews/exact CI; [ ] final recoverable handoff. Existing failures remain visible until verified repaired.
+Batch checklist: [x] complete-history privacy review and sanitized-publication clearance; [x] isolated source preservation; [x] private visibility/upload/restoration; [x] public implementation PR and recovery receipt; [ ] CIR RED/GREEN, independent reviews and exact CI; [ ] GL-P01 ownership/golden bytes/RED/GREEN/reviews/exact CI; [ ] final recoverable handoff. Existing failures remain visible until verified repaired.
 
 ### AUTH-DOC-20261016 — effective for this documentation task
 
@@ -89,8 +89,8 @@ Within a valid grant, agents continue routine eligible actions without repeated 
 
 | Packet / scope | Implemented | Verified/reviewed | Accepted/synchronized | Blocker / next action |
 |---|---|---|---|---|
-| PUB-IMPL-01 preservation | In progress: history/privacy and CI admission inspection | No recovery acceptance yet | No | Preserve exact source; private artifact repository and fresh restoration; safe outgoing history |
-| CIR-01..04 compatibility | Authorized, awaiting isolated preserved baseline | Prior failing CI is RED diagnosis, not repair acceptance | No | Request/error/driver behavior and reproducible dependency resolution; unchanged checks |
+| PUB-IMPL-01 preservation | Published sanitized source plus private recovery | Independent privacy review PASS; fresh restoration174/174 hash matches | Source recovery complete at `96293ab`; not product acceptance | Preserve originals; private original case inputs/environment remain separately required |
+| CIR-01..04 compatibility | Isolated request/error and DB-driver repairs in progress | RED-first offline regression verification underway | No | Request/error/driver behavior and reproducible dependency resolution; unchanged checks |
 | GL-P01 compatibility | Authorized, ownership inspection only | No new execution evidence | No | Baseline recovery and CIR verification; exact frozen ownership before change |
 | GL-P02 calculation/support path | No | No | No | GL-P01 and approved formula/reference/evidence scope; may prepare reference rubric read-only under separate grant |
 | GL-P03 answer/correction/export path | No | No | No | GL-P02 typed supported-answer seam; fund output assumptions explicit |

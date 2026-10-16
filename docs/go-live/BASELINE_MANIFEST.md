@@ -2,6 +2,8 @@
 
 Captured 2026-10-16 from the active development tree. This is identity evidence, not a source backup or proof that tests pass. No private source documents or credentials are included.
 
+Subsequent authorized recovery: [PUB-IMPL-01 receipt](../evidence/2026-10-16-batch-recovery.md) records public preservation head `96293ab3fc850d41a8d86622681bbb77565c6bd7`, private artifact recovery and a fresh174/174 hash-matching checkout. The original manifest and historical publication proposal below are preserved as captured; their former "not established/not authorized" status is superseded only by AUTH-IMPL-20261016 and that receipt. Original case inputs and live environment are still not supplied by GitHub.
+
 ## Three different baselines
 
 | Baseline | Exact identity | Meaning |

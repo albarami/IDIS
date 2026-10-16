@@ -30,4 +30,4 @@ Packet scope: [IMPLEMENTATION_BACKLOG](docs/go-live/IMPLEMENTATION_BACKLOG.md).
 - [ ] Cursor next: correct9 Linux-only mypy diagnostics exposed by run38964431536 in the3 unchanged platform-specific source files; preserve security behavior and independent review.
 - [ ] Remaining CIR-04C:20 PostgreSQL failures and1 skipped case remain in exact CI; C1's13 document-fixture failures are resolved.
 - [ ] Remaining quality-tool observations: `scripts/run_gates.py` check/all still mutates formatting; non-acknowledged scanner `REDACTED`/example bypasses and old pre-commit Ruff pin require separate disposition.
-- [ ] Publish the owner-directed Cursor checkpoint and verify its final remote head/CI, private-evidence access map and released ownership.
+- [x] Publish the reviewed owner-directed Cursor checkpoint608ec17, verify matching remote/PR head and record metadata CI38967277409 (queued when observed). Private/local evidence and released ownership are mapped; final publication receipt records the subsequent closure head and its separate CI status.

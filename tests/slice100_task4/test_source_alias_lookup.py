@@ -228,6 +228,7 @@ def test_lookup_never_trusts_an_exception_code_as_terminal_safe_output(
 
 
 def test_cli_non_tty_fails_before_resolver_and_never_emits_a_path(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -243,6 +244,9 @@ def test_cli_non_tty_fails_before_resolver_and_never_emits_a_path(
         yield lambda _path: None
 
     monkeypatch.setattr(module, "resolve_and_write_source_alias", forbidden_resolver)
+    monkeypatch.setattr(
+        module, "SOURCE_LOOKUP_REPORT_ROOT", tmp_path / ".local_reports" / "slice100"
+    )
 
     result = module.main(
         [

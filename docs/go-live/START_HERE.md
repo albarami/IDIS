@@ -1,6 +1,6 @@
 # IDIS execution package — start here
 
-Status: documentation handoff, not implementation authorization or go-live acceptance. Updated 2026-10-16.
+Status: execution handoff; bounded owner authorization and current acceptance state are recorded in RUN_STATE. This package is not go-live acceptance. Updated 2026-10-16.
 
 ## Objective
 
@@ -16,7 +16,7 @@ Complete the existing Institutional Deal Intelligence System (VC Edition) so a f
 6. [AGENT_EXECUTION.md](AGENT_EXECUTION.md): choose Mode A (one agent/application), B (two cooperating CLIs) or C (overnight CLI); use its startup/resume prompt.
 7. [DOCUMENTATION_REVIEW.md](DOCUMENTATION_REVIEW.md): documentation checks and independent review findings; not product test evidence.
 
-No prior chat is required to understand the plan. Private sources and local-only implementation are still required to execute it; the package does not pretend to contain them.
+No prior chat is required to understand the plan. The sanitized implementation is recoverable through PR #119 plus the separately controlled four-artifact recovery. Original private inputs, operator credentials/profiles, stores and historical private reports remain separately required; neither repository is a portable live environment.
 
 ## Repository identity and safe entry
 
@@ -37,7 +37,7 @@ Historical handoff correction: GL-11 preserves the source Muḥāsibī disciplin
 
 An unrelated Whale Hunter rule file exists under `.cursor/rules/` in the assessed checkout; its unrelated product/build order must not be silently applied to IDIS. If any tool presents conflicting instructions as applicable, report the conflict before affected work.
 
-The scoped supersessions are in the master plan's decision record. Historical plans remain evidence; no source plan is deleted. The local Slice100 plan remains necessary until its approved baseline is separately published. If it cannot be accessed, stop affected implementation instead of reconstructing authority from this summary.
+The scoped supersessions are in the master plan's decision record. Historical plans remain evidence; no source plan is deleted. The Slice100 plans are now in the separately reviewed implementation publication, with provenance in the recovery receipt. Use those actual plans and current RUN_STATE, not reconstructed authority from this summary.
 
 ## Completion means
 

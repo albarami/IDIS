@@ -4,6 +4,8 @@ Captured 2026-10-16 from the active development tree. This is identity evidence,
 
 Subsequent authorized recovery: [PUB-IMPL-01 receipt](../evidence/2026-10-16-batch-recovery.md) records public preservation head `96293ab3fc850d41a8d86622681bbb77565c6bd7`, private artifact recovery and a fresh174/174 hash-matching checkout. The original manifest and historical publication proposal below are preserved as captured; their former "not established/not authorized" status is superseded only by AUTH-IMPL-20261016 and that receipt. Original case inputs and live environment are still not supplied by GitHub.
 
+Additional tracked-source byte dependency found during conservation: `4361a1b07eca131b69142f1f0c0627c3cddc0a49` separately preserves the original raw CRLF bytes of `src/idis/methodology/templates/commercial_dd_v1.json` (SHA256 `57cfec98436514cae717e359fa872504a7b9e1115c7bc12a4561e0989c4281fc`) with a path-specific `-text` rule. That unmodified tracked file was outside the174-row overlay manifest. A fresh GitHub checkout verified the corrected bytes and frozen methodology identity. See [correction evidence](../evidence/2026-10-16-cir-glp01.md#recovery-correction-discovered-by-conservation); the original174 identities below are not rewritten to hide later intentional repairs.
+
 ## Three different baselines
 
 | Baseline | Exact identity | Meaning |

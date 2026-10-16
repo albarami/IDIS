@@ -4,6 +4,8 @@
 *.pptx -text
 # Raw source bytes own the frozen CDD methodology identity; preserve original CRLF.
 src/idis/methodology/templates/commercial_dd_v1.json -text
+requirements/constraints-py311.txt text eol=lf
+tests/fixtures/go_live_legacy_extraction_task_v1.json text eol=lf
 contracts/full_strict_v2_reviewed_preimage_v1.json text eol=lf
 contracts/full_strict_v3_reviewed_preimage_v1.json text eol=lf
 contracts/full_strict_v4_reviewed_preimage_v1.json text eol=lf

@@ -15,6 +15,8 @@ Status: source preservation and private recovery, not product acceptance. CIR an
 
 Required original workbook/cases, credentials/profiles, signing material, databases and historical local reports remain private/local and are not recovered by either repository. This recovery establishes the implementation source and four policy-artifact prerequisites, not a portable live environment or real-case acceptance.
 
+Follow-up conservation found one additional raw-byte dependency outside the174-row overlay: the tracked commercial-methodology template. Separate preservation-only commit `4361a1b07eca131b69142f1f0c0627c3cddc0a49` restores its exact original CRLF bytes without changing content or frozen expectations; a fresh remote checkout verifies them. See [CIR / GL-P01 recovery correction](2026-10-16-cir-glp01.md#recovery-correction-discovered-by-conservation). The initial174/174 result is scoped to the original manifest, not all original tracked worktree bytes.
+
 ## Identities and privacy route
 
 - Public base: `4594ecabc4d7b598b42a67bf999b894d510f0ec9`.
@@ -23,7 +25,7 @@ Required original workbook/cases, credentials/profiles, signing material, databa
 - Shared9-file overlay commit: `be5c53fd497d952db5db2894ffd8a3766245fd27`.
 - Task8 public105-file overlay commit: `17c2b3b265b3c09121febd90c61a368e827a00ab`.
 - Task9 public56-file overlay commit: `cdae32154e9f88dbe7e17420a9676e4590727b40`.
-- All170 public overlay files retain their original raw SHA-256 values from BASELINE_MANIFEST; four private files are recovered separately. Use `git -c core.autocrlf=false clone` and verify raw bytes; do not silently normalize original CRLF/LF content. One preserved frozen fixture has an existing blank line at EOF; it was recorded, not reformatted.
+- All170 public overlay files retain their original raw SHA-256 values from BASELINE_MANIFEST; four private files are recovered separately. Use `git clone --config core.autocrlf=false` and verify raw bytes; the clone configuration must persist for later checkouts. Do not silently normalize original CRLF/LF content. One preserved frozen fixture has an existing blank line at EOF; it was recorded, not reformatted.
 
 The complete outgoing original history audit covered857 unique blobs,26 commit messages and287 tree objects (137,063,519 bytes of blob/commit content), plus174 overlay hashes. Bounded comparisons included private requirement strings, case labels and document filenames; flagged payloads/media provenance were inspected. This is exhaustive object/pattern coverage with targeted semantic review, not a claim of manual reading of every byte or universal secret detection.
 

@@ -263,7 +263,9 @@ All offending source, dependency and CI definitions are byte-identical between b
 
 The exact base's [July14 run29370909359](https://github.com/albarami/IDIS/actions/runs/29370909359) succeeded, including its check and PostgreSQL jobs. Its old job logs now return HTTP410, so the old resolved versions cannot be recovered from those logs. Do **not** claim the historical base CI failed, or that a fresh base-only reproduction ran in this task. Under the observed October dependency set, the identical incompatible code remains present on base; that conclusion is from logs, source identity and the documented driver change, not a newly executed test.
 
-### Proposed bounded repair packet — not authorized or performed
+### Original bounded repair proposal — historical authorization state
+
+The proposal below is retained as the original acceptance specification. AUTH-IMPL-20261016 subsequently authorized its bounded implementation; current code, reviews, actual test/CI results and remaining failures are in [the CIR / GL-P01 receipt](../evidence/2026-10-16-cir-glp01.md) and RUN_STATE. The earlier diagnosis itself performed no product work. In particular, the requirement for green unchanged CI has not been waived by focused component success.
 
 Use separate repair commits/PR scope, not this documentation PR or a disguised baseline-preservation commit. Reconcile the patch into the advanced Slice100 tree without replacing its newer changes; line numbers will differ there.
 

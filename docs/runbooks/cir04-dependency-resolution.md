@@ -39,6 +39,13 @@ restored. Do not modify the preserved source worktree. The commands below do not
 activate an IDIS runtime or authorize access to configured databases/providers.
 Run tests only in an environment stripped of live IDIS/provider/database settings.
 
+Create recovery checkouts with persistent configuration, for example
+`git clone --config core.autocrlf=false --branch <authorized-branch> <repository> <new-directory>`.
+The `--config` option belongs to `clone`; a one-command `git -c` override does not
+persist for later checkouts. The constraints and before-edit golden fixture have
+path-specific LF attributes, so their reviewed raw hashes also survive a later
+checkout on a host whose global `core.autocrlf` is true.
+
 Windows PowerShell (choose a new virtual-environment path if `.venv` already exists):
 
 ```powershell

@@ -20,6 +20,7 @@ import logging
 import os
 import re
 import stat
+import sys
 import tempfile
 import uuid
 from collections.abc import Iterator
@@ -181,7 +182,7 @@ def _exclusive_object_write_lock(
                 lock_file.write(b"\0")
                 lock_file.flush()
             lock_file.seek(0)
-            if os.name == "nt":
+            if sys.platform == "win32":
                 import msvcrt
 
                 msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
@@ -195,7 +196,7 @@ def _exclusive_object_write_lock(
                 if acquired:
                     lock_file.seek(0)
                     try:
-                        if os.name == "nt":
+                        if sys.platform == "win32":
                             import msvcrt
 
                             msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)

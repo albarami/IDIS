@@ -177,6 +177,8 @@ def _stream_is_tty(stream: object) -> bool:
 
 
 def _windows_kernel32() -> Any:
+    if sys.platform != "win32":
+        raise SourceLookupError(SOURCE_LOOKUP_TTY_REQUIRED) from None
     try:
         return ctypes.WinDLL("kernel32", use_last_error=True)
     except (AttributeError, OSError):

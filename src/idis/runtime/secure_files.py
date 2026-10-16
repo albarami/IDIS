@@ -11,6 +11,7 @@ from __future__ import annotations
 import ctypes
 import os
 import stat
+import sys
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
@@ -96,6 +97,8 @@ def _raise_secure_file_error() -> NoReturn:
 
 
 def _windows_libraries() -> tuple[Any, Any, Any]:
+    if sys.platform != "win32":
+        _raise_secure_file_error()
     try:
         return (
             ctypes.WinDLL("kernel32", use_last_error=True),
@@ -158,7 +161,7 @@ def _windows_current_sid_bytes() -> bytes:
 
 
 def _windows_sid_string(sid_bytes: bytes) -> str:
-    _kernel32, advapi32, _user32 = _windows_libraries()
+    kernel32, advapi32, _user32 = _windows_libraries()
     sid_buffer = ctypes.create_string_buffer(sid_bytes)
     output = ctypes.c_wchar_p()
     if not advapi32.ConvertSidToStringSidW(sid_buffer, ctypes.byref(output)):
@@ -169,7 +172,7 @@ def _windows_sid_string(sid_bytes: bytes) -> str:
             _raise_secure_file_error()
         return value
     finally:
-        ctypes.windll.kernel32.LocalFree(output)
+        kernel32.LocalFree(output)
 
 
 def _windows_open(path: Path, *, directory: bool) -> int:

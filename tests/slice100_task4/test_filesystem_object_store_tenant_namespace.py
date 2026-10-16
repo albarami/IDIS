@@ -42,7 +42,10 @@ def _directory_alias(*, alias: Path, target: Path, kind: str) -> Iterator[None]:
         yield
     finally:
         if alias.exists() or alias.is_symlink():
-            alias.rmdir()
+            if os.name == "nt":
+                alias.rmdir()
+            else:
+                alias.unlink()
 
 
 _ALIAS_KINDS = ("symlink", "junction") if os.name == "nt" else ("symlink",)

@@ -4,8 +4,15 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+from textwrap import dedent
 from types import SimpleNamespace
 from typing import Any
+
+import pytest
 
 from idis.validators.audit_event_validator import validate_audit_event
 
@@ -13,6 +20,126 @@ TENANT_ID = "10000000-0000-4000-8000-000000000002"
 DEAL_ID = "30000000-0000-4000-8000-000000000002"
 RUN_ID = "40000000-0000-4000-8000-000000000002"
 RESOURCE_ID = "50000000-0000-4000-8000-000000000002"
+COLD_IMPORT_TIMEOUT_SECONDS = 30
+
+
+@pytest.mark.parametrize(
+    "first_import",
+    [
+        "idis.services.claims.service",
+        "idis.services.extraction.service",
+        "idis.services.extraction",
+        "idis.services.extraction.methodology_coverage_transitions",
+        "idis.persistence.repositories",
+        "idis.persistence.repositories.methodology_extraction",
+        "from-package-service",
+    ],
+)
+def test_canonical_producer_cold_imports_preserve_package_exports(first_import: str) -> None:
+    """Import real producers in fresh processes without inherited runtime configuration."""
+    repo_root = Path(__file__).resolve().parents[2]
+    script = dedent(
+        """
+        import importlib
+        import sys
+        from pathlib import Path
+
+        from pytest_socket import disable_socket
+
+        disable_socket()
+        first_import = sys.argv[1]
+        if first_import == "from-package-service":
+            from idis.services.extraction import ExtractionService
+        else:
+            importlib.import_module(first_import)
+            if first_import in {
+                "idis.services.extraction",
+                "idis.services.extraction.methodology_coverage_transitions",
+            }:
+                assert "idis.services.extraction.service" not in sys.modules
+
+        import idis.services.extraction as extraction
+
+        try:
+            extraction.not_a_public_export
+        except AttributeError as error:
+            assert str(error) == (
+                "module 'idis.services.extraction' has no attribute 'not_a_public_export'"
+            )
+        else:
+            raise AssertionError("Unknown package attributes must raise AttributeError")
+
+        expected_exports = {
+            "chunking": (
+                "ChunkingService", "ExtractionChunk", "UnsupportedDocumentTypeError",
+            ),
+            "confidence": (
+                "CONFIDENCE_ACCEPT_WITH_FLAG", "CONFIDENCE_AUTO_ACCEPT",
+                "CONFIDENCE_HUMAN_REVIEW", "ConfidenceScorer", "SourceTier",
+            ),
+            "service": (
+                "ExtractionResult", "ExtractionService", "ExtractionServiceError",
+                "ExtractorNotConfiguredError", "LowConfidenceExtractionError",
+            ),
+        }
+        assert set(extraction.__all__) == {
+            name for names in expected_exports.values() for name in names
+        }
+        assert set(extraction.__all__) <= set(dir(extraction))
+
+        from idis.services.extraction import *
+
+        for submodule, names in expected_exports.items():
+            module = importlib.import_module("idis.services.extraction." + submodule)
+            for name in names:
+                assert globals()[name] is getattr(module, name)
+                assert getattr(extraction, name) is getattr(module, name)
+
+        from idis.persistence.repositories import *
+        import idis.persistence.repositories as repositories
+
+        for name in repositories.__all__:
+            exported = globals()[name]
+            module = importlib.import_module(exported.__module__)
+            assert exported is getattr(module, name)
+            assert getattr(repositories, name) is exported
+
+        from idis.services.claims.service import ClaimService
+        from idis.services.extraction.service import ExtractionService as DirectExtractionService
+
+        assert ExtractionService is DirectExtractionService
+        assert ClaimService.__module__ == "idis.services.claims.service"
+        source_root = (Path.cwd() / "src").resolve()
+        for name, module in tuple(sys.modules.items()):
+            if name == "idis" or name.startswith("idis."):
+                assert Path(module.__file__).resolve().is_relative_to(source_root), name
+        """
+    )
+    os_environment_names = {
+        "SYSTEMROOT",
+        "WINDIR",
+        "PATH",
+        "PATHEXT",
+        "COMSPEC",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "HOME",
+    }
+    env = {key: value for key, value in os.environ.items() if key.upper() in os_environment_names}
+    env["PYTHONPATH"] = str(repo_root / "src")
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PYTHONNOUSERSITE"] = "1"
+    result = subprocess.run(
+        [sys.executable, "-c", script, first_import],
+        cwd=repo_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=COLD_IMPORT_TIMEOUT_SECONDS,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
 
 
 class RecordingSink:

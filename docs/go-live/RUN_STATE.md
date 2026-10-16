@@ -6,16 +6,16 @@ State date: 2026-10-16. This is the current authority/status entry point. Reconc
 
 | Field | State |
 |---|---|
-| Active milestone | M0: execution-package documentation publication |
+| Active milestone | M0: documentation package published in [PR #118](https://github.com/albarami/IDIS/pull/118); open for owner review, not merged |
 | Product implementation | **Not authorized by this task; not started** |
 | Next product packet | **GL-P01 — financial-schema compatibility**, after the authorization/baseline prerequisites below |
-| Next eligible action now | Finish documentation review/corrections, verify the documentation-only range, commit/push the dedicated branch, open PR, verify remote files and exact-commit CI status; then hand off without implementing |
+| Next eligible action now | Inspect PR #118 and its current exact-head CI; owner reviews/merges only under appropriate authority, then separately decides whether to authorize GL-P01. Do not repeat publication or begin product work merely because this package exists |
 | Documentation branch | `docs/go-live-execution-package-2026-10-16` |
 | Baselines | Exact main/implementation SHAs and local file hashes: [BASELINE_MANIFEST](BASELINE_MANIFEST.md) |
 | Implementation checkpoint | Local committed Task7 checkpoint plus later uncommitted Task8/9-related work; no fresh product verification claimed |
 | Strict execution | `full-strict-v21` INACTIVE in assessed registry; v27 successor work not activation or full acceptance |
 | Pilot route | Production-relevant components plus explicitly labelled replay first; GL-04 separate live admission remains conditional |
-| Documentation review | [DOCUMENTATION_REVIEW](DOCUMENTATION_REVIEW.md); publication/PR exact-head status must be verified remotely |
+| Documentation review | Independent PASS; [DOCUMENTATION_REVIEW](DOCUMENTATION_REVIEW.md) records checks. Reviewed publication commit `7ed25424125dd4d90db3700095c27410e0591046` has all eight remote blobs verified; later state-only publication metadata is tracked by PR head, not confused with this reviewed identity |
 
 ## Authorization ledger
 
@@ -92,6 +92,8 @@ No unresolved item authorizes weakening a frozen contract, substituting a model 
 ## Checkpoint and evidence register
 
 This publication captures the plan, not new product acceptance. Historical implementation evidence locations and current local hashes are recorded in the baseline manifest; current documentation evidence is in DOCUMENTATION_REVIEW. Do not use May22 outputs as gold answers or infer historical behavior from newer code.
+
+Documentation checkpoint: [reviewed commit](https://github.com/albarami/IDIS/commit/7ed25424125dd4d90db3700095c27410e0591046), [PR #118](https://github.com/albarami/IDIS/pull/118), [initial CI run](https://github.com/albarami/IDIS/actions/runs/38923027329). At this state update CI was running/queued, not green. Check the current PR head and latest run before relying on status; any state-only follow-up commit is distinct from the reviewed content commit. Publication is complete; merge/CI acceptance and product authority are not implied. The PR receipt records final remote verification and observed CI status without a self-referential commit hash in this file.
 
 For future accepted checkpoints append the template in [AGENT_EXECUTION](AGENT_EXECUTION.md): tested code SHA, review identity, complete diff range, exact-head CI, durable safe evidence, private access owner, acceptance authority, actual costs/user time, and exact next action. Keep code candidate and later evidence-only commit identities separate. A checkpoint missing required GitHub recovery or evidence is **pending**, not accepted synchronized.
 

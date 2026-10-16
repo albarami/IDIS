@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+env:
+  # --isolated ignores user settings; this also disables global/site pip config.
+  PIP_CONFIG_FILE: /dev/null
+
 jobs:
   ui-check:
     runs-on: ubuntu-latest
@@ -73,8 +77,15 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          python -m venv .venv
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple "pip==26.2.1"
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple -c requirements/constraints-py311.txt --build-constraint requirements/constraints-py311.txt -e ".[dev]" setuptools wheel
+          .venv/bin/python -m pip check
+          .venv/bin/python scripts/verify_dependency_resolution.py
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Enforce authorized migration ceiling before checks
+        run: python scripts/check_migration_ceiling.py
 
       - name: Provision Redis URL for the cross-replica rate-limit integration test (Slice96 DEC-A)
         run: echo "IDIS_TEST_REDIS_URL=redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}/15" >> "$GITHUB_ENV"
@@ -142,8 +153,15 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          python -m venv .venv
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple "pip==26.2.1"
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple -c requirements/constraints-py311.txt --build-constraint requirements/constraints-py311.txt -e ".[dev]" setuptools wheel
+          .venv/bin/python -m pip check
+          .venv/bin/python scripts/verify_dependency_resolution.py
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Enforce authorized migration ceiling before PostgreSQL bootstrap
+        run: python scripts/check_migration_ceiling.py
 
       - name: Bootstrap PostgreSQL and export env
         run: |
@@ -246,8 +264,12 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          python -m venv .venv
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple "pip==26.2.1"
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple -c requirements/constraints-py311.txt --build-constraint requirements/constraints-py311.txt -e ".[dev]" setuptools wheel
+          .venv/bin/python -m pip check
+          .venv/bin/python scripts/verify_dependency_resolution.py
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Run GDBS-S evaluation harness (validate mode + drift gate)
         run: |
@@ -334,10 +356,20 @@ jobs:
           docker stop idis-test || true
           docker rm idis-test || true
 
+      - name: Set up Python 3.11 for release manifest
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Generate release manifest
         run: |
-          pip install --quiet pyyaml
-          python scripts/release_build.py --output release_manifest.json
+          python -m venv .venv
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple "pip==26.2.1"
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple -c requirements/constraints-py311.txt --build-constraint requirements/constraints-py311.txt pyyaml setuptools wheel
+          .venv/bin/python -m pip check
+          .venv/bin/python scripts/verify_dependency_resolution.py
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          .venv/bin/python scripts/release_build.py --output release_manifest.json
           echo "=== Release Manifest ==="
           cat release_manifest.json
 
@@ -497,8 +529,15 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          python -m venv .venv
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple "pip==26.2.1"
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple -c requirements/constraints-py311.txt --build-constraint requirements/constraints-py311.txt -e ".[dev]" setuptools wheel
+          .venv/bin/python -m pip check
+          .venv/bin/python scripts/verify_dependency_resolution.py
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Enforce authorized migration ceiling before recovery drill
+        run: python scripts/check_migration_ceiling.py
 
       - name: Provision app role and drill env
         run: |
@@ -580,8 +619,13 @@ jobs:
 
       - name: Generate and completeness-check release manifest
         run: |
-          pip install --quiet pyyaml
-          python scripts/release_build.py --output release_manifest.json --require-complete
+          python -m venv .venv
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple "pip==26.2.1"
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple -c requirements/constraints-py311.txt --build-constraint requirements/constraints-py311.txt pyyaml setuptools wheel
+          .venv/bin/python -m pip check
+          .venv/bin/python scripts/verify_dependency_resolution.py
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          .venv/bin/python scripts/release_build.py --output release_manifest.json --require-complete
           echo "=== Release Manifest (gated) ==="
           cat release_manifest.json
 

@@ -16,6 +16,7 @@ dependencies = [
     "alembic>=1.13.0",
     "psycopg2-binary>=2.9.0",
     "httpx>=0.26.0",
+    "httpx2>=2.13.1",  # current Starlette TestClient response/error family
     "opentelemetry-api>=1.22.0",
     "opentelemetry-sdk>=1.22.0",
     "opentelemetry-exporter-otlp>=1.22.0",
@@ -32,7 +33,7 @@ dependencies = [
     "openpyxl>=3.1.0",
     "python-docx>=1.1.0",
     "python-pptx>=0.6.23",
-    "anthropic>=0.39.0",
+    "anthropic==0.125.0",  # qualified frozen temperature-bearing requests; SDK 1.x rejects them
     "cryptography>=42.0.0,<47",  # AES-256-GCM BYOL credential encryption; also used by auth_sso JWKS verification
     "python-dotenv>=1.0.0",
     "neo4j>=5.14.0",
@@ -43,6 +44,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7.4.0",
+    "pytest-socket>=0.8.1",  # explicit network denial for offline qualification
     "httpx>=0.26.0",
     "ruff>=0.1.14",
     "mypy>=1.8.0",
@@ -56,6 +58,10 @@ dev = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv]
+# This lock qualifies Python 3.11 only; --python-version alone is a lower bound.
+environments = ["python_version == '3.11' and (sys_platform == 'win32' or sys_platform == 'linux')"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/idis"]

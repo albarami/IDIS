@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Create virtual environment
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
+ENV PIP_CONFIG_FILE=/dev/null
 
 # Copy all source and data files (must precede pip install for hatchling force-include)
 COPY pyproject.toml ./
@@ -30,10 +31,16 @@ COPY openapi/ ./openapi/
 COPY src/ ./src/
 COPY prompts/ ./prompts/
 COPY schemas/ ./schemas/
+COPY requirements/ ./requirements/
+COPY scripts/verify_dependency_resolution.py ./scripts/verify_dependency_resolution.py
 
 # Install the package (non-editable so runtime has in-venv code)
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir .
+RUN python -m pip --isolated install --no-cache-dir --index-url https://pypi.org/simple "pip==26.2.1" && \
+    python -m pip --isolated install --no-cache-dir --index-url https://pypi.org/simple \
+      -c requirements/constraints-py311.txt \
+      --build-constraint requirements/constraints-py311.txt . setuptools wheel && \
+    python -m pip check && \
+    python scripts/verify_dependency_resolution.py
 
 # Compile Python files for faster startup (optional verification)
 RUN python -m compileall -q src/

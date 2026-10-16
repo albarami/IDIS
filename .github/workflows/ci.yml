@@ -1,53 +1,35 @@
 name: CI
-
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
-
 env:
   # --isolated ignores user settings; this also disables global/site pip config.
   PIP_CONFIG_FILE: /dev/null
-
 jobs:
   ui-check:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js 20
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: ui/package-lock.json
-
+      - {"name": "Checkout code", "uses": "actions/checkout@v4"}
+      - {"name": "Set up Node.js 20", "uses": "actions/setup-node@v4", "with": {"node-version": "20", "cache": "npm", "cache-dependency-path": "ui/package-lock.json"}}
       - name: Install dependencies
         working-directory: ui
         run: npm ci
-
       - name: Run lint
         working-directory: ui
         run: npm run lint
-
       - name: Run typecheck
         working-directory: ui
         run: npm run typecheck
-
       - name: Run tests
         working-directory: ui
         run: npm run test
-
       - name: Build
         working-directory: ui
         run: npm run build
-
   check:
     runs-on: ubuntu-latest
-
     services:
       # Slice96 DEC-A: a real Redis so the cross-replica rate-limit integration test
       # (test_real_redis_enforces_one_shared_bucket_across_replicas) runs here instead of skipping.
@@ -60,16 +42,9 @@ jobs:
           --health-retries 5
         ports:
           - 6379/tcp
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
+      - {"name": "Checkout code", "uses": "actions/checkout@v4"}
+      - {"name": "Set up Python 3.11", "uses": "actions/setup-python@v5", "with": {"python-version": "3.11"}}
       - name: Install OCR and media system dependencies
         run: |
           sudo apt-get update
@@ -84,32 +59,14 @@ jobs:
           .venv/bin/python scripts/verify_dependency_resolution.py
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
-      - name: Enforce authorized migration ceiling before checks
-        run: python scripts/check_migration_ceiling.py
-
-      - name: Provision Redis URL for the cross-replica rate-limit integration test (Slice96 DEC-A)
-        run: echo "IDIS_TEST_REDIS_URL=redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}/15" >> "$GITHUB_ENV"
-
-      - name: Validate prompt registry governance (Slice99)
-        run: python -m idis prompts validate --prompts-root prompts --repo-root . --out prompt_governance_report.json
-
-      - name: Verify OpenAPI/schema/client contract lock (Slice99)
-        run: python scripts/contract_lock.py verify --repo-root .
-
-      - name: Upload prompt governance report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: prompt-governance-report
-          path: prompt_governance_report.json
-          retention-days: 30
-
-      - name: Run all checks
-        run: make check
-
+      - {"name": "Enforce authorized migration ceiling before checks", "run": "python scripts/check_migration_ceiling.py"}
+      - {"name": "Provision Redis URL for the cross-replica rate-limit integration test (Slice96 DEC-A)", "run": "echo \"IDIS_TEST_REDIS_URL=redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}/15\" >> \"$GITHUB_ENV\""}
+      - {"name": "Validate prompt registry governance (Slice99)", "run": "python -m idis prompts validate --prompts-root prompts --repo-root . --out prompt_governance_report.json"}
+      - {"name": "Verify OpenAPI/schema/client contract lock (Slice99)", "run": "python scripts/contract_lock.py verify --repo-root ."}
+      - {"name": "Upload prompt governance report", "if": "always()", "uses": "actions/upload-artifact@v4", "with": {"name": "prompt-governance-report", "path": "prompt_governance_report.json", "retention-days": 30}}
+      - {"name": "Run all checks", "run": "make check"}
   postgres-integration:
     runs-on: ubuntu-latest
-
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -124,18 +81,14 @@ jobs:
           --health-retries 5
         ports:
           - 5432/tcp
-
     env:
       PG_ADMIN_USER: postgres
       PG_ADMIN_PASSWORD: postgres
       IDIS_PG_APP_USER: idis_app
       IDIS_PG_APP_PASSWORD: idis_app_pw
       IDIS_PG_DB_NAME: idis_test
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
+      - {"name": "Checkout code", "uses": "actions/checkout@v4"}
       - name: Mask secrets
         run: |
           echo "::add-mask::${PG_ADMIN_PASSWORD}"
@@ -146,11 +99,7 @@ jobs:
           echo "IDIS_PG_HOST=127.0.0.1" >> "$GITHUB_ENV"
           echo "IDIS_PG_PORT=${{ job.services.postgres.ports['5432'] }}" >> "$GITHUB_ENV"
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
+      - {"name": "Set up Python 3.11", "uses": "actions/setup-python@v5", "with": {"python-version": "3.11"}}
       - name: Install dependencies
         run: |
           python -m venv .venv
@@ -160,17 +109,22 @@ jobs:
           .venv/bin/python scripts/verify_dependency_resolution.py
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
-      - name: Enforce authorized migration ceiling before PostgreSQL bootstrap
-        run: python scripts/check_migration_ceiling.py
+      - {"name": "Enforce authorized migration ceiling before PostgreSQL bootstrap", "run": "python scripts/check_migration_ceiling.py"}
+      - name: Prepare exact migration 0038 roles on disposable CI
+        env:
+          IDIS_CI_ERASURE_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres
+          IDIS_REQUIRE_POSTGRES: "1"
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: |
+          python -m pytest -p pytest_socket tests/test_ci_erasure_role_preparation.py -q --disable-socket --allow-hosts=127.0.0.1,::1
+          python scripts/prepare_ci_erasure_roles.py --disposable-ci
 
       - name: Bootstrap PostgreSQL and export env
         run: |
           python scripts/pg_bootstrap_ci.py --export-github-env 2>&1 | tee postgres_bootstrap.log
           exit ${PIPESTATUS[0]}
 
-      - name: Verify app role connectivity and security
-        run: python scripts/pg_bootstrap_ci.py --verify-only
-
+      - {"name": "Verify app role connectivity and security", "run": "python scripts/pg_bootstrap_ci.py --verify-only"}
       - name: Run PostgreSQL integration tests
         env:
           IDIS_REQUIRE_POSTGRES: "1"
@@ -180,30 +134,9 @@ jobs:
           pytest tests/test_postgres_rls_and_audit_immutability.py tests/test_api_deals_postgres.py tests/test_api_claims_postgres.py tests/test_postgres_break_attempts.py tests/test_api_run_observability_postgres.py tests/test_api_default_upload_ingestion_postgres.py tests/test_api_full_run_step_name_postgres.py tests/test_api_full_run_durable_evidence_postgres.py tests/test_api_selected_multidocument_full_acceptance_postgres.py tests/test_api_sanad_auto_grade_persistence_postgres.py tests/test_slice96_provider_budget_postgres.py tests/test_slice96_idempotency_ttl_postgres.py tests/test_slice97_webhook_outbox_postgres.py tests/test_slice97_webhook_dispatcher_postgres.py tests/test_slice98_abac_durable_store_postgres.py tests/test_slice98_access_admin_api_postgres.py tests/test_slice98_break_glass_workflow_postgres.py tests/test_slice98_byok_legal_hold_postgres.py tests/test_slice98_durable_residency_postgres.py tests/test_slice98_erasure_export_postgres.py tests/test_slice98_retention_janitor_postgres.py -v --junitxml=postgres_integration_pytest.xml 2>&1 | tee postgres_integration_pytest.log
           exit ${PIPESTATUS[0]}
 
-      - name: Upload bootstrap log artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: postgres-bootstrap-log
-          path: postgres_bootstrap.log
-          retention-days: 7
-
-      - name: Upload pytest log artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: postgres-integration-pytest-log
-          path: postgres_integration_pytest.log
-          retention-days: 7
-
-      - name: Upload pytest JUnit XML artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: postgres-integration-pytest-xml
-          path: postgres_integration_pytest.xml
-          retention-days: 7
-
+      - {"name": "Upload bootstrap log artifact", "if": "always()", "uses": "actions/upload-artifact@v4", "with": {"name": "postgres-bootstrap-log", "path": "postgres_bootstrap.log", "retention-days": 7}}
+      - {"name": "Upload pytest log artifact", "if": "always()", "uses": "actions/upload-artifact@v4", "with": {"name": "postgres-integration-pytest-log", "path": "postgres_integration_pytest.log", "retention-days": 7}}
+      - {"name": "Upload pytest JUnit XML artifact", "if": "always()", "uses": "actions/upload-artifact@v4", "with": {"name": "postgres-integration-pytest-xml", "path": "postgres_integration_pytest.xml", "retention-days": 7}}
       - name: Write explicit pytest summary to job summary
         if: always()
         run: |
@@ -252,16 +185,9 @@ jobs:
 
   evaluation-harness:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
+      - {"name": "Checkout code", "uses": "actions/checkout@v4"}
+      - {"name": "Set up Python 3.11", "uses": "actions/setup-python@v5", "with": {"python-version": "3.11"}}
       - name: Install dependencies
         run: |
           python -m venv .venv
@@ -285,14 +211,7 @@ jobs:
           echo "=== GDBS-S Report ===" 
           cat gdbs_s_report.json 2>/dev/null || echo "No report file found"
 
-      - name: Upload GDBS-S report artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: gdbs-s-evaluation-report
-          path: gdbs_s_report.json
-          retention-days: 30
-
+      - {"name": "Upload GDBS-S report artifact", "if": "always()", "uses": "actions/upload-artifact@v4", "with": {"name": "gdbs-s-evaluation-report", "path": "gdbs_s_report.json", "retention-days": 30}}
       - name: Write evaluation summary to job summary
         if: always()
         run: |
@@ -306,25 +225,10 @@ jobs:
   # ===========================================================================
   container-build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile
-          push: false
-          load: true
-          tags: idis:ci-${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
+      - {"name": "Checkout code", "uses": "actions/checkout@v4"}
+      - {"name": "Set up Docker Buildx", "uses": "docker/setup-buildx-action@v3"}
+      - {"name": "Build Docker image", "uses": "docker/build-push-action@v5", "with": {"context": ".", "file": "./Dockerfile", "push": false, "load": true, "tags": "idis:ci-${{ github.sha }}", "cache-from": "type=gha", "cache-to": "type=gha,mode=max"}}
       - name: Test container health check
         run: |
           echo "=== Starting container for health check ==="
@@ -356,11 +260,7 @@ jobs:
           docker stop idis-test || true
           docker rm idis-test || true
 
-      - name: Set up Python 3.11 for release manifest
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
+      - {"name": "Set up Python 3.11 for release manifest", "uses": "actions/setup-python@v5", "with": {"python-version": "3.11"}}
       - name: Generate release manifest
         run: |
           python -m venv .venv
@@ -373,13 +273,7 @@ jobs:
           echo "=== Release Manifest ==="
           cat release_manifest.json
 
-      - name: Upload release manifest artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-manifest
-          path: release_manifest.json
-          retention-days: 30
-
+      - {"name": "Upload release manifest artifact", "uses": "actions/upload-artifact@v4", "with": {"name": "release-manifest", "path": "release_manifest.json", "retention-days": 30}}
       - name: Write container build summary
         if: always()
         run: |
@@ -400,11 +294,8 @@ jobs:
   # ===========================================================================
   k8s-validate:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
+      - {"name": "Checkout code", "uses": "actions/checkout@v4"}
       - name: Install kubeconform
         run: |
           curl -sL https://github.com/yannh/kubeconform/releases/download/v0.6.4/kubeconform-linux-amd64.tar.gz | tar xz
@@ -425,14 +316,7 @@ jobs:
           fi
           echo "[OK] All Kubernetes manifests are valid"
 
-      - name: Upload validation results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: k8s-validation-results
-          path: k8s_validation.json
-          retention-days: 7
-
+      - {"name": "Upload validation results", "if": "always()", "uses": "actions/upload-artifact@v4", "with": {"name": "k8s-validation-results", "path": "k8s_validation.json", "retention-days": 7}}
       - name: Write K8s validation summary
         if: always()
         run: |
@@ -453,23 +337,15 @@ jobs:
   # ===========================================================================
   terraform-validate:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.5.0"
-
+      - {"name": "Checkout code", "uses": "actions/checkout@v4"}
+      - {"name": "Setup Terraform", "uses": "hashicorp/setup-terraform@v3", "with": {"terraform_version": "1.5.0"}}
       - name: Terraform Format Check
         id: fmt
         run: |
           cd deploy/terraform
           terraform fmt -check -recursive -diff
         continue-on-error: true
-
       - name: Terraform Init
         run: |
           cd deploy/terraform
@@ -502,7 +378,6 @@ jobs:
   # ===========================================================================
   backup-restore-drill:
     runs-on: ubuntu-latest
-
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -517,16 +392,9 @@ jobs:
           --health-retries 5
         ports:
           - 5432/tcp
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
+      - {"name": "Checkout code", "uses": "actions/checkout@v4"}
+      - {"name": "Set up Python 3.11", "uses": "actions/setup-python@v5", "with": {"python-version": "3.11"}}
       - name: Install dependencies
         run: |
           python -m venv .venv
@@ -536,8 +404,15 @@ jobs:
           .venv/bin/python scripts/verify_dependency_resolution.py
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
-      - name: Enforce authorized migration ceiling before recovery drill
-        run: python scripts/check_migration_ceiling.py
+      - {"name": "Enforce authorized migration ceiling before recovery drill", "run": "python scripts/check_migration_ceiling.py"}
+      - name: Prepare exact migration 0038 roles on disposable CI
+        env:
+          IDIS_CI_ERASURE_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres
+          IDIS_REQUIRE_POSTGRES: "1"
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: |
+          python -m pytest -p pytest_socket tests/test_ci_erasure_role_preparation.py -q --disable-socket --allow-hosts=127.0.0.1,::1
+          python scripts/prepare_ci_erasure_roles.py --disposable-ci
 
       - name: Provision app role and drill env
         run: |
@@ -575,7 +450,6 @@ jobs:
           DRILL_PG_PORT: ${{ job.services.postgres.ports['5432'] }}
           DRILL_PG_ADMIN_PASSWORD: postgres
           DRILL_PG_APP_PASSWORD: idis_app_pw
-
       - name: Run the backup/restore drill (REQUIRED, cannot skip)
         env:
           IDIS_REQUIRE_POSTGRES: "1"
@@ -583,14 +457,7 @@ jobs:
           pytest tests/test_slice99_backup_restore_postgres.py -v 2>&1 | tee backup_restore_drill.log
           exit ${PIPESTATUS[0]}
 
-      - name: Upload drill log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: backup-restore-drill-log
-          path: backup_restore_drill.log
-          retention-days: 30
-
+      - {"name": "Upload drill log", "if": "always()", "uses": "actions/upload-artifact@v4", "with": {"name": "backup-restore-drill-log", "path": "backup_restore_drill.log", "retention-days": 30}}
   # ===========================================================================
   # Release Promotion Gate (Slice99): aggregates every CI gate and verifies the
   # release manifest is COMPLETE (real sha256 for source, schemas, openapi,
@@ -607,16 +474,9 @@ jobs:
       - k8s-validate
       - terraform-validate
       - backup-restore-drill
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
+      - {"name": "Checkout code", "uses": "actions/checkout@v4"}
+      - {"name": "Set up Python 3.11", "uses": "actions/setup-python@v5", "with": {"python-version": "3.11"}}
       - name: Generate and completeness-check release manifest
         run: |
           python -m venv .venv
@@ -629,13 +489,7 @@ jobs:
           echo "=== Release Manifest (gated) ==="
           cat release_manifest.json
 
-      - name: Upload gated release manifest
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-manifest-gated
-          path: release_manifest.json
-          retention-days: 90
-
+      - {"name": "Upload gated release manifest", "uses": "actions/upload-artifact@v4", "with": {"name": "release-manifest-gated", "path": "release_manifest.json", "retention-days": 90}}
       - name: Write release gate summary
         run: |
           echo "## Release Promotion Gate" >> $GITHUB_STEP_SUMMARY

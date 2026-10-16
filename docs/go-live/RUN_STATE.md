@@ -9,13 +9,14 @@ State date: 2026-10-16. This is the current authority/status entry point. Reconc
 | Active milestone | M0: documentation package published in [PR #118](https://github.com/albarami/IDIS/pull/118); open for owner review, not merged |
 | Product implementation | **Not authorized by this task; not started** |
 | Next product packet | **GL-P01 — financial-schema compatibility**, after the authorization/baseline prerequisites below |
-| Next eligible action now | Inspect PR #118 and its current exact-head CI; owner reviews/merges only under appropriate authority, then separately decides whether to authorize GL-P01. Do not repeat publication or begin product work merely because this package exists |
+| Next eligible action now | Inspect the corrected PR #118 and its exact-head CI receipt; await the owner's separate scoped decision on PUB-IMPL-01 + CIR-01..04 + GL-P01. Do not repeat publication, begin product work or merge under this documentation grant |
 | Documentation branch | `docs/go-live-execution-package-2026-10-16` |
 | Baselines | Exact main/implementation SHAs and local file hashes: [BASELINE_MANIFEST](BASELINE_MANIFEST.md) |
 | Implementation checkpoint | Local committed Task7 checkpoint plus later uncommitted Task8/9-related work; no fresh product verification claimed |
 | Strict execution | `full-strict-v21` INACTIVE in assessed registry; v27 successor work not activation or full acceptance |
 | Pilot route | Production-relevant components plus explicitly labelled replay first; GL-04 separate live admission remains conditional |
-| Documentation review | Independent PASS; [DOCUMENTATION_REVIEW](DOCUMENTATION_REVIEW.md) records checks. Reviewed publication commit `7ed25424125dd4d90db3700095c27410e0591046` has all eight remote blobs verified; later state-only publication metadata is tracked by PR head, not confused with this reviewed identity |
+| Documentation review | Original package independent PASS at `7ed25424125dd4d90db3700095c27410e0591046`; focused correction review/remote receipt tracked in [DOCUMENTATION_REVIEW](DOCUMENTATION_REVIEW.md) and PR #118. Review identities are not interchangeable |
+| Completed CI at `52c830e` | **FAILURE**: `check` (seven typing diagnostics) and `postgres-integration` (missing selected `psycopg` driver); six successes, `release-gate` skipped. [Exact run](https://github.com/albarami/IDIS/actions/runs/38923212479); diagnosis/repair proposal in [runbook section9](VERIFICATION_AND_RUNBOOKS.md#9-completed-documentation-head-ci-diagnosis--52c830e). Not green |
 
 ## Authorization ledger
 
@@ -39,9 +40,13 @@ Source: explicit owner instruction to create/verify the Markdown execution packa
 
 Earlier Tier1 delegation for specific Task8 freeze/census/INACTIVE-publication work is preserved as historical authority with its guards, not generalized into this documentation task. Migration0039, activation, implementation commit/publication and live/priced execution retain their own holds/reviews. A documentation commit does not satisfy or waive them.
 
+### AUTH-DOC-CORRECTION-20261016 — focused follow-up
+
+The owner's follow-up authorizes GL-11 documentation correction, read-only CI/base/log/bootstrap-artifact diagnosis, a concrete implementation-publication proposal, and documentation-only commit/push/review on the existing PR #118. It does **not** authorize CIR product repairs, PUB-IMPL-01 execution/publication, merging or GL-P01 execution. No local product tests/installations, service/database operations or provider calls are added. The eight-file package is retained; no overall planning restart.
+
 ### Proposed implementation grant — NOT approved
 
-The owner may later authorize GL-P01, then GL-P02/03 or a bounded batch. Record the actual grant here before relying on it across sessions:
+The owner may authorize the combined staged scope below, then GL-P02/03 or a later bounded batch. Record the actual grant here before relying on it across sessions:
 
 ```text
 Authorization ID / owner decision date / durable decision reference:
@@ -74,6 +79,8 @@ Within a valid grant, agents continue routine eligible actions without repeated 
 | Item | Proposed assumption / responsible decision-maker | Resolve by |
 |---|---|---|
 | Local-only implementation availability | Owner preserves current tree; separately reviewed publication is necessary for hosted agents and recoverable future checkpoints | Before GL-P01 remote/isolated execution |
+| Four private fund-derived policy/map artifacts | Use owner-approved private immutable recovery, not public Git; frozen bytes must remain exact. See PUB-IMPL-01 in BASELINE_MANIFEST | Before implementation publication/recovery acceptance |
+| Dependency compatibility CI failures | Base-existing source conditions under October resolution; July base CI passed. CIR-01..04 are proposed repairs, not performed; no weakening checks | Before any repaired implementation checkpoint claims exact-head CI acceptance |
 | Exact expected-answer frozen ownership | Do not assume the requirement-model precedent settles it; inspect the actual 68-schema set and route disjointly if admitted | GL-P01 design gate |
 | Policy-v2 source ambiguities | No coercion or invented financial rule; owner obtains fund clarification where material | Before affected GL-07/08 acceptance |
 | Reference answers and independence | Use existing case evidence, but create/review reference calculations and judgment rubrics; no gold set claimed | Before substantive pilot evaluation |
@@ -93,10 +100,20 @@ No unresolved item authorizes weakening a frozen contract, substituting a model 
 
 This publication captures the plan, not new product acceptance. Historical implementation evidence locations and current local hashes are recorded in the baseline manifest; current documentation evidence is in DOCUMENTATION_REVIEW. Do not use May22 outputs as gold answers or infer historical behavior from newer code.
 
-Documentation checkpoint: [reviewed commit](https://github.com/albarami/IDIS/commit/7ed25424125dd4d90db3700095c27410e0591046), [PR #118](https://github.com/albarami/IDIS/pull/118), [initial CI run](https://github.com/albarami/IDIS/actions/runs/38923027329). At this state update CI was running/queued, not green. Check the current PR head and latest run before relying on status; any state-only follow-up commit is distinct from the reviewed content commit. Publication is complete; merge/CI acceptance and product authority are not implied. The PR receipt records final remote verification and observed CI status without a self-referential commit hash in this file.
+Documentation checkpoint: [reviewed original commit](https://github.com/albarami/IDIS/commit/7ed25424125dd4d90db3700095c27410e0591046) followed by state commit `52c830ed823fff6ff1fb49f0166b8df07daf33bf`, [PR #118](https://github.com/albarami/IDIS/pull/118). The latter's [CI run38923212479](https://github.com/albarami/IDIS/actions/runs/38923212479) is completed **FAILURE**, superseding the previous queued/running handoff. All seven typing diagnostics and the bootstrap failure are attributed in runbook section9; identical base source is established, not a fresh base test. The exact base's July CI passed; its old logs expired. Publication is not CI acceptance. This correction's exact final head, remote eight-file verification and current CI state belong in the PR receipt, avoiding a self-referential commit/hash update loop.
 
 For future accepted checkpoints append the template in [AGENT_EXECUTION](AGENT_EXECUTION.md): tested code SHA, review identity, complete diff range, exact-head CI, durable safe evidence, private access owner, acceptance authority, actual costs/user time, and exact next action. Keep code candidate and later evidence-only commit identities separate. A checkpoint missing required GitHub recovery or evidence is **pending**, not accepted synchronized.
 
-## Exact next product action after authorization
+## Proposed combined next authorization — not granted
+
+| Order | Concrete scope | Required boundary / completion evidence |
+|---|---|---|
+| 1. PUB-IMPL-01 / GL-01 | Preserve/review the26 local commits and174 overlay states; publish only privacy-cleared code/plans/contracts on a separate implementation PR, with private recovery for four fund-derived artifacts | Owner selects private destination; complete history/diff/privacy review, raw-byte identity and another-machine restoration proof. No repairs hidden in preservation commits; failed CI remains WIP |
+| 2. CIR-01..04 | Repair SDK request, HTTP response/error-family and PostgreSQL driver compatibility; record reproducible dependency resolution in existing mechanisms | Explicit code/test/install and disposable-CI-database permissions as needed; RED/GREEN/review and complete exact-head CI. No migration0039, activation, provider calls or check weakening. Apply to both release/main and advanced implementation as reviewed, without overwriting local work |
+| 3. GL-P01 | Establish frozen expected-answer ownership and implement the smallest approved version-bound financial-schema compatibility route | Reconciled/recoverable source; required private artifacts; explicit implementation/test authority; independent review and conservation evidence. No GL-P02/03 execution implicitly added |
+
+Preservation/privacy review and repair design may proceed in parallel under a future grant; integrate preservation before new repairs into the advanced source. A minimal base repair PR may be separately reviewed for main, then integrated by an explicit merge/cherry-pick decision. No merge permission is implied by commit/push authority. The owner can authorize this batch together while retaining each stop point and separate migration, activation, live/priced and fund-acceptance holds.
+
+## Exact GL-P01 action after authorization and baseline reconciliation
 
 Read GL-P01, reconcile the implementation HEAD plus the manifest's 174 file states, then inspect `ExpectedAnswerSchema.required_calculations` in `src/idis/models/extraction_task.py` and its construction in `src/idis/services/extraction/task_planner.py`. Establish the actual frozen-snapshot ownership and approved version-bound policy-v2 route before writing a RED test. Do not start with provider calls, migration0039, activation, broad refactoring or a new pilot framework.

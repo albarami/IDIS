@@ -12,7 +12,7 @@ Captured 2026-10-16 from the active development tree. This is identity evidence,
 
 The documentation PR intentionally contains none of the 26 implementation commits or these implementation file contents. An absent named remote branch is not proof that every object is absent from every GitHub ref. The remote availability of this complete implementation is **not established**. A GitHub checkout of this documentation branch is **not an executable Slice100 baseline**.
 
-The local-only application snapshot must be preserved, reviewed, secret-scanned and published under separate implementation authority before a cloud agent can claim a recoverable implementation checkpoint. Do not blindly push the existing implementation branch or include its full history in a documentation PR. Compare the complete outgoing range first.
+The local-only application snapshot must be preserved, reviewed, secret-scanned and made recoverable under separate implementation authority before a cloud agent can claim a recoverable implementation checkpoint. Public code publication must exclude private fund-derived artifacts; those need controlled private recovery as specified in PUB-IMPL-01 below. Do not blindly push the existing implementation branch or include its full history in a documentation PR. Compare the complete outgoing range first.
 
 ## Machine mappings and private dependencies
 
@@ -208,3 +208,55 @@ Paths below are relative to the **active implementation root**, not to this docu
 | `tests/test_slice57_byol_enrichment.py` | modified | `9682b523b8e0dbbce6715534907b6ad7cbc6174ea3bf24f9974b1796b1811735` |
 | `tests/test_slice86_enrichment_execution_provenance_characterization.py` | modified | `0850a0360574ad20dcb1156d882ab8904ff79938ab183e5a6faa37146cefbe8b` |
 | `tests/test_slice86_optional_provider_strict_policy.py` | modified | `d60121f066d9c6fb9753599248d8c9f8aed978354218ac06adbf17629e6d858b` |
+
+## PUB-IMPL-01 — proposed implementation recovery/publication packet
+
+**Not authorized or performed by this documentation correction.** This concretizes GL-01; it does not reopen the architecture plan or authorize product repairs, migration0039, activation, census execution or GL-P01. Owner approval must cover the outgoing source scope, private recovery destination, verification commands and Git operations separately from merge authority.
+
+### Required source and commit boundaries
+
+Recheck implementation HEAD and all 174 raw-byte hashes before copying anything. The focused follow-up inspection found all174 still matching; no source was changed. The committed range is `4594ecabc4d7b598b42a67bf999b894d510f0ec9..445c3c844630ab232faea24d2e5ad02abdd1d3c6`: 26 commits, 725 changed paths. These source identities are not fresh acceptance evidence.
+
+| Preservation boundary | Existing identity / overlay selector | Proposed treatment |
+|---|---|---|
+| Tasks1–4 committed history | First12 commits, through `b9280ed975b5fe8ca2022859ef807de311c0f3e8` | Preserve original commits only after complete outgoing-history privacy review |
+| Task5 committed history | Next5, through `ea803d86f49ecc89a7847613f9dcc0f7a87a3b2a` | Same |
+| Task6 committed history | Next6, through `a07c8ac02b3aeff3e8458de74a1b6d39ec2c19d7` | Same |
+| Task7 committed history | Final3, through `445c3c844630ab232faea24d2e5ad02abdd1d3c6` | Same; this is the committed implementation tip, not main |
+| Shared overlay | 9 manifest paths listed below | One explicit preservation commit; no repairs hidden in it |
+| Task8/governance overlay | Remaining109 entries after shared/Task9 selectors; includes `.gitattributes`, governing plans, preimages, source, scripts, tests | Public candidates105; four private artifacts below remain outside public Git. Preserve as a separately reviewed commit group plus private exact-byte receipt |
+| Task9 overlay | 56 manifest entries: all under `src/idis/services/enrichment/` and `tests/slice100_task9_periphery/`, plus the six paths below | Separate preservation commit group; fixture evidence is not live-provider acceptance |
+| Compatibility repairs / GL-P01 | Proposed CIR-01..04, then GL-P01 | Separate later commits with new RED/GREEN/review evidence; never folded into baseline preservation |
+
+Shared9: `src/idis/runtime/strict_launcher.py`; `tests/slice100_task2/_support.py`; `tests/slice100_task2/test_dependency_probe_adapters.py`; `tests/slice100_task2/test_governance_import.py`; `tests/slice100_task2/test_governance_repositories.py`; `tests/slice100_task2/test_provider_budget_policy.py`; `tests/slice100_task4/test_fresh_database_migration_admission.py`; `tests/slice100_task6/test_strict_launcher_post_migration_privileges_red.py`; `tests/slice100_worker_lease/_support.py`.
+
+Task9 additional6: `docs/plans/2026-07-21-slice100-task9-provider-surface-plan.md`; `tests/test_enrichment_connectors_registry.py`; `tests/test_external_integrations_config_baseline.py`; `tests/test_slice57_byol_enrichment.py`; `tests/test_slice86_enrichment_execution_provenance_characterization.py`; `tests/test_slice86_optional_provider_strict_policy.py`. Select only existing manifest entries, not new files discovered later. The groups partition174; they do not promise intermediate commits independently pass tests.
+
+The recoverable source closure includes the governing Slice100 plan and all accepted amendments, Task8 lineage/materialization/v25–v27 plans, Task9 provider plan, frozen contract preimages and registry definitions, 68 schema snapshots, prompt assets, existing dependency/configuration metadata, migrations through the approved boundary, API/runtime/repositories, fixture generators, independent oracles, census/sealed-publication scripts and their tests. Publishing `src/` alone is insufficient. Preserve migration0039's hold; source availability is not permission to apply it or activate an execution contract.
+
+### Private artifact boundary — material finding
+
+These four untracked manifest entries reproduce private fund requirements and must **not** be included in the public baseline push:
+
+- `contracts/fdd_formula_policy_v1.json`
+- `contracts/fdd_formula_policy_v2.json`
+- `docs/plans/2026-07-25-slice100-task8-fdd-formula-policy-v1-review-map.md`
+- `docs/plans/2026-07-25-slice100-task8-fdd-formula-policy-v2-review-map.md`
+
+Each policy contains79 question-text fields; the maps reproduce fund wording. No wording is reproduced in this package. A limited exact-string comparison found no matching long requirement strings at the committed implementation tip; **that is not clearance of the 26-commit history, other sensitive content or all174 files**. Provider fixtures labelled `HERMETIC_TEST`/`acceptance_eligible=false` still need privacy/licensing review.
+
+Recommended route: retain these exact bytes in an owner-approved private immutable artifact store or private artifact repository, with hashes from this manifest, access controls, retention and tested restoration to their existing repository-relative paths. `import_fdd_formula_policy_v2_registry()` accepts a policy artifact; materializers, fixtures, oracles and census scripts also depend on the policy files. A public checkout without this private overlay is therefore **not** a complete Task8 execution baseline. Do not redact frozen content and claim the same hash/semantics, substitute placeholders, regenerate a different artifact or skip its checks. Private CI restoration, if needed, must be limited to trusted authorized runs; untrusted PR code must not receive private artifacts or credentials. Choosing/provisioning that destination and any restoration integration requires the future grant.
+
+### Concrete future sequence and verification
+
+1. **Admission:** owner approves PUB-IMPL-01, the private destination/access owner, preservation scope and read-only/authorized verification. Capture fresh remote base and local identities; preserve the active worktree unchanged. No automatic choice of new spending or service operation.
+2. **Review outgoing history:** inspect every outgoing commit and blob, not merely the final diff, for confidential names/content, keys, provider payloads, binary artifacts and distribution rights. If all26 commits are clear, create a dedicated implementation-preservation branch/worktree at the existing implementation tip, retaining its ancestry. Do not use this documentation branch as the implementation base. If any history is restricted, stop public push and obtain approval for a sanitized publication branch from approved main with an explicit source-commit/tree provenance map; retain originals locally, never rewrite/force-push them silently.
+3. **Preserve overlay:** copy only the174 manifest-allowlisted paths into the isolated candidate, routing the four private entries to the approved private store rather than public Git. Apply the reviewed `.gitattributes` behavior before final byte verification. Stage explicit paths in the groups above, with no `git add .`/all-files staging. Compare every candidate/private artifact to its recorded raw SHA-256; reconcile line-ending normalization rather than silently accepting altered frozen bytes.
+4. **Record recovery:** public receipt identifies source tip/range, safe source manifest, public tree/commit and private artifact receipt IDs/hashes/access owner; private locators and contents stay controlled. Preserve governing plans/contracts with the source. Record which boundaries are WIP and what remains unverified. A hash or a local path is not a backup.
+5. **Verify/review before push:** check complete outgoing commit range and unfiltered diff, exact file partition, secret/privacy review and source dependency closure. Run only separately authorized checks. Preserve failures; do not weaken checks to publish a green label. Keep CIR repairs in a distinct review/commit scope so preservation can be compared to original bytes.
+6. **Push and recover:** under the grant, push the dedicated implementation branch, open its own PR, compare remote SHA and file identities, inspect unchanged required CI at that exact head. Prove recovery on another authorized checkout using public source plus private overlay, verifying all recorded bytes/paths/version metadata without activation or live execution. A remotely recoverable WIP with failed CI is **not an accepted implementation checkpoint**. Owner retains merge authority.
+7. **Next:** apply the separately authorized compatibility repairs from [runbook section9](VERIFICATION_AND_RUNBOOKS.md#9-completed-documentation-head-ci-diagnosis--52c830e), then GL-P01 on the reconciled implementation baseline. Record source/review/CI/evidence identities at each boundary; no full Slice100 acceptance is implied.
+
+### What still remains local/private
+
+Until separately recovered, the 26-commit implementation plus174 overlay states remain local-only as a complete baseline. The original financial workbook, two real-case collections, four fund-derived artifacts, ignored local reports/private execution receipts, document/artifact bytes, database/graph/vector/cache state and local runtime artifacts are not delivered by this documentation PR. Credentials, signing keys, provider rights/budgets/entitlements, installed tooling and environment configuration must be provisioned separately; never publish their values. Source recovery is not data/service recovery or authority for a live run. Reconfirm required private inputs and evidence access before GL-P01; no independent reference-answer set is supplied by this package.

@@ -131,7 +131,7 @@ After measured first-packet work, compare the remaining production path with the
 | Court/VEP and FULL DEBATE | Internal substantive evidence only; full findings/qualifications/calculations available, not IDs alone. Persist dissent and unresolved contradictions. In replay, label every non-live role and any unavailable stage. |
 | Specialists, scoring, Layer2 IC | Relevant internal evidence plus authorized external facts; specialist reports and scorecard reach IC advocate/challenger/arbiter. Stage-specific scoring replaces hard-coded Seed only after approved semantics. Every selected role/model/prompt is identifiable. |
 | System-driven investigation | System identifies material uncertainty, explains decision impact, proposes a specific evidence request/research/calculation with expected result and bounded scope/cost. Owner approves the pilot action; system then incorporates admissible results and reassesses. Record approval versus owner-supplied reasoning/evidence/answer separately. |
-| Verification and review | Statement-specific source/calculation support, numerical recomputation, source applicability, independence, contradiction handling, Nafs/material-assumption challenge/insight classification, explicit uncertainty, and analyst decisions. Do not backfill unrelated available citations. |
+| Verification and review | Statement-specific source/calculation support, numerical recomputation, source applicability, independence, contradiction handling, and the exact GL-11 disciplines: Nafs default interpretation; single most consequential assumption challenge/Mujahada; `conventional`, `deal-specific`, `contradictory` insight types. Support classification is separate. Preserve uncertainty and analyst decisions; do not backfill unrelated citations. |
 | Regeneration and outputs | A reviewed correction invalidates affected outputs and triggers bounded recomputation/reassessment; versioned workbook answer, narrative, evidence/calculation annex, and IC memo update consistently without deleting prior evidence or qualifications. |
 
 Compare the improved path against the existing approach on the same authorized evidence and expert rubric, holding model/settings constant where practical. For Anthropic financial-services adaptations, compare unchanged-model variants and record content version/license/dependencies; skill-generated calculations must use the governed calculation/verification path. Repeated demonstrations on these familiar cases are engineering evaluations, not generalization estimates.
@@ -214,3 +214,64 @@ Every authorized implementation checkpoint follows: **implement → verify → i
 Before claiming product readiness, produce one owner-approved record linking: complete financial/commercial requirement coverage; validated numerical/analytical reference pack; exact-SHA code and CI; canonical execution/receipt and restart proofs; prompt/model/provider qualification; full analyst-journey outputs; financial/commercial review and corrections; real measured effort/time/cost; deployment/recovery evidence; rights/security checks; remaining limitations; and fund feedback/final-format confirmation.
 
 Until those records exist, use the narrow truthful claim: documentation published, component evaluated, offline integration verified, live preflight passed, or canonical FULL demonstrated—as applicable. None is a synonym for full fund acceptance or go-live.
+
+## 9. Completed documentation-head CI diagnosis — 52c830e
+
+This is read-only diagnosis, not a repair or a fresh local test run. [CI run 38923212479](https://github.com/albarami/IDIS/actions/runs/38923212479) completed with **FAILURE** for exact source head `52c830ed823fff6ff1fb49f0166b8df07daf33bf`. Six jobs succeeded (`ui-check`, `evaluation-harness`, `container-build`, `k8s-validate`, `terraform-validate`, `backup-restore-drill`); `check` and `postgres-integration` failed; `release-gate` was skipped. No release/merge acceptance follows from the six successes.
+
+### Seven typing diagnostics, two compatibility causes
+
+Evidence: [check job 117048096703](https://github.com/albarami/IDIS/actions/runs/38923212479/job/117048096703). `make check` stopped at mypy after formatting/lint; its subsequent pytest and forbidden-scan steps did not execute. Line numbers here refer to this documentation head/base, not the newer local Slice100 tree.
+
+| Diagnostic | Source location | Observed cause | Smallest proposed repair scope |
+|---|---|---|---|
+| TYP-01 | `src/idis/services/extraction/extractors/anthropic_client.py:94` | Unexpected `temperature` keyword in `Messages.create` overload | CIR-01 below |
+| TYP-02 | Same call at line94 | No matching overload for the supplied argument types; same request mismatch as TYP-01, not a second independent defect | CIR-01 |
+| TYP-03 | `src/idis/evaluation/synthetic_strict_runtime_rehearsal.py:924` | Deal response is `httpx2.Response`, helper requires `httpx.Response` | CIR-02 below |
+| TYP-04 | Same file:957 | Upload response, same type mismatch | CIR-02 |
+| TYP-05 | Same file:1087 | FULL-run status response, same type mismatch | CIR-02 |
+| TYP-06 | Same file:1184 | Deliverable-list response, same type mismatch | CIR-02 |
+| TYP-07 | Same file:1194 | Manifest response, same type mismatch | CIR-02 |
+
+The job resolved `anthropic==1.15.0`, `mypy==2.4.0`, `fastapi==0.143.3`, `starlette==1.8.0`, `httpx==0.28.1`, `httpx2==2.13.1` and `typing-extensions==4.16.0`. Its logged SDK overload has no `temperature` argument; source supplies it at line97. The five response diagnostics directly establish the TestClient return-family mismatch. Broad dependency ranges in `pyproject.toml` allow these newly resolved interfaces; no resolved lock protects the older call shapes.
+
+The response problem is also an error-sanitization compatibility issue: this module catches only `httpx.HTTPStatusError` at lines479,952,1233,1304. A new-family exception may bypass safe status-only reporting or download-failure classification. Changing only the type annotation is insufficient. Existing `tests/test_slice68_synthetic_api_upload_rehearsal.py` covers an old-family exception, not proof that both families work.
+
+### PostgreSQL bootstrap and the artifact
+
+Evidence: [postgres-integration job 117048096588](https://github.com/albarami/IDIS/actions/runs/38923212479/job/117048096588) and its [postgres-bootstrap-log artifact](https://github.com/albarami/IDIS/actions/runs/38923212479/artifacts/12055626950). The ZIP was read in memory, not executed; SHA-256 `87a098006fb9d4dd22399ffdeee78488f5fde02cdfaee341c53a5e290967cd14` matches GitHub's artifact digest. Its single log is 680 characters/16 split lines. Only a safe diagnostic summary is retained here; no connection values are copied.
+
+The artifact reports `No module named 'psycopg'` after PostgreSQL readiness, role/database preparation and entry to migrations. `scripts/pg_bootstrap_ci.py:292` catches `ImportError` across the whole migration operation and labels it “Could not import alembic”; that label does not establish that Alembic itself is absent. The install log contains Alembic1.20.0, SQLAlchemy2.1.4 and psycopg2-binary2.9.13, but not psycopg3.
+
+Source trace: bootstrap creates bare PostgreSQL URLs and exports them to the process; Alembic `src/idis/persistence/migrations/env.py` calls `get_admin_engine()`; `src/idis/persistence/db.py:_ensure_psycopg_driver()` only rewrites the `postgres://` alias to another bare URL despite its docstring claiming explicit psycopg2 selection. SQLAlchemy2.1 changed the default for bare PostgreSQL URLs to psycopg3. This explains the missing-driver import while psycopg2 is installed. The same CI's successful backup/restore job explicitly supplies `postgresql+psycopg2` URLs, a useful comparison—not proof that the failing integration suite passed. [Official SQLAlchemy2.1 migration note](https://docs.sqlalchemy.org/en/21/changelog/migration_21.html#default-postgresql-driver-changed-to-psycopg-psycopg-3).
+
+No migration completion or PostgreSQL integration-test success was established: the bootstrap failure skipped both the application-role security/connectivity step and the integration tests.
+
+### Base-revision attribution and limits
+
+All offending source, dependency and CI definitions are byte-identical between base `4594ecabc4d7b598b42a67bf999b894d510f0ec9` and head `52c830ed823fff6ff1fb49f0166b8df07daf33bf`; the PR changes only Markdown. These are **base-existing compatibility conditions exposed by the current resolved dependencies**, not documentation-introduced product regressions.
+
+| Base/head-identical file | Git blob SHA |
+|---|---|
+| Anthropic client | `c1ba6dec4c15548848f9d885011ecb0100d5a4a6` |
+| Synthetic rehearsal | `f1e5ed22f9f14c25d7a56a6abb7dc6b407a78491` |
+| `src/idis/persistence/db.py` | `38f224a789d2a61d405159ee311abf4dc167bfb0` |
+| `scripts/pg_bootstrap_ci.py` | `3e7e0c9f9eb2a21795c12d62849604c0bbc93b67` |
+| `pyproject.toml` | `60d08d981ce2d4484025db1f51f8647f5122b049` |
+| `.github/workflows/ci.yml` | `c2765babbf4ea581292c70ab125bba36f7c2442c` |
+| `Makefile` | `2cd7261ee3178b313114eeb6b81b25d2c46968b7` |
+
+The exact base's [July14 run29370909359](https://github.com/albarami/IDIS/actions/runs/29370909359) succeeded, including its check and PostgreSQL jobs. Its old job logs now return HTTP410, so the old resolved versions cannot be recovered from those logs. Do **not** claim the historical base CI failed, or that a fresh base-only reproduction ran in this task. Under the observed October dependency set, the identical incompatible code remains present on base; that conclusion is from logs, source identity and the documented driver change, not a newly executed test.
+
+### Proposed bounded repair packet — not authorized or performed
+
+Use separate repair commits/PR scope, not this documentation PR or a disguised baseline-preservation commit. Reconcile the patch into the advanced Slice100 tree without replacing its newer changes; line numbers will differ there.
+
+| ID | Bounded change | Required future evidence |
+|---|---|---|
+| CIR-01: SDK request compatibility | In `anthropic_client.py`, qualify the observed SDK interface and stop passing its unsupported `temperature` argument; correct the deterministic-output claim. Preserve model selection, prompt, output ceiling, retry/budget behavior. This is a request-contract change requiring review, not a cast. If an existing frozen request requires temperature, pause for a specifically audited compatible SDK constraint; do not invent a known-good version from expired logs | Offline SDK-signature/request-contract tests catch unsupported kwargs (not only unrestricted mocks); existing legacy requirements conserved or explicitly ruled on; same full typecheck passes on the recorded resolution; no live request needed |
+| CIR-02: response and safe-error compatibility | In `synthetic_strict_runtime_rehearsal.py`, explicitly support both response families and both narrow status-error classes at the helper and four catch sites; declare/lock a direct `httpx2` dependency if imported. A narrow structural adapter is acceptable only if it preserves status/error semantics. No `Any`, cast, ignored error or broad swallowing | Both old/new families tested for create/upload/status/list/manifest/download failures; status-only sanitized errors retain no body/URL/credential leakage; actual current TestClient exercised offline; unchanged safety/coverage checks |
+| CIR-03: explicit installed DB driver | In `src/idis/persistence/db.py:_ensure_psycopg_driver`, map bare PostgreSQL schemes to the installed `postgresql+psycopg2` dialect and preserve explicitly selected drivers. Keep raw psycopg2 URL conversion separate from SQLAlchemy engine configuration in `scripts/pg_bootstrap_ci.py:run_migrations`; correct the misleading import-error classification if touched. Do not blindly install psycopg3 or alter roles/RLS/migration semantics | URL tests for bare alias, bare PostgreSQL and explicit drivers; driver selection without connecting; bootstrap plus existing mandatory integration/security and recovery checks in an explicitly disposable authorized database; migration0039 remains excluded |
+| CIR-04: reproducible resolution | Record the exact validated dependency/tool resolution used by these repairs in the existing packaging/CI mechanism; qualify compatibility rather than downgrade the checker or remove checks. Broad ecosystem modernization remains GL-05/23, not this repair packet | Same dependency set reproduced in a clean authorized environment; complete unchanged CI green at the exact repair head; failures/skips recorded and new incompatibilities separately scoped |
+
+Acceptance requires more than seven diagnostics disappearing: the safe-error behavior, request contract and PostgreSQL bootstrap must work, required tests must actually run, and the release aggregate must pass. No product change, local mypy/pytest run, dependency installation, service operation or migration was performed for this diagnosis.

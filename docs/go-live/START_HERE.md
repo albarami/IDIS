@@ -26,6 +26,8 @@ Before acting, inspect the actual working tree, applicable project instructions,
 
 Current milestone: **M0 documentation publication and handoff**. No product packet is currently authorized. The next product milestone is the three-packet offline calibration cycle, beginning with GL-P01 after explicit owner authority and baseline reconciliation.
 
+Focused handoff correction: GL-11 preserves the source Muḥāsibī disciplines; completed CI at `52c830e` is **failed**, not pending/green; and PUB-IMPL-01 specifies public-code/private-artifact recovery. Read the updated RUN_STATE for the proposed combined preservation, compatibility-repair and GL-P01 authorization. These corrections do not authorize any of those product actions.
+
 ## Authority and conflict resolution
 
 1. Explicit current owner authorization and its scope; privacy, safety and spending limits.

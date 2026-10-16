@@ -7,6 +7,9 @@ import tomllib
 import unittest
 from pathlib import Path
 from types import ModuleType
+from typing import Any
+
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "verify_dependency_resolution.py"
@@ -146,16 +149,66 @@ class DependencyWiringTests(unittest.TestCase):
         self.assertEqual(workflow.count("--build-constraint requirements/constraints-py311.txt"), 6)
         self.assertEqual(workflow.count('"pip==26.2.1"'), 6)
         self.assertEqual(workflow.count("python scripts/verify_dependency_resolution.py"), 6)
-        self.assertIn("run: make check", workflow)
         self.assertIn("pytest tests/test_slice99_backup_restore_postgres.py -v", workflow)
         self.assertEqual(workflow.count("python scripts/check_migration_ceiling.py"), 3)
+        self._assert_required_ci_job_execution(yaml.safe_load(workflow))
+
+    def _assert_required_ci_job_execution(self, workflow: dict[str, Any]) -> None:
+        jobs = workflow["jobs"]
+        self.assertIn(
+            "make check",
+            [step.get("run") for step in jobs["check"]["steps"]],
+            "check must retain the exact make check step",
+        )
         for job, command in (
-            ("check", "run: make check"),
+            ("check", "make check"),
             ("postgres-integration", "python scripts/pg_bootstrap_ci.py --export-github-env"),
             ("backup-restore-drill", "pytest tests/test_slice99_backup_restore_postgres.py -v"),
         ):
-            block = workflow.split(f"  {job}:\n", 1)[1].split("\n  # ", 1)[0]
-            self.assertLess(block.index("check_migration_ceiling.py"), block.index(command))
+            steps = jobs[job]["steps"]
+            ceiling = [
+                index
+                for index, step in enumerate(steps)
+                if step.get("run") == "python scripts/check_migration_ceiling.py"
+            ]
+            consumer = [index for index, step in enumerate(steps) if command in step.get("run", "")]
+            self.assertEqual(len(ceiling), 1, f"{job} must retain one migration ceiling step")
+            self.assertEqual(len(consumer), 1, f"{job} must retain one required command")
+            self.assertLess(ceiling[0], consumer[0], f"{job} must check the ceiling first")
+
+    def test_ci_job_execution_guard_rejects_missing_make_check(self) -> None:
+        workflow = yaml.safe_load(
+            (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        )
+        steps = workflow["jobs"]["check"]["steps"]
+        steps[:] = [step for step in steps if step.get("run") != "make check"]
+
+        with self.assertRaisesRegex(AssertionError, "check must retain the exact make check step"):
+            self._assert_required_ci_job_execution(workflow)
+
+    def test_ci_job_execution_guard_rejects_reordered_migration_ceilings(self) -> None:
+        for job, command in (
+            ("check", "make check"),
+            ("postgres-integration", "python scripts/pg_bootstrap_ci.py --export-github-env"),
+            ("backup-restore-drill", "pytest tests/test_slice99_backup_restore_postgres.py -v"),
+        ):
+            with self.subTest(job=job):
+                workflow = yaml.safe_load(
+                    (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+                )
+                steps = workflow["jobs"][job]["steps"]
+                ceiling = next(
+                    index
+                    for index, step in enumerate(steps)
+                    if step.get("run") == "python scripts/check_migration_ceiling.py"
+                )
+                consumer = next(
+                    index for index, step in enumerate(steps) if command in step.get("run", "")
+                )
+                steps[ceiling], steps[consumer] = steps[consumer], steps[ceiling]
+
+                with self.assertRaisesRegex(AssertionError, f"{job} must check the ceiling first"):
+                    self._assert_required_ci_job_execution(workflow)
 
     def test_docker_uses_the_same_runtime_and_build_constraints(self) -> None:
         dockerfile = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")

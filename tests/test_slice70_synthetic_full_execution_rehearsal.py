@@ -95,11 +95,11 @@ def _fake_upload_and_execution_result(
     )
 
 
-def test_synthetic_full_execution_rehearsal_runs_one_case_through_all_full_steps(
+def test_synthetic_full_execution_rehearsal_blocks_without_durable_methodologies(
     monkeypatch: Any,
     tmp_path: Path,
 ) -> None:
-    """Bounded rehearsal should prove non-strict FULL execution, not package export."""
+    """Legacy in-memory FULL execution cannot bypass Task-5 methodology admission."""
     from idis.evaluation import synthetic_strict_runtime_rehearsal as rehearsal
 
     def fail_if_package_helper_called(**_kwargs: Any) -> dict[str, Any]:
@@ -127,25 +127,24 @@ def test_synthetic_full_execution_rehearsal_runs_one_case_through_all_full_steps
 
     execution = report["full_execution_rehearsal"]
     assert execution["enabled"] is True
-    assert execution["http_status_code"] == 202
-    assert execution["run_created"] is True
-    assert execution["run_status"] == "SUCCEEDED"
-    assert execution["status_run_status"] == "SUCCEEDED"
-    assert execution["terminal"] is True
-    assert execution["completed_step_count"] == len(FULL_STEPS) == 28
-    assert execution["completed_step_names"] == [step.value for step in FULL_STEPS]
+    assert execution["status"] == "failed_safe"
+    assert execution["reason_code"] == "INVALID_REQUEST"
+    assert execution["http_status_code"] == 400
+    assert execution["run_created"] is False
+    assert execution["run_status"] == "FAILED"
+    assert execution["status_run_status"] == "FAILED"
+    assert execution["terminal"] is False
+    assert execution["completed_step_count"] == 0
+    assert execution["completed_step_names"] == []
     assert execution["failed_step_names"] == []
-    assert StepName.DELIVERABLES.value in execution["completed_step_names"]
+    assert StepName.DELIVERABLES.value not in execution["completed_step_names"]
 
     package = report["package_surface_verification"]
-    assert report["package_surface_status"] == "not_created"
+    assert report["package_surface_status"] == "not_run"
     assert package == {
-        "status": "not_created",
+        "status": "not_run",
         "verified": False,
-        "reason_code": "SAME_RUN_PACKAGE_SURFACES_NOT_CREATED",
-        "listed_deliverable_count_for_run": 0,
-        "manifest_http_status_code": 404,
-        "downloaded_artifact_count": 0,
+        "reason_code": "INVALID_REQUEST",
     }
     assert "package_surface_verified" not in report
     assert "vc-ready" not in serialized.lower()

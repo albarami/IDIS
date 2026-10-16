@@ -12,7 +12,9 @@ import inspect
 import math
 import os
 import re
+import sys
 import tomllib
+import types
 import uuid
 from pathlib import Path
 
@@ -120,6 +122,28 @@ def test_in_memory_stores_are_per_process_not_shared() -> None:
 def test_redis_store_from_url_lazily_imports_redis_source_pin() -> None:
     src = inspect.getsource(RedisTokenBucketStore.from_url)
     assert "import redis" in src  # imported lazily inside from_url, not at module load
+
+
+def test_redis_store_from_url_pins_resp2_for_supported_redis_endpoints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    class _Redis:
+        @staticmethod
+        def from_url(url: str, **kwargs: object) -> object:
+            observed.update(url=url, **kwargs)
+            return object()
+
+    monkeypatch.setitem(sys.modules, "redis", types.SimpleNamespace(Redis=_Redis))
+
+    store = RedisTokenBucketStore.from_url("redis://redis.internal:6379/0")
+
+    assert store._client is not None
+    assert observed == {
+        "url": "redis://redis.internal:6379/0",
+        "protocol": 2,
+    }
 
 
 # --- real Redis integration (env-gated; exercises the actual Lua atomic bucket) ---

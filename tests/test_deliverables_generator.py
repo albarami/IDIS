@@ -467,8 +467,9 @@ class TestDeliverablesGeneratorHappyPath:
                         claim_id=noisy_claim_id,
                         claim_text=(
                             "ONLINE INTERNATIONAL WIRE TRANSFER A/C: FOREIGN CUR BUS ACCT "
-                            "ORG: 00000000933802115 MYNE TECHNOLOGIES INC. BEN:/TR0900134000 "
-                            "BUSINESS EXPENSES/OCMT/EUR1034,00/EXCH/0.8904/TRN: 3519900289RE "
+                            "ORG: 99999999000000001 FICTIONAL PAYEE SYSTEMS INC. "
+                            "BEN:/FX0000000000 BUSINESS EXPENSES/OCMT/EUR4321,00/"
+                            "EXCH/1.2345/TRN: 9999900000ZZ "
                             "with additional remittance boilerplate that should not be exported "
                             "as a long evidence-index snippet."
                         ),
@@ -832,7 +833,7 @@ class TestDeliverablesGeneratorFailClosed:
         assert "deliverable.generation.failed" in event_types
 
         failed = [e for e in sink.events if e["event_type"] == "deliverable.generation.failed"]
-        assert failed[0]["error_type"] == "MISSING_SCORECARD"
+        assert failed[0]["payload"]["safe"]["error_type"] == "MISSING_SCORECARD"
 
     def test_generator_rejects_nff_violation_in_qa_brief(self) -> None:
         """Generator must fail-closed if assembled QA items lack evidence refs."""
@@ -915,7 +916,7 @@ class TestDeliverablesGeneratorFailClosed:
 
         failed = [e for e in sink.events if e["event_type"] == "deliverable.generation.failed"]
         assert len(failed) == 1
-        assert failed[0]["error_type"] == "INTERNAL_ERROR"
+        assert failed[0]["payload"]["safe"]["error_type"] == "INTERNAL_ERROR"
 
 
 class TestDeliverablesGeneratorAudit:
@@ -1000,7 +1001,7 @@ class TestDeliverablesGeneratorAudit:
         )
 
         for event in sink.events:
-            assert event["deal_id"] == "deal-001"
+            assert event["resource"]["deal_id"] == "deal-001"
             assert event["tenant_id"] == "tenant-001"
 
     def test_completed_event_has_deliverable_count(self) -> None:
@@ -1021,8 +1022,8 @@ class TestDeliverablesGeneratorAudit:
             e for e in sink.events if e["event_type"] == "deliverable.generation.completed"
         ]
         assert len(completed) == 1
-        assert completed[0]["deliverable_count"] == 4
-        assert completed[0]["has_decline_letter"] is False
+        assert completed[0]["payload"]["safe"]["deliverable_count"] == 4
+        assert completed[0]["payload"]["safe"]["has_decline_letter"] is False
 
 
 class TestDeliverablesGeneratorStructural:

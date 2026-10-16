@@ -201,7 +201,7 @@ class TestTechnicalAgentEngineIntegration:
         assert len(bundle.reports) == 1
         assert bundle.reports[0].agent_type == "technical_agent"
         event_types = [e["event_type"] for e in sink.events]
-        assert "analysis.completed" in event_types
+        assert "integration.analysis.completed" in event_types
 
 
 class TestTechnicalAgentFailClosed:

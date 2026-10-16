@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from idis.api.auth import IDIS_API_KEYS_ENV
@@ -26,6 +27,44 @@ from tests.abac_seed import seed_deal_access
 
 TENANT_ID = "11111111-1111-1111-1111-111111111111"
 API_KEY = "slice56-test-key"
+STRICT_API_BASE_URL = "http://127.0.0.1:8000"
+STRICT_PREFLIGHT_PROOF_ID = "00000000-0000-4000-8000-000000000056"
+COMMERCIAL_DD_VERSION_RECORD_ID = "10000000-0000-4000-8000-000000000056"
+FINANCIAL_DD_VERSION_RECORD_ID = "20000000-0000-4000-8000-000000000056"
+
+
+def _full_run_request(**values: Any) -> dict[str, Any]:
+    return {
+        "mode": "FULL",
+        "methodology_selection": {
+            "commercial_dd_version_record_id": COMMERCIAL_DD_VERSION_RECORD_ID,
+            "financial_dd_version_record_id": FINANCIAL_DD_VERSION_RECORD_ID,
+        },
+        **values,
+    }
+
+
+class _LegacyMethodologySelectionsRepository:
+    """Minimal recorder keeping Slice56 assertions on strict runtime behavior."""
+
+    def __init__(self) -> None:
+        self.create_calls: list[dict[str, Any]] = []
+
+    def create_run_selection(self, **kwargs: Any) -> dict[str, Any]:
+        self.create_calls.append(dict(kwargs))
+        return {"selection_id": "30000000-0000-4000-8000-000000000056"}
+
+
+@pytest.fixture(autouse=True)
+def _admit_fictional_methodology_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> _LegacyMethodologySelectionsRepository:
+    repository = _LegacyMethodologySelectionsRepository()
+    monkeypatch.setattr(
+        "idis.api.routes.runs._validate_full_methodology_selection",
+        lambda **_kwargs: repository,
+    )
+    return repository
 
 
 class _FakeResponse:
@@ -97,6 +136,14 @@ def teardown_function() -> None:
     clear_deals_store()
     clear_runs_store()
     clear_run_steps_store()
+
+
+def _create_hermetic_strict_app(monkeypatch: Any) -> Any:
+    """Compose the legacy in-memory app before restoring request-time strict inputs."""
+    with monkeypatch.context() as composition_env:
+        composition_env.delenv("IDIS_REQUIRE_FULL_LIVE", raising=False)
+        composition_env.delenv("IDIS_STRICT_DOTENV_PATH", raising=False)
+        return create_app(audit_sink=InMemoryAuditSink(), service_region="me-south-1")
 
 
 def test_strict_env_source_uses_process_over_dotenv_without_leaking_values(tmp_path: Path) -> None:
@@ -297,7 +344,7 @@ def test_strict_api_block_response_includes_inventory_and_no_env_values(
     monkeypatch.setenv("ANTHROPIC_API_KEY", process_secret)
     monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(_api_keys()))
 
-    app = create_app(audit_sink=InMemoryAuditSink(), service_region="me-south-1")
+    app = _create_hermetic_strict_app(monkeypatch)
     app.state.deal_documents = {}
     client = TestClient(app)
 
@@ -313,7 +360,7 @@ def test_strict_api_block_response_includes_inventory_and_no_env_values(
 
     run_resp = client.post(
         f"/v1/deals/{deal_id}/runs",
-        json={"mode": "FULL"},
+        json=_full_run_request(strict_preflight_proof_id=STRICT_PREFLIGHT_PROOF_ID),
         headers={"X-IDIS-API-Key": API_KEY},
     )
 
@@ -352,7 +399,7 @@ def test_strict_api_can_be_activated_from_explicit_dotenv(
     monkeypatch.setenv("IDIS_STRICT_DOTENV_PATH", str(dotenv_path))
     monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(_api_keys()))
 
-    app = create_app(audit_sink=InMemoryAuditSink(), service_region="me-south-1")
+    app = _create_hermetic_strict_app(monkeypatch)
     app.state.deal_documents = {}
     client = TestClient(app)
 
@@ -368,7 +415,7 @@ def test_strict_api_can_be_activated_from_explicit_dotenv(
 
     run_resp = client.post(
         f"/v1/deals/{deal_id}/runs",
-        json={"mode": "FULL"},
+        json=_full_run_request(strict_preflight_proof_id=STRICT_PREFLIGHT_PROOF_ID),
         headers={"X-IDIS-API-Key": API_KEY},
     )
 
@@ -394,7 +441,7 @@ def test_strict_api_blocks_before_run_create_or_step_records(
     monkeypatch.setattr(runs_module, "get_runs_repository", lambda *_args: repo)
     monkeypatch.setattr(runs_module, "get_run_steps_repository", fake_steps_factory)
 
-    app = create_app(audit_sink=InMemoryAuditSink(), service_region="me-south-1")
+    app = _create_hermetic_strict_app(monkeypatch)
     app.state.deal_documents = {
         "deal-strict-pre-created": [_preflight_doc(deal_id="deal-strict-pre-created")]
     }
@@ -402,7 +449,7 @@ def test_strict_api_blocks_before_run_create_or_step_records(
 
     run_resp = client.post(
         "/v1/deals/deal-strict-pre-created/runs",
-        json={"mode": "FULL"},
+        json=_full_run_request(strict_preflight_proof_id=STRICT_PREFLIGHT_PROOF_ID),
         headers={"X-IDIS-API-Key": API_KEY},
     )
 
@@ -413,24 +460,32 @@ def test_strict_api_blocks_before_run_create_or_step_records(
 
 def test_private_harness_strict_block_includes_inventory_before_upload_without_leaks(
     tmp_path: Path,
+    monkeypatch: Any,
 ) -> None:
     root = tmp_path / "real_example"
     secret_dir = root / "Private Secret Data Room"
     secret_dir.mkdir(parents=True)
     (secret_dir / "secret-board-pack.pdf").write_bytes(b"%PDF-1.4\nPRIVATE SECRET\n%%EOF")
-    client = _FakeApiClient()
+
+    def fail_if_external_client_is_built(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("strict readiness must block before constructing the HTTP client")
+
+    monkeypatch.setattr(
+        "idis.evaluation.real_example_run_harness._external_api_client",
+        fail_if_external_client_is_built,
+    )
 
     summary = run_real_example_full_run_harness(
         RealExampleFullRunHarnessOptions(
             root=root,
-            api_client=client,
+            api_base_url=STRICT_API_BASE_URL,
             require_full_live=True,
+            strict_preflight_proof_id=STRICT_PREFLIGHT_PROOF_ID,
         )
     )
 
     assert summary["status"] == "blocked"
-    assert client.uploads == []
-    assert client.run_requests == []
+    assert summary["run"]["attempted"] is False
     assert "component_inventory" in summary["strict_full_live"]
     encoded = json.dumps(summary, sort_keys=True)
     assert str(root) not in encoded
@@ -440,17 +495,28 @@ def test_private_harness_strict_block_includes_inventory_before_upload_without_l
     assert summary["counts_by_extension"] == {"pdf": 1}
 
 
-def test_private_harness_strict_summary_buckets_private_unknown_suffixes(tmp_path: Path) -> None:
+def test_private_harness_strict_summary_buckets_private_unknown_suffixes(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
     root = tmp_path / "real_example"
     root.mkdir()
     (root / "private.customer-secret-extension").write_bytes(b"PRIVATE")
-    client = _FakeApiClient()
+
+    def fail_if_external_client_is_built(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("strict readiness must block before constructing the HTTP client")
+
+    monkeypatch.setattr(
+        "idis.evaluation.real_example_run_harness._external_api_client",
+        fail_if_external_client_is_built,
+    )
 
     summary = run_real_example_full_run_harness(
         RealExampleFullRunHarnessOptions(
             root=root,
-            api_client=client,
+            api_base_url=STRICT_API_BASE_URL,
             require_full_live=True,
+            strict_preflight_proof_id=STRICT_PREFLIGHT_PROOF_ID,
         )
     )
 
@@ -479,7 +545,7 @@ def test_non_strict_api_run_still_reaches_execution_service(monkeypatch: Any) ->
 
     run_resp = client.post(
         f"/v1/deals/{deal_id}/runs",
-        json={"mode": "FULL"},
+        json=_full_run_request(),
         headers={"X-IDIS-API-Key": API_KEY},
     )
 

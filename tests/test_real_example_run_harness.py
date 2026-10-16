@@ -275,6 +275,7 @@ class _FakeApiClientWithPhaseRecorder(_FakeApiClient):
 
 def _seed_running_run_with_safe_steps() -> None:
     run_id = "00000000-0000-4000-8000-000000000044"
+    lease_owner_id = "real-example-timeout-fixture"
     runs_repo = get_runs_repository(None, DEFAULT_TENANT_ID)
     runs_repo.create(
         run_id=run_id,
@@ -282,7 +283,13 @@ def _seed_running_run_with_safe_steps() -> None:
         mode="FULL",
         source={"type": "deal_documents", "document_ids": ["document-1"]},
     )
-    runs_repo.try_mark_running(run_id)
+    claimed = runs_repo.claim_queued_runs(
+        limit=1,
+        lease_owner_id=lease_owner_id,
+        lease_seconds=300,
+    )
+    assert [run["run_id"] for run in claimed] == [run_id]
+    lease_fencing_token = int(claimed[0]["lease_fencing_token"])
     steps_repo = get_run_steps_repository(None, DEFAULT_TENANT_ID)
     steps_repo.create(
         RunStep(
@@ -295,7 +302,9 @@ def _seed_running_run_with_safe_steps() -> None:
             started_at="2026-01-01T00:00:00Z",
             finished_at="2026-01-01T00:00:01Z",
             result_summary={"document_count": 1, "private_path": "SECRET_PATH"},
-        )
+        ),
+        lease_owner_id=lease_owner_id,
+        lease_fencing_token=lease_fencing_token,
     )
     steps_repo.create(
         RunStep(
@@ -307,7 +316,9 @@ def _seed_running_run_with_safe_steps() -> None:
             status=StepStatus.RUNNING,
             started_at="2026-01-01T00:00:01Z",
             result_summary={"text_excerpt": "SECRET_TEXT"},
-        )
+        ),
+        lease_owner_id=lease_owner_id,
+        lease_fencing_token=lease_fencing_token,
     )
 
 
@@ -351,7 +362,7 @@ def test_local_reports_are_gitignored_private_artifacts() -> None:
 
 def test_harness_never_emits_private_paths_filenames_or_content(tmp_path: Path) -> None:
     root = tmp_path / "real_example"
-    confidential_dir = root / "Nexx Secret Board Pack"
+    confidential_dir = root / "fictional-nimbus Secret Board Pack"
     confidential_dir.mkdir(parents=True)
     (confidential_dir / "secret_pipeline.pdf").write_bytes(
         b"%PDF-1.4\nPRIVATE_CONTENT_SLICE42_REVENUE\n%%EOF"
@@ -370,7 +381,7 @@ def test_harness_never_emits_private_paths_filenames_or_content(tmp_path: Path) 
     encoded_output = output_path.read_text(encoding="utf-8")
     for forbidden in (
         str(root),
-        "Nexx",
+        "fictional-nimbus",
         "Secret",
         "secret_pipeline",
         "PRIVATE_CONTENT_SLICE42_REVENUE",
@@ -977,12 +988,22 @@ def test_harness_filters_unsafe_internal_upload_phase_recorder_summary(
 def test_harness_upload_timeout_returns_partial_timing_profile(
     tmp_path: Path,
     capsys: Any,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = tmp_path / "real_example"
     confidential_dir = root / "Private Slow Upload Room"
     confidential_dir.mkdir(parents=True)
     (confidential_dir / "first-secret.pdf").write_bytes(b"%PDF-1.4\nPRIVATE_FIRST\n%%EOF")
     (confidential_dir / "second-secret.pdf").write_bytes(b"%PDF-1.4\nPRIVATE_SECOND\n%%EOF")
+
+    # A manual clock prevents suite scheduling from consuming the deadline before upload starts.
+    clock = [0.0]
+    monkeypatch.setattr(harness_module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        harness_module.time,
+        "sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
 
     summary = run_real_example_full_run_harness(
         RealExampleFullRunHarnessOptions(

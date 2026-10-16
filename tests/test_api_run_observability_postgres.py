@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from datetime import UTC, datetime
@@ -226,12 +227,30 @@ def test_get_run_status_derives_block_reason_from_step_ledger(
     """A failed selected run should expose a durable safe block reason."""
     client, _audit_sink = _run_client(monkeypatch)
     deal_id = _create_deal(client, name="Slice 23 Blocked Deal")
-    failed_upload = _upload_document(
-        client,
-        deal_id=deal_id,
-        filename="blocked-corrupt.pdf",
-        data=b"%PDF-private corrupt bytes that must not be echoed",
+    corrupt_data = b"%PDF-private corrupt bytes that must not be echoed"
+    failed_response = client.post(
+        f"/v1/deals/{deal_id}/documents/upload",
+        headers={
+            "X-IDIS-API-Key": pg_helpers.API_KEY,
+            "Content-Type": "application/octet-stream",
+        },
+        params={
+            "filename": "blocked-corrupt.pdf",
+            "doc_type": "DATA_ROOM_FILE",
+            "sha256": hashlib.sha256(corrupt_data).hexdigest(),
+            "source_system": "api-smoke",
+        },
+        content=corrupt_data,
     )
+    # Task 4 controlled drift: a durable failed parse returns terminal HTTP 422.
+    assert failed_response.status_code == 422
+    assert failed_response.json()["code"] == "DOCUMENT_UNREADABLE"
+    listed_response = client.get(
+        f"/v1/deals/{deal_id}/documents",
+        headers={"X-IDIS-API-Key": pg_helpers.API_KEY},
+    )
+    assert listed_response.status_code == 200
+    failed_upload = listed_response.json()["items"][0]
     assert failed_upload["parse_status"] == "FAILED"
 
     run_response = client.post(

@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from idis.methodology.category_mapping import (
+    CDD_DOCUMENT_CLASSIFIER_REACHABLE_CATEGORIES,
+    CDD_DOCUMENT_CLASSIFIER_REACHABLE_CATEGORIES_SHA256,
+    CDD_DOCUMENT_CLASSIFIER_VERSION,
+)
 from idis.models.document_classification import (
     CddDocumentCategory,
     ClassificationEvidence,
@@ -113,11 +119,12 @@ def classify_document(
         has_span_evidence=bool(descriptor.parsed_span_texts),
     )
 
-    evidence_source = (
-        DocumentClassificationSource.SPAN
-        if reason_code.startswith("span_")
-        else DocumentClassificationSource.RULE
-    )
+    if reason_code.startswith("span_"):
+        evidence_source = DocumentClassificationSource.SPAN
+    elif reason_code.startswith(("title_", "artifact_doc_type_")):
+        evidence_source = DocumentClassificationSource.ARTIFACT_METADATA
+    else:
+        evidence_source = DocumentClassificationSource.RULE
     usable = capability.support_status in {
         DocumentSupportStatus.SUPPORTED,
         DocumentSupportStatus.PARTIALLY_SUPPORTED,
@@ -129,8 +136,8 @@ def classify_document(
         document_id=descriptor.document_id,
         fdd_category=fdd_category,
         cdd_category=cdd_category,
-        secondary_fdd_categories=secondary_fdd,
-        secondary_cdd_categories=secondary_cdd,
+        secondary_fdd_categories=sorted(set(secondary_fdd), key=lambda item: item.value),
+        secondary_cdd_categories=sorted(set(secondary_cdd), key=lambda item: item.value),
         confidence=confidence,
         evidence=[
             ClassificationEvidence(
@@ -157,9 +164,40 @@ def _classify_categories(
     list[CddDocumentCategory],
     str,
 ]:
-    signal_text = _classification_signal_text(descriptor)
+    (
+        fdd_category,
+        cdd_category,
+        secondary_fdd,
+        secondary_cdd,
+        reason_code,
+    ) = _classify_established_categories(descriptor)
+    new_matches = _new_cdd_category_matches(descriptor)
+    if not new_matches:
+        return fdd_category, cdd_category, secondary_fdd, secondary_cdd, reason_code
 
-    if _has_all(signal_text, "financial", "model"):
+    new_categories = [category for category, _source in new_matches]
+    if cdd_category == CddDocumentCategory.UNKNOWN:
+        cdd_category = new_categories[0]
+        secondary_cdd.extend(new_categories[1:])
+        if fdd_category == FddDocumentCategory.UNKNOWN:
+            reason_code = f"{new_matches[0][1]}_{cdd_category.value}"
+    else:
+        secondary_cdd.extend(category for category in new_categories if category != cdd_category)
+    return fdd_category, cdd_category, secondary_fdd, secondary_cdd, reason_code
+
+
+def _classify_established_categories(
+    descriptor: DocumentDescriptor,
+) -> tuple[
+    FddDocumentCategory,
+    CddDocumentCategory,
+    list[FddDocumentCategory],
+    list[CddDocumentCategory],
+    str,
+]:
+    signal_texts = tuple(text for _source, text in _classification_signal_sources(descriptor))
+
+    if _any_source_has_all(signal_texts, "financial", "model"):
         return (
             FddDocumentCategory.FINANCIAL_SCHEDULE_MODEL,
             CddDocumentCategory.BUSINESS_PLAN_ASSUMPTIONS,
@@ -167,7 +205,7 @@ def _classify_categories(
             [CddDocumentCategory.PRICING_UNIT_ECONOMICS],
             "filename_financial_model",
         )
-    if "pl" in signal_text or "p&l" in signal_text or "profit loss" in signal_text:
+    if _any_source_contains(signal_texts, "pl", "p&l", "profit loss"):
         return (
             FddDocumentCategory.PL_SUPPORT,
             CddDocumentCategory.UNKNOWN,
@@ -175,7 +213,7 @@ def _classify_categories(
             [],
             "span_pl_support" if descriptor.parsed_span_texts else "filename_pl_support",
         )
-    if "cash flow" in signal_text or "cash-flow" in signal_text:
+    if _any_source_contains(signal_texts, "cash flow", "cash-flow"):
         return (
             FddDocumentCategory.CASH_FLOW_SUPPORT,
             CddDocumentCategory.UNKNOWN,
@@ -183,7 +221,7 @@ def _classify_categories(
             [],
             "filename_cash_flow_support",
         )
-    if "balance sheet" in signal_text or "asset" in signal_text:
+    if _any_source_contains(signal_texts, "balance sheet", "asset"):
         return (
             FddDocumentCategory.BALANCE_SHEET_SUPPORT,
             CddDocumentCategory.UNKNOWN,
@@ -191,7 +229,7 @@ def _classify_categories(
             [],
             "filename_balance_sheet_support",
         )
-    if "cap table" in signal_text or "capitalization" in signal_text:
+    if _any_source_contains(signal_texts, "cap table", "capitalization"):
         return (
             FddDocumentCategory.CAP_TABLE_FINANCING,
             CddDocumentCategory.UNKNOWN,
@@ -199,7 +237,9 @@ def _classify_categories(
             [],
             "filename_cap_table_financing",
         )
-    if "customer contract" in signal_text or _has_all(signal_text, "customer", "contract"):
+    if _any_source_contains(signal_texts, "customer contract") or _any_source_has_all(
+        signal_texts, "customer", "contract"
+    ):
         return (
             FddDocumentCategory.CUSTOMER_CONTRACT,
             CddDocumentCategory.COMMERCIAL_CONTRACTS,
@@ -207,7 +247,9 @@ def _classify_categories(
             [CddDocumentCategory.CUSTOMER_EVIDENCE],
             "filename_customer_contract",
         )
-    if "market research" in signal_text or _has_all(signal_text, "market", "research"):
+    if _any_source_contains(signal_texts, "market research") or _any_source_has_all(
+        signal_texts, "market", "research"
+    ):
         return (
             FddDocumentCategory.MARKET_RESEARCH,
             CddDocumentCategory.MARKET_RESEARCH,
@@ -215,7 +257,7 @@ def _classify_categories(
             [],
             "filename_market_research",
         )
-    if "product" in signal_text or "technical" in signal_text or "technology" in signal_text:
+    if _any_source_contains(signal_texts, "product", "technical", "technology"):
         return (
             FddDocumentCategory.PRODUCT_IP,
             CddDocumentCategory.PRODUCT_TECHNOLOGY,
@@ -223,7 +265,7 @@ def _classify_categories(
             [],
             "filename_product_technology",
         )
-    if "competitor" in signal_text or "competitive" in signal_text:
+    if _any_source_contains(signal_texts, "competitor", "competitive"):
         return (
             FddDocumentCategory.UNKNOWN,
             CddDocumentCategory.COMPETITIVE_LANDSCAPE,
@@ -231,7 +273,7 @@ def _classify_categories(
             [],
             "filename_competitive_landscape",
         )
-    if "sales pipeline" in signal_text or "pipeline" in signal_text:
+    if _any_source_contains(signal_texts, "sales pipeline", "pipeline"):
         return (
             FddDocumentCategory.UNKNOWN,
             CddDocumentCategory.SALES_PIPELINE,
@@ -248,14 +290,60 @@ def _classify_categories(
     )
 
 
-def _classification_signal_text(descriptor: DocumentDescriptor) -> str:
-    parts = [
-        descriptor.filename,
-        descriptor.title or "",
-        descriptor.artifact_doc_type or "",
-        " ".join(descriptor.parsed_span_texts[:10]),
+def _new_cdd_category_matches(
+    descriptor: DocumentDescriptor,
+) -> list[tuple[CddDocumentCategory, str]]:
+    sources = _classification_signal_sources(descriptor)
+    rules = (
+        (
+            CddDocumentCategory.GTM_DISTRIBUTION,
+            (
+                "go to market",
+                "gtm",
+                "distribution channel",
+                "channel performance",
+                "sales plan",
+                "marketing report",
+            ),
+        ),
+        (
+            CddDocumentCategory.MANAGEMENT_TEAM,
+            (
+                "management team",
+                "founder profile",
+                "leadership team",
+                "executive team",
+                "management reference",
+            ),
+        ),
+        (
+            CddDocumentCategory.COMMERCIAL_RISKS,
+            ("commercial risk", "commercial risks", "risk register"),
+        ),
+    )
+    matches: list[tuple[CddDocumentCategory, str]] = []
+    for category, phrases in rules:
+        source = next(
+            (source for source, text in sources if _has_any_phrase(text, *phrases)),
+            None,
+        )
+        if source is not None:
+            matches.append((category, source))
+    return matches
+
+
+def _classification_signal_sources(descriptor: DocumentDescriptor) -> tuple[tuple[str, str], ...]:
+    raw_sources = [
+        ("filename", descriptor.filename),
+        ("title", descriptor.title or ""),
+        ("artifact_doc_type", descriptor.artifact_doc_type or ""),
+        *(("span", text) for text in descriptor.parsed_span_texts[:10]),
     ]
-    return " ".join(parts).replace("_", " ").replace("-", " ").lower()
+    return tuple(
+        (source, text.replace("_", " ").replace("-", " ").lower())
+        for source, text in raw_sources
+        if text
+    )
 
 
 def _methodology_target_areas(
@@ -281,8 +369,20 @@ def _confidence_for(
     return 0.9 if has_span_evidence else 0.82
 
 
-def _has_all(text: str, *terms: str) -> bool:
-    return all(term in text for term in terms)
+def _any_source_contains(texts: tuple[str, ...], *terms: str) -> bool:
+    return any(term in text for text in texts for term in terms)
+
+
+def _any_source_has_all(texts: tuple[str, ...], *terms: str) -> bool:
+    return any(all(term in text for term in terms) for text in texts)
+
+
+def _has_any_phrase(text: str, *phrases: str) -> bool:
+    """Match complete lowercase alphanumeric token phrases, never substrings."""
+    return any(
+        re.search(rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])", text) is not None
+        for phrase in phrases
+    )
 
 
 def _dedupe(items: list[str]) -> list[str]:
@@ -291,3 +391,12 @@ def _dedupe(items: list[str]) -> list[str]:
         if item not in result:
             result.append(item)
     return result
+
+
+__all__ = [
+    "CDD_DOCUMENT_CLASSIFIER_REACHABLE_CATEGORIES",
+    "CDD_DOCUMENT_CLASSIFIER_REACHABLE_CATEGORIES_SHA256",
+    "CDD_DOCUMENT_CLASSIFIER_VERSION",
+    "DocumentDescriptor",
+    "classify_document",
+]

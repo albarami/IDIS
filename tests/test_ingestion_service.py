@@ -376,12 +376,12 @@ class TestHappyPathPDF:
 
         created_event = next(e for e in events if e["event_type"] == "document.created")
         assert created_event["tenant_id"] == str(ingestion_context.tenant_id)
-        assert "sha256" in created_event["payload"]
+        assert created_event["payload"]["hashes"]
 
         completed_event = next(
             e for e in events if e["event_type"] == "document.ingestion.completed"
         )
-        assert completed_event["payload"]["parse_status"] == "PARSED"
+        assert completed_event["payload"]["safe"]["parse_status"] == "PARSED"
 
     def test_ingest_pdf_sha256_matches_content(
         self,
@@ -639,21 +639,21 @@ class TestHappyPathPDF:
         assert pdf_diagnostics["counts_by_outcome_reason"] == {
             "failed_corrupted": 1,
             "failed_encrypted": 1,
-            "failed_no_text": 1,
+            "failed_ocr_unavailable": 1,
             "parsed_empty_password_encrypted": 1,
             "parsed_text": 1,
         }
         assert sorted(pdf_diagnostics["parse_elapsed_by_outcome_reason"]) == [
             "failed_corrupted",
             "failed_encrypted",
-            "failed_no_text",
+            "failed_ocr_unavailable",
             "parsed_empty_password_encrypted",
             "parsed_text",
         ]
         assert pdf_diagnostics["observable_slowest_outcome_reason"] in {
             "failed_corrupted",
             "failed_encrypted",
-            "failed_no_text",
+            "failed_ocr_unavailable",
             "parsed_empty_password_encrypted",
             "parsed_text",
         }
@@ -899,11 +899,12 @@ class TestScannedPdfReadiness:
         assert result.success is False
         assert result.parse_status == ParseStatus.FAILED
         assert document is not None
-        assert document.metadata["parse_error_codes"] == [ParseErrorCode.NO_TEXT_EXTRACTED.value]
+        # Task 4 persists the actionable missing-runtime code for image-only PDFs.
+        assert document.metadata["parse_error_codes"] == [ParseErrorCode.OCR_UNAVAILABLE.value]
         assert document.metadata["parser_support_status"] == "scanned_or_image_only"
         assert document.metadata["parser_triage_status"] == "ocr_required"
         assert document.metadata["parser_requires_ocr"] is True
-        assert document.metadata["parser_reason_codes"] == ["ocr_required"]
+        assert document.metadata["parser_reason_codes"] == ["ocr_unavailable"]
 
     def test_empty_docx_does_not_persist_ocr_required_metadata(
         self,
@@ -956,9 +957,11 @@ class TestHtmlTextReadiness:
         assert result.success is True
         assert result.parse_status == ParseStatus.PARSED
         assert document is not None
+        assert document.doc_type.value == "HTML"
         assert document.metadata["parser_support_status"] == "supported"
         assert document.metadata["parser_triage_status"] == "ready"
-        assert "text_parser_available" in document.metadata["parser_reason_codes"]
+        # Task 4 requires one terminal completion reason, not a capability-only label.
+        assert document.metadata["parser_reason_codes"] == ["text_parse_completed"]
         assert document.metadata["parser_requires_ocr"] is False
         assert document.metadata["parser_requires_conversion"] is False
 
@@ -984,9 +987,11 @@ class TestHtmlTextReadiness:
         assert result.success is True
         assert result.parse_status == ParseStatus.PARSED
         assert document is not None
+        assert document.doc_type.value == "TEXT"
         assert document.metadata["parser_support_status"] == "supported"
         assert document.metadata["parser_triage_status"] == "ready"
-        assert "text_parser_available" in document.metadata["parser_reason_codes"]
+        # Task 4 requires one terminal completion reason, not a capability-only label.
+        assert document.metadata["parser_reason_codes"] == ["text_parse_completed"]
         assert document.metadata["parser_requires_ocr"] is False
         assert document.metadata["parser_requires_conversion"] is False
 

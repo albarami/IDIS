@@ -39,6 +39,7 @@ _TENANT_B = "22222222-2222-2222-2222-222222222222"
 _ADMIN_A = "admin-key-a"
 _ANALYST_A = "analyst-key-a"
 _ADMIN_B = "admin-key-b"
+_CREATOR_A = "creator-key-a"
 
 
 def _api_keys() -> str:
@@ -57,6 +58,7 @@ def _api_keys() -> str:
             _ADMIN_A: _entry(_TENANT_A, "admin-a", ["ADMIN"]),
             _ANALYST_A: _entry(_TENANT_A, "analyst-a", ["ANALYST"]),
             _ADMIN_B: _entry(_TENANT_B, "admin-b", ["ADMIN"]),
+            _CREATOR_A: _entry(_TENANT_A, "creator-a", ["PARTNER"]),
         }
     )
 
@@ -79,7 +81,7 @@ def _hdr(key: str) -> dict[str, str]:
     return {"X-IDIS-API-Key": key, "Content-Type": "application/json"}
 
 
-def _create_deal(api: TestClient, key: str = _ADMIN_A) -> str:
+def _create_deal(api: TestClient, key: str = _CREATOR_A) -> str:
     resp = api.post("/v1/deals", json={"name": "D", "company_name": "Acme"}, headers=_hdr(key))
     assert resp.status_code == 201, resp.text
     return resp.json()["deal_id"]

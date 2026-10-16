@@ -17,6 +17,8 @@ from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 from uuid import uuid4
 
+from pydantic import ValidationError
+
 from idis.models.data_room_package import (
     DataRoomFileStatus,
     DataRoomPackage,
@@ -25,6 +27,7 @@ from idis.models.data_room_package import (
 )
 from idis.models.document import ParseStatus
 from idis.models.document_classification import DocumentSupportStatus, DocumentTriageStatus
+from idis.models.source_package_manifest import SourcePackageManifest
 
 _SAFE_EXTENSION_PATTERN = re.compile(r"^\.?[a-z0-9]{1,12}$")
 _SAFE_CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -74,6 +77,7 @@ def create_data_room_package(
     created_by_actor_type: str | None,
     document_ids: Sequence[str],
     documents: Sequence[Mapping[str, Any]],
+    source_manifest: SourcePackageManifest | Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create a data-room package from ``document_ids`` within ``deal_id``.
 
@@ -84,6 +88,8 @@ def create_data_room_package(
         created_by_actor_id/created_by_actor_type: Originating authenticated actor.
         document_ids: Selected durable document ids (deduped before grouping).
         documents: The deal's preflight corpus (doc dicts) used for validation + triage.
+        source_manifest: Optional strict, self-hashed source contract. Legacy callers
+            may omit it; strict Slice100 preparation must provide it.
 
     Returns:
         The safe package summary/ref (no raw paths/filenames/object keys/content).
@@ -93,7 +99,15 @@ def create_data_room_package(
             (masked — does not reveal which ids or whether they exist elsewhere).
     """
     corpus_by_id = {str(doc.get("document_id")): doc for doc in documents}
-    requested = list(dict.fromkeys(str(doc_id) for doc_id in document_ids))
+    requested_raw = [str(doc_id) for doc_id in document_ids]
+    manifest = _validate_source_manifest(
+        source_manifest,
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        requested=requested_raw,
+        corpus_by_id=corpus_by_id,
+    )
+    requested = requested_raw if manifest is not None else list(dict.fromkeys(requested_raw))
     if not requested:
         raise DataRoomPackageError(
             "NO_DOCUMENTS_SELECTED",
@@ -118,6 +132,11 @@ def create_data_room_package(
             "status": DataRoomPackageStatus.OPEN,
             "created_by_actor_id": created_by_actor_id,
             "created_by_actor_type": created_by_actor_type,
+            "metadata": (
+                {"source_manifest": manifest.model_dump(mode="json")}
+                if manifest is not None
+                else {}
+            ),
             "created_at": now,
             "updated_at": now,
         }
@@ -126,6 +145,7 @@ def create_data_room_package(
 
     for sequence, doc_id in enumerate(requested):
         doc = corpus_by_id[doc_id]
+        manifest_file = manifest.files[sequence] if manifest is not None else None
         repo.add_file(
             _build_file(
                 tenant_id=tenant_id,
@@ -134,6 +154,13 @@ def create_data_room_package(
                 sequence=sequence,
                 doc=doc,
                 created_at=now,
+                source_path_hash=(
+                    manifest_file.source_locator_sha256 if manifest_file is not None else None
+                ),
+                source_content_sha256=(
+                    manifest_file.content_sha256 if manifest_file is not None else None
+                ),
+                source_extension=(manifest_file.extension if manifest_file is not None else None),
             )
         )
 
@@ -150,6 +177,9 @@ def _build_file(
     sequence: int,
     doc: Mapping[str, Any],
     created_at: datetime,
+    source_path_hash: str | None = None,
+    source_content_sha256: str | None = None,
+    source_extension: str | None = None,
 ) -> DataRoomPackageFile:
     metadata = doc.get("metadata") or {}
     support_status = _to_support_status(metadata.get("parser_support_status"))
@@ -164,9 +194,9 @@ def _build_file(
             "package_id": package_id,
             "deal_id": deal_id,
             "sequence": sequence,
-            "path_hash": _derive_path_hash(doc),
-            "extension": _derive_extension(doc),
-            "sha256": doc.get("sha256"),
+            "path_hash": source_path_hash or _derive_path_hash(doc),
+            "extension": source_extension or _derive_extension(doc),
+            "sha256": source_content_sha256 or doc.get("sha256"),
             "file_status": _rollup_file_status(support_status, triage_status, parse_status),
             "support_status": support_status,
             "triage_status": triage_status,
@@ -227,6 +257,7 @@ def _rollup_file_status(
 def build_data_room_package_summary(
     package: DataRoomPackage, files: Sequence[DataRoomPackageFile]
 ) -> dict[str, Any]:
+    stored_manifest = _reconcile_stored_source_manifest(package, files)
     counts_by_status: dict[str, int] = {}
     counts_by_reason_code: dict[str, int] = {}
     for file in files:
@@ -234,11 +265,108 @@ def build_data_room_package_summary(
         counts_by_status[status] = counts_by_status.get(status, 0) + 1
         for code in file.reason_codes:
             counts_by_reason_code[code] = counts_by_reason_code.get(code, 0) + 1
-    summary = package.safe_dict()
+    summary: dict[str, Any] = package.safe_dict()
     summary["file_count"] = len(files)
     summary["counts_by_status"] = counts_by_status
     summary["counts_by_reason_code"] = counts_by_reason_code
+    if stored_manifest is not None:
+        summary["source_manifest"] = stored_manifest.safe_summary()
     return summary
+
+
+def _reconcile_stored_source_manifest(
+    package: DataRoomPackage,
+    files: Sequence[DataRoomPackageFile],
+) -> SourcePackageManifest | None:
+    if "source_manifest" not in package.metadata:
+        return None
+    stored = package.metadata["source_manifest"]
+    try:
+        manifest = SourcePackageManifest.model_validate(stored)
+    except (TypeError, ValueError, ValidationError) as exc:
+        raise DataRoomPackageError(
+            "SOURCE_MANIFEST_RECONCILIATION_FAILED",
+            "The persisted source package manifest is invalid",
+        ) from exc
+    if len(files) != manifest.file_count:
+        raise DataRoomPackageError(
+            "SOURCE_MANIFEST_RECONCILIATION_FAILED",
+            "The persisted source package file ledger is incomplete",
+        )
+    for expected, actual in zip(manifest.files, files, strict=True):
+        if (
+            actual.sequence != expected.sequence
+            or actual.path_hash != expected.source_locator_sha256
+            or actual.sha256 != expected.content_sha256
+            or actual.extension != expected.extension
+            or actual.document_id != expected.document_id
+            or actual.doc_id != expected.doc_id
+            or actual.package_id != package.package_id
+            or actual.deal_id != package.deal_id
+            or actual.tenant_id != package.tenant_id
+        ):
+            raise DataRoomPackageError(
+                "SOURCE_MANIFEST_RECONCILIATION_FAILED",
+                "The persisted source package file ledger has drifted",
+            )
+    return manifest
+
+
+def _validate_source_manifest(
+    source_manifest: SourcePackageManifest | Mapping[str, Any] | None,
+    *,
+    tenant_id: str,
+    deal_id: str,
+    requested: Sequence[str],
+    corpus_by_id: Mapping[str, Mapping[str, Any]],
+) -> SourcePackageManifest | None:
+    """Validate every strict source binding before creating a durable package row."""
+    if source_manifest is None:
+        return None
+    try:
+        manifest = (
+            source_manifest
+            if isinstance(source_manifest, SourcePackageManifest)
+            else SourcePackageManifest.model_validate(source_manifest)
+        )
+    except (TypeError, ValueError, ValidationError) as exc:
+        raise DataRoomPackageError(
+            "SOURCE_MANIFEST_INVALID",
+            "The source package manifest is invalid",
+        ) from exc
+
+    manifest_ids = [str(row.document_id) for row in manifest.files]
+    if list(requested) != manifest_ids or len(set(requested)) != len(requested):
+        raise DataRoomPackageError(
+            "SOURCE_MANIFEST_INVALID",
+            "The source package manifest does not match the selected documents",
+        )
+    for manifest_file in manifest.files:
+        doc = corpus_by_id.get(str(manifest_file.document_id))
+        source_metadata = doc.get("source_metadata") if doc is not None else None
+        upload_filename = (
+            source_metadata.get("upload_filename") if isinstance(source_metadata, Mapping) else None
+        )
+        upload_size = (
+            source_metadata.get("size_bytes") if isinstance(source_metadata, Mapping) else None
+        )
+        if (
+            doc is None
+            or str(doc.get("tenant_id") or "") != str(tenant_id)
+            or str(doc.get("deal_id") or "") != str(deal_id)
+            or str(doc.get("document_id") or "") != str(manifest_file.document_id)
+            or str(doc.get("doc_id") or "") != str(manifest_file.doc_id)
+            or str(doc.get("sha256") or "") != manifest_file.content_sha256
+            or upload_filename is None
+            or str(upload_filename) != manifest_file.generated_upload_name
+            or type(upload_size) is not int
+            or upload_size != manifest_file.size_bytes
+        ):
+            raise DataRoomPackageError(
+                "SOURCE_MANIFEST_INVALID",
+                "The source package manifest does not match durable document state",
+            )
+    return manifest
 
 
 def _to_support_status(value: Any) -> DocumentSupportStatus:

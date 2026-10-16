@@ -15,12 +15,11 @@ Fail-closed:
 from __future__ import annotations
 
 import logging
-import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from idis.audit.sink import AuditSink
+from idis.audit.canonical import build_canonical_audit_event
+from idis.audit.sink import AuditSink, AuditSinkError
 from idis.persistence.repositories.claims import (
     ClaimsRepository,
     InMemoryClaimsRepository,
@@ -100,17 +99,44 @@ def _emit_audit(
         tenant_id: Tenant UUID.
         details: Event payload.
     """
-    event: dict[str, Any] = {
-        "event_id": str(uuid.uuid4()),
-        "event_type": event_type,
-        "tenant_id": tenant_id,
-        "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-        "details": details,
+    if event_type.startswith("sanad."):
+        resource_type = "sanad"
+        resource_id = str(details.get("sanad_id") or "")
+    elif event_type.startswith("defect."):
+        resource_type = "defect"
+        resource_id = str(details.get("defect_id") or "")
+    else:
+        raise AuditSinkError("Sanad grading audit taxonomy is unsupported")
+    if not resource_id:
+        raise AuditSinkError("Sanad grading audit resource correlation missing")
+    safe = {
+        key: details[key]
+        for key in ("claim_id", "grade", "defect_type", "severity")
+        if key in details
     }
+    deal_id = str(details["deal_id"]) if details.get("deal_id") else None
+    event = build_canonical_audit_event(
+        tenant_id=tenant_id,
+        event_type=event_type,
+        severity="HIGH" if event_type.startswith("defect.") else "MEDIUM",
+        summary=f"Sanad grading mutation recorded: {event_type}",
+        actor_id="idis-sanad-auto-grader",
+        request_id=str(details.get("run_id") or details.get("claim_id") or resource_id),
+        method="POST",
+        path="/internal/sanad/auto-grade",
+        status_code=200,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        deal_id=deal_id,
+        safe=safe,
+        refs=[f"claim_id:{details['claim_id']}"] if details.get("claim_id") else [],
+    )
     try:
         sink.emit(event)
+    except AuditSinkError:
+        raise
     except Exception as exc:
-        logger.warning("Failed to emit audit event %s: %s", event_type, exc)
+        raise AuditSinkError(f"Sanad grading audit emission failed for {event_type}") from exc
 
 
 def auto_grade_claims_for_run(

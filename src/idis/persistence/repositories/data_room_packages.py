@@ -134,6 +134,13 @@ class InMemoryDataRoomPackagesRepository:
     def add_file(self, file: DataRoomPackageFile) -> DataRoomPackageFile:
         if str(file.tenant_id) != self._tenant_id:
             raise ValueError("Tenant mismatch in data-room package file creation")
+        package = _data_room_packages_store.get(str(file.package_id))
+        if (
+            package is None
+            or package["tenant_id"] != self._tenant_id
+            or package["deal_id"] != str(file.deal_id)
+        ):
+            raise ValueError("Package/deal mismatch in data-room package file creation")
         for data in _data_room_package_files_store.values():
             if (
                 data["tenant_id"] == self._tenant_id
@@ -152,7 +159,7 @@ class InMemoryDataRoomPackagesRepository:
             and data["package_id"] == str(package_id)
             and data["deal_id"] == str(deal_id)
         ]
-        files.sort(key=lambda f: f.sequence)
+        files.sort(key=lambda f: (f.sequence, str(f.file_entry_id)))
         return files
 
 
@@ -238,16 +245,20 @@ class PostgresDataRoomPackagesRepository:
     def add_file(self, file: DataRoomPackageFile) -> DataRoomPackageFile:
         if str(file.tenant_id) != self._tenant_id:
             raise ValueError("Tenant mismatch in data-room package file creation")
-        self._conn.execute(
+        insert_result = self._conn.execute(
             text(
                 f"""
                 INSERT INTO data_room_package_files ({_FILE_COLUMNS})
-                VALUES
-                    (:file_entry_id, :tenant_id, :package_id, :deal_id, :sequence,
-                     :path_hash, :extension, :sha256, :file_status, :support_status,
-                     :triage_status, :parse_status, CAST(:reason_codes AS JSONB),
-                     CAST(:error_codes AS JSONB), :doc_id, :document_id, :storage_uri,
-                     :created_at)
+                SELECT
+                    :file_entry_id, :tenant_id, :package_id, :deal_id, :sequence,
+                    :path_hash, :extension, :sha256, :file_status, :support_status,
+                    :triage_status, :parse_status, CAST(:reason_codes AS JSONB),
+                    CAST(:error_codes AS JSONB), :doc_id, :document_id, :storage_uri,
+                    :created_at
+                FROM data_room_packages
+                WHERE package_id = :package_id
+                  AND tenant_id = :tenant_id
+                  AND deal_id = :deal_id
                 ON CONFLICT (tenant_id, package_id, path_hash) DO NOTHING
                 """
             ),
@@ -279,13 +290,26 @@ class PostgresDataRoomPackagesRepository:
                 f"""
                 SELECT {_FILE_COLUMNS}
                 FROM data_room_package_files
-                WHERE package_id = :package_id AND path_hash = :path_hash
+                WHERE package_id = :package_id
+                  AND deal_id = :deal_id
+                  AND path_hash = :path_hash
                 """
             ),
-            {"package_id": str(file.package_id), "path_hash": file.path_hash},
+            {
+                "package_id": str(file.package_id),
+                "deal_id": str(file.deal_id),
+                "path_hash": file.path_hash,
+            },
         )
         row = result.fetchone()
-        return _file_from_data(row) if row is not None else file
+        if row is not None:
+            return _file_from_data(row)
+        # SQLAlchemy's PostgreSQL CursorResult reports zero when the owning
+        # package/deal SELECT admitted no row. Minimal recorder fakes used by
+        # legacy SQL-shape tests do not expose rowcount and retain old fallback.
+        if getattr(insert_result, "rowcount", None) == 0:
+            raise ValueError("Package/deal mismatch in data-room package file creation")
+        return file
 
     def list_files_by_package(self, package_id: str, deal_id: str) -> list[DataRoomPackageFile]:
         result = self._conn.execute(
@@ -294,7 +318,7 @@ class PostgresDataRoomPackagesRepository:
                 SELECT {_FILE_COLUMNS}
                 FROM data_room_package_files
                 WHERE package_id = :package_id AND deal_id = :deal_id
-                ORDER BY sequence
+                ORDER BY sequence ASC, file_entry_id ASC
                 """
             ),
             {"package_id": str(package_id), "deal_id": str(deal_id)},

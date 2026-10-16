@@ -195,19 +195,8 @@ def _make_preflight_document(
     spans: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Return a full persisted-corpus document for preflight tests."""
-    return {
-        "tenant_id": TENANT_A,
-        "deal_id": "deal-preflight",
-        "document_id": document_id,
-        "doc_id": f"artifact-{document_id}",
-        "doc_type": "DOCX",
-        "parse_status": parse_status,
-        "document_name": f"{document_id}.docx",
-        "sha256": "a" * 64,
-        "uri": f"deals/{document_id}.docx",
-        "metadata": metadata or {},
-        "source_metadata": {},
-        "spans": spans
+    resolved_spans = (
+        spans
         if spans is not None
         else [
             {
@@ -220,7 +209,33 @@ def _make_preflight_document(
                 "text_excerpt": "Highly sensitive raw revenue sentence.",
                 "content_hash": "b" * 64,
             }
-        ],
+        ]
+    )
+    resolved_metadata = (
+        metadata
+        if metadata is not None
+        else {
+            "parser_doc_type": "DOCX",
+            "detected_format": "DOCX",
+            "parser_runtime_status": "completed",
+            "span_count": len(resolved_spans),
+            "parse_error_codes": [],
+            "parse_warning_codes": [],
+        }
+    )
+    return {
+        "tenant_id": TENANT_A,
+        "deal_id": "deal-preflight",
+        "document_id": document_id,
+        "doc_id": f"artifact-{document_id}",
+        "doc_type": "DOCX",
+        "parse_status": parse_status,
+        "document_name": f"{document_id}.docx",
+        "sha256": "a" * 64,
+        "uri": f"deals/{document_id}.docx",
+        "metadata": resolved_metadata,
+        "source_metadata": {},
+        "spans": resolved_spans,
     }
 
 

@@ -34,6 +34,7 @@ from idis.services.enrichment.models import (
     EntityType,
 )
 from idis.services.enrichment.registry import EnrichmentProviderRegistry
+from tests.strict_runtime_test_support import RecordingPostgresAuditSink
 from tests.test_slice86_enrichment_conflict_checks import _IdentityConnector
 from tests.test_slice86_enrichment_execution_provenance_characterization import (
     TENANT_ID,
@@ -81,6 +82,7 @@ def _run_step(*, strict: bool, registry_factory: Any = None, service: Any = None
             created_claim_ids=[],
             calc_ids=[],
             db_conn=None,
+            audit_sink=RecordingPostgresAuditSink(),
         )
 
 

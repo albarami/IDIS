@@ -149,7 +149,7 @@ def test_persisted_ocr_metadata_is_safe_and_includes_confidence(tmp_path: Path) 
     assert confidential not in json.dumps(metadata, default=str)
 
 
-def test_image_ocr_spans_persist_even_though_image_not_extraction_eligible(tmp_path: Path) -> None:
+def test_image_ocr_spans_persist_and_are_extraction_eligible(tmp_path: Path) -> None:
     adapter = RecordingOcrAdapter([OcrPageText(page_number=1, text="image text", confidence=0.6)])
     service, _ = _service(tmp_path, ocr_config=OcrConfig(enabled=True, adapter=adapter))
 
@@ -163,13 +163,11 @@ def test_image_ocr_spans_persist_even_though_image_not_extraction_eligible(tmp_p
 
     assert result.success is True
     metadata = service.recording_repo.documents[0]["metadata"]
-    # OCR ran, but the image is NOT extraction-eligible (NARROW: durable spans, not claims).
+    # Task 4 controlled drift: successful real OCR is now usable downstream.
     assert metadata["parser_mode"] == "ocr"
-    assert metadata["parser_support_status"] not in {
-        DocumentSupportStatus.SUPPORTED.value,
-        DocumentSupportStatus.PARTIALLY_SUPPORTED.value,
-    }
-    # ...yet the OCR spans are still durably persisted.
+    assert metadata["parser_support_status"] == DocumentSupportStatus.SUPPORTED.value
+    assert metadata["parser_triage_status"] == "ready"
+    # The OCR spans are durably persisted as the eligibility evidence.
     spans = service.recording_repo.spans
     assert spans
     assert all(row["locator"]["source"] == "ocr_image" for row in spans)

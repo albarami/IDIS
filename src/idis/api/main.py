@@ -3,7 +3,10 @@
 This module provides the create_app() factory for bootstrapping the IDIS API.
 """
 
+import os
+from collections.abc import Mapping
 from typing import Any
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
@@ -25,7 +28,9 @@ from idis.api.middleware.rate_limit import RateLimitMiddleware
 from idis.api.middleware.rbac import RBACMiddleware
 from idis.api.middleware.request_id import RequestIdMiddleware
 from idis.api.middleware.residency import ResidencyMiddleware
+from idis.api.middleware.task4_ingestion_scope import Task4IngestionScopeMiddleware
 from idis.api.middleware.tracing import TracingEnrichmentMiddleware
+from idis.api.middleware.upload_staging import UploadStagingMiddleware
 from idis.api.routes.access_admin import router as access_admin_router
 from idis.api.routes.audit import router as audit_router
 from idis.api.routes.break_glass import router as break_glass_router
@@ -41,6 +46,7 @@ from idis.api.routes.enrichment import router as enrichment_router
 from idis.api.routes.erasure_export import router as erasure_export_router
 from idis.api.routes.health import router as health_router
 from idis.api.routes.human_gates import router as human_gates_router
+from idis.api.routes.methodology_versions import router as methodology_versions_router
 from idis.api.routes.metrics import router as metrics_router
 from idis.api.routes.overrides import router as overrides_router
 from idis.api.routes.readiness import router as readiness_router
@@ -53,7 +59,17 @@ from idis.idempotency.store import SqliteIdempotencyStore
 from idis.observability.tracing import configure_tracing, instrument_fastapi, instrument_httpx
 from idis.pipeline.worker import start_worker, stop_worker
 from idis.rate_limit.limiter import TenantRateLimiter, build_default_rate_limit_store
+from idis.runtime.profile import (
+    StrictProfileError,
+    StrictRuntimeProfile,
+    require_runtime_profile,
+)
 from idis.services.ingestion.defaults import build_default_ingestion_service
+from idis.services.runs.strict_full_live import (
+    IDIS_STRICT_DOTENV_PATH_ENV,
+    is_strict_full_live_required,
+    require_strict_process_role,
+)
 from idis.services.webhooks.dispatcher import (
     start_webhook_dispatcher_worker,
     stop_webhook_dispatcher_worker,
@@ -72,6 +88,33 @@ except ImportError:
 IDIS_VERSION = "6.3"
 
 
+def _restrict_task4_ingestion_routes(app: FastAPI) -> None:
+    """Reduce a bootstrap API to the literal, plan-reviewed Task-4 surface."""
+
+    from idis.runtime.task4_ingestion_scope import TASK4_SERVER_ROUTE_INVENTORY
+
+    retained: list[Any] = []
+    observed: list[tuple[str, str]] = []
+    for route in app.router.routes:
+        path = getattr(route, "path", None)
+        methods = getattr(route, "methods", None)
+        if not isinstance(path, str) or not methods:
+            continue
+        keys = tuple((str(method).upper(), path) for method in methods)
+        admitted = tuple(key for key in keys if key in TASK4_SERVER_ROUTE_INVENTORY)
+        if admitted:
+            if len(admitted) != len(keys):
+                raise RuntimeError("STRICT_FULL_LIVE_BLOCKED")
+            retained.append(route)
+            observed.extend(admitted)
+    if (
+        len(observed) != len(TASK4_SERVER_ROUTE_INVENTORY)
+        or frozenset(observed) != TASK4_SERVER_ROUTE_INVENTORY
+    ):
+        raise RuntimeError("STRICT_FULL_LIVE_BLOCKED")
+    app.router.routes[:] = retained
+
+
 def create_app(
     audit_sink: AuditSink | None = None,
     idempotency_store: SqliteIdempotencyStore | None = None,
@@ -80,6 +123,7 @@ def create_app(
     postgres_idempotency_store: PostgresIdempotencyStore | None = None,
     service_region: str | None = None,
     ingestion_service: Any | None = None,
+    strict_profile: StrictRuntimeProfile | None = None,
 ) -> FastAPI:
     """Create and configure the IDIS FastAPI application.
 
@@ -122,11 +166,61 @@ def create_app(
     Returns:
         Configured FastAPI application instance.
     """
+    strict_values: Mapping[str, str]
+    task4_ingestion_scope = False
+    strict_dotenv_path = os.environ.get(IDIS_STRICT_DOTENV_PATH_ENV)
+    ambient_strict = is_strict_full_live_required(dotenv_path=strict_dotenv_path)
+    if strict_profile is None:
+        if ambient_strict:
+            raise RuntimeError("STRICT_PROFILE_LOAD_FAILED")
+        strict_values = os.environ
+        strict_full_live = False
+    else:
+        try:
+            require_runtime_profile(strict_profile, command="api")
+        except StrictProfileError as exc:
+            raise RuntimeError(exc.code) from exc
+        strict_values = strict_profile.values
+        strict_full_live = True
+        task4_ingestion_scope = strict_profile.generation == "bootstrap-v1"
+
+    # The strict composition root has one durable audit sink shared by request middleware,
+    # application services, and background workers.  Keep explicit JSONL/in-memory injection for
+    # hermetic and non-strict usage, but never let it become the audit authority of a configured
+    # strict production process.
+    effective_audit_sink: AuditSink
+    effective_postgres_audit_sink: PostgresAuditSink | None
+    if strict_full_live:
+        if not strict_values.get("IDIS_DATABASE_URL", "").strip():
+            raise RuntimeError("AUDIT_FAILURE: strict mode requires PostgreSQL audit storage")
+        if PostgresAuditSink is None:
+            raise RuntimeError("AUDIT_FAILURE: PostgreSQL audit sink is unavailable")
+        if audit_sink is None and postgres_audit_sink is not None:
+            durable_audit_sink = postgres_audit_sink
+        elif audit_sink is None:
+            durable_audit_sink = PostgresAuditSink()
+        elif not isinstance(audit_sink, PostgresAuditSink):
+            raise RuntimeError("AUDIT_FAILURE: strict mode requires PostgresAuditSink")
+        else:
+            durable_audit_sink = audit_sink
+        if postgres_audit_sink is not None and postgres_audit_sink is not durable_audit_sink:
+            raise RuntimeError("AUDIT_FAILURE: strict mode received mismatched audit sinks")
+        effective_audit_sink = durable_audit_sink
+        effective_postgres_audit_sink = durable_audit_sink
+    else:
+        effective_audit_sink = audit_sink if audit_sink is not None else get_audit_sink()
+        effective_postgres_audit_sink = postgres_audit_sink
+
     app = FastAPI(
         title="IDIS API (VC Edition)",
         description="Institutional Deal Intelligence System - Enterprise API",
         version=IDIS_VERSION,
     )
+    # Safe, opaque identity for proving that a later health response came from a
+    # newly constructed server instance. It contains no host, process, or path data.
+    app.state.boot_id = str(uuid4())
+    app.state.strict_runtime_profile = strict_profile
+    app.state.task4_ingestion_scope = task4_ingestion_scope
 
     # Default to the configured audit sink when no test sink is injected. Production invokes
     # create_app() with no args (Dockerfile --factory / idis/app.py), so without this the
@@ -134,13 +228,21 @@ def create_app(
     # events read app.state.audit_sink == None and become silent no-ops. This effective sink is
     # shared by app.state and the AuditMiddleware; the default ingestion wiring keeps its prior
     # audit_sink behavior (unchanged) to avoid an out-of-scope change to ingestion audit.
-    effective_audit_sink = audit_sink if audit_sink is not None else get_audit_sink()
     app.state.audit_sink = effective_audit_sink
-    app.state.ingestion_service = ingestion_service or build_default_ingestion_service(
-        audit_sink=audit_sink
-    )
+    if ingestion_service is not None:
+        app.state.ingestion_service = ingestion_service
+    elif strict_full_live:
+        app.state.ingestion_service = build_default_ingestion_service(
+            audit_sink=effective_audit_sink,
+            env=strict_values,
+            strict=True,
+        )
+    else:
+        app.state.ingestion_service = build_default_ingestion_service(
+            audit_sink=effective_audit_sink
+        )
 
-    validate_api_key_registry_config()
+    validate_api_key_registry_config(env=strict_values)
 
     configure_tracing()
     instrument_httpx()
@@ -150,16 +252,24 @@ def create_app(
         store=idempotency_store,
         postgres_store=postgres_idempotency_store,
     )
+    # Request order is reversed from registration order: auth/RBAC/rate-limit run
+    # before this stage, then idempotency consumes its trusted streaming digest.
+    app.add_middleware(UploadStagingMiddleware)
     app.add_middleware(RBACMiddleware)
     if rate_limiter is None:
         # DEC-A: Redis cross-replica store when IDIS_REDIS_URL is set, else in-memory default.
         rate_limiter = TenantRateLimiter(store=build_default_rate_limit_store())
     app.add_middleware(RateLimitMiddleware, limiter=rate_limiter)
-    app.add_middleware(ResidencyMiddleware, service_region=service_region)
+    effective_service_region = (
+        strict_values.get("IDIS_SERVICE_REGION") if strict_full_live else service_region
+    )
+    app.add_middleware(ResidencyMiddleware, service_region=effective_service_region)
     app.add_middleware(TracingEnrichmentMiddleware)
     app.add_middleware(OpenAPIValidationMiddleware)
     app.add_middleware(
-        AuditMiddleware, sink=effective_audit_sink, postgres_sink=postgres_audit_sink
+        AuditMiddleware,
+        sink=effective_audit_sink,
+        postgres_sink=effective_postgres_audit_sink,
     )
     app.add_middleware(DBTransactionMiddleware)
     app.add_middleware(RequestIdMiddleware)
@@ -176,8 +286,13 @@ def create_app(
         from idis.persistence.db import is_postgres_configured
         from idis.services.compliance.janitor import start_compliance_janitor_worker
 
+        if strict_full_live:
+            require_strict_process_role("api", env=strict_values)
+        if task4_ingestion_scope:
+            return
         if is_postgres_configured():
-            await start_worker()
+            if not strict_full_live:
+                await start_worker()
             await start_webhook_dispatcher_worker()
             await start_compliance_janitor_worker(audit_sink=effective_audit_sink)
 
@@ -186,7 +301,10 @@ def create_app(
         """Stop background workers on app shutdown."""
         from idis.services.compliance.janitor import stop_compliance_janitor_worker
 
-        await stop_worker()
+        if task4_ingestion_scope:
+            return
+        if not strict_full_live:
+            await stop_worker()
         await stop_webhook_dispatcher_worker()
         await stop_compliance_janitor_worker()
 
@@ -210,6 +328,7 @@ def create_app(
     app.include_router(compliance_admin_router)
     app.include_router(erasure_export_router)
     app.include_router(audit_router)
+    app.include_router(methodology_versions_router)
     app.include_router(runs_router)
     app.include_router(readiness_router)
     app.include_router(debate_router)
@@ -217,5 +336,11 @@ def create_app(
     app.include_router(human_gates_router)
     app.include_router(overrides_router)
     app.include_router(enrichment_router)
+
+    if task4_ingestion_scope:
+        _restrict_task4_ingestion_routes(app)
+        # Added last so the scope guard is outermost and an absent full-live route
+        # cannot leak through auth/OpenAPI validation before the router returns 404.
+        app.add_middleware(Task4IngestionScopeMiddleware)
 
     return app

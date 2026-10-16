@@ -198,10 +198,12 @@ def _probe(
     )
 
     monkeypatch.setenv(_DURABLE_FLAG, "1" if durable_on else "0")
+    # This unit matrix exercises the documented in-memory twin regardless of
+    # ambient integration-test DSNs or a preceding migration teardown.
+    store = InMemoryTenantRegionStore()
     if seed != "__unset__":
-        store = InMemoryTenantRegionStore()
         store.set_region(_TENANT, seed)  # type: ignore[arg-type]
-        set_tenant_region_store(store)
+    set_tenant_region_store(store)
     app = _probe_app(service_region)
     _inject_claim(app, data_region=claim_region)
     client = TestClient(app, raise_server_exceptions=False)

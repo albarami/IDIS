@@ -12,7 +12,7 @@ Pins (per the locked decisions D-A..D-I):
      all abort the strict step (Task 2 added the optional_in_strict escape; defaults stay
      mandatory, so these pins hold; see test_slice86_optional_provider_strict_policy.py).
   3. The optionality policy exists with mandatory defaults (drift-flipped after Task 2).
-  4. Cache hits emit enrichment.cache_hit AND mark the returned copy from_cache=True
+  4. Cache hits emit integration.enrichment.cache_hit AND mark the returned copy from_cache=True
      (Task 3 drift-flipped D-D); live results stay from_cache=False.
   5. Strict matrix strings: registered providers now report the output-visible
      'enrichment_package_output_visible' (Task 4 drift-flipped G3); strict_behavior values for
@@ -57,6 +57,7 @@ from idis.services.enrichment.models import (
 from idis.services.enrichment.registry import EnrichmentProviderRegistry, ProviderDescriptor
 from idis.services.enrichment.rights_gate import EnvironmentMode
 from idis.services.enrichment.service import EnrichmentService
+from tests.strict_runtime_test_support import RecordingPostgresAuditSink
 
 TENANT_ID = "tenant-slice86"
 _KEY_MARKER = "sk-s86-LEAK-0001"
@@ -207,6 +208,7 @@ def test_strict_fatality_is_uniform(
             created_claim_ids=[],
             calc_ids=[],
             db_conn=None,
+            audit_sink=RecordingPostgresAuditSink(),
         )
     assert expected_fragment in str(exc_info.value)
 
@@ -262,7 +264,9 @@ def test_cache_hit_emits_audit_and_marks_from_cache() -> None:
     first = service.enrich(provider_id="cached_provider", request=request)
     second = service.enrich(provider_id="cached_provider", request=request)
     assert first.status == second.status == EnrichmentStatus.HIT
-    cache_events = [e for e in sink.events if e.get("event_type") == "enrichment.cache_hit"]
+    cache_events = [
+        e for e in sink.events if e.get("event_type") == "integration.enrichment.cache_hit"
+    ]
     assert len(cache_events) == 1
     # Task 3 drift-flip: the result model now carries the additive from_cache marker, set only
     # on cache-served copies (full coverage in test_slice86_enrichment_ledger_cache_visibility).

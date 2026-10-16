@@ -21,11 +21,11 @@ from __future__ import annotations
 import logging
 import re
 import uuid
-from datetime import UTC, datetime
 from typing import Any
 
 from idis.analysis.models import AgentReport, AnalysisBundle, AnalysisContext
 from idis.analysis.scoring.models import RoutingAction, Scorecard, ScoreDimension
+from idis.audit.canonical import build_canonical_audit_event
 from idis.audit.sink import AuditSink, AuditSinkError
 from idis.deliverables.decline_letter import DeclineLetterBuilder
 from idis.deliverables.financial_table import build_financial_table
@@ -1050,14 +1050,32 @@ class DeliverablesGenerator:
         Raises:
             AuditSinkError: If the audit sink fails.
         """
-        event = {
-            "event_type": event_type,
-            "timestamp": datetime.now(UTC).isoformat(),
-            **data,
+        safe = {
+            key: data[key]
+            for key in ("routing", "has_decline_letter", "deliverable_count", "error_type")
+            if key in data
         }
+        if event_type.endswith(".failed") and "error_type" not in safe:
+            safe["error_type"] = "DELIVERABLE_GENERATION_FAILED"
+        event = build_canonical_audit_event(
+            tenant_id=str(data["tenant_id"]),
+            event_type=event_type,
+            severity="HIGH" if event_type.endswith(".failed") else "LOW",
+            summary=f"Deliverable operation recorded: {event_type}",
+            actor_id="idis-deliverables-generator",
+            request_id=str(data["run_id"]),
+            method="POST",
+            path=f"/internal/deliverables/runs/{data['run_id']}",
+            status_code=422 if event_type.endswith(".failed") else 200,
+            resource_type="run",
+            resource_id=str(data["run_id"]),
+            deal_id=str(data["deal_id"]),
+            safe=safe,
+            refs=[f"deal_id:{data['deal_id']}"],
+        )
         try:
             self._audit_sink.emit(event)
         except AuditSinkError:
             raise
         except Exception as exc:
-            raise AuditSinkError(f"Audit sink failure for event '{event_type}': {exc}") from exc
+            raise AuditSinkError("AUDIT_FAILURE: deliverable operation was not recorded") from exc

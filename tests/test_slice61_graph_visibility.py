@@ -41,7 +41,7 @@ DEAL_ID = "33333333-3333-3333-3333-333333333333"
 
 
 class FakeNeo4jDriver:
-    """Small fake driver for health checks."""
+    """Small fake driver updated for Task 2's configured-database session proof."""
 
     def __init__(self, *, fail: bool = False) -> None:
         self.closed = False
@@ -52,6 +52,24 @@ class FakeNeo4jDriver:
             raise RuntimeError(
                 "cannot reach neo4j+s://secret-host.databases.neo4j.io as private_user"
             )
+
+    class _Session:
+        class _Result:
+            def consume(self) -> None:
+                return None
+
+        def __enter__(self) -> FakeNeo4jDriver._Session:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def run(self, _query: str) -> FakeNeo4jDriver._Session._Result:
+            return self._Result()
+
+    def session(self, *, database: str) -> FakeNeo4jDriver._Session:
+        assert database == "neo4j"
+        return self._Session()
 
     def close(self) -> None:
         self.closed = True
@@ -213,6 +231,7 @@ def test_neo4j_health_helper_uses_injected_driver_and_redacts_failures() -> None
             "NEO4J_URI": "neo4j+s://secret-host.databases.neo4j.io",
             "NEO4J_USERNAME": "private_user",
             "NEO4J_PASSWORD": "private_password",
+            "NEO4J_DATABASE": "neo4j",
         },
         driver_factory=lambda *_args, **_kwargs: FakeNeo4jDriver(fail=True),
     )

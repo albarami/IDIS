@@ -6,6 +6,7 @@ and document spans. All operations rely on RLS through SET LOCAL tenant context.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -187,6 +188,31 @@ class PostgresDocumentsRepository:
             "content_hash": content_hash,
         }
 
+    def acquire_watermark_company_admission_lock(
+        self,
+        *,
+        deal_id: str,
+        company_alias: str,
+    ) -> None:
+        """Serialize a company's classifier-cap check with its document write.
+
+        The lock is transaction-scoped, so the caller's subsequent receipt count
+        and insert form one admission boundary without adding a schema object.
+        """
+
+        lock_material = (
+            f"watermark-page-cap-v1:{self._tenant_id}:{deal_id}:{company_alias}"
+        ).encode()
+        lock_key = int.from_bytes(
+            hashlib.sha256(lock_material).digest()[:8],
+            byteorder="big",
+            signed=True,
+        )
+        self._conn.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"),
+            {"lock_key": lock_key},
+        )
+
     def list_documents_by_deal(
         self,
         deal_id: str,
@@ -238,6 +264,38 @@ class PostgresDocumentsRepository:
         ).fetchone()
         return None if result is None else self._document_row_to_dict(result)
 
+    def get_document_by_artifact_id(self, doc_id: str) -> dict[str, Any] | None:
+        """Get the sole parsed document bound to a durable public artifact ID.
+
+        ``documents.doc_id`` is indexed but not unique in the current schema.  A
+        bounded, totally ordered two-row read makes duplicate lineage fail closed
+        instead of letting PostgreSQL plan order choose a completed-looking row.
+        """
+        result = self._conn.execute(
+            text(
+                """
+                SELECT documents.document_id, documents.tenant_id, documents.deal_id,
+                       documents.doc_id, documents.doc_type, documents.parse_status,
+                       documents.metadata AS document_metadata,
+                       documents.created_at, documents.updated_at,
+                       document_artifacts.doc_type AS artifact_doc_type,
+                       document_artifacts.title AS document_name,
+                       document_artifacts.sha256, document_artifacts.uri,
+                       document_artifacts.metadata AS artifact_metadata
+                FROM documents
+                JOIN document_artifacts ON document_artifacts.doc_id = documents.doc_id
+                WHERE documents.doc_id = :doc_id
+                ORDER BY documents.document_id ASC
+                LIMIT 2
+                """
+            ),
+            {"doc_id": doc_id},
+        )
+        rows = result.fetchall()
+        if len(rows) > 1:
+            raise RuntimeError("Artifact document lineage resolved to multiple durable rows")
+        return None if not rows else self._document_row_to_dict(rows[0])
+
     def get_document_by_inventory_file_id(
         self,
         *,
@@ -259,13 +317,16 @@ class PostgresDocumentsRepository:
                 JOIN document_artifacts ON document_artifacts.doc_id = documents.doc_id
                 WHERE documents.deal_id = :deal_id
                   AND document_artifacts.metadata ->> 'inventory_file_id' = :inventory_file_id
-                ORDER BY documents.created_at ASC
-                LIMIT 1
+                ORDER BY documents.created_at ASC, documents.document_id ASC
+                LIMIT 2
                 """
             ),
             {"deal_id": deal_id, "inventory_file_id": inventory_file_id},
-        ).fetchone()
-        return None if result is None else self._document_row_to_dict(result)
+        )
+        rows = result.fetchall()
+        if len(rows) > 1:
+            raise RuntimeError("Inventory file lineage resolved to multiple durable rows")
+        return None if not rows else self._document_row_to_dict(rows[0])
 
     def list_spans_by_document(self, *, deal_id: str, document_id: str) -> list[dict[str, Any]]:
         """List spans for one deal/document in deterministic order."""
@@ -276,7 +337,14 @@ class PostgresDocumentsRepository:
                        locator, text_excerpt, content_hash, created_at, updated_at
                 FROM document_spans
                 WHERE deal_id = :deal_id AND document_id = :document_id
-                ORDER BY span_id ASC
+                ORDER BY
+                    CASE
+                        WHEN span_type = 'TIMECODE'
+                         AND jsonb_typeof(locator -> 'start_ms') = 'number'
+                        THEN (locator ->> 'start_ms')::BIGINT
+                        ELSE NULL
+                    END ASC NULLS LAST,
+                    span_id ASC
                 """
             ),
             {"deal_id": deal_id, "document_id": document_id},

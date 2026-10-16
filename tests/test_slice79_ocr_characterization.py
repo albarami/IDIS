@@ -25,7 +25,6 @@ import pytest
 
 from idis.models.document import ParseStatus
 from idis.models.document_classification import DocumentSupportStatus, DocumentTriageStatus
-from idis.models.extraction_task import ExtractionTaskBlockerReason
 from idis.parsers.image import parse_image
 from idis.parsers.ocr import OcrConfig, OcrPageText
 from idis.parsers.pdf import parse_pdf
@@ -34,7 +33,6 @@ from idis.services.extraction.chunking.service import ChunkingService
 from idis.services.extraction.task_planner import (
     _READY_SUPPORT_STATUSES,
     _READY_TRIAGE_STATUSES,
-    _SUPPORT_BLOCKERS,
 )
 from idis.services.ingestion import IngestionContext
 from idis.services.ingestion.defaults import (
@@ -65,7 +63,7 @@ def _ocr_span(span_id: str, *, page: int, line: int, text: str) -> dict[str, Any
 
 
 def test_scanned_pdf_ocr_produces_spans_and_is_extraction_eligible() -> None:
-    """1. Scanned PDF OCR -> PAGE_TEXT spans; triage -> PARTIALLY_SUPPORTED/PARTIAL (eligible)."""
+    """1. Scanned PDF OCR produces evidence-backed READY spans."""
     adapter = RecordingOcrAdapter(
         [OcrPageText(page_number=1, text="OCR revenue 10M\nOCR margin 40%")]
     )
@@ -80,8 +78,10 @@ def test_scanned_pdf_ocr_produces_spans_and_is_extraction_eligible() -> None:
     assert all(s.locator.get("source") == "ocr" for s in result.spans)
 
     capability = triage_document(parse_result=result, filename="scan.pdf")
-    assert capability.support_status == DocumentSupportStatus.PARTIALLY_SUPPORTED
-    assert capability.triage_status == DocumentTriageStatus.PARTIAL
+    # Task 4 controlled drift: completed non-empty OCR is no longer labeled partial.
+    assert capability.support_status == DocumentSupportStatus.SUPPORTED
+    assert capability.triage_status == DocumentTriageStatus.READY
+    assert capability.reason_codes == ["pdf_ocr_completed"]
     # Consumed by preflight/task_planner ready-sets -> eligible; doc_type PDF is chunkable.
     assert capability.support_status in _READY_SUPPORT_STATUSES
     assert capability.triage_status in _READY_TRIAGE_STATUSES
@@ -128,22 +128,20 @@ def test_image_ocr_spans_are_persisted_by_ingestion_like_pdf() -> None:
     assert confidential not in str(result.to_dict())
 
 
-def test_image_ocr_success_remains_downstream_blocked_ocr_required() -> None:
-    """4. NARROW: image OCR succeeds at parser, but capability re-derives ocr_required."""
+def test_image_ocr_success_is_downstream_ready() -> None:
+    """4. Successful OCR supplies evidence and is extraction-ready."""
     adapter = RecordingOcrAdapter([OcrPageText(page_number=1, text="image text")])
 
     result = parse_image(_PNG_BYTES, ocr_config=OcrConfig(enabled=True, adapter=adapter))
     assert result.success is True  # parser produced spans...
 
     capability = triage_document(parse_result=result, filename="scan.png")
-    # ...but capability is re-derived from the .png extension (ignores successful OCR).
-    assert capability.support_status == DocumentSupportStatus.SCANNED_OR_IMAGE_ONLY
-    assert capability.triage_status == DocumentTriageStatus.OCR_REQUIRED
-    assert capability.reason_codes == ["ocr_required"]
-    assert capability.requires_ocr is True
-    # Downstream consumes this -> blocked, NOT eligible.
-    assert capability.support_status not in _READY_SUPPORT_STATUSES
-    assert _SUPPORT_BLOCKERS[capability.support_status] == ExtractionTaskBlockerReason.OCR_REQUIRED
+    # Task 4 controlled drift: capability consumes the completed OCR result.
+    assert capability.support_status == DocumentSupportStatus.SUPPORTED
+    assert capability.triage_status == DocumentTriageStatus.READY
+    assert capability.reason_codes == ["image_ocr_completed"]
+    assert capability.requires_ocr is False
+    assert capability.support_status in _READY_SUPPORT_STATUSES
 
 
 def test_canonical_ingestion_path_receives_ocr_config_when_enabled(

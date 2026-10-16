@@ -63,6 +63,7 @@ from idis.services.rag.pgvector_health import (
 
 IDIS_REQUIRE_FULL_LIVE_ENV = "IDIS_REQUIRE_FULL_LIVE"
 IDIS_STRICT_DOTENV_PATH_ENV = "IDIS_STRICT_DOTENV_PATH"
+IDIS_PROCESS_ROLE_ENV = "IDIS_PROCESS_ROLE"
 STRICT_FULL_LIVE_BLOCKED = "STRICT_FULL_LIVE_BLOCKED"
 OCR_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"})
 
@@ -114,6 +115,7 @@ TRACKED_ENV_VARS: tuple[str, ...] = (
     "IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER",
     "IDIS_DATABASE_URL",
     "IDIS_DATABASE_ADMIN_URL",
+    "IDIS_ERASURE_DATABASE_URL",
     "IDIS_API_KEYS_JSON",
     "IDIS_API_KEYS",
     "IDIS_OBJECT_STORE_BACKEND",
@@ -167,6 +169,7 @@ STRICT_ENV_EXAMPLE_REQUIRED_NAMES: tuple[str, ...] = (
     "IDIS_STRICT_DOTENV_PATH",
     "IDIS_DATABASE_URL",
     "IDIS_DATABASE_ADMIN_URL",
+    "IDIS_ERASURE_DATABASE_URL",
     "IDIS_API_KEYS_JSON",
     "IDIS_OBJECT_STORE_BACKEND",
     "IDIS_OBJECT_STORE_BASE_DIR",
@@ -321,6 +324,31 @@ def is_strict_full_live_required(
     )
     value = str(env_source.effective_env.get(IDIS_REQUIRE_FULL_LIVE_ENV, "")).strip().lower()
     return value in {"1", "true", "yes", "on"}
+
+
+def require_strict_process_role(
+    expected_role: str,
+    *,
+    env: Mapping[str, str] | None = None,
+    dotenv_path: str | Path | None = None,
+) -> None:
+    """Require one exact process role when strict full-live mode is enabled.
+
+    The role is launcher-injected process metadata, rather than part of the
+    base strict-profile HMAC.  Reading it only from the process environment
+    prevents a dotenv value from silently turning an API process into a
+    combined API/worker process.
+    """
+    process_env = os.environ if env is None else env
+    if not is_strict_full_live_required(env=process_env, dotenv_path=dotenv_path):
+        return
+
+    role = str(process_env.get(IDIS_PROCESS_ROLE_ENV, "")).strip().lower()
+    if expected_role not in {"api", "worker"} or role != expected_role:
+        raise RuntimeError(
+            "STRICT_PROCESS_ROLE_INVALID: strict full-live process role must be "
+            f"exactly {expected_role!r}"
+        )
 
 
 def build_strict_full_live_admission_report(

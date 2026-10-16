@@ -499,10 +499,16 @@ class TestPostgresAuditSink:
             "event_id": event_id,
             "tenant_id": TENANT_A_ID,
             "occurred_at": now,
-            "event_type": "test.sink.event",
+            # The durable sink now rejects non-taxonomy fixtures before SQL execution.
+            "event_type": "integration.test_sink.event",
             "actor": {"actor_type": "SERVICE", "actor_id": "test"},
-            "request": {"request_id": "req-123", "method": "POST", "path": "/test"},
-            "resource": {"resource_type": "test", "resource_id": str(uuid.uuid4())},
+            "request": {
+                "request_id": "req-123",
+                "method": "POST",
+                "path": "/test",
+                "status_code": 200,
+            },
+            "resource": {"resource_type": "integration", "resource_id": str(uuid.uuid4())},
             "severity": "LOW",
             "summary": "Test event",
             "payload": {"refs": []},
@@ -521,7 +527,7 @@ class TestPostgresAuditSink:
             rows = result.fetchall()
 
         assert len(rows) == 1
-        assert rows[0].event_type == "test.sink.event"
+        assert rows[0].event_type == "integration.test_sink.event"
 
 
 class TestPostgresIdempotencyStore:

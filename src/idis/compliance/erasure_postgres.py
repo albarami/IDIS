@@ -6,6 +6,8 @@ FAILS if a future migration adds a deal-scoped table without classifying it here
 ``retained`` (with the reason in this module), or ``out_of_scope``. Three child tables carry no
 deal_id and are erased through their parent (``_CHILD_TABLE_DELETES``): calc_sanads (via
 deterministic_calculations), run_steps (via runs), human_gate_actions (via human_gates).
+``strict_preflight_proofs`` is erased in an explicit post-deal phase because its lifecycle
+trigger deliberately rejects deletion while the same-tenant deal still exists.
 
 Retained-with-reason:
 - ``erasure_requests``: the durable evidence OF the erasure itself; deliberately has no FK to
@@ -55,9 +57,21 @@ DEAL_SCOPED_TABLE_CLASSIFICATION: dict[str, str] = {
     "layer2_ic_challenges": "erased",
     "layer2_ic_findings": "erased",
     "muhasabah_records": "erased",
+    "methodology_extraction_attempts": "erased",
+    "methodology_extraction_results": "erased",
+    "methodology_extraction_task_spans": "erased",
+    "methodology_extraction_tasks": "erased",
+    "methodology_coverage_records": "erased",
+    "methodology_result_claim_links": "erased",
+    "methodology_result_defect_links": "erased",
+    "methodology_result_evidence_links": "erased",
+    "methodology_result_factual_outputs": "erased",
+    "methodology_result_sanad_links": "erased",
     "overrides": "erased",
+    "run_methodology_selections": "erased",
     "runs": "erased",
     "sanads": "erased",
+    "strict_preflight_proofs": "erased",
     "validated_evidence_packages": "erased",
     "vector_embeddings": "erased",
 }
@@ -65,6 +79,17 @@ DEAL_SCOPED_TABLE_CLASSIFICATION: dict[str, str] = {
 # FK-safe deletion order for tables with a direct deal_id column (children before parents;
 # deals last). Derived from the live foreign-key graph.
 _DIRECT_DELETE_ORDER: tuple[str, ...] = (
+    "methodology_result_defect_links",
+    "methodology_result_sanad_links",
+    "methodology_result_evidence_links",
+    "methodology_result_claim_links",
+    "methodology_result_factual_outputs",
+    "methodology_extraction_results",
+    "methodology_extraction_attempts",
+    "methodology_extraction_task_spans",
+    "methodology_extraction_tasks",
+    "methodology_coverage_records",
+    "run_methodology_selections",
     "document_spans",
     "sanads",
     "defects",
@@ -89,6 +114,24 @@ _DIRECT_DELETE_ORDER: tuple[str, ...] = (
     "deal_assignments",
     "break_glass_grants",
 )
+
+# Complete Task 5 disposition: run-derived rows are erased with their deal;
+# frozen source registries are tenant-level governance records and are retained.
+METHODOLOGY_TABLE_ERASURE_CLASSIFICATION: dict[str, str] = {
+    "methodology_extraction_attempts": "erased_with_deal",
+    "methodology_extraction_results": "erased_with_deal",
+    "methodology_extraction_task_spans": "erased_with_deal",
+    "methodology_extraction_tasks": "erased_with_deal",
+    "methodology_coverage_records": "erased_with_deal",
+    "methodology_result_claim_links": "erased_with_deal",
+    "methodology_result_defect_links": "erased_with_deal",
+    "methodology_result_evidence_links": "erased_with_deal",
+    "methodology_result_factual_outputs": "erased_with_deal",
+    "methodology_result_sanad_links": "erased_with_deal",
+    "run_methodology_selections": "erased_with_deal",
+    "methodology_questions": "retained_tenant_frozen_source",
+    "methodology_versions": "retained_tenant_frozen_source",
+}
 
 # Children WITHOUT a deal_id column, erased through their deal-scoped parent (before it).
 _CHILD_TABLE_DELETES: tuple[tuple[str, str], ...] = (
@@ -222,6 +265,18 @@ class PostgresErasureExecutor:
             rows_deleted += conn.execute(
                 text(
                     "DELETE FROM deals WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                    "AND deal_id = CAST(:deal_id AS uuid)"
+                ),
+                params,
+            ).rowcount
+            # Proof deletion is intentionally post-deal rather than part of
+            # _DIRECT_DELETE_ORDER: the database trigger prevents deletion while the
+            # same-tenant deal is live.  This remains in the same transaction so any
+            # failure rolls the deal graph and proof deletion back together.
+            rows_deleted += conn.execute(
+                text(
+                    "DELETE FROM strict_preflight_proofs "
+                    "WHERE tenant_id = CAST(:tenant_id AS uuid) "
                     "AND deal_id = CAST(:deal_id AS uuid)"
                 ),
                 params,

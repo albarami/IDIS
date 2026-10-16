@@ -318,7 +318,10 @@ class RedisTokenBucketStore:
     def from_url(cls, url: str) -> RedisTokenBucketStore:
         import redis  # lazy: build a real client only when configured (no module-load import)
 
-        return cls(redis.Redis.from_url(url))
+        # RESP2 remains the common denominator for Redis-compatible durable stores.
+        # redis-py 8 defaults to RESP3 and emits HELLO during connection setup, which
+        # needlessly excludes otherwise compatible endpoints used by this contract.
+        return cls(redis.Redis.from_url(url, protocol=2))
 
     def consume(
         self, *, key: str, capacity: int, refill_rate_per_sec: float, cost: int = 1

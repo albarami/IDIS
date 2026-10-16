@@ -2,3 +2,23 @@
 *.xlsx -text
 *.docx -text
 *.pptx -text
+contracts/full_strict_v2_reviewed_preimage_v1.json text eol=lf
+contracts/full_strict_v3_reviewed_preimage_v1.json text eol=lf
+contracts/full_strict_v4_reviewed_preimage_v1.json text eol=lf
+contracts/full_strict_v5_reviewed_preimage_v1.json text eol=lf
+contracts/full_strict_v6_reviewed_preimage_v1.json text eol=lf
+contracts/full_strict_v7_reviewed_preimage_v1.json text eol=lf
+contracts/full_strict_v8_reviewed_preimage_v1.json text eol=lf
+contracts/full_strict_v9_reviewed_preimage_v1.json text eol=lf
+contracts/full_strict_v10_reviewed_preimage_v1.json text eol=lf
+contracts/full_strict_v11_reviewed_preimage_v1.json text eol=lf
+contracts/full_strict_v12_reviewed_preimage_v1.json text eol=lf
+contracts/full_strict_v13_reviewed_preimage_v1.json text eol=lf
+contracts/full_strict_v14_reviewed_preimage_v1.json text eol=lf
+contracts/full_strict_v15_reviewed_preimage_v1.json text eol=lf
+contracts/full_strict_v16_reviewed_preimage_v1.json text eol=lf
+contracts/full_strict_v17_reviewed_preimage_v1.json text eol=lf
+contracts/full_strict_v18_reviewed_preimage_v1.json text eol=lf
+contracts/full_strict_v19_reviewed_preimage_v1.json text eol=lf
+contracts/full_strict_v20_reviewed_preimage_v1.json text eol=lf
+contracts/full_strict_v21_reviewed_preimage_v1.json text eol=lf

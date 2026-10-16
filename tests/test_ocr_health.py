@@ -15,6 +15,8 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import idis.services.ocr_health as ocr_health
+from idis.parsers.poppler_runtime import PopplerRuntimeBindingError
 from idis.services.ocr_health import OcrHealthCheck, OcrHealthStatus, check_ocr_health
 
 
@@ -35,6 +37,10 @@ def _noop_runtime() -> None:
     return None
 
 
+def _noop_poppler_runtime() -> None:
+    return None
+
+
 def _healthy_kwargs(**overrides: Any) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "env": {"IDIS_OCR_ENABLED": "1"},
@@ -42,6 +48,7 @@ def _healthy_kwargs(**overrides: Any) -> dict[str, Any]:
         "module_probe": _module_present,
         "language_probe": _language_present,
         "runtime_probe": _noop_runtime,
+        "poppler_runtime_probe": _noop_poppler_runtime,
     }
     kwargs.update(overrides)
     return kwargs
@@ -76,7 +83,7 @@ def test_missing_tesseract_binary() -> None:
 
 def test_missing_poppler_pdfinfo_binary() -> None:
     def resolver(name: str) -> str | None:
-        return None if name == "pdfinfo" else f"/opt/bin/{name}"
+        return None if name == ocr_health.POPPLER_PDFINFO_BINARY else f"/opt/bin/{name}"
 
     result = check_ocr_health(**_healthy_kwargs(binary_resolver=resolver))
     assert result.status is OcrHealthStatus.MISSING_DEPENDENCIES
@@ -217,6 +224,7 @@ def test_default_language_probe_honors_supplied_env(tmp_path: Path) -> None:
         binary_resolver=_present_resolver,
         module_probe=_module_present,
         runtime_probe=_noop_runtime,
+        poppler_runtime_probe=_noop_poppler_runtime,
     )
 
     assert "tessdata" not in result.missing_dependencies
@@ -233,24 +241,51 @@ def test_default_language_probe_supports_nested_tessdata_dir(tmp_path: Path) -> 
         binary_resolver=_present_resolver,
         module_probe=_module_present,
         runtime_probe=_noop_runtime,
+        poppler_runtime_probe=_noop_poppler_runtime,
     )
 
     assert "tessdata" not in result.missing_dependencies
 
 
-def test_default_language_probe_reports_missing_without_tessdata_prefix() -> None:
+def test_default_language_probe_reports_missing_when_runtime_language_is_absent(
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(ocr_health, "_default_installed_language_probe", lambda _language: False)
     result = check_ocr_health(
         env={"IDIS_OCR_ENABLED": "1"},
         binary_resolver=_present_resolver,
         module_probe=_module_present,
         runtime_probe=_noop_runtime,
+        poppler_runtime_probe=_noop_poppler_runtime,
     )
 
     assert "tessdata" in result.missing_dependencies
     assert result.status is OcrHealthStatus.MISSING_DEPENDENCIES
 
 
-def test_default_runtime_path_runs_version_checks_for_both_binaries() -> None:
+def test_default_language_probe_accepts_bounded_runtime_language_without_prefix(
+    monkeypatch: Any,
+) -> None:
+    observed: list[str] = []
+    monkeypatch.setattr(
+        ocr_health,
+        "_default_installed_language_probe",
+        lambda language: observed.append(language) or True,
+    )
+
+    result = check_ocr_health(
+        env={"IDIS_OCR_ENABLED": "1", "IDIS_OCR_LANGUAGE": "eng"},
+        binary_resolver=_present_resolver,
+        module_probe=_module_present,
+        runtime_probe=_noop_runtime,
+        poppler_runtime_probe=_noop_poppler_runtime,
+    )
+
+    assert result.status is OcrHealthStatus.HEALTHY
+    assert observed == ["eng"]
+
+
+def test_default_runtime_path_runs_tesseract_after_exact_poppler_probe() -> None:
     calls: list[list[str]] = []
 
     def runner(args: Sequence[str]) -> None:
@@ -262,10 +297,11 @@ def test_default_runtime_path_runs_version_checks_for_both_binaries() -> None:
         module_probe=_module_present,
         language_probe=_language_present,
         command_runner=runner,
+        poppler_runtime_probe=_noop_poppler_runtime,
     )
 
     assert result.status is OcrHealthStatus.HEALTHY
-    assert {call[0] for call in calls} == {"tesseract", "pdfinfo"}
+    assert {call[0] for call in calls} == {"tesseract"}
 
 
 def test_default_runtime_path_catches_command_failure_without_leak() -> None:
@@ -280,9 +316,44 @@ def test_default_runtime_path_catches_command_failure_without_leak() -> None:
         module_probe=_module_present,
         language_probe=_language_present,
         command_runner=runner,
+        poppler_runtime_probe=_noop_poppler_runtime,
     )
 
     assert result.status is OcrHealthStatus.FAILED
     assert result.error is not None
     for marker in ("TESSERACT FATAL", "/opt/secret", "scan.png", "sk-LEAK123", "stdout-content"):
         assert marker not in result.error
+
+
+def test_poppler_runtime_version_mismatch_is_failed_with_safe_code() -> None:
+    def mismatch() -> None:
+        raise PopplerRuntimeBindingError("POPPLER_RUNTIME_VERSION_MISMATCH")
+
+    result = check_ocr_health(
+        env={"IDIS_OCR_ENABLED": "1"},
+        binary_resolver=_present_resolver,
+        module_probe=_module_present,
+        language_probe=_language_present,
+        runtime_probe=_noop_runtime,
+        poppler_runtime_probe=mismatch,
+    )
+
+    assert result.status is OcrHealthStatus.FAILED
+    assert result.error == "POPPLER_RUNTIME_VERSION_MISMATCH"
+
+
+def test_poppler_runtime_unavailable_maps_to_missing_dependency() -> None:
+    def unavailable() -> None:
+        raise PopplerRuntimeBindingError("POPPLER_RUNTIME_UNAVAILABLE")
+
+    result = check_ocr_health(
+        env={"IDIS_OCR_ENABLED": "1"},
+        binary_resolver=_present_resolver,
+        module_probe=_module_present,
+        language_probe=_language_present,
+        runtime_probe=_noop_runtime,
+        poppler_runtime_probe=unavailable,
+    )
+
+    assert result.status is OcrHealthStatus.MISSING_DEPENDENCIES
+    assert result.missing_dependencies == ["poppler"]

@@ -92,6 +92,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Default command: run uvicorn with app factory
-# Note: Production should override with appropriate workers and settings
-CMD ["uvicorn", "idis.api.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+# Default command: profile-first strict API admission, then the canonical app factory.
+CMD ["python", "-m", "idis.runtime.strict_launcher", "api", "--host", "0.0.0.0", "--port", "8000", "--pid-file", "/tmp/idis-api.pid"]

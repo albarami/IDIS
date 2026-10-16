@@ -568,9 +568,10 @@ class TestRateLimitHeaders:
             assert "X-IDIS-RateLimit-Limit" in response.headers
             assert "X-IDIS-RateLimit-Remaining" in response.headers
 
-            assert response.headers["X-IDIS-RateLimit-Limit"] == "10"
+            assert response.headers["X-IDIS-RateLimit-Limit"] == "20"
+            limit = int(response.headers["X-IDIS-RateLimit-Limit"])
             remaining = int(response.headers["X-IDIS-RateLimit-Remaining"])
-            assert remaining >= 0
+            assert 0 <= remaining <= limit
 
         finally:
             os.environ.pop("IDIS_API_KEYS_JSON", None)

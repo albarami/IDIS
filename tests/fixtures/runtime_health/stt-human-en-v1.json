@@ -1,0 +1,11 @@
+﻿{
+    "schema_version":  "stt-health-fixture-manifest-v1",
+    "fixture_id":  "stt-human-en-v1",
+    "file_sha256":  "4c5e8d89642cfc9658b2649362a4eda53e753fa1875a8c0c96d0aafe14fdf370",
+    "duration_ms":  3399,
+    "language":  "en",
+    "expected_normalized_phrase":  "media health check one two three",
+    "normalization":  "lowercase; strip punctuation; digit groups 1-2-3 map to one two three",
+    "license_evidence":  "Synthesized locally on 2026-07-16 via Windows System.Speech (SAPI) by the reviewer agent for the IDIS project. No human voice, no third-party audio, no external rights. Project-owned. Approved plan deviation: synthetic speech in place of consented human recording; phrase amended to \u003cmedia health check one two three\u003e for STT determinism. May be replaced by a consented human recording before Gate A.",
+    "license_evidence_sha256":  "1225d236926961f1f6fc8b2c6f96d599349fd0dbb56c21119bb9c311ab2d0148"
+}

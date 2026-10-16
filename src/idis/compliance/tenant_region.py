@@ -64,18 +64,19 @@ class InMemoryTenantRegionStore:
 class PostgresTenantRegionStore:
     """Durable twin: reads ``tenants.data_region`` on a per-call app-role connection.
 
-    The ``tenants`` registry is not RLS-scoped (it is the FK parent), so the read is filtered
-    explicitly by ``tenant_id`` and only ever asked for the current authenticated tenant. Both a
-    missing row and a NULL column return None (the residency layer denies as "region unset"); a
-    backend error propagates so the residency layer denies as "resolution failed".
+    The tenant row is protected by the same transaction-local RLS context as every other
+    tenant-bearing table. Both a missing row and a NULL column return None (the residency layer
+    denies as "region unset"); a backend error propagates so the residency layer denies as
+    "resolution failed".
     """
 
     def get_data_region(self, tenant_id: str) -> str | None:
         from sqlalchemy import text
 
-        from idis.persistence.db import begin_app_conn
+        from idis.persistence.db import begin_app_conn, set_tenant_local
 
         with begin_app_conn() as conn:
+            set_tenant_local(conn, tenant_id)
             row = conn.execute(
                 text("SELECT data_region FROM tenants WHERE tenant_id = CAST(:tid AS uuid)"),
                 {"tid": tenant_id},

@@ -130,6 +130,7 @@ def test_canonical_runtime_prompt_surface_matches_api_constants() -> None:
 
     expected = {
         runs_module._EXTRACTION_PROMPT_ID,
+        runs_module._METHODOLOGY_EXTRACTION_PROMPT_ID,
         runs_module._SCORING_PROMPT_ID,
         *runs_module._DEBATE_PROMPT_IDS,
     }

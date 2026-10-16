@@ -27,6 +27,7 @@ from idis.services.enrichment.models import EnrichmentStatus
 from idis.services.enrichment.registry import EnrichmentProviderRegistry, ProviderDescriptor
 from idis.services.enrichment.rights_gate import EnvironmentMode
 from idis.services.enrichment.service import EnrichmentService, _build_default_registry
+from tests.strict_runtime_test_support import RecordingPostgresAuditSink
 from tests.test_slice86_enrichment_execution_provenance_characterization import (
     TENANT_ID,
     _env_without,
@@ -61,6 +62,7 @@ def _run_strict(registry_factory: Any) -> dict[str, Any]:
             created_claim_ids=[],
             calc_ids=[],
             db_conn=None,
+            audit_sink=RecordingPostgresAuditSink(),
         )
 
 

@@ -32,6 +32,7 @@ from idis.services.enrichment.service import (
     create_default_enrichment_service,
 )
 from idis.services.runs.strict_full_live import build_strict_full_live_readiness_report
+from tests.strict_runtime_test_support import RecordingPostgresAuditSink
 
 TENANT_ID = "tenant-slice57"
 SECRET_PROCESS_VALUE = "PROCESS_TOKEN_VALUE_SHOULD_NOT_LEAK"
@@ -446,6 +447,7 @@ def test_strict_full_enrichment_fails_closed_on_provider_error(
             deal_id="safe-public-company",
             created_claim_ids=[],
             calc_ids=[],
+            audit_sink=RecordingPostgresAuditSink(),
         )
 
 
@@ -521,6 +523,7 @@ def test_strict_full_enrichment_public_provider_error_uses_generic_wording(
             deal_id="safe-public-company",
             created_claim_ids=[],
             calc_ids=[],
+            audit_sink=RecordingPostgresAuditSink(),
         )
     assert "BYOL" not in str(exc.value)
 
@@ -569,6 +572,7 @@ def test_strict_full_enrichment_fails_closed_on_blocked_missing_byol(
             deal_id="safe-public-company",
             created_claim_ids=[],
             calc_ids=[],
+            audit_sink=RecordingPostgresAuditSink(),
         )
 
 

@@ -354,8 +354,8 @@ class TestAuditEvents:
         engine.score(_make_context(), _make_bundle(), Stage.SERIES_A)
 
         event_types = [e["event_type"] for e in sink.events]
-        assert "analysis.scoring.started" in event_types
-        assert "analysis.scoring.completed" in event_types
+        assert "integration.scoring.started" in event_types
+        assert "integration.scoring.completed" in event_types
 
     def test_completed_event_includes_composite_score(self) -> None:
         response = _build_scoring_response(_all_dimensions_score(0.70))
@@ -366,11 +366,11 @@ class TestAuditEvents:
 
         engine.score(_make_context(), _make_bundle(), Stage.SERIES_A)
 
-        completed = [e for e in sink.events if e["event_type"] == "analysis.scoring.completed"]
+        completed = [e for e in sink.events if e["event_type"] == "integration.scoring.completed"]
         assert len(completed) == 1
-        assert "composite_score" in completed[0]
-        assert "score_band" in completed[0]
-        assert "routing" in completed[0]
+        assert "composite_score" in completed[0]["payload"]["safe"]
+        assert "score_band" in completed[0]["payload"]["safe"]
+        assert "routing" in completed[0]["payload"]["safe"]
 
     def test_failure_emits_failed_event(self) -> None:
         client = _StubLLMClient("invalid json {{{")
@@ -382,8 +382,8 @@ class TestAuditEvents:
             engine.score(_make_context(), _make_bundle(), Stage.SERIES_A)
 
         event_types = [e["event_type"] for e in sink.events]
-        assert "analysis.scoring.started" in event_types
-        assert "analysis.scoring.failed" in event_types
+        assert "integration.scoring.started" in event_types
+        assert "integration.scoring.failed" in event_types
 
     def test_audit_sink_failure_is_fatal(self) -> None:
         response = _build_scoring_response(_all_dimensions_score(0.70))

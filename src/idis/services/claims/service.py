@@ -18,7 +18,8 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field, field_validator
 
-from idis.audit.sink import AuditSink, InMemoryAuditSink
+from idis.audit.canonical import build_canonical_audit_event
+from idis.audit.sink import AuditSink, AuditSinkError, InMemoryAuditSink
 from idis.models.claim import ClaimType
 from idis.persistence.repositories.claims import (
     ClaimsRepository,
@@ -177,22 +178,36 @@ class ClaimService:
         request_id: str | None = None,
     ) -> None:
         """Emit an audit event for claim operations with request correlation."""
-        event: dict[str, Any] = {
-            "event_type": event_type,
-            "tenant_id": self._tenant_id,
-            "resource_type": "claim",
-            "resource_id": claim_id,
-            "entity_type": "claim",
-            "entity_id": claim_id,
-            "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-            "details": details or {},
-        }
-        if request_id:
-            event["request_id"] = request_id
+        source = details or {}
+        safe = {key: source[key] for key in ("claim_class", "fields_updated") if key in source}
+        deal_id = str(source["deal_id"]) if source.get("deal_id") else None
+        event = build_canonical_audit_event(
+            tenant_id=self._tenant_id,
+            event_type=event_type,
+            severity="MEDIUM",
+            summary=f"Claim mutation recorded: {event_type}",
+            actor_id="idis-claim-service",
+            request_id=request_id or f"{event_type}:{claim_id}",
+            method="DELETE" if event_type == "claim.deleted" else "POST",
+            path=f"/internal/claims/{claim_id}",
+            status_code=200,
+            resource_type="claim",
+            resource_id=claim_id,
+            deal_id=deal_id,
+            safe=safe,
+            refs=[f"deal_id:{deal_id}"] if deal_id else [],
+        )
         try:
+            db_conn = getattr(self, "_db_conn", None)
+            emit_in_tx = getattr(self._audit_sink, "emit_in_tx", None)
+            if db_conn is not None and callable(emit_in_tx):
+                emit_in_tx(db_conn, event)
+                return
             self._audit_sink.emit(event)
-        except Exception as e:
-            logger.warning("Failed to emit audit event: %s", e)
+        except AuditSinkError:
+            raise
+        except Exception as exc:
+            raise AuditSinkError("Claim audit emission failed") from exc
 
     def _validate_no_free_facts(
         self,

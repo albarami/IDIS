@@ -285,12 +285,36 @@ def _status_and_reasons(
                 DataRoomInventoryReason.PARSER_FAILED.value
             ]
         if ParseErrorCode.SCANNED_PDF_UNSUPPORTED in error_codes or (
-            ParseErrorCode.NO_TEXT_EXTRACTED in error_codes and parse_result.doc_type == "PDF"
+            error_codes
+            & {
+                ParseErrorCode.NO_TEXT_EXTRACTED,
+                ParseErrorCode.OCR_UNAVAILABLE,
+            }
+            and parse_result.doc_type == "PDF"
         ):
             return DataRoomInventoryFileStatus.DEFERRED, [
                 DataRoomInventoryReason.OCR_REQUIRED.value
             ]
         if ParseErrorCode.NO_TEXT_EXTRACTED in error_codes:
+            return DataRoomInventoryFileStatus.BLOCKED, [
+                DataRoomInventoryReason.PARSER_FAILED.value
+            ]
+        if error_codes & {
+            ParseErrorCode.OCR_FAILED,
+            ParseErrorCode.OCR_TIMEOUT,
+            ParseErrorCode.OCR_NO_TEXT_EXTRACTED,
+            ParseErrorCode.MEDIA_TRANSCRIPTION_UNAVAILABLE,
+            ParseErrorCode.MEDIA_TRANSCRIPTION_TIMEOUT,
+            ParseErrorCode.MEDIA_TRANSCRIPTION_FAILED,
+            ParseErrorCode.MEDIA_DURATION_EXCEEDED,
+            ParseErrorCode.MEDIA_NO_TEXT_EXTRACTED,
+            ParseErrorCode.MEDIA_FRAME_OCR_UNAVAILABLE,
+            ParseErrorCode.MEDIA_FRAME_OCR_TIMEOUT,
+            ParseErrorCode.MEDIA_FRAME_OCR_FAILED,
+            ParseErrorCode.MEDIA_FRAME_OCR_INCOMPLETE,
+            ParseErrorCode.MEDIA_FRAME_SAMPLE_LIMIT_EXCEEDED,
+            ParseErrorCode.MEDIA_NO_EXTRACTABLE_EVIDENCE,
+        }:
             return DataRoomInventoryFileStatus.BLOCKED, [
                 DataRoomInventoryReason.PARSER_FAILED.value
             ]
@@ -347,33 +371,50 @@ def _document_from_parse_result(
     sha256: str,
     parse_result: ParseResult,
 ) -> dict[str, Any]:
+    spans = [
+        _span_dict(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            document_id=document_id,
+            span_index=index,
+            span=span,
+        )
+        for index, span in enumerate(parse_result.spans, start=1)
+    ]
+    parse_completed = parse_result.success and not parse_result.errors
+    persisted_doc_type = "VIDEO" if parse_result.doc_type == "MEDIA" else parse_result.doc_type
+    parser_metadata: dict[str, Any] = {
+        "artifact_id": artifact_id,
+        "relative_path": relative_path,
+        "size_bytes": size_bytes,
+        "sha256": sha256,
+        "parser_doc_type": parse_result.doc_type,
+        "detected_format": parse_result.doc_type,
+        "parser_runtime_status": "completed" if parse_completed else "failed",
+        "span_count": len(spans),
+        "parse_error_codes": [error.code.value for error in parse_result.errors],
+        "parse_warning_codes": list(parse_result.warnings),
+    }
+    for proof_key in (
+        "ocr_performed",
+        "media_transcription_performed",
+        "media_frame_ocr_performed",
+        "media_stt_receipt",
+        "media_frame_ocr_receipt",
+        "media_runtime_provenance",
+    ):
+        if proof_key in parse_result.metadata:
+            parser_metadata[proof_key] = parse_result.metadata[proof_key]
     return {
         "tenant_id": tenant_id,
         "deal_id": deal_id,
         "document_id": document_id,
         "document_name": relative_path,
-        "doc_type": parse_result.doc_type,
+        "doc_type": persisted_doc_type,
+        "parse_status": "PARSED" if parse_completed else "FAILED",
         "uri": relative_path,
-        "metadata": {
-            "artifact_id": artifact_id,
-            "relative_path": relative_path,
-            "size_bytes": size_bytes,
-            "sha256": sha256,
-            "parser_doc_type": parse_result.doc_type,
-            "detected_format": parse_result.doc_type,
-            "parse_error_codes": [error.code.value for error in parse_result.errors],
-            "parse_warning_codes": list(parse_result.warnings),
-        },
-        "spans": [
-            _span_dict(
-                tenant_id=tenant_id,
-                deal_id=deal_id,
-                document_id=document_id,
-                span_index=index,
-                span=span,
-            )
-            for index, span in enumerate(parse_result.spans, start=1)
-        ],
+        "metadata": parser_metadata,
+        "spans": spans,
     }
 
 

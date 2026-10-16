@@ -466,19 +466,26 @@ _executor: ErasureExecutor | None = None
 
 
 def build_default_erasure_executor() -> ErasureExecutor:
-    """Select the durable Postgres executor when configured, else the in-memory twin."""
+    """Return only the Task-7 authority marker when PostgreSQL is configured."""
     from idis.persistence.db import is_postgres_configured
 
     if is_postgres_configured():
-        from idis.compliance.erasure_postgres import PostgresErasureExecutor
+        from idis.compliance.task7_erasure import Task7ErasureAuthority
 
-        return PostgresErasureExecutor()
+        return Task7ErasureAuthority()
     return InMemoryErasureExecutor()
 
 
 def get_erasure_executor() -> ErasureExecutor:
     """Return the process-wide erasure executor, building the default on first use."""
+    from idis.persistence.db import is_postgres_configured
+
     global _executor
+    if is_postgres_configured():
+        # Process-global test overrides are not an authority boundary.  The
+        # authenticated route bypasses this seam entirely, and any residual
+        # caller receives only the fail-closed Task-7 marker.
+        return build_default_erasure_executor()
     if _executor is None:
         _executor = build_default_erasure_executor()
     return _executor
@@ -486,6 +493,10 @@ def get_erasure_executor() -> ErasureExecutor:
 
 def set_erasure_executor(executor: ErasureExecutor) -> None:
     """Override the process-wide executor (tests / explicit wiring)."""
+    from idis.persistence.db import is_postgres_configured
+
+    if is_postgres_configured():
+        raise RuntimeError("TASK7_ERASURE_GLOBAL_OVERRIDE_FORBIDDEN")
     global _executor
     _executor = executor
 
@@ -512,6 +523,14 @@ def execute_erasure(
     BEFORE destruction and its failure aborts all of it; an executor failure marks the request
     FAILED (500) for idempotent retry.
     """
+    from idis.persistence.db import is_postgres_configured
+
+    if is_postgres_configured():
+        # The explicit ``executor=`` seam predates the dedicated v19 authority.
+        # Guard its public ingress as well as its defaults: otherwise callers
+        # could inject either historical executor while PostgreSQL is active.
+        raise RuntimeError("TASK7_ERASURE_API_COMPOSITION_REQUIRED")
+
     effective_store = store or get_erasure_request_store()
     request = effective_store.get(tenant_ctx.tenant_id, request_id)
     if request is None:

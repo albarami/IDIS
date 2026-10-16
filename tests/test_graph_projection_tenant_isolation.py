@@ -314,7 +314,8 @@ class TestAuditEventBuilding:
             error="connection timeout",
         )
         assert event["severity"] == "HIGH"
-        assert event["payload"]["error"] == "connection timeout"
+        assert event["payload"]["safe"]["failure_code"] == "GRAPH_PROJECTION_FAILED"
+        assert "connection timeout" not in str(event)
 
     def test_emit_audit_or_fail_raises_on_sink_failure(self) -> None:
         sink = FakeAuditSink(should_fail=True)
@@ -324,7 +325,10 @@ class TestAuditEventBuilding:
             entity_id=DEAL_A,
             status=ProjectionStatus.SUCCESS,
         )
-        with pytest.raises(RuntimeError, match="Audit sink failure"):
+        with pytest.raises(
+            RuntimeError,
+            match="AUDIT_FAILURE: graph projection audit emission failed",
+        ):
             _emit_audit_or_fail(sink, event)
 
     def test_emit_audit_none_sink_is_noop(self) -> None:

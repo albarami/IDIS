@@ -118,11 +118,16 @@ def _client(
     idempotency_store = (
         SqliteIdempotencyStore(in_memory=True) if isolate_idempotency_store else None
     )
-    app = create_app(
-        audit_sink=audit_sink or InMemoryAuditSink(),
-        idempotency_store=idempotency_store,
-        service_region="me-south-1",
-    )
+    # Slice75B tests request-time admission in an explicitly injected in-memory app;
+    # isolate only app composition so the outer strict flag is restored before requests.
+    with monkeypatch.context() as composition_env:
+        composition_env.delenv("IDIS_REQUIRE_FULL_LIVE", raising=False)
+        composition_env.delenv("IDIS_STRICT_DOTENV_PATH", raising=False)
+        app = create_app(
+            audit_sink=audit_sink or InMemoryAuditSink(),
+            idempotency_store=idempotency_store,
+            service_region="me-south-1",
+        )
     return TestClient(app)
 
 
@@ -761,7 +766,7 @@ def test_resume_then_worker_skips_completed_steps_via_existing_orchestrator_resu
     import asyncio
 
     from idis.persistence.repositories.runs import InMemoryRunsRepository
-    from idis.pipeline.worker import PipelineWorker
+    from idis.pipeline.worker import PipelineWorker, WorkerLeaseConfig
     from idis.services.runs.execution import RunExecutionService
     from idis.services.runs.orchestrator import RunContext
 
@@ -807,7 +812,12 @@ def test_resume_then_worker_skips_completed_steps_via_existing_orchestrator_resu
 
     runs_repo = InMemoryRunsRepository(TENANT_A)
     run_steps_repo = InMemoryRunStepsRepository(TENANT_A)
-    audit_sink = InMemoryAuditSink()
+
+    class TransactionalInMemoryAuditSink(InMemoryAuditSink):
+        def emit_in_tx(self, _conn: object, event: dict[str, Any]) -> None:
+            self.emit(event)
+
+    audit_sink = TransactionalInMemoryAuditSink()
 
     extract_calls: list[str] = []
     grade_calls: list[str] = []
@@ -875,6 +885,8 @@ def test_resume_then_worker_skips_completed_steps_via_existing_orchestrator_resu
             tenant_id=tenant_id,
             deal_id=str(run_data["deal_id"]),
             mode="SNAPSHOT",
+            lease_owner_id=str(run_data["lease_owner_id"]),
+            lease_fencing_token=int(run_data["lease_fencing_token"]),
             documents=[
                 {
                     "document_id": "doc-001",
@@ -901,7 +913,14 @@ def test_resume_then_worker_skips_completed_steps_via_existing_orchestrator_resu
                     "document_name": "test.pdf",
                     "sha256": "a" * 64,
                     "uri": "deals/test.pdf",
-                    "metadata": {},
+                    "metadata": {
+                        "parser_doc_type": "PDF",
+                        "detected_format": "PDF",
+                        "parser_runtime_status": "completed",
+                        "span_count": 1,
+                        "parse_error_codes": [],
+                        "parse_warning_codes": [],
+                    },
                     "source_metadata": {},
                     "spans": [
                         {
@@ -930,6 +949,7 @@ def test_resume_then_worker_skips_completed_steps_via_existing_orchestrator_resu
         tenant_ids=[TENANT_A],
         execution_service_factory=execution_service_factory,
         run_context_factory=run_context_factory,
+        lease_config=WorkerLeaseConfig(lease_seconds=60, heartbeat_seconds=20),
     )
 
     with (
@@ -942,6 +962,7 @@ def test_resume_then_worker_skips_completed_steps_via_existing_orchestrator_resu
             "idis.pipeline.worker.get_run_steps_repository",
             side_effect=lambda _conn, _tenant: run_steps_repo,
         ),
+        patch("idis.pipeline.worker._default_worker_audit_sink", return_value=audit_sink),
         patch("idis.pipeline.worker.set_tenant_local", create=True),
     ):
         asyncio.run(worker._process_queued_runs())

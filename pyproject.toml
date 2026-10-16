@@ -9,7 +9,7 @@ authors = [{ name = "Salim Al-Barami" }]
 dependencies = [
     "fastapi>=0.109.0",
     "uvicorn[standard]>=0.27.0",
-    "pydantic>=2.5.0",
+    "pydantic==2.12.5",
     "jsonschema>=4.21.0",
     "pyyaml>=6.0.1",
     "sqlalchemy>=2.0.0",
@@ -84,7 +84,21 @@ ignore = [
     "UP038",  # deprecated in ruff >=0.15; isinstance(x, (A, B)) is valid Python
 ]
 
+[tool.ruff.lint.per-file-ignores]
+"scripts/run_task7_v11_current_guard_census.py" = ["B009", "B010", "F401"]
+"scripts/run_task7_v9_current_guard_census.py" = ["I001"]
+
 [tool.ruff.format]
+exclude = [
+    "scripts/generate_task7_v6_contract_fixture.py",
+    "scripts/generate_task7_v9_contract_fixture.py",
+    "scripts/generate_task7_v21_contract_fixture.py",
+    "scripts/materialize_full_strict_v21_preimage.py",
+    "scripts/run_task7_v11_current_guard_census.py",
+    "scripts/run_task7_v21_current_guard_census.py",
+    "scripts/run_task7_v9_current_guard_census.py",
+    "tests/slice100_task7/test_full_strict_v9_native_schema_red.py",
+]
 quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false

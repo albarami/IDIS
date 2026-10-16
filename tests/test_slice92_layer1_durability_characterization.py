@@ -168,6 +168,8 @@ def test_layer2_ic_challenge_accepts_vep_reference() -> None:
         # reference (vep_package_ids) it must still accept stays present above.
         "db_conn",
         "challenge_repository",
+        # Slice100 Task 1 stages the typed row until the fenced COMPLETE transaction.
+        "defer_persistence",
     }
 
 

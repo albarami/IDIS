@@ -135,3 +135,60 @@ def test_create_app_default_upload_persists_parsed_document_without_ingestion_sh
     summary = get_response.json()
     assert summary["document_id"] == durable_document_id
     _assert_safe_public_payload(summary)
+
+
+def test_authenticated_span_read_survives_fresh_app_instance(
+    app_engine: Any,
+    clean_tables: None,
+    monkeypatch: Any,
+    tmp_path: Any,
+) -> None:
+    """A fresh API instance reads document spans from PostgreSQL, not process memory."""
+    clear_deals_store()
+    clear_document_store()
+    _configure_api_key(monkeypatch)
+    monkeypatch.setenv("IDIS_OBJECT_STORE_BASE_DIR", str(tmp_path / "objects"))
+
+    first_app = create_app(idempotency_store=SqliteIdempotencyStore(in_memory=True))
+    first_client = TestClient(first_app, raise_server_exceptions=False)
+    deal_response = first_client.post(
+        "/v1/deals",
+        headers={"X-IDIS-API-Key": pg_helpers.API_KEY},
+        json={"name": "Restart Span Deal", "company_name": "Fictional Restart Co"},
+    )
+    assert deal_response.status_code == 201
+    deal_id = deal_response.json()["deal_id"]
+    seed_deal_access(str(pg_helpers.TENANT_ID), deal_id, pg_helpers.ACTOR_ID)
+
+    data = pg_helpers._pdf_bytes()
+    upload_response = first_client.post(
+        f"/v1/deals/{deal_id}/documents/upload",
+        headers={
+            "X-IDIS-API-Key": pg_helpers.API_KEY,
+            "Content-Type": "application/octet-stream",
+        },
+        params={
+            "filename": "company-001-document-00001.pdf",
+            "doc_type": "DATA_ROOM_FILE",
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "source_system": "slice100-restart-proof",
+        },
+        content=data,
+    )
+    assert upload_response.status_code == 201
+    artifact_id = upload_response.json()["doc_id"]
+
+    # Task 4 controlled restart: discard all process-local document/span mappings.
+    clear_document_store()
+    restarted_app = create_app(idempotency_store=SqliteIdempotencyStore(in_memory=True))
+    restarted_client = TestClient(restarted_app, raise_server_exceptions=False)
+    spans_response = restarted_client.get(
+        f"/v1/documents/{artifact_id}/spans",
+        headers={"X-IDIS-API-Key": pg_helpers.API_KEY},
+    )
+
+    assert spans_response.status_code == 200
+    body = spans_response.json()
+    assert body["total"] > 0
+    assert len(body["items"]) == body["total"]
+    assert all(item["content_hash"] for item in body["items"])

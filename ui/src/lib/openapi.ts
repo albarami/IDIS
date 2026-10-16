@@ -787,6 +787,8 @@ export interface components {
         StartRunRequest: {
             /** @enum {string} */
             mode: "SNAPSHOT" | "FULL";
+            /** Fresh one-use proof required when strict full-live FULL admission is enabled. */
+            strict_preflight_proof_id?: string;
         };
         RunStatus: {
             /** Format: uuid */

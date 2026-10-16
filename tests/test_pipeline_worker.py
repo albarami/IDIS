@@ -3,14 +3,34 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable, Iterator
+from typing import Any
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from idis.audit.sink import InMemoryAuditSink
-from idis.persistence.repositories.run_steps import InMemoryRunStepsRepository
+from idis.persistence.repositories.run_steps import (
+    InMemoryRunStepsRepository,
+    clear_run_steps_store,
+)
+from idis.persistence.repositories.runs import (
+    InMemoryRunsRepository,
+    clear_in_memory_runs_store,
+)
 from idis.pipeline.worker import PipelineWorker, _default_run_context_factory
 from idis.services.runs.execution import RunExecutionService
 
 TENANT_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+LEASE_EXPIRES_AT = "2099-01-01T00:01:00Z"
+LAST_HEARTBEAT_AT = "2099-01-01T00:00:00Z"
+
+
+class TransactionalInMemoryAuditSink(InMemoryAuditSink):
+    """In-memory sink exposing the durable sink's in-transaction seam."""
+
+    def emit_in_tx(self, _conn: object, event: dict[str, Any]) -> None:
+        self.emit(event)
 
 
 class FakeRunsRepository:
@@ -18,23 +38,97 @@ class FakeRunsRepository:
 
     def __init__(self) -> None:
         self.claim_queued_runs_calls: list[int] = []
+        self.requeue_expired_worker_leases_calls: list[int] = []
         self.completed: list[tuple[str, str, str | None]] = []
+        self.status = "QUEUED"
+        self.lease_owner_id: str | None = None
+        self.lease_fencing_token = 0
 
-    def claim_queued_runs(self, *, limit: int) -> list[dict[str, str]]:
-        """Return one safely claimed queued run."""
+    def requeue_expired_worker_leases(
+        self,
+        *,
+        limit: int = 1,
+        lease_audit_emitter: Callable[..., None] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Model the canonical expired-lease sweep with no expired rows."""
+        assert lease_audit_emitter is not None
+        self.requeue_expired_worker_leases_calls.append(limit)
+        return []
+
+    def claim_queued_runs(
+        self,
+        *,
+        limit: int,
+        lease_owner_id: str,
+        lease_seconds: int,
+        lease_audit_emitter: Callable[..., None],
+    ) -> list[dict[str, Any]]:
+        """Atomically model QUEUED -> RUNNING with a fenced worker lease."""
+        assert limit == 1
+        assert lease_owner_id
+        assert lease_seconds > 0
         self.claim_queued_runs_calls.append(limit)
-        return [
-            {
-                "run_id": "run-1",
-                "deal_id": "deal-1",
-                "mode": "SNAPSHOT",
-                "tenant_id": TENANT_ID,
-            }
-        ]
+        self.status = "RUNNING"
+        self.lease_owner_id = lease_owner_id
+        self.lease_fencing_token += 1
+        run = {
+            "run_id": "run-1",
+            "deal_id": "deal-1",
+            "mode": "SNAPSHOT",
+            "status": self.status,
+            "tenant_id": TENANT_ID,
+            "lease_owner_id": lease_owner_id,
+            "lease_fencing_token": self.lease_fencing_token,
+            "lease_expires_at": LEASE_EXPIRES_AT,
+            "last_heartbeat_at": LAST_HEARTBEAT_AT,
+        }
+        lease_audit_emitter(
+            db_conn=None,
+            code="WORKER_LEASE_CLAIMED",
+            run_id=run["run_id"],
+            deal_id=run["deal_id"],
+            lease_owner_id=lease_owner_id,
+            new_fencing_token=self.lease_fencing_token,
+            lease_expires_at=LEASE_EXPIRES_AT,
+        )
+        return [run]
+
+    def count_queued_runs(self) -> int:
+        return int(self.status == "QUEUED")
 
     def try_mark_running(self, run_id: str) -> bool:
         """Allow canonical execution service to claim the fake run."""
         return run_id == "run-1"
+
+    def get(self, run_id: str) -> dict[str, Any] | None:
+        if run_id != "run-1":
+            return None
+        return {
+            "run_id": run_id,
+            "tenant_id": TENANT_ID,
+            "deal_id": "deal-1",
+            "status": self.status,
+        }
+
+    def try_complete_running(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        finished_at: str | None,
+        lease_owner_id: str | None = None,
+        lease_fencing_token: int | None = None,
+    ) -> bool:
+        """Accept terminal writes only from the current fenced owner/token."""
+        if self.status != "RUNNING":
+            return False
+        if lease_owner_id != self.lease_owner_id:
+            return False
+        if lease_fencing_token != self.lease_fencing_token:
+            return False
+        self.status = status
+        self.completed.append((run_id, status, finished_at))
+        return True
 
     def complete(
         self,
@@ -45,6 +139,46 @@ class FakeRunsRepository:
     ) -> None:
         """Record failure recovery status updates."""
         self.completed.append((run_id, status, finished_at))
+
+
+def _preclaimed_default_run_context_factory(
+    *,
+    db_conn: Any,
+    tenant_id: str,
+    run_data: dict[str, Any],
+    audit_sink: Any,
+) -> Any:
+    """Build the legacy hermetic context and attach its atomically claimed lease."""
+    unfenced_run_data = dict(run_data)
+    lease_owner_id = str(unfenced_run_data.pop("lease_owner_id"))
+    lease_fencing_token = int(unfenced_run_data.pop("lease_fencing_token"))
+    ctx = _default_run_context_factory(
+        db_conn=db_conn,
+        tenant_id=tenant_id,
+        run_data=unfenced_run_data,
+        audit_sink=audit_sink,
+    )
+    ctx.lease_owner_id = lease_owner_id
+    ctx.lease_fencing_token = lease_fencing_token
+    return ctx
+
+
+@pytest.fixture
+def seeded_in_memory_runs_repository() -> Iterator[InMemoryRunsRepository]:
+    """Keep the run row and fenced step writes on one persistence twin."""
+    clear_in_memory_runs_store()
+    clear_run_steps_store()
+    repository = InMemoryRunsRepository(TENANT_ID)
+    repository.create(
+        run_id="run-1",
+        deal_id="deal-1",
+        mode="SNAPSHOT",
+    )
+    try:
+        yield repository
+    finally:
+        clear_run_steps_store()
+        clear_in_memory_runs_store()
 
 
 def test_worker_uses_run_execution_service_not_pipeline_executor() -> None:
@@ -60,16 +194,25 @@ def test_worker_uses_run_execution_service_not_pipeline_executor() -> None:
     run_context.run_id = "run-1"
     run_context.tenant_id = TENANT_ID
 
+    def context_factory(**kwargs: Any) -> MagicMock:
+        run_context.lease_owner_id = kwargs["run_data"]["lease_owner_id"]
+        run_context.lease_fencing_token = kwargs["run_data"]["lease_fencing_token"]
+        return run_context
+
     worker = PipelineWorker(
         poll_interval=0,
         tenant_ids=[TENANT_ID],
         execution_service_factory=lambda **kwargs: execution_service,
-        run_context_factory=lambda **kwargs: run_context,
+        run_context_factory=context_factory,
     )
 
     with (
         patch("idis.pipeline.worker.get_app_engine", return_value=engine),
         patch("idis.pipeline.worker.get_runs_repository", return_value=runs_repo),
+        patch(
+            "idis.pipeline.worker._default_worker_audit_sink",
+            return_value=TransactionalInMemoryAuditSink(),
+        ),
         patch(
             "idis.pipeline.worker.PipelineExecutor",
             side_effect=AssertionError("worker must not instantiate PipelineExecutor"),
@@ -79,9 +222,11 @@ def test_worker_uses_run_execution_service_not_pipeline_executor() -> None:
     ):
         asyncio.run(worker._process_queued_runs())
 
-    set_tenant_local.assert_called_once_with(conn, TENANT_ID)
-    assert runs_repo.claim_queued_runs_calls == [10]
-    execution_service.execute.assert_called_once_with(run_context)
+    assert set_tenant_local.call_count == 2
+    assert all(item.args == (conn, TENANT_ID) for item in set_tenant_local.call_args_list)
+    assert runs_repo.requeue_expired_worker_leases_calls == [1]
+    assert runs_repo.claim_queued_runs_calls == [1]
+    execution_service.execute_preclaimed.assert_called_once_with(run_context)
 
 
 def test_worker_without_tenant_scope_does_not_scan_global_queued_runs() -> None:
@@ -103,7 +248,7 @@ def test_worker_without_tenant_scope_does_not_scan_global_queued_runs() -> None:
 
 
 def test_worker_persists_failed_status_after_execution_exception() -> None:
-    """Rollback after service errors must not leave claimed runs queued forever."""
+    """A crashed preclaimed execution remains leased RUNNING for explicit reclaim."""
     conn = MagicMock()
     engine = MagicMock()
     engine.connect.return_value.__enter__.return_value = conn
@@ -111,30 +256,37 @@ def test_worker_persists_failed_status_after_execution_exception() -> None:
     runs_repo = FakeRunsRepository()
     execution_service = MagicMock()
     execution_service.audit_sink = InMemoryAuditSink()
-    execution_service.execute.side_effect = RuntimeError("orchestration failed")
+    execution_service.execute_preclaimed.side_effect = RuntimeError("orchestration failed")
     run_context = MagicMock()
+
+    def context_factory(**kwargs: Any) -> MagicMock:
+        run_context.lease_owner_id = kwargs["run_data"]["lease_owner_id"]
+        run_context.lease_fencing_token = kwargs["run_data"]["lease_fencing_token"]
+        return run_context
 
     worker = PipelineWorker(
         poll_interval=0,
         tenant_ids=[TENANT_ID],
         execution_service_factory=lambda **kwargs: execution_service,
-        run_context_factory=lambda **kwargs: run_context,
+        run_context_factory=context_factory,
     )
 
     with (
         patch("idis.pipeline.worker.get_app_engine", return_value=engine),
         patch("idis.pipeline.worker.get_runs_repository", return_value=runs_repo),
+        patch(
+            "idis.pipeline.worker._default_worker_audit_sink",
+            return_value=TransactionalInMemoryAuditSink(),
+        ),
         patch("idis.pipeline.worker.set_tenant_local", create=True),
+        pytest.raises(RuntimeError, match="orchestration failed"),
     ):
-        processed = asyncio.run(worker._process_queued_runs())
+        asyncio.run(worker._process_queued_runs())
 
-    assert processed == 1
-    conn.rollback.assert_called()
-    conn.commit.assert_called_once()
-    assert len(runs_repo.completed) == 1
-    assert runs_repo.completed[0][0] == "run-1"
-    assert runs_repo.completed[0][1] == "FAILED"
-    assert runs_repo.completed[0][2] is not None
+    assert conn.commit.call_count == 2
+    conn.rollback.assert_not_called()
+    assert runs_repo.status == "RUNNING"
+    assert runs_repo.completed == []
 
 
 class _RecoveryRunsRepository:
@@ -298,17 +450,53 @@ def test_worker_commits_running_claim_before_orchestration(monkeypatch) -> None:
         def __init__(self) -> None:
             super().__init__(TENANT_ID)
             self.status = "QUEUED"
+            self.lease_owner_id: str | None = None
+            self.lease_fencing_token = 0
 
-        def claim_queued_runs(self, *, limit: int) -> list[dict[str, str]]:
+        def requeue_expired_worker_leases(
+            self,
+            *,
+            limit: int = 1,
+            lease_audit_emitter: Callable[..., None] | None = None,
+        ) -> list[dict[str, Any]]:
+            assert limit == 1
+            assert lease_audit_emitter is not None
+            events.append("requeue_expired_worker_leases")
+            return []
+
+        def claim_queued_runs(
+            self,
+            *,
+            limit: int,
+            lease_owner_id: str,
+            lease_seconds: int,
+            lease_audit_emitter: Callable[..., None],
+        ) -> list[dict[str, Any]]:
+            assert limit == 1
+            assert lease_seconds > 0
             events.append("claim_queued_runs")
-            return [
-                {
-                    "run_id": "run-1",
-                    "deal_id": "deal-1",
-                    "mode": "SNAPSHOT",
-                    "tenant_id": TENANT_ID,
-                }
-            ]
+            self.status = "RUNNING"
+            run = {
+                "run_id": "run-1",
+                "deal_id": "deal-1",
+                "mode": "SNAPSHOT",
+                "status": self.status,
+                "tenant_id": TENANT_ID,
+                "lease_owner_id": lease_owner_id,
+                "lease_fencing_token": 1,
+                "lease_expires_at": LEASE_EXPIRES_AT,
+                "last_heartbeat_at": LAST_HEARTBEAT_AT,
+            }
+            lease_audit_emitter(
+                db_conn=conn,
+                code="WORKER_LEASE_CLAIMED",
+                run_id=run["run_id"],
+                deal_id=run["deal_id"],
+                lease_owner_id=lease_owner_id,
+                new_fencing_token=1,
+                lease_expires_at=LEASE_EXPIRES_AT,
+            )
+            return [run]
 
         def try_mark_running(self, run_id: str) -> bool:
             events.append("mark_running")
@@ -327,7 +515,8 @@ def test_worker_commits_running_claim_before_orchestration(monkeypatch) -> None:
 
         def try_cancel_active(self, run_id: str) -> bool:
             events.append("cancel_during_orchestration")
-            if self.status != "RUNNING" or "commit" not in events:
+            claim_index = events.index("claim_queued_runs")
+            if self.status != "RUNNING" or "commit" not in events[claim_index + 1 :]:
                 return False
             self.status = "CANCELLED"
             return True
@@ -360,6 +549,8 @@ def test_worker_commits_running_claim_before_orchestration(monkeypatch) -> None:
             tenant_id=tenant_id,
             deal_id=run_data["deal_id"],
             mode=run_data["mode"],
+            lease_owner_id=str(run_data["lease_owner_id"]),
+            lease_fencing_token=int(run_data["lease_fencing_token"]),
             documents=[],
             extract_fn=lambda **_kwargs: {},
             grade_fn=lambda **_kwargs: {},
@@ -381,7 +572,10 @@ def test_worker_commits_running_claim_before_orchestration(monkeypatch) -> None:
         patch("idis.pipeline.worker.get_app_engine", return_value=engine),
         patch("idis.pipeline.worker.get_runs_repository", return_value=runs_repo),
         patch("idis.pipeline.worker.get_run_steps_repository", return_value=run_steps_repo),
-        patch("idis.pipeline.worker._default_worker_audit_sink", return_value=InMemoryAuditSink()),
+        patch(
+            "idis.pipeline.worker._default_worker_audit_sink",
+            return_value=TransactionalInMemoryAuditSink(),
+        ),
         patch("idis.pipeline.worker.set_tenant_local", create=True),
         patch("idis.services.runs.execution.RunOrchestrator") as orch_class_mock,
     ):
@@ -392,7 +586,9 @@ def test_worker_commits_running_claim_before_orchestration(monkeypatch) -> None:
 
     assert processed == 1
     assert cancel_results == [True]
-    assert events.index("commit") < events.index("orchestrator_execute")
+    claim_index = events.index("claim_queued_runs")
+    claim_commit_index = events.index("commit", claim_index)
+    assert claim_index < claim_commit_index < events.index("orchestrator_execute")
     assert orch_class_mock.call_count == 1
 
 
@@ -423,16 +619,53 @@ def test_worker_default_execution_restores_tenant_context_after_claim_commit(mon
         def __init__(self) -> None:
             super().__init__(TENANT_ID)
             self.status = "QUEUED"
+            self.lease_owner_id: str | None = None
+            self.lease_fencing_token = 0
 
-        def claim_queued_runs(self, *, limit: int) -> list[dict[str, str]]:
-            return [
-                {
-                    "run_id": "run-1",
-                    "deal_id": "deal-1",
-                    "mode": "SNAPSHOT",
-                    "tenant_id": TENANT_ID,
-                }
-            ]
+        def requeue_expired_worker_leases(
+            self,
+            *,
+            limit: int = 1,
+            lease_audit_emitter: Callable[..., None] | None = None,
+        ) -> list[dict[str, Any]]:
+            assert limit == 1
+            assert lease_audit_emitter is not None
+            return []
+
+        def claim_queued_runs(
+            self,
+            *,
+            limit: int,
+            lease_owner_id: str,
+            lease_seconds: int,
+            lease_audit_emitter: Callable[..., None],
+        ) -> list[dict[str, Any]]:
+            assert limit == 1
+            assert lease_seconds > 0
+            self.status = "RUNNING"
+            self.lease_owner_id = lease_owner_id
+            self.lease_fencing_token += 1
+            run = {
+                "run_id": "run-1",
+                "deal_id": "deal-1",
+                "mode": "SNAPSHOT",
+                "status": self.status,
+                "tenant_id": TENANT_ID,
+                "lease_owner_id": lease_owner_id,
+                "lease_fencing_token": self.lease_fencing_token,
+                "lease_expires_at": LEASE_EXPIRES_AT,
+                "last_heartbeat_at": LAST_HEARTBEAT_AT,
+            }
+            lease_audit_emitter(
+                db_conn=conn,
+                code="WORKER_LEASE_CLAIMED",
+                run_id=run["run_id"],
+                deal_id=run["deal_id"],
+                lease_owner_id=lease_owner_id,
+                new_fencing_token=self.lease_fencing_token,
+                lease_expires_at=LEASE_EXPIRES_AT,
+            )
+            return [run]
 
         def try_mark_running(self, run_id: str) -> bool:
             if self.status != "QUEUED":
@@ -447,6 +680,25 @@ def test_worker_default_execution_restores_tenant_context_after_claim_commit(mon
                 "deal_id": "deal-1",
                 "status": self.status,
             }
+
+        def try_complete_running(
+            self,
+            run_id: str,
+            *,
+            status: str,
+            finished_at: str | None,
+            lease_owner_id: str | None = None,
+            lease_fencing_token: int | None = None,
+        ) -> bool:
+            _ = (run_id, finished_at)
+            if self.status != "RUNNING":
+                return False
+            if lease_owner_id != self.lease_owner_id:
+                return False
+            if lease_fencing_token != self.lease_fencing_token:
+                return False
+            self.status = status
+            return True
 
         def complete(
             self,
@@ -470,11 +722,14 @@ def test_worker_default_execution_restores_tenant_context_after_claim_commit(mon
         run_data: dict[str, str],
         audit_sink: object,
     ) -> RunContext:
+        fake_set_tenant_local(db_conn, tenant_id)
         return RunContext(
             run_id=run_data["run_id"],
             tenant_id=tenant_id,
             deal_id=run_data["deal_id"],
             mode=run_data["mode"],
+            lease_owner_id=str(run_data["lease_owner_id"]),
+            lease_fencing_token=int(run_data["lease_fencing_token"]),
             documents=[],
             extract_fn=lambda **_kwargs: {},
             grade_fn=lambda **_kwargs: {},
@@ -497,7 +752,10 @@ def test_worker_default_execution_restores_tenant_context_after_claim_commit(mon
         patch("idis.pipeline.worker.get_app_engine", return_value=engine),
         patch("idis.pipeline.worker.get_runs_repository", return_value=runs_repo),
         patch("idis.pipeline.worker.get_run_steps_repository", return_value=run_steps_repo),
-        patch("idis.pipeline.worker._default_worker_audit_sink", return_value=InMemoryAuditSink()),
+        patch(
+            "idis.pipeline.worker._default_worker_audit_sink",
+            return_value=TransactionalInMemoryAuditSink(),
+        ),
         patch(
             "idis.pipeline.worker.set_tenant_local",
             side_effect=fake_set_tenant_local,
@@ -514,7 +772,9 @@ def test_worker_default_execution_restores_tenant_context_after_claim_commit(mon
     assert tenant_context_at_orchestration == [True]
 
 
-def test_worker_empty_persisted_corpus_preserves_no_ingested_documents_code() -> None:
+def test_worker_empty_persisted_corpus_preserves_no_ingested_documents_code(
+    seeded_in_memory_runs_repository: InMemoryRunsRepository,
+) -> None:
     """Worker no-document failures must not collapse into VALUEERROR."""
     conn = MagicMock()
 
@@ -535,7 +795,7 @@ def test_worker_empty_persisted_corpus_preserves_no_ingested_documents_code() ->
     engine = MagicMock()
     engine.connect.return_value.__enter__.return_value = conn
 
-    runs_repo = FakeRunsRepository()
+    runs_repo = seeded_in_memory_runs_repository
     run_steps_repo = InMemoryRunStepsRepository(TENANT_ID)
 
     worker = PipelineWorker(
@@ -546,11 +806,16 @@ def test_worker_empty_persisted_corpus_preserves_no_ingested_documents_code() ->
             runs_repo=runs_repo,
             run_steps_repo=run_steps_repo,
         ),
+        run_context_factory=_preclaimed_default_run_context_factory,
     )
 
     with (
         patch("idis.pipeline.worker.get_app_engine", return_value=engine),
         patch("idis.pipeline.worker.get_runs_repository", return_value=runs_repo),
+        patch(
+            "idis.pipeline.worker._default_worker_audit_sink",
+            return_value=TransactionalInMemoryAuditSink(),
+        ),
     ):
         processed = asyncio.run(worker._process_queued_runs())
 
@@ -561,7 +826,9 @@ def test_worker_empty_persisted_corpus_preserves_no_ingested_documents_code() ->
     assert steps[-1].error_code != "VALUEERROR"
 
 
-def test_worker_no_usable_persisted_corpus_preserves_no_usable_documents_code() -> None:
+def test_worker_no_usable_persisted_corpus_preserves_no_usable_documents_code(
+    seeded_in_memory_runs_repository: InMemoryRunsRepository,
+) -> None:
     """Worker failed-corpus runs must fail at DOCUMENT_PREFLIGHT with a business code."""
     conn = MagicMock()
 
@@ -609,7 +876,7 @@ def test_worker_no_usable_persisted_corpus_preserves_no_usable_documents_code() 
     engine = MagicMock()
     engine.connect.return_value.__enter__.return_value = conn
 
-    runs_repo = FakeRunsRepository()
+    runs_repo = seeded_in_memory_runs_repository
     run_steps_repo = InMemoryRunStepsRepository(TENANT_ID)
 
     worker = PipelineWorker(
@@ -620,11 +887,16 @@ def test_worker_no_usable_persisted_corpus_preserves_no_usable_documents_code() 
             runs_repo=runs_repo,
             run_steps_repo=run_steps_repo,
         ),
+        run_context_factory=_preclaimed_default_run_context_factory,
     )
 
     with (
         patch("idis.pipeline.worker.get_app_engine", return_value=engine),
         patch("idis.pipeline.worker.get_runs_repository", return_value=runs_repo),
+        patch(
+            "idis.pipeline.worker._default_worker_audit_sink",
+            return_value=TransactionalInMemoryAuditSink(),
+        ),
     ):
         processed = asyncio.run(worker._process_queued_runs())
 

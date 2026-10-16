@@ -33,6 +33,7 @@ IDIS_REQUIRE_PROMOTED_PROMPTS_ENV = "IDIS_REQUIRE_PROMOTED_PROMPTS"
 # step provenance (kept in sync with idis.api.routes.runs constants by test).
 RUNTIME_PROMPT_IDS: tuple[str, ...] = (
     "EXTRACT_CLAIMS_V1",
+    "METHODOLOGY_QUESTION_EXTRACTION_V1",
     "DEBATE_ADVOCATE_V1",
     "DEBATE_SANAD_BREAKER_V1",
     "DEBATE_CONTRADICTION_FINDER_V1",

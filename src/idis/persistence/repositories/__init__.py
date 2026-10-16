@@ -40,6 +40,13 @@ from idis.persistence.repositories.evidence import (
     PostgresEvidenceRepository,
     get_evidence_repository,
 )
+from idis.persistence.repositories.methodology_extraction import (
+    DurableCanonicalMaterializationSnapshot,
+    DurableMethodologyExtractionTaskRecord,
+    DurableMethodologyTerminalizationProof,
+    MethodologyExtractionRepositoryError,
+    PostgresMethodologyExtractionRepository,
+)
 from idis.persistence.repositories.run_steps import (
     InMemoryRunStepsRepository,
     PostgresRunStepsRepository,
@@ -74,6 +81,11 @@ __all__ = [
     "EvidenceRepo",
     "PostgresEvidenceRepository",
     "PostgresDocumentsRepository",
+    "DurableCanonicalMaterializationSnapshot",
+    "DurableMethodologyExtractionTaskRecord",
+    "DurableMethodologyTerminalizationProof",
+    "MethodologyExtractionRepositoryError",
+    "PostgresMethodologyExtractionRepository",
     "PostgresRunStepsRepository",
     "RunStepsRepo",
     "PostgresRunsRepository",

@@ -886,6 +886,13 @@ class FailingIdempotencyStore:
         raise IdempotencyStoreError("Simulated store put failure")
 
 
+class UnexpectedFailingIdempotencyStore(FailingIdempotencyStore):
+    """Test-only store exposing an unexpected post-route persistence failure."""
+
+    def put(self, scope_key: object, record: object) -> None:
+        raise RuntimeError("unexpected idempotency persistence failure")
+
+
 class TestStorePutFailure:
     """Test F: store.put failure returns 500 IDEMPOTENCY_STORE_FAILED."""
 
@@ -927,3 +934,29 @@ class TestStorePutFailure:
         assert response.status_code == 500
         body = response.json()
         assert body["code"] == "IDEMPOTENCY_STORE_FAILED"
+
+    def test_unexpected_store_put_failure_cannot_return_the_success_response(
+        self,
+        api_keys_config_single: dict[str, dict[str, str]],
+        api_key_a: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys_config_single))
+        app = create_app(
+            audit_sink=InMemoryAuditSink(),
+            idempotency_store=UnexpectedFailingIdempotencyStore(),
+            service_region="me-south-1",
+        )
+
+        response = TestClient(app).post(
+            "/v1/deals",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "Content-Type": "application/json",
+                "Idempotency-Key": f"idem_{uuid.uuid4().hex[:8]}",
+            },
+            json={"name": "Deal Unexpected Put Fail", "company_name": "Unexpected Corp"},
+        )
+
+        assert response.status_code == 500
+        assert response.json()["code"] == "IDEMPOTENCY_STORE_FAILED"

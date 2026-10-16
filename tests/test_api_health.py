@@ -22,13 +22,14 @@ def test_health_returns_200(client: TestClient) -> None:
 
 
 def test_health_contains_required_fields(client: TestClient) -> None:
-    """GET /health response contains status, time, and version."""
+    """GET /health response contains status, time, version, and boot identity."""
     response = client.get("/health")
     data = response.json()
 
     assert "status" in data
     assert "time" in data
     assert "version" in data
+    assert "boot_id" in data
 
 
 def test_health_status_is_ok(client: TestClient) -> None:

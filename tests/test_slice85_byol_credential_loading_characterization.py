@@ -75,6 +75,7 @@ from idis.services.runs.strict_full_live import (
     build_strict_full_live_admission_report,
     build_strict_full_live_readiness_report,
 )
+from tests.strict_runtime_test_support import RecordingPostgresAuditSink
 
 TENANT_ID = "tenant-slice85"
 
@@ -293,6 +294,7 @@ def test_run_full_enrichment_strict_raises_on_missing_byol_without_leak() -> Non
             created_claim_ids=[],
             calc_ids=[],
             db_conn=None,
+            audit_sink=RecordingPostgresAuditSink(),
         )
     # Note: with env markers present, the strict execution path bootstraps them into the
     # (in-memory) repo, so the block is the rights/credential outcome for the fake provider;

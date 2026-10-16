@@ -47,6 +47,11 @@ def run_migrations_online() -> None:
 
     Creates an Engine and associates a connection with the context.
     """
+    provided_connection = context.config.attributes.get("connection")
+    if provided_connection is not None:
+        run_migrations_with_connection(provided_connection)
+        return
+
     engine = get_admin_engine()
 
     with engine.connect() as connection:

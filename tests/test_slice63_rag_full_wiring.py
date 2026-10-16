@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -49,13 +50,15 @@ def _vector(seed: float) -> list[float]:
 
 
 def _documents(*, include_empty: bool = False) -> list[dict[str, Any]]:
+    revenue_text = "PRIVATE revenue span text must not leak"
+    secondary_text = "   " if include_empty else "PRIVATE margin span text must not leak"
     spans: list[dict[str, Any]] = [
         {
             "span_id": SPAN_ID,
             "document_id": "doc-001",
             "span_type": "PARAGRAPH",
-            "text_excerpt": "PRIVATE revenue span text must not leak",
-            "content_hash": "hash-span-1",
+            "text_excerpt": revenue_text,
+            "content_hash": hashlib.sha256(revenue_text.encode("utf-8")).hexdigest(),
         }
     ]
     if include_empty:
@@ -64,8 +67,8 @@ def _documents(*, include_empty: bool = False) -> list[dict[str, Any]]:
                 "span_id": SPAN_ID_2,
                 "document_id": "doc-001",
                 "span_type": "PARAGRAPH",
-                "text_excerpt": "   ",
-                "content_hash": "hash-span-2",
+                "text_excerpt": secondary_text,
+                "content_hash": hashlib.sha256(secondary_text.encode("utf-8")).hexdigest(),
             }
         )
     else:
@@ -74,8 +77,8 @@ def _documents(*, include_empty: bool = False) -> list[dict[str, Any]]:
                 "span_id": SPAN_ID_2,
                 "document_id": "doc-001",
                 "span_type": "CELL",
-                "text_excerpt": "PRIVATE margin span text must not leak",
-                "content_hash": "hash-span-2",
+                "text_excerpt": secondary_text,
+                "content_hash": hashlib.sha256(secondary_text.encode("utf-8")).hexdigest(),
             }
         )
     return [
@@ -84,6 +87,13 @@ def _documents(*, include_empty: bool = False) -> list[dict[str, Any]]:
             "doc_type": "PDF",
             "document_name": "test.pdf",
             "parse_status": "PARSED",
+            "metadata": {
+                "parser_doc_type": "PDF",
+                "parser_runtime_status": "completed",
+                "span_count": len(spans),
+                "parse_error_codes": [],
+                "parse_warning_codes": [],
+            },
             "spans": spans,
         }
     ]

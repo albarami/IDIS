@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections import Counter
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
+from typing import Protocol
 
+from idis.methodology.category_mapping import (
+    METHODOLOGY_CDD_CATEGORY_MAP_DRIFT,
+    CommercialDDCategoryMapError,
+    CommercialDDQuestionCategoryMap,
+    validate_commercial_dd_question_category_map,
+)
 from idis.methodology.models import MethodologyQuestion, MethodologyRegistry, MethodologyType
 from idis.models.document_classification import (
     CddDocumentCategory,
@@ -22,6 +31,7 @@ from idis.models.extraction_task import (
     ExtractionTaskStatus,
     ExtractionTaskSummary,
     SourceSpanReference,
+    StrictExtractionTaskAdmission,
 )
 from idis.models.methodology_coverage import MethodologyCoverageRecord
 
@@ -77,6 +87,7 @@ _CDD_CATEGORY_ALIASES: dict[str, set[CddDocumentCategory]] = {
     "contracts": {CddDocumentCategory.COMMERCIAL_CONTRACTS},
     "customer_report": {CddDocumentCategory.CUSTOMER_EVIDENCE},
 }
+STRICT_CATEGORY_SPAN_ADMISSION_VERSION = "strict-category-span-admission-v2"
 
 
 @dataclass(frozen=True)
@@ -89,14 +100,266 @@ class SafePreflightClassificationInput:
     classification_id: str | None
     fdd_category: FddDocumentCategory
     cdd_category: CddDocumentCategory
+    secondary_fdd_categories: tuple[FddDocumentCategory, ...]
+    secondary_cdd_categories: tuple[CddDocumentCategory, ...]
     support_status: DocumentSupportStatus
     triage_status: DocumentTriageStatus
     usable_for_methodology_extraction: bool
     methodology_target_areas: list[str] = field(default_factory=list)
     reason_codes: list[str] = field(default_factory=list)
 
+    def __post_init__(self) -> None:
+        for values, enum_type in (
+            (self.secondary_fdd_categories, FddDocumentCategory),
+            (self.secondary_cdd_categories, CddDocumentCategory),
+        ):
+            if not isinstance(values, tuple) or any(
+                not isinstance(item, enum_type) for item in values
+            ):
+                raise ValueError("secondary categories must be typed tuples")
+            canonical_values = [item.value for item in values]
+            if canonical_values != sorted(set(canonical_values)):
+                raise ValueError("secondary categories must be sorted and unique")
+
 
 PlannerClassification = DocumentClassification | SafePreflightClassificationInput
+
+
+@dataclass(frozen=True, slots=True)
+class ExtractionTaskAdmissionMatch:
+    """One deterministic category match and its optional strict provenance."""
+
+    target_fdd_category: FddDocumentCategory | None
+    target_cdd_category: CddDocumentCategory | None
+    strict_admission: StrictExtractionTaskAdmission | None = None
+
+
+class ExtractionTaskAdmissionPolicy(Protocol):
+    """Typed policy boundary between legacy tag and strict live-span admission."""
+
+    def match_question(
+        self,
+        *,
+        question: MethodologyQuestion,
+        classification: PlannerClassification,
+    ) -> ExtractionTaskAdmissionMatch | None: ...
+
+    def validate_spans(
+        self,
+        *,
+        question: MethodologyQuestion,
+        classification: PlannerClassification,
+        spans: Sequence[SourceSpanReference],
+    ) -> ExtractionTaskBlockerReason | None: ...
+
+
+class LegacyEvidenceTagAdmissionPolicy:
+    """Historical non-strict policy retained only for the in-memory seam."""
+
+    def match_question(
+        self,
+        *,
+        question: MethodologyQuestion,
+        classification: PlannerClassification,
+    ) -> ExtractionTaskAdmissionMatch | None:
+        if not _classification_matches_question(question, classification):
+            return None
+        return ExtractionTaskAdmissionMatch(
+            target_fdd_category=classification.fdd_category,
+            target_cdd_category=classification.cdd_category,
+        )
+
+    def validate_spans(
+        self,
+        *,
+        question: MethodologyQuestion,
+        classification: PlannerClassification,
+        spans: Sequence[SourceSpanReference],
+    ) -> ExtractionTaskBlockerReason | None:
+        _ = classification
+        if not spans:
+            return ExtractionTaskBlockerReason.NO_SOURCE_SPANS
+        if not _required_evidence_is_present(question, list(spans)):
+            return ExtractionTaskBlockerReason.REQUIRED_EVIDENCE_MISSING
+        return None
+
+
+class StrictDurableCategorySpanAdmissionPolicy:
+    """Governed category matching over authenticated durable span identities."""
+
+    def __init__(
+        self,
+        *,
+        cdd_category_map_loader: Callable[[], CommercialDDQuestionCategoryMap],
+    ) -> None:
+        if not callable(cdd_category_map_loader):
+            raise CommercialDDCategoryMapError(METHODOLOGY_CDD_CATEGORY_MAP_DRIFT)
+        self._category_map_loader = cdd_category_map_loader
+        self._category_map = validate_commercial_dd_question_category_map(cdd_category_map_loader())
+        self._cdd_entries = {
+            entry.methodology_question_id: entry for entry in self._category_map.questions
+        }
+
+    @property
+    def category_map(self) -> CommercialDDQuestionCategoryMap:
+        """Return the authenticated immutable map bound to this planning policy."""
+        return self._category_map
+
+    def match_question(
+        self,
+        *,
+        question: MethodologyQuestion,
+        classification: PlannerClassification,
+    ) -> ExtractionTaskAdmissionMatch | None:
+        if question.methodology_type is MethodologyType.COMMERCIAL_DD:
+            entry = self._cdd_entries.get(question.methodology_question_id)
+            if (
+                question.methodology_id != self._category_map.methodology_id
+                or question.methodology_version_id != self._category_map.methodology_version_id
+                or entry is None
+                or _methodology_question_sha256(question) != entry.methodology_question_sha256
+            ):
+                raise CommercialDDCategoryMapError(METHODOLOGY_CDD_CATEGORY_MAP_DRIFT)
+            available = _complete_cdd_categories(classification)
+            matched_values = sorted(set(entry.categories).intersection(available))
+            if not matched_values:
+                return None
+            matched_cdd = matched_values[0]
+            return ExtractionTaskAdmissionMatch(
+                target_fdd_category=classification.fdd_category,
+                target_cdd_category=matched_cdd,
+                strict_admission=self._strict_metadata(
+                    classification=classification,
+                    matched_category=matched_cdd.value,
+                ),
+            )
+
+        available_fdd = _complete_fdd_categories(classification)
+        matched_fdd_values = sorted(_normalized_fdd_targets(question).intersection(available_fdd))
+        if not matched_fdd_values:
+            return None
+        matched_fdd = matched_fdd_values[0]
+        return ExtractionTaskAdmissionMatch(
+            target_fdd_category=matched_fdd,
+            target_cdd_category=classification.cdd_category,
+            strict_admission=self._strict_metadata(
+                classification=classification,
+                matched_category=matched_fdd.value,
+            ),
+        )
+
+    def validate_spans(
+        self,
+        *,
+        question: MethodologyQuestion,
+        classification: PlannerClassification,
+        spans: Sequence[SourceSpanReference],
+    ) -> ExtractionTaskBlockerReason | None:
+        _ = question
+        return self._validate_strict_spans(classification=classification, spans=spans)
+
+    @staticmethod
+    def _validate_strict_spans(
+        *,
+        classification: PlannerClassification,
+        spans: Sequence[SourceSpanReference],
+    ) -> ExtractionTaskBlockerReason | None:
+        if not spans:
+            return ExtractionTaskBlockerReason.NO_SOURCE_SPANS
+        seen_span_ids: set[str] = set()
+        for span in spans:
+            if (
+                span.document_id != classification.document_id
+                or span.span_id in seen_span_ids
+                or span.content_hash is None
+                or len(span.content_hash) != 64
+                or any(character not in "0123456789abcdef" for character in span.content_hash)
+                or span.text_excerpt is None
+                or not span.text_excerpt.strip()
+                or hashlib.sha256(span.text_excerpt.encode("utf-8")).hexdigest()
+                != span.content_hash
+                or not isinstance(span.locator, dict)
+                or not span.locator
+                or span.span_type is None
+                or not span.span_type.strip()
+                or bool(span.evidence_tags)
+            ):
+                raise ValueError("strict durable source span identity is invalid")
+            try:
+                json.dumps(span.locator, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("strict durable source locator is invalid") from exc
+            seen_span_ids.add(span.span_id)
+        return None
+
+    def validate_rehydrated_tasks(self, tasks: Sequence[ExtractionTask]) -> None:
+        """Reject stale task payloads under the current governed map/classifier."""
+        current = validate_commercial_dd_question_category_map(self._category_map_loader())
+        if current != self._category_map or not tasks:
+            raise ValueError("strict admission mapping drift")
+        for task in tasks:
+            admission = task.strict_admission
+            classification = _classification_from_admission(task) if admission is not None else None
+            if task.methodology_type is MethodologyType.COMMERCIAL_DD:
+                cdd_entry = self._cdd_entries.get(task.methodology_question_id)
+                category_lineage_is_current = (
+                    classification is not None
+                    and task.target_fdd_category == classification.fdd_category
+                    and task.target_cdd_category is not None
+                    and admission is not None
+                    and admission.matched_category == task.target_cdd_category.value
+                    and task.target_cdd_category in _complete_cdd_categories(classification)
+                    and cdd_entry is not None
+                    and task.target_cdd_category in cdd_entry.categories
+                )
+            else:
+                category_lineage_is_current = (
+                    classification is not None
+                    and task.target_cdd_category == classification.cdd_category
+                    and task.target_fdd_category is not None
+                    and admission is not None
+                    and admission.matched_category == task.target_fdd_category.value
+                    and task.target_fdd_category in _complete_fdd_categories(classification)
+                )
+            if (
+                task.status is not ExtractionTaskStatus.READY
+                or admission is None
+                or admission.contract_version != STRICT_CATEGORY_SPAN_ADMISSION_VERSION
+                or admission.cdd_category_mapping_version != current.mapping_version
+                or admission.cdd_category_mapping_sha256 != current.canonical_payload_sha256
+                or admission.classifier_contract_version != current.classifier_version
+                or admission.classifier_reachable_categories_sha256
+                != current.classifier_reachable_categories_sha256
+                or not category_lineage_is_current
+            ):
+                raise ValueError("strict admission task payload drift")
+            if classification is None:
+                raise ValueError("strict admission task payload drift")
+            self._validate_strict_spans(
+                classification=classification,
+                spans=task.source_spans,
+            )
+
+    def _strict_metadata(
+        self,
+        *,
+        classification: PlannerClassification,
+        matched_category: str,
+    ) -> StrictExtractionTaskAdmission:
+        return StrictExtractionTaskAdmission(
+            contract_version=STRICT_CATEGORY_SPAN_ADMISSION_VERSION,
+            matched_category=matched_category,
+            classified_primary_fdd_category=classification.fdd_category,
+            classified_primary_cdd_category=classification.cdd_category,
+            classified_secondary_fdd_categories=list(classification.secondary_fdd_categories),
+            classified_secondary_cdd_categories=list(classification.secondary_cdd_categories),
+            cdd_category_mapping_version=self._category_map.mapping_version,
+            cdd_category_mapping_sha256=self._category_map.canonical_payload_sha256,
+            classifier_contract_version=self._category_map.classifier_version,
+            classifier_reachable_categories_sha256=(
+                self._category_map.classifier_reachable_categories_sha256
+            ),
+        )
 
 
 class InMemoryExtractionTaskPlanner:
@@ -104,6 +367,13 @@ class InMemoryExtractionTaskPlanner:
 
     persistence_backend = "in_memory"
     external_calls_enabled = False
+
+    def __init__(
+        self,
+        *,
+        admission_policy: ExtractionTaskAdmissionPolicy | None = None,
+    ) -> None:
+        self._admission_policy = admission_policy or LegacyEvidenceTagAdmissionPolicy()
 
     def plan_tasks(
         self,
@@ -195,9 +465,15 @@ class InMemoryExtractionTaskPlanner:
             ]
 
         category_matches = [
-            classification
+            (classification, admission)
             for classification in classifications
-            if _classification_matches_question(question, classification)
+            if (
+                admission := self._admission_policy.match_question(
+                    question=question,
+                    classification=classification,
+                )
+            )
+            is not None
         ]
         if not category_matches:
             return [
@@ -214,16 +490,18 @@ class InMemoryExtractionTaskPlanner:
             ]
 
         tasks: list[ExtractionTask] = []
-        for classification in category_matches:
+        for classification, admission in category_matches:
             blocker_reason = _triage_blocker_for(classification)
             spans = sorted(
                 source_spans_by_document_id.get(classification.document_id, []),
                 key=lambda span: span.span_id,
             )
-            if blocker_reason is None and not spans:
-                blocker_reason = ExtractionTaskBlockerReason.NO_SOURCE_SPANS
-            if blocker_reason is None and not _required_evidence_is_present(question, spans):
-                blocker_reason = ExtractionTaskBlockerReason.REQUIRED_EVIDENCE_MISSING
+            if blocker_reason is None:
+                blocker_reason = self._admission_policy.validate_spans(
+                    question=question,
+                    classification=classification,
+                    spans=spans,
+                )
 
             if blocker_reason is not None:
                 tasks.append(
@@ -255,11 +533,12 @@ class InMemoryExtractionTaskPlanner:
                     document_id=classification.document_id,
                     classification_id=classification.classification_id,
                     source_spans=spans,
-                    target_fdd_category=classification.fdd_category,
-                    target_cdd_category=classification.cdd_category,
-                    required_evidence=question.required_evidence,
+                    target_fdd_category=admission.target_fdd_category,
+                    target_cdd_category=admission.target_cdd_category,
+                    strict_admission=admission.strict_admission,
+                    required_evidence=list(question.required_evidence),
                     expected_answer_schema=build_expected_answer_schema(question),
-                    validation_requirements=question.validation_requirements,
+                    validation_requirements=list(question.validation_requirements),
                     reason_codes=["ready"],
                 )
             )
@@ -271,9 +550,9 @@ def build_expected_answer_schema(question: MethodologyQuestion) -> ExpectedAnswe
     return ExpectedAnswerSchema(
         answer_type=_infer_answer_type(question),
         question_text=question.question_text,
-        required_evidence=question.required_evidence,
-        required_calculations=question.required_calculations,
-        validation_requirements=question.validation_requirements,
+        required_evidence=list(question.required_evidence),
+        required_calculations=list(question.required_calculations),
+        validation_requirements=list(question.validation_requirements),
         report_section=question.report_mapping.report_section,
         report_subsection=question.report_mapping.report_subsection,
         methodology_type=question.methodology_type,
@@ -314,9 +593,9 @@ def _blocked_task(
         source_spans=source_spans,
         target_fdd_category=classification.fdd_category if classification else None,
         target_cdd_category=classification.cdd_category if classification else None,
-        required_evidence=question.required_evidence,
+        required_evidence=list(question.required_evidence),
         expected_answer_schema=build_expected_answer_schema(question),
-        validation_requirements=question.validation_requirements,
+        validation_requirements=list(question.validation_requirements),
         reason_codes=[blocker_reason.value],
     )
 
@@ -352,6 +631,47 @@ def _normalized_cdd_targets(question: MethodologyQuestion) -> set[CddDocumentCat
         except ValueError:
             continue
     return targets
+
+
+def _complete_fdd_categories(
+    classification: PlannerClassification,
+) -> set[FddDocumentCategory]:
+    return {classification.fdd_category, *classification.secondary_fdd_categories}
+
+
+def _complete_cdd_categories(
+    classification: PlannerClassification,
+) -> set[CddDocumentCategory]:
+    return {classification.cdd_category, *classification.secondary_cdd_categories}
+
+
+def _methodology_question_sha256(question: MethodologyQuestion) -> str:
+    payload = json.dumps(
+        question.model_dump(mode="json"),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _classification_from_admission(task: ExtractionTask) -> SafePreflightClassificationInput:
+    admission = task.strict_admission
+    if admission is None or task.document_id is None:
+        raise ValueError("strict admission is absent")
+    return SafePreflightClassificationInput(
+        tenant_id=task.tenant_id,
+        deal_id=task.deal_id,
+        document_id=task.document_id,
+        classification_id=task.classification_id,
+        fdd_category=admission.classified_primary_fdd_category,
+        cdd_category=admission.classified_primary_cdd_category,
+        secondary_fdd_categories=tuple(admission.classified_secondary_fdd_categories),
+        secondary_cdd_categories=tuple(admission.classified_secondary_cdd_categories),
+        support_status=DocumentSupportStatus.SUPPORTED,
+        triage_status=DocumentTriageStatus.READY,
+        usable_for_methodology_extraction=True,
+    )
 
 
 def _required_evidence_is_present(

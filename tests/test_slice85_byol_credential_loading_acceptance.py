@@ -43,6 +43,7 @@ from idis.services.runs.strict_full_live import (
     build_strict_full_live_admission_report,
     build_strict_full_live_readiness_report,
 )
+from tests.strict_runtime_test_support import RecordingPostgresAuditSink
 from tests.test_slice85_byol_credential_loading_characterization import (
     TENANT_ID,
     _CapturingByolConnector,
@@ -253,6 +254,7 @@ def test_acceptance_execution_backstop_fails_closed_in_strict_without_leak() -> 
             created_claim_ids=[],
             calc_ids=[],
             db_conn=None,
+            audit_sink=RecordingPostgresAuditSink(),
         )
     surfaced = f"{exc_info.value!s}|{exc_info.value!r}"
     assert "fake_byol" in surfaced  # provider id only

@@ -57,6 +57,7 @@ class DocumentSupportStatus(StrEnum):
     TOO_LARGE = "too_large"
     CORRUPTED = "corrupted"
     CONVERSION_REQUIRED = "conversion_required"
+    EXCLUDED_CONFIRMED = "excluded_confirmed"
     UNKNOWN = "unknown"
 
 
@@ -70,6 +71,7 @@ class DocumentTriageStatus(StrEnum):
     UNSUPPORTED_SOURCE = "unsupported_source"
     OCR_REQUIRED = "ocr_required"
     TOO_LARGE = "too_large"
+    EXCLUDED_CONFIRMED = "excluded_confirmed"
     UNKNOWN = "unknown"
 
 

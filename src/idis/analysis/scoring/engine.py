@@ -13,7 +13,6 @@ Deterministic aggregator that:
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 from typing import Any
 
 from idis.analysis.models import AnalysisBundle, AnalysisContext, EnrichmentRef
@@ -27,6 +26,7 @@ from idis.analysis.scoring.models import (
     Stage,
 )
 from idis.analysis.scoring.stage_packs import StagePack, get_stage_pack
+from idis.audit.canonical import build_canonical_audit_event
 from idis.audit.sink import AuditSink, AuditSinkError
 from idis.validators.muhasabah import validate_muhasabah
 from idis.validators.schema_validator import ValidationError, ValidationResult
@@ -391,14 +391,40 @@ class ScoringEngine:
         Raises:
             AuditSinkError: If the audit sink fails.
         """
-        event = {
-            "event_type": event_type,
-            "timestamp": datetime.now(UTC).isoformat(),
-            **data,
+        suffix = event_type.removeprefix("analysis.scoring.")
+        canonical_type = f"integration.scoring.{suffix}"
+        safe = {
+            key: data[key]
+            for key in (
+                "stage",
+                "composite_score",
+                "score_band",
+                "routing",
+                "error_type",
+            )
+            if key in data
         }
+        if canonical_type.endswith(".failed") and "error_type" not in safe:
+            safe["error_type"] = "SCORING_EXECUTION_FAILED"
+        event = build_canonical_audit_event(
+            tenant_id=str(data["tenant_id"]),
+            event_type=canonical_type,
+            severity="HIGH" if canonical_type.endswith(".failed") else "LOW",
+            summary=f"Scoring operation recorded: {canonical_type}",
+            actor_id="idis-scoring-engine",
+            request_id=str(data["run_id"]),
+            method="POST",
+            path=f"/internal/scoring/runs/{data['run_id']}",
+            status_code=422 if canonical_type.endswith(".failed") else 200,
+            resource_type="run",
+            resource_id=str(data["run_id"]),
+            deal_id=str(data["deal_id"]),
+            safe=safe,
+            refs=[f"deal_id:{data['deal_id']}"],
+        )
         try:
             self._audit_sink.emit(event)
         except AuditSinkError:
             raise
         except Exception as exc:
-            raise AuditSinkError(f"Audit sink failure for event '{event_type}': {exc}") from exc
+            raise AuditSinkError("AUDIT_FAILURE: scoring operation was not recorded") from exc

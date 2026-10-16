@@ -30,6 +30,7 @@ import yaml
 
 from idis.contracts import (
     CONTRACT_LOCK_RELATIVE_PATH,
+    GOVERNED_CONTRACT_RELATIVE_PATHS,
     build_lock_document,
     verify_contract_lock,
     write_lock_document,
@@ -338,7 +339,7 @@ def test_lock_regeneration_is_deterministic_and_idempotent() -> None:
     )
 
 
-def test_lock_covers_every_schema_file_recursively() -> None:
+def test_lock_covers_every_schema_and_governed_contract_file() -> None:
     committed = json.loads((_REPO_ROOT / CONTRACT_LOCK_RELATIVE_PATH).read_text(encoding="utf-8"))
     locked_files = set(committed["files"])
 
@@ -346,5 +347,6 @@ def test_lock_covers_every_schema_file_recursively() -> None:
         path.relative_to(_REPO_ROOT).as_posix() for path in (_REPO_ROOT / "schemas").rglob("*.json")
     }
     on_disk.add(_SPEC_RELATIVE)
+    on_disk.update(relative.as_posix() for relative in GOVERNED_CONTRACT_RELATIVE_PATHS)
 
     assert locked_files == on_disk

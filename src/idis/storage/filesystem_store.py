@@ -14,22 +14,28 @@ Environment Variables:
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import logging
 import os
 import re
+import stat
 import tempfile
 import uuid
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 
 from idis.storage.errors import (
+    ObjectIntegrityError,
     ObjectNotFoundError,
     PathTraversalError,
     StorageBackendError,
 )
 from idis.storage.models import StoredObject, StoredObjectMetadata
-from idis.storage.object_store import ObjectStore
+from idis.storage.object_store import BinaryReader, ObjectStore, StreamSource
 from idis.storage.tracing import traced_storage_operation
 
 logger = logging.getLogger(__name__)
@@ -45,11 +51,35 @@ _SAFE_KEY_PATTERN = re.compile(r"^[a-zA-Z0-9_\-./]+$")
 _LATEST_POINTER = "_latest"
 _METADATA_SUFFIX = ".meta.json"
 _CONTENT_SUFFIX = ".data"
+_STREAM_READ_CHUNK_BYTES = 1024 * 1024
+_SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
+_WRITE_LOCK_FILENAME = ".put-stream.lock"
 
 
 def _validate_tenant_id(tenant_id: str) -> bool:
     """Validate that tenant_id is a valid UUID format."""
     return bool(_UUID_PATTERN.match(tenant_id))
+
+
+def _is_canonical_version_id(version_id: object) -> bool:
+    """Return whether a version identifier is the canonical UUID spelling."""
+    if not isinstance(version_id, str):
+        return False
+    try:
+        return str(uuid.UUID(version_id)) == version_id
+    except (AttributeError, ValueError):
+        return False
+
+
+def _validate_version_id(version_id: object, *, tenant_id: str, key: str) -> str:
+    """Reject unsafe or non-canonical version identifiers before path creation."""
+    if not _is_canonical_version_id(version_id):
+        raise PathTraversalError(
+            message="Invalid object version identifier",
+            tenant_id=tenant_id,
+            key=key,
+        )
+    return cast(str, version_id)
 
 
 def _is_path_traversal(key: str) -> bool:
@@ -108,6 +138,82 @@ def _validate_key(key: str, tenant_id: str) -> None:
 def _compute_sha256(data: bytes) -> str:
     """Compute SHA256 hash of data and return as hex string."""
     return hashlib.sha256(data).hexdigest()
+
+
+def _normalized_resolved_path(path: Path) -> Path:
+    """Normalize equivalent Windows extended-length paths for containment checks."""
+    resolved = str(path.resolve())
+    if os.name == "nt":
+        if resolved.startswith("\\\\?\\UNC\\"):
+            resolved = f"\\\\{resolved[8:]}"
+        elif resolved.startswith("\\\\?\\"):
+            resolved = resolved[4:]
+        resolved = os.path.normcase(os.path.normpath(resolved))
+    return Path(resolved)
+
+
+def _normalized_absolute_path(path: Path) -> Path:
+    """Normalize a path lexically, without following filesystem aliases."""
+    absolute = os.path.abspath(path)
+    if os.name == "nt":
+        if absolute.startswith("\\\\?\\UNC\\"):
+            absolute = f"\\\\{absolute[8:]}"
+        elif absolute.startswith("\\\\?\\"):
+            absolute = absolute[4:]
+        absolute = os.path.normcase(os.path.normpath(absolute))
+    return Path(absolute)
+
+
+@contextmanager
+def _exclusive_object_write_lock(
+    obj_dir: Path,
+    *,
+    tenant_id: str,
+    key: str,
+) -> Iterator[None]:
+    """Serialize version publication across threads and worker processes."""
+    lock_path = obj_dir / _WRITE_LOCK_FILENAME
+    acquired = False
+    try:
+        with lock_path.open("a+b") as lock_file:
+            lock_file.seek(0, os.SEEK_END)
+            if lock_file.tell() == 0:
+                lock_file.write(b"\0")
+                lock_file.flush()
+            lock_file.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                fcntl = cast(Any, importlib.import_module("fcntl"))
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            acquired = True
+            try:
+                yield
+            finally:
+                if acquired:
+                    lock_file.seek(0)
+                    try:
+                        if os.name == "nt":
+                            import msvcrt
+
+                            msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                        else:
+                            fcntl = cast(Any, importlib.import_module("fcntl"))
+                            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                    except OSError as exc:
+                        logger.warning(
+                            "Failed to release filesystem object write lock: %s",
+                            type(exc).__name__,
+                        )
+    except OSError as exc:
+        raise StorageBackendError(
+            message="Failed to acquire filesystem object write lock",
+            tenant_id=tenant_id,
+            key=key,
+            cause=exc,
+        ) from exc
 
 
 class FilesystemObjectStore(ObjectStore):
@@ -172,27 +278,75 @@ class FilesystemObjectStore(ObjectStore):
         return tenant_dir / f"{safe_key}_{key_hash}"
 
     def _ensure_resolved_within_base(self, path: Path, tenant_id: str, key: str) -> Path:
-        """Ensure a path resolves within the base directory (defense in depth)."""
-        resolved = path.resolve()
+        """Reject paths that escape or alias the requested tenant namespace.
+
+        Merely remaining under ``base_dir`` is insufficient: a symlink or Windows
+        junction named for tenant A could otherwise resolve to tenant B's directory.
+        The canonical path must therefore retain the exact lexical tenant identity.
+        """
+        tenant_dir = self._get_tenant_dir(tenant_id)
+        expected_base = _normalized_absolute_path(self._base_dir)
+        expected_tenant_dir = _normalized_absolute_path(tenant_dir)
+        expected_path = _normalized_absolute_path(path)
         try:
-            resolved.relative_to(self._base_dir.resolve())
+            expected_tenant_dir.relative_to(expected_base)
+            expected_path.relative_to(expected_tenant_dir)
         except ValueError as e:
             raise PathTraversalError(
-                message="Path resolves outside storage base directory",
+                message="Path is outside the requested tenant namespace",
+                tenant_id=tenant_id,
+                key=key,
+            ) from e
+
+        try:
+            resolved_tenant_dir = _normalized_resolved_path(tenant_dir)
+            resolved = _normalized_resolved_path(path)
+        except (OSError, RuntimeError) as e:
+            raise PathTraversalError(
+                message="Path cannot be resolved safely inside the tenant namespace",
+                tenant_id=tenant_id,
+                key=key,
+            ) from e
+
+        if resolved_tenant_dir != expected_tenant_dir or resolved != expected_path:
+            raise PathTraversalError(
+                message="Path resolves through an alias or reparse point in the tenant namespace",
+                tenant_id=tenant_id,
+                key=key,
+            )
+
+        try:
+            resolved.relative_to(resolved_tenant_dir)
+        except ValueError as e:
+            raise PathTraversalError(
+                message="Path resolves outside the requested tenant namespace",
                 tenant_id=tenant_id,
                 key=key,
             ) from e
         return resolved
 
-    def _read_latest_pointer(self, obj_dir: Path) -> str | None:
+    def _read_latest_pointer(
+        self,
+        obj_dir: Path,
+        *,
+        tenant_id: str,
+        key: str,
+    ) -> str | None:
         """Read the latest version pointer file."""
         latest_file = obj_dir / _LATEST_POINTER
         if not latest_file.exists():
             return None
         try:
-            return latest_file.read_text(encoding="utf-8").strip()
+            version_id = latest_file.read_text(encoding="utf-8")
+        except UnicodeError as exc:
+            raise PathTraversalError(
+                message="Invalid object version identifier",
+                tenant_id=tenant_id,
+                key=key,
+            ) from exc
         except OSError:
             return None
+        return _validate_version_id(version_id, tenant_id=tenant_id, key=key)
 
     def _write_latest_pointer(self, obj_dir: Path, version_id: str) -> None:
         """Write the latest version pointer file atomically."""
@@ -209,17 +363,33 @@ class FilesystemObjectStore(ObjectStore):
                 cause=e,
             ) from e
 
-    def _read_metadata(self, obj_dir: Path, version_id: str) -> StoredObjectMetadata | None:
-        """Read metadata for a specific version."""
+    def _read_metadata(
+        self,
+        obj_dir: Path,
+        version_id: str,
+        *,
+        tenant_id: str,
+        key: str,
+    ) -> StoredObjectMetadata | None:
+        """Read metadata only when its complete object identity is bound."""
+        version_id = _validate_version_id(version_id, tenant_id=tenant_id, key=key)
         meta_file = obj_dir / f"{version_id}{_METADATA_SUFFIX}"
         if not meta_file.exists():
             return None
         try:
             data = json.loads(meta_file.read_text(encoding="utf-8"))
-            return StoredObjectMetadata.from_dict(data)
-        except (OSError, json.JSONDecodeError, KeyError) as e:
+            metadata = StoredObjectMetadata.from_dict(data)
+        except (OSError, ValueError, TypeError, KeyError) as e:
             logger.warning("Failed to read metadata %s: %s", meta_file, e)
             return None
+        if (
+            metadata.tenant_id != tenant_id
+            or metadata.key != key
+            or metadata.version_id != version_id
+        ):
+            logger.warning("Object metadata identity does not match its requested namespace")
+            return None
+        return metadata
 
     def _write_metadata(
         self,
@@ -244,16 +414,161 @@ class FilesystemObjectStore(ObjectStore):
                 cause=e,
             ) from e
 
-    def _read_content(self, obj_dir: Path, version_id: str) -> bytes | None:
-        """Read content for a specific version."""
+    def _read_content(
+        self,
+        obj_dir: Path,
+        version_id: str,
+        *,
+        metadata: StoredObjectMetadata,
+        tenant_id: str,
+        key: str,
+        collect_body: bool = True,
+    ) -> tuple[bool, bytes | None]:
+        """Read content only when bytes, metadata, and file identity stay bound."""
         content_file = obj_dir / f"{version_id}{_CONTENT_SUFFIX}"
-        if not content_file.exists():
-            return None
         try:
-            return content_file.read_bytes()
-        except OSError as e:
-            logger.warning("Failed to read content %s: %s", content_file, e)
-            return None
+            initial_path_stat = os.stat(content_file, follow_symlinks=False)
+        except FileNotFoundError:
+            return False, None
+        except OSError as exc:
+            raise ObjectIntegrityError(
+                tenant_id=tenant_id,
+                key=key,
+                cause=exc,
+            ) from exc
+
+        if not stat.S_ISREG(initial_path_stat.st_mode):
+            raise ObjectIntegrityError(tenant_id=tenant_id, key=key)
+
+        try:
+            digest = hashlib.sha256()
+            body = bytearray() if collect_body else None
+            observed_size = 0
+            with content_file.open("rb") as content:
+                opened_before = os.fstat(content.fileno())
+                path_before = os.stat(content_file, follow_symlinks=False)
+                if (
+                    not stat.S_ISREG(path_before.st_mode)
+                    or self._read_stat_signature(initial_path_stat)
+                    != self._read_stat_signature(path_before)
+                    or self._read_stat_signature(path_before)
+                    != self._read_stat_signature(opened_before)
+                ):
+                    raise ObjectIntegrityError(tenant_id=tenant_id, key=key)
+                while True:
+                    chunk = content.read(_STREAM_READ_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+                    observed_size += len(chunk)
+                    if body is not None:
+                        body.extend(chunk)
+                opened_after = os.fstat(content.fileno())
+            path_after = os.stat(content_file, follow_symlinks=False)
+        except ObjectIntegrityError:
+            raise
+        except OSError as exc:
+            raise ObjectIntegrityError(
+                tenant_id=tenant_id,
+                key=key,
+                cause=exc,
+            ) from exc
+
+        expected_sha256 = metadata.sha256.lower()
+        if (
+            not _SHA256_PATTERN.fullmatch(expected_sha256)
+            or observed_size != metadata.size_bytes
+            or digest.hexdigest() != expected_sha256
+            or self._read_stat_signature(opened_before) != self._read_stat_signature(opened_after)
+            or self._read_stat_signature(opened_after) != self._read_stat_signature(path_after)
+        ):
+            raise ObjectIntegrityError(tenant_id=tenant_id, key=key)
+        return True, bytes(body) if body is not None else None
+
+    def _iter_verified_content(
+        self,
+        obj_dir: Path,
+        version_id: str,
+        *,
+        metadata: StoredObjectMetadata,
+        tenant_id: str,
+        key: str,
+    ) -> Iterator[bytes]:
+        """Yield bounded chunks while preserving published-file identity."""
+        content_file = obj_dir / f"{version_id}{_CONTENT_SUFFIX}"
+        try:
+            initial_path_stat = os.stat(content_file, follow_symlinks=False)
+        except FileNotFoundError as exc:
+            raise ObjectNotFoundError(
+                message="Version content not found",
+                tenant_id=tenant_id,
+                key=key,
+                version_id=version_id,
+            ) from exc
+        except OSError as exc:
+            raise ObjectIntegrityError(
+                tenant_id=tenant_id,
+                key=key,
+                cause=exc,
+            ) from exc
+
+        if not stat.S_ISREG(initial_path_stat.st_mode):
+            raise ObjectIntegrityError(tenant_id=tenant_id, key=key)
+
+        try:
+            digest = hashlib.sha256()
+            observed_size = 0
+            with content_file.open("rb") as content:
+                opened_before = os.fstat(content.fileno())
+                path_before = os.stat(content_file, follow_symlinks=False)
+                if (
+                    not stat.S_ISREG(path_before.st_mode)
+                    or self._read_stat_signature(initial_path_stat)
+                    != self._read_stat_signature(path_before)
+                    or self._read_stat_signature(path_before)
+                    != self._read_stat_signature(opened_before)
+                ):
+                    raise ObjectIntegrityError(tenant_id=tenant_id, key=key)
+                while True:
+                    chunk = content.read(_STREAM_READ_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+                    observed_size += len(chunk)
+                    if observed_size > metadata.size_bytes:
+                        raise ObjectIntegrityError(tenant_id=tenant_id, key=key)
+                    yield chunk
+                opened_after = os.fstat(content.fileno())
+            path_after = os.stat(content_file, follow_symlinks=False)
+        except (ObjectIntegrityError, ObjectNotFoundError):
+            raise
+        except OSError as exc:
+            raise ObjectIntegrityError(
+                tenant_id=tenant_id,
+                key=key,
+                cause=exc,
+            ) from exc
+
+        expected_sha256 = metadata.sha256.lower()
+        if (
+            not _SHA256_PATTERN.fullmatch(expected_sha256)
+            or observed_size != metadata.size_bytes
+            or digest.hexdigest() != expected_sha256
+            or self._read_stat_signature(opened_before) != self._read_stat_signature(opened_after)
+            or self._read_stat_signature(opened_after) != self._read_stat_signature(path_after)
+        ):
+            raise ObjectIntegrityError(tenant_id=tenant_id, key=key)
+
+    @staticmethod
+    def _read_stat_signature(file_stat: Any) -> tuple[int, int, int, int, int]:
+        """Return mutation-sensitive identity fields for a durable object read."""
+        return (
+            int(file_stat.st_dev),
+            int(file_stat.st_ino),
+            int(file_stat.st_mode),
+            int(file_stat.st_size),
+            int(file_stat.st_mtime_ns),
+        )
 
     def _write_content(self, obj_dir: Path, version_id: str, data: bytes) -> None:
         """Write content for a specific version atomically."""
@@ -292,6 +607,7 @@ class FilesystemObjectStore(ObjectStore):
                 key=key,
                 cause=e,
             ) from e
+        self._ensure_resolved_within_base(obj_dir, tenant_id, key)
 
         version_id = str(uuid.uuid4())
         sha256 = _compute_sha256(data)
@@ -321,6 +637,356 @@ class FilesystemObjectStore(ObjectStore):
 
         return metadata
 
+    @staticmethod
+    def _validate_stream_expectations(
+        *,
+        tenant_id: str,
+        key: str,
+        expected_sha256: str | None,
+        expected_size_bytes: int | None,
+    ) -> tuple[str | None, int | None]:
+        """Normalize fail-closed stream integrity expectations."""
+        normalized_sha256: str | None = None
+        if expected_sha256 is not None:
+            if not isinstance(expected_sha256, str) or not _SHA256_PATTERN.fullmatch(
+                expected_sha256
+            ):
+                raise StorageBackendError(
+                    message="Expected SHA-256 must be exactly 64 hexadecimal characters",
+                    tenant_id=tenant_id,
+                    key=key,
+                )
+            normalized_sha256 = expected_sha256.lower()
+
+        if expected_size_bytes is not None and (
+            isinstance(expected_size_bytes, bool)
+            or not isinstance(expected_size_bytes, int)
+            or expected_size_bytes < 0
+        ):
+            raise StorageBackendError(
+                message="Expected object size must be a non-negative integer",
+                tenant_id=tenant_id,
+                key=key,
+            )
+        return normalized_sha256, expected_size_bytes
+
+    def _stream_source_to_temp(
+        self,
+        *,
+        obj_dir: Path,
+        tenant_id: str,
+        key: str,
+        source: StreamSource,
+        expected_size_bytes: int | None,
+    ) -> tuple[Path, str, int]:
+        """Copy a source into one unpublished file using bounded reads."""
+        temp_path = obj_dir / f".stream-{uuid.uuid4().hex}.tmp"
+        try:
+            with ExitStack() as stack:
+                reader: BinaryReader
+                if isinstance(source, (str, os.PathLike)):
+                    reader = stack.enter_context(Path(source).open("rb"))
+                else:
+                    reader = source
+
+                digest = hashlib.sha256()
+                size_bytes = 0
+                descriptor = os.open(
+                    temp_path,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                )
+                try:
+                    output_file = os.fdopen(descriptor, "wb")
+                except BaseException:
+                    with suppress(OSError):
+                        os.close(descriptor)
+                    raise
+                output = stack.enter_context(output_file)
+                while True:
+                    raw_chunk = reader.read(_STREAM_READ_CHUNK_BYTES)
+                    if not isinstance(raw_chunk, (bytes, bytearray, memoryview)):
+                        raise StorageBackendError(
+                            message="Stream source returned a non-binary chunk",
+                            tenant_id=tenant_id,
+                            key=key,
+                        )
+                    chunk = memoryview(raw_chunk)
+                    if chunk.nbytes == 0:
+                        break
+                    if chunk.nbytes > _STREAM_READ_CHUNK_BYTES:
+                        raise StorageBackendError(
+                            message="Stream source violated the bounded-read contract",
+                            tenant_id=tenant_id,
+                            key=key,
+                        )
+                    next_size = size_bytes + chunk.nbytes
+                    if expected_size_bytes is not None and next_size > expected_size_bytes:
+                        raise StorageBackendError(
+                            message="Stream exceeded the expected object size",
+                            tenant_id=tenant_id,
+                            key=key,
+                        )
+                    digest.update(chunk)
+                    written = 0
+                    while written < chunk.nbytes:
+                        count = output.write(chunk[written:])
+                        if count is None or count <= 0:
+                            raise StorageBackendError(
+                                message="Stream write made no progress",
+                                tenant_id=tenant_id,
+                                key=key,
+                            )
+                        written += count
+                    size_bytes = next_size
+                output.flush()
+                os.fsync(output.fileno())
+        except StorageBackendError:
+            with suppress(OSError):
+                temp_path.unlink(missing_ok=True)
+            raise
+        except Exception as exc:
+            with suppress(OSError):
+                temp_path.unlink(missing_ok=True)
+            raise StorageBackendError(
+                message="Failed to stage streamed object content",
+                tenant_id=tenant_id,
+                key=key,
+                cause=exc,
+            ) from exc
+
+        return temp_path, digest.hexdigest(), size_bytes
+
+    def _matching_stream_version(
+        self,
+        *,
+        obj_dir: Path,
+        tenant_id: str,
+        key: str,
+        sha256: str,
+        size_bytes: int,
+    ) -> StoredObjectMetadata | None:
+        """Find one already-published version matching streamed content."""
+        for version_id in self._list_version_ids(
+            obj_dir,
+            tenant_id=tenant_id,
+            key=key,
+        ):
+            metadata = self._read_metadata(
+                obj_dir,
+                version_id,
+                tenant_id=tenant_id,
+                key=key,
+            )
+            if metadata is None:
+                continue
+            content_path = obj_dir / f"{version_id}{_CONTENT_SUFFIX}"
+            if (
+                metadata.tenant_id == tenant_id
+                and metadata.key == key
+                and metadata.sha256 == sha256
+                and metadata.size_bytes == size_bytes
+                and self._stream_content_matches(
+                    content_path,
+                    expected_sha256=sha256,
+                    expected_size_bytes=size_bytes,
+                )
+            ):
+                return metadata
+        return None
+
+    @staticmethod
+    def _stream_content_matches(
+        content_path: Path,
+        *,
+        expected_sha256: str,
+        expected_size_bytes: int,
+    ) -> bool:
+        """Verify immutable published bytes before treating a retry as idempotent."""
+        try:
+            path_before = os.stat(content_path, follow_symlinks=False)
+            if not stat.S_ISREG(path_before.st_mode):
+                return False
+            digest = hashlib.sha256()
+            size_bytes = 0
+            with content_path.open("rb") as content:
+                opened_before = os.fstat(content.fileno())
+                if (
+                    opened_before.st_size != expected_size_bytes
+                    or FilesystemObjectStore._read_stat_signature(path_before)
+                    != FilesystemObjectStore._read_stat_signature(opened_before)
+                ):
+                    return False
+                while True:
+                    chunk = content.read(_STREAM_READ_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+                    size_bytes += len(chunk)
+                opened_after = os.fstat(content.fileno())
+            path_after = os.stat(content_path, follow_symlinks=False)
+            return (
+                size_bytes == expected_size_bytes
+                and digest.hexdigest() == expected_sha256
+                and stat.S_ISREG(path_after.st_mode)
+                and FilesystemObjectStore._read_stat_signature(opened_before)
+                == FilesystemObjectStore._read_stat_signature(opened_after)
+                and FilesystemObjectStore._read_stat_signature(opened_after)
+                == FilesystemObjectStore._read_stat_signature(path_after)
+            )
+        except OSError:
+            return False
+
+    def _publish_stream_temp(
+        self,
+        *,
+        obj_dir: Path,
+        tenant_id: str,
+        key: str,
+        temp_path: Path,
+        sha256: str,
+        size_bytes: int,
+        content_type: str | None,
+    ) -> StoredObjectMetadata:
+        """Publish staged content atomically while holding the object lock."""
+        matching = self._matching_stream_version(
+            obj_dir=obj_dir,
+            tenant_id=tenant_id,
+            key=key,
+            sha256=sha256,
+            size_bytes=size_bytes,
+        )
+        if matching is not None:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError as exc:
+                raise StorageBackendError(
+                    message="Failed to remove idempotent stream retry content",
+                    tenant_id=tenant_id,
+                    key=key,
+                    cause=exc,
+                ) from exc
+            return matching
+
+        version_id = str(uuid.uuid4())
+        metadata = StoredObjectMetadata(
+            tenant_id=tenant_id,
+            key=key,
+            version_id=version_id,
+            sha256=sha256,
+            size_bytes=size_bytes,
+            content_type=content_type,
+            created_at=datetime.now(UTC),
+        )
+        content_path = obj_dir / f"{version_id}{_CONTENT_SUFFIX}"
+        metadata_path = obj_dir / f"{version_id}{_METADATA_SUFFIX}"
+        content_published = False
+        try:
+            temp_path.replace(content_path)
+            content_published = True
+            self._write_metadata(obj_dir, version_id, metadata)
+            self._write_latest_pointer(obj_dir, version_id)
+        except Exception as exc:
+            with suppress(OSError):
+                metadata_path.unlink(missing_ok=True)
+            if content_published:
+                with suppress(OSError):
+                    content_path.unlink(missing_ok=True)
+            if isinstance(exc, StorageBackendError):
+                raise
+            raise StorageBackendError(
+                message="Failed to publish streamed object content",
+                tenant_id=tenant_id,
+                key=key,
+                cause=exc,
+            ) from exc
+        return metadata
+
+    @traced_storage_operation("put_stream")
+    def put_stream(
+        self,
+        tenant_id: str,
+        key: str,
+        source: StreamSource,
+        *,
+        content_type: str | None = None,
+        expected_sha256: str | None = None,
+        expected_size_bytes: int | None = None,
+    ) -> StoredObjectMetadata:
+        """Store a bounded stream with atomic, same-hash retry semantics."""
+        normalized_sha256, normalized_size = self._validate_stream_expectations(
+            tenant_id=tenant_id,
+            key=key,
+            expected_sha256=expected_sha256,
+            expected_size_bytes=expected_size_bytes,
+        )
+        obj_dir = self._get_object_dir(tenant_id, key)
+        self._ensure_resolved_within_base(obj_dir, tenant_id, key)
+        try:
+            obj_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise StorageBackendError(
+                message="Failed to create object directory",
+                tenant_id=tenant_id,
+                key=key,
+                cause=exc,
+            ) from exc
+        self._ensure_resolved_within_base(obj_dir, tenant_id, key)
+
+        temp_path: Path | None = None
+        try:
+            temp_path, actual_sha256, actual_size = self._stream_source_to_temp(
+                obj_dir=obj_dir,
+                tenant_id=tenant_id,
+                key=key,
+                source=source,
+                expected_size_bytes=normalized_size,
+            )
+            if normalized_size is not None and actual_size != normalized_size:
+                raise StorageBackendError(
+                    message="Stream size does not match the expected object size",
+                    tenant_id=tenant_id,
+                    key=key,
+                )
+            if normalized_sha256 is not None and actual_sha256 != normalized_sha256:
+                raise StorageBackendError(
+                    message="Stream SHA-256 does not match the expected digest",
+                    tenant_id=tenant_id,
+                    key=key,
+                )
+
+            with _exclusive_object_write_lock(
+                obj_dir,
+                tenant_id=tenant_id,
+                key=key,
+            ):
+                metadata = self._publish_stream_temp(
+                    obj_dir=obj_dir,
+                    tenant_id=tenant_id,
+                    key=key,
+                    temp_path=temp_path,
+                    sha256=actual_sha256,
+                    size_bytes=actual_size,
+                    content_type=content_type,
+                )
+            logger.debug(
+                "Streamed object stored: tenant=%s key=%s version=%s sha256=%s",
+                tenant_id,
+                key,
+                metadata.version_id,
+                metadata.sha256,
+            )
+            return metadata
+        finally:
+            if temp_path is not None:
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except OSError as exc:
+                    logger.warning(
+                        "Failed to remove unpublished stream temp file: %s",
+                        type(exc).__name__,
+                    )
+
     @traced_storage_operation("get")
     def get(
         self,
@@ -332,6 +998,8 @@ class FilesystemObjectStore(ObjectStore):
         """Retrieve an object."""
         obj_dir = self._get_object_dir(tenant_id, key)
         self._ensure_resolved_within_base(obj_dir, tenant_id, key)
+        if version_id is not None:
+            version_id = _validate_version_id(version_id, tenant_id=tenant_id, key=key)
 
         if not obj_dir.exists():
             raise ObjectNotFoundError(
@@ -341,7 +1009,11 @@ class FilesystemObjectStore(ObjectStore):
             )
 
         if version_id is None:
-            version_id = self._read_latest_pointer(obj_dir)
+            version_id = self._read_latest_pointer(
+                obj_dir,
+                tenant_id=tenant_id,
+                key=key,
+            )
             if version_id is None:
                 raise ObjectNotFoundError(
                     message="Object has no versions",
@@ -349,7 +1021,12 @@ class FilesystemObjectStore(ObjectStore):
                     key=key,
                 )
 
-        metadata = self._read_metadata(obj_dir, version_id)
+        metadata = self._read_metadata(
+            obj_dir,
+            version_id,
+            tenant_id=tenant_id,
+            key=key,
+        )
         if metadata is None:
             raise ObjectNotFoundError(
                 message="Version not found",
@@ -358,8 +1035,14 @@ class FilesystemObjectStore(ObjectStore):
                 version_id=version_id,
             )
 
-        content = self._read_content(obj_dir, version_id)
-        if content is None:
+        content_found, content = self._read_content(
+            obj_dir,
+            version_id,
+            metadata=metadata,
+            tenant_id=tenant_id,
+            key=key,
+        )
+        if not content_found or content is None:
             raise ObjectNotFoundError(
                 message="Version content not found",
                 tenant_id=tenant_id,
@@ -368,6 +1051,56 @@ class FilesystemObjectStore(ObjectStore):
             )
 
         return StoredObject(metadata=metadata, body=content)
+
+    @traced_storage_operation("verify_integrity")
+    def verify_integrity(
+        self,
+        tenant_id: str,
+        key: str,
+        *,
+        version_id: str | None = None,
+    ) -> StoredObjectMetadata:
+        """Stream-verify one published object without materializing its body."""
+        metadata = self.head(tenant_id, key, version_id=version_id)
+        obj_dir = self._get_object_dir(tenant_id, key)
+        self._ensure_resolved_within_base(obj_dir, tenant_id, key)
+        content_found, _body = self._read_content(
+            obj_dir,
+            metadata.version_id,
+            metadata=metadata,
+            tenant_id=tenant_id,
+            key=key,
+            collect_body=False,
+        )
+        if not content_found:
+            raise ObjectNotFoundError(
+                message="Version content not found",
+                tenant_id=tenant_id,
+                key=key,
+                version_id=metadata.version_id,
+            )
+        return metadata
+
+    @traced_storage_operation("open_verified_stream")
+    def open_verified_stream(
+        self,
+        tenant_id: str,
+        key: str,
+        *,
+        version_id: str | None = None,
+    ) -> tuple[StoredObjectMetadata, Iterator[bytes]]:
+        """Return metadata plus a bounded iterator over one exact version."""
+        metadata = self.head(tenant_id, key, version_id=version_id)
+        obj_dir = self._get_object_dir(tenant_id, key)
+        self._ensure_resolved_within_base(obj_dir, tenant_id, key)
+        chunks = self._iter_verified_content(
+            obj_dir,
+            metadata.version_id,
+            metadata=metadata,
+            tenant_id=tenant_id,
+            key=key,
+        )
+        return metadata, chunks
 
     @traced_storage_operation("head")
     def head(
@@ -380,6 +1113,8 @@ class FilesystemObjectStore(ObjectStore):
         """Get object metadata without retrieving content."""
         obj_dir = self._get_object_dir(tenant_id, key)
         self._ensure_resolved_within_base(obj_dir, tenant_id, key)
+        if version_id is not None:
+            version_id = _validate_version_id(version_id, tenant_id=tenant_id, key=key)
 
         if not obj_dir.exists():
             raise ObjectNotFoundError(
@@ -389,7 +1124,11 @@ class FilesystemObjectStore(ObjectStore):
             )
 
         if version_id is None:
-            version_id = self._read_latest_pointer(obj_dir)
+            version_id = self._read_latest_pointer(
+                obj_dir,
+                tenant_id=tenant_id,
+                key=key,
+            )
             if version_id is None:
                 raise ObjectNotFoundError(
                     message="Object has no versions",
@@ -397,7 +1136,12 @@ class FilesystemObjectStore(ObjectStore):
                     key=key,
                 )
 
-        metadata = self._read_metadata(obj_dir, version_id)
+        metadata = self._read_metadata(
+            obj_dir,
+            version_id,
+            tenant_id=tenant_id,
+            key=key,
+        )
         if metadata is None:
             raise ObjectNotFoundError(
                 message="Version not found",
@@ -419,6 +1163,8 @@ class FilesystemObjectStore(ObjectStore):
         """Delete an object or specific version."""
         obj_dir = self._get_object_dir(tenant_id, key)
         self._ensure_resolved_within_base(obj_dir, tenant_id, key)
+        if version_id is not None:
+            version_id = _validate_version_id(version_id, tenant_id=tenant_id, key=key)
 
         if not obj_dir.exists():
             raise ObjectNotFoundError(
@@ -441,16 +1187,27 @@ class FilesystemObjectStore(ObjectStore):
                     cause=e,
                 ) from e
         else:
-            meta_file = obj_dir / f"{version_id}{_METADATA_SUFFIX}"
-            content_file = obj_dir / f"{version_id}{_CONTENT_SUFFIX}"
-
-            if not meta_file.exists() and not content_file.exists():
+            metadata = self._read_metadata(
+                obj_dir,
+                version_id,
+                tenant_id=tenant_id,
+                key=key,
+            )
+            if metadata is None:
                 raise ObjectNotFoundError(
                     message="Version not found",
                     tenant_id=tenant_id,
                     key=key,
                     version_id=version_id,
                 )
+
+            meta_file = obj_dir / f"{version_id}{_METADATA_SUFFIX}"
+            content_file = obj_dir / f"{version_id}{_CONTENT_SUFFIX}"
+            current_latest = self._read_latest_pointer(
+                obj_dir,
+                tenant_id=tenant_id,
+                key=key,
+            )
 
             try:
                 meta_file.unlink(missing_ok=True)
@@ -463,9 +1220,12 @@ class FilesystemObjectStore(ObjectStore):
                     cause=e,
                 ) from e
 
-            current_latest = self._read_latest_pointer(obj_dir)
             if current_latest == version_id:
-                versions = self._list_version_ids(obj_dir)
+                versions = self._list_version_ids(
+                    obj_dir,
+                    tenant_id=tenant_id,
+                    key=key,
+                )
                 if versions:
                     self._write_latest_pointer(obj_dir, versions[0])
                 else:
@@ -479,7 +1239,13 @@ class FilesystemObjectStore(ObjectStore):
                 version_id,
             )
 
-    def _list_version_ids(self, obj_dir: Path) -> list[str]:
+    def _list_version_ids(
+        self,
+        obj_dir: Path,
+        *,
+        tenant_id: str,
+        key: str,
+    ) -> list[str]:
         """List all version IDs in an object directory, newest first."""
         versions: list[tuple[datetime, str]] = []
 
@@ -487,7 +1253,14 @@ class FilesystemObjectStore(ObjectStore):
             for f in obj_dir.iterdir():
                 if f.name.endswith(_METADATA_SUFFIX):
                     version_id = f.name[: -len(_METADATA_SUFFIX)]
-                    meta = self._read_metadata(obj_dir, version_id)
+                    if not _is_canonical_version_id(version_id):
+                        continue
+                    meta = self._read_metadata(
+                        obj_dir,
+                        version_id,
+                        tenant_id=tenant_id,
+                        key=key,
+                    )
                     if meta:
                         versions.append((meta.created_at, version_id))
         except OSError:
@@ -510,10 +1283,19 @@ class FilesystemObjectStore(ObjectStore):
             return []
 
         result: list[StoredObjectMetadata] = []
-        version_ids = self._list_version_ids(obj_dir)
+        version_ids = self._list_version_ids(
+            obj_dir,
+            tenant_id=tenant_id,
+            key=key,
+        )
 
         for version_id in version_ids:
-            meta = self._read_metadata(obj_dir, version_id)
+            meta = self._read_metadata(
+                obj_dir,
+                version_id,
+                tenant_id=tenant_id,
+                key=key,
+            )
             if meta:
                 result.append(meta)
 

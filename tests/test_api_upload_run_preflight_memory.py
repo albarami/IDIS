@@ -36,7 +36,7 @@ API_KEY = "slice43-upload-run-key"
 TENANT_ID = "11111111-1111-4111-8111-111111111111"
 
 
-def test_uploaded_parsed_document_is_usable_in_selected_full_preflight(
+def test_uploaded_parsed_document_is_usable_in_selected_snapshot_preflight(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -75,7 +75,7 @@ def test_uploaded_parsed_document_is_usable_in_selected_full_preflight(
         f"/v1/deals/{deal_id}/runs",
         headers={"X-IDIS-API-Key": API_KEY},
         json={
-            "mode": "FULL",
+            "mode": "SNAPSHOT",
             "source": {
                 "type": "deal_documents",
                 "document_ids": [selected_document_id],
@@ -127,7 +127,7 @@ def test_uploaded_document_ids_are_the_preflight_document_id_namespace(
         f"/v1/deals/{deal_id}/runs",
         headers={"X-IDIS-API-Key": API_KEY},
         json={
-            "mode": "FULL",
+            "mode": "SNAPSHOT",
             "source": {
                 "type": "deal_documents",
                 "document_ids": [selected_document_id],

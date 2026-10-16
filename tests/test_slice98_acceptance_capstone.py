@@ -6,7 +6,8 @@ this slice cannot silently return:
 - CI drift guard: the ACTUAL postgres-integration pytest INVOCATION in .github/workflows/ci.yml
   must include every tests/test_slice98_*_postgres.py on disk (parsing the executed command, not
   the echo text). A future durable test that is not wired to CI fails this test.
-- Migration chain linearity: exactly one head, no duplicate revisions, current head 0030.
+- Migration chain linearity: exactly one head, no duplicate revisions, and the head is the
+  highest declared revision.
 - Audit-contract surface: the Slice98 audit event prefixes and resource types are present in BOTH
   the Python validator and the JSON schema (they are validated together at emit time).
 - Operation wiring: the Slice98 compliance/security operationIds are ADMIN-only in policy and
@@ -102,7 +103,7 @@ class TestCiPostgresDriftGuard:
 
 
 class TestMigrationChainLinearity:
-    """Migration drift guard: single linear head at 0030."""
+    """Migration drift guard: single linear head at the latest declared revision."""
 
     def _revisions(self) -> list[tuple[str, str | None]]:
         versions = _REPO / "src" / "idis" / "persistence" / "migrations" / "versions"
@@ -116,13 +117,16 @@ class TestMigrationChainLinearity:
             pairs.append((rev.group(1), down.group(2)))
         return pairs
 
-    def test_single_head_is_0030_and_chain_is_linear(self) -> None:
+    def test_single_head_is_latest_revision_and_chain_is_linear(self) -> None:
         pairs = self._revisions()
         revisions = [r for r, _ in pairs]
         assert len(revisions) == len(set(revisions)), "duplicate migration revisions"
         downs = {d for _, d in pairs if d is not None}
         heads = set(revisions) - downs
-        assert heads == {"0030"}, f"expected single head 0030, found {sorted(heads)}"
+        expected_head = max(revisions)
+        assert heads == {expected_head}, (
+            f"expected single latest head {expected_head}, found {sorted(heads)}"
+        )
         # exactly one root (down_revision None) -> linear chain, no branches
         roots = [r for r, d in pairs if d is None]
         assert len(roots) == 1, f"expected one root migration, found {roots}"

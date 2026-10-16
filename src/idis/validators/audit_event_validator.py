@@ -43,12 +43,20 @@ VALID_EVENT_PREFIXES = {
     "break_glass.",
     "data.",
     "prompt.",
+    "worker.",
     "data_room_package.",
     "byok.",
     "legal_hold.",
     "retention.",
     "erasure.",
     "export.",
+    "methodology.",
+}
+
+VALID_EXACT_EVENT_TYPES = {
+    "task7.erasure.attempted",
+    "task7.erasure.failed",
+    "task7.erasure.succeeded",
 }
 
 VALID_SEVERITIES = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
@@ -67,6 +75,7 @@ VALID_RESOURCE_TYPES = {
     "integration",
     "webhook",
     "prompt",
+    "run",
     "data_room_package",
     "group",
     "session",
@@ -75,6 +84,7 @@ VALID_RESOURCE_TYPES = {
     "retention_sweep",
     "erasure_request",
     "compliance_export",
+    "methodology",
 }
 
 VALID_ACTOR_TYPES = {"HUMAN", "SERVICE"}
@@ -185,17 +195,15 @@ class AuditEventValidator:
         """Check if value is a valid ISO-8601 timestamp string."""
         if not isinstance(value, str):
             return False
-        is_valid = False
         try:
-            # Try parsing with timezone
-            if value.endswith("Z"):
-                datetime.fromisoformat(value.replace("Z", "+00:00"))
-            else:
-                datetime.fromisoformat(value)
-            is_valid = True
+            parsed = datetime.fromisoformat(
+                value.removesuffix("Z") + "+00:00" if value.endswith("Z") else value
+            )
         except ValueError:
-            pass
-        return is_valid
+            return False
+        # A naive timestamp is environment-dependent when PostgreSQL converts it
+        # to timestamptz; canonical audit evidence must name an absolute instant.
+        return parsed.tzinfo is not None and parsed.utcoffset() is not None
 
     def _is_valid_event_type(self, value: Any) -> bool:
         """Check if value is a valid event type (dotted lower-case pattern)."""
@@ -347,14 +355,17 @@ class AuditEventValidator:
                 )
             else:
                 # Validate event type matches taxonomy prefix
-                valid_prefix = any(event_type.startswith(prefix) for prefix in VALID_EVENT_PREFIXES)
-                if not valid_prefix:
+                valid_taxonomy = event_type in VALID_EXACT_EVENT_TYPES or any(
+                    event_type.startswith(prefix) for prefix in VALID_EVENT_PREFIXES
+                )
+                if not valid_taxonomy:
                     errors.append(
                         ValidationError(
                             code="INVALID_EVENT_TYPE",
                             message=(
                                 f"Event type '{event_type}' does not match known taxonomy. "
-                                f"Must start with one of: {sorted(VALID_EVENT_PREFIXES)}"
+                                "Must be an admitted exact event or start with one of: "
+                                f"{sorted(VALID_EVENT_PREFIXES)}"
                             ),
                             path="$.event_type",
                         )

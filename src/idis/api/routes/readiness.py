@@ -15,9 +15,10 @@ flags as able to carry paths / internal strings), the ``component_inventory`` tr
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from idis.api.auth import RequireTenantContext
@@ -65,6 +66,9 @@ class StrictReadinessReview(BaseModel):
     required: bool
     may_proceed: bool
     blocker_count: int
+    # Required in the wire shape even when a non-strict server truthfully emits
+    # null; the durable gate must never confuse an omitted identity with a match.
+    profile_hmac_sha256: str | None
     blocking_components: list[str] = Field(default_factory=list)
     components: list[StrictReadinessComponentReview] = Field(default_factory=list)
 
@@ -80,12 +84,17 @@ def _safe_env_var_names(required_env_vars: list[str]) -> list[str]:
     return names
 
 
-def _to_review(report: StrictFullLiveReadinessReport) -> StrictReadinessReview:
+def _to_review(
+    report: StrictFullLiveReadinessReport,
+    *,
+    profile_hmac_sha256: str | None = None,
+) -> StrictReadinessReview:
     """Project the internal readiness report to the safe reviewer shape (whitelist only)."""
     return StrictReadinessReview(
         required=report.required,
         may_proceed=report.may_proceed,
         blocker_count=report.blocker_count,
+        profile_hmac_sha256=profile_hmac_sha256,
         blocking_components=list(report.blocking_components),
         components=[
             StrictReadinessComponentReview(
@@ -132,8 +141,24 @@ def _config_only_embedding_health(env: Mapping[str, str]) -> EmbeddingHealthChec
     )
 
 
+def _safe_server_profile_hmac_sha256(request: Request) -> str | None:
+    """Return only a one-way launch-profile identity for authenticated comparison."""
+    profile = getattr(request.app.state, "strict_runtime_profile", None)
+    base_profile_hmac = getattr(profile, "base_profile_hmac", None)
+    if (
+        not isinstance(base_profile_hmac, str)
+        or len(base_profile_hmac) != 64
+        or any(character not in "0123456789abcdef" for character in base_profile_hmac)
+    ):
+        return None
+    return hashlib.sha256(base_profile_hmac.encode("ascii")).hexdigest()
+
+
 @router.get("/strict-readiness", response_model=StrictReadinessReview)
-def get_strict_readiness(tenant_ctx: RequireTenantContext) -> StrictReadinessReview:
+def get_strict_readiness(
+    request: Request,
+    tenant_ctx: RequireTenantContext,
+) -> StrictReadinessReview:
     """Return the safe strict full-live readiness review (component modes + blockers).
 
     This endpoint is **config / read-model inspection only — not a live health proof.** It reports
@@ -151,4 +176,7 @@ def get_strict_readiness(tenant_ctx: RequireTenantContext) -> StrictReadinessRev
         pgvector_health_checker=_config_only_pgvector_health,
         probe_object_store=False,
     )
-    return _to_review(report)
+    return _to_review(
+        report,
+        profile_hmac_sha256=_safe_server_profile_hmac_sha256(request),
+    )

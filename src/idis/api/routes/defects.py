@@ -88,7 +88,8 @@ class PaginatedDefectList(BaseModel):
 def _get_defect_service(request: Request, tenant_id: str) -> DefectService:
     """Get DefectService instance based on DB availability."""
     db_conn = getattr(request.state, "db_conn", None)
-    return DefectService(tenant_id=tenant_id, db_conn=db_conn)
+    audit_sink = getattr(request.app.state, "audit_sink", None)
+    return DefectService(tenant_id=tenant_id, db_conn=db_conn, audit_sink=audit_sink)
 
 
 def _to_defect_response(defect_data: dict[str, Any]) -> DefectResponse:

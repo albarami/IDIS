@@ -137,12 +137,30 @@ def test_bounded_pdf_ocr_succeeds_only_inside_configured_page_window() -> None:
 
     assert first_page_only.success is False
     assert first_page_only.spans == []
-    assert [error.code for error in first_page_only.errors] == [
-        ParseErrorCode.OCR_NO_TEXT_EXTRACTED
-    ]
+    # Task 4: a configured page window that cannot cover every required page is invalid.
+    assert [error.code for error in first_page_only.errors] == [ParseErrorCode.OCR_FAILED]
     assert two_page_window.success is True
+    render_admission = {
+        "schema_version": "ocr-render-admission-v1",
+        "ladder_version": "ocr-dpi-ladder-v1",
+        "configured_dpi": 200,
+        "chosen_dpi": 200,
+        "projected_pixel_count": 3_740_000,
+        "max_pixel_count": 20_000_000,
+    }
     assert [span.locator for span in two_page_window.spans] == [
-        {"page": 2, "line": 1, "source": "ocr"}
+        {
+            "page": 1,
+            "line": 1,
+            "source": "ocr",
+            "ocr_render_admission": render_admission,
+        },
+        {
+            "page": 2,
+            "line": 1,
+            "source": "ocr",
+            "ocr_render_admission": render_admission,
+        },
     ]
 
 
@@ -152,7 +170,8 @@ def test_default_pdf_parser_still_requires_explicit_ocr_config() -> None:
     encoded = str(result.to_dict())
     assert result.success is False
     assert result.spans == []
-    assert [error.code for error in result.errors] == [ParseErrorCode.NO_TEXT_EXTRACTED]
+    # Task 4: image-only PDFs fail with the actionable missing-runtime code.
+    assert [error.code for error in result.errors] == [ParseErrorCode.OCR_UNAVAILABLE]
     assert "SLICE36 DEFAULT OCR DISABLED" not in encoded
 
 
@@ -396,7 +415,7 @@ def _second_page_text_when_allowed_worker(
     queue: Queue,
 ) -> None:
     del data, dpi, language, timeout_seconds
-    pages: list[dict[str, object]] = [{"page_number": 1, "text": ""}]
+    pages: list[dict[str, object]] = [{"page_number": 1, "text": "First page OCR text"}]
     if max_pages >= 2:
         pages.append({"page_number": 2, "text": "Second page OCR text"})
     queue.put({"status": "success", "pages": pages})

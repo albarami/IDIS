@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from fastapi import APIRouter, Query, Request
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from idis.api.auth import RequireTenantContext
 from idis.api.errors import IdisHttpError
@@ -30,6 +30,10 @@ from idis.audit.sink import AuditSink, AuditSinkError
 from idis.models.run_source import RunSource
 from idis.persistence.repositories.run_steps import get_run_steps_repository
 from idis.persistence.repositories.runs import RunAlreadyActiveError, get_runs_repository
+from idis.persistence.repositories.strict_preflight_proofs import (
+    StrictPreflightProofError,
+    get_strict_preflight_proofs_repository,
+)
 from idis.services.runs import strict_full_live as strict_full_live_module
 from idis.services.runs.execution import RunExecutionService
 from idis.services.runs.lifecycle import RunLifecycleService
@@ -60,6 +64,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1", tags=["Runs"])
 
 
+class RunMethodologySelectionRequest(BaseModel):
+    """Explicit immutable methodology-version selection for a FULL run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    commercial_dd_version_record_id: uuid.UUID
+    financial_dd_version_record_id: uuid.UUID
+
+    @model_validator(mode="after")
+    def _version_records_are_distinct(self) -> RunMethodologySelectionRequest:
+        if self.commercial_dd_version_record_id == self.financial_dd_version_record_id:
+            raise ValueError("CDD and FDD methodology version records must be distinct")
+        return self
+
+
 class StartRunRequest(BaseModel):
     """Request body for POST /v1/deals/{dealId}/runs."""
 
@@ -67,6 +86,16 @@ class StartRunRequest(BaseModel):
 
     mode: str
     source: RunSource | None = None
+    strict_preflight_proof_id: str | None = None
+    methodology_selection: RunMethodologySelectionRequest | None = None
+
+    @model_validator(mode="after")
+    def _full_run_has_complete_methodology_selection(self) -> StartRunRequest:
+        if self.mode == "FULL" and self.methodology_selection is None:
+            raise ValueError("FULL run requires the frozen CDD and FDD methodology selection")
+        if self.mode == "SNAPSHOT" and self.methodology_selection is not None:
+            raise ValueError("SNAPSHOT run does not accept a methodology selection")
+        return self
 
 
 PATH_LIKE_RUN_FIELDS = frozenset(
@@ -192,7 +221,10 @@ def _validate_start_run_body(body: dict[str, Any] | None) -> StartRunRequest:
             status_code=400,
             code="INVALID_REQUEST",
             message="Invalid run request body",
-            details={"errors": exc.errors()},
+            # Pydantic includes the original ValueError object in ``ctx`` by
+            # default; that object is not JSON serializable and would turn a
+            # safe client error into an internal 500 at the real API boundary.
+            details={"errors": exc.errors(include_context=False)},
         ) from exc
 
 
@@ -205,6 +237,223 @@ def _path_like_fields(body: dict[str, Any]) -> list[str]:
         if isinstance(value, dict):
             rejected.update(field for field in value if field in PATH_LIKE_RUN_FIELDS)
     return sorted(rejected)
+
+
+def _methodology_record_value(record: Any, field: str) -> Any:
+    if isinstance(record, dict):
+        return record[field]
+    return getattr(record, field)
+
+
+def _methodology_configuration(request: Request) -> Any:
+    profile = getattr(request.app.state, "strict_runtime_profile", None)
+    values = getattr(profile, "values", None)
+    return values if values is not None else os.environ
+
+
+def _validate_full_methodology_selection(
+    *,
+    request: Request,
+    tenant_id: str,
+    selection: RunMethodologySelectionRequest,
+) -> Any:
+    """Return the durable repository after exact frozen-source validation."""
+
+    from idis.api.routes.methodology_versions import resolve_server_registry
+    from idis.methodology.models import MethodologyRegistry, MethodologyType
+    from idis.persistence.repositories.methodologies import (
+        MethodologiesRepositoryError,
+        get_methodologies_repository,
+    )
+
+    db_conn = getattr(request.state, "db_conn", None)
+    try:
+        repository = get_methodologies_repository(db_conn, tenant_id)
+        selected = (
+            (
+                MethodologyType.COMMERCIAL_DD,
+                repository.get_frozen_version(
+                    methodology_version_record_id=str(selection.commercial_dd_version_record_id)
+                ),
+            ),
+            (
+                MethodologyType.FINANCIAL_DD,
+                repository.get_frozen_version(
+                    methodology_version_record_id=str(selection.financial_dd_version_record_id)
+                ),
+            ),
+        )
+    except MethodologiesRepositoryError as exc:
+        raise IdisHttpError(
+            status_code=409,
+            code="METHODOLOGY_COVERAGE_INCOMPLETE",
+            message="Both frozen CDD and FDD methodology versions are required",
+        ) from exc
+
+    configuration = _methodology_configuration(request)
+    for expected_type, record in selected:
+        try:
+            actual_type = MethodologyType(_methodology_record_value(record, "methodology_type"))
+            current_registry, _byte_count, _source_type, _source_alias = resolve_server_registry(
+                expected_type, configuration=configuration
+            )
+            persisted_registry = _methodology_record_value(record, "registry")
+            if not isinstance(persisted_registry, MethodologyRegistry):
+                raise ValueError("persisted registry is unavailable")
+            if (
+                actual_type is not expected_type
+                or str(_methodology_record_value(record, "status")) != "FROZEN"
+                or str(_methodology_record_value(record, "source_sha256"))
+                != current_registry.current_version.source_hash
+                or str(_methodology_record_value(record, "registry_hash"))
+                != current_registry.registry_hash
+                or persisted_registry.to_deterministic_json()
+                != current_registry.to_deterministic_json()
+            ):
+                raise ValueError("frozen methodology source binding drifted")
+        except IdisHttpError:
+            raise
+        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            raise IdisHttpError(
+                status_code=409,
+                code="METHODOLOGY_COVERAGE_INCOMPLETE",
+                message="The selected methodology version failed source validation",
+            ) from exc
+    return repository
+
+
+def resolve_strict_preflight_binding(
+    *,
+    request: Request,
+    tenant_id: str,
+    deal_id: str,
+    preflight_corpus: list[dict[str, Any]],
+    strict_report: Any,
+) -> Any:
+    """Resolve the complete server-side binding for a strict proof.
+
+    Slice100's later tasks will install the producer after the governed
+    pipeline, methodology, prompt, provider, and dependency receipts exist.
+    Task 1 deliberately provides no partial/default binding: strict admission
+    stays closed until that complete resolver is wired.
+    """
+    resolver = getattr(request.app.state, "strict_preflight_binding_resolver", None)
+    if not callable(resolver):
+        raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_MISMATCH")
+    binding = resolver(
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        preflight_corpus=preflight_corpus,
+        strict_report=strict_report,
+    )
+    if binding is None:
+        raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_MISMATCH")
+    return binding
+
+
+def _freeze_task7_selected_source_packages(
+    *,
+    request: Request,
+    tenant_id: str,
+    deal_id: str,
+    selected_document_ids: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Freeze every complete selected package before strict-run admission."""
+
+    from sqlalchemy import text
+
+    from idis.models.source_package_manifest import SourcePackageManifest
+    from idis.persistence.db import get_app_engine
+    from idis.persistence.repositories.task7_source_freeze import (
+        Task7SourceFreezeError,
+        freeze_source_package,
+    )
+    from idis.services.ingestion.no_substantive_content_attestation import (
+        VerifiedDocumentNoSubstantiveContentAttestation,
+        VerifiedDocumentNoSubstantiveContentAttestationManifest,
+        load_document_no_substantive_content_attestation,
+    )
+
+    db_conn = getattr(request.state, "db_conn", None)
+    if db_conn is None or not selected_document_ids:
+        raise StrictPreflightProofError("PIPELINE_CONTRACT_UNAVAILABLE")
+    try:
+        selected = tuple(sorted(str(uuid.UUID(value)) for value in selected_document_ids))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise StrictPreflightProofError("PIPELINE_CONTRACT_UNAVAILABLE") from exc
+    if len(set(selected)) != len(selected):
+        raise StrictPreflightProofError("PIPELINE_CONTRACT_UNAVAILABLE")
+
+    package_rows = db_conn.execute(
+        text(
+            """
+            SELECT package_id, metadata -> 'source_manifest' AS source_manifest
+            FROM data_room_packages
+            WHERE tenant_id = CAST(:tenant_id AS uuid)
+              AND deal_id = CAST(:deal_id AS uuid)
+              AND metadata ? 'source_manifest'
+            ORDER BY package_id
+            """
+        ),
+        {"tenant_id": tenant_id, "deal_id": deal_id},
+    ).fetchall()
+    selected_set = set(selected)
+    matched_packages: list[tuple[str, frozenset[str]]] = []
+    document_owner: dict[str, str] = {}
+    try:
+        for row in package_rows:
+            mapping = getattr(row, "_mapping", row)
+            manifest = SourcePackageManifest.model_validate(mapping["source_manifest"])
+            package_id = str(uuid.UUID(str(mapping["package_id"])))
+            members = frozenset(str(member.document_id) for member in manifest.files)
+            overlap = selected_set & members
+            if not overlap:
+                continue
+            for document_id in overlap:
+                if document_id in document_owner:
+                    raise ValueError("selected document belongs to multiple packages")
+                document_owner[document_id] = package_id
+            matched_packages.append((package_id, members))
+    except (KeyError, TypeError, ValueError, ValidationError) as exc:
+        raise StrictPreflightProofError("PIPELINE_CONTRACT_UNAVAILABLE") from exc
+
+    if set(document_owner) != selected_set or not matched_packages:
+        raise StrictPreflightProofError("PIPELINE_CONTRACT_UNAVAILABLE")
+    selected_package_members = frozenset(
+        document_id for _package_id, members in matched_packages for document_id in members
+    )
+    if selected_package_members != selected_set:
+        # Strict admission binds one complete manifest corpus. A partial
+        # package selection would create inventory edges for unselected files.
+        raise StrictPreflightProofError("PIPELINE_CONTRACT_UNAVAILABLE")
+    package_ids = tuple(sorted(package_id for package_id, _members in matched_packages))
+    if len(set(package_ids)) != len(package_ids):
+        raise StrictPreflightProofError("PIPELINE_CONTRACT_UNAVAILABLE")
+
+    authority = load_document_no_substantive_content_attestation(
+        env=_methodology_configuration(request)
+    )
+    if authority is not None and not isinstance(
+        authority,
+        (
+            VerifiedDocumentNoSubstantiveContentAttestation,
+            VerifiedDocumentNoSubstantiveContentAttestationManifest,
+        ),
+    ):
+        raise StrictPreflightProofError("PIPELINE_CONTRACT_UNAVAILABLE")
+    engine = get_app_engine()
+    try:
+        for package_id in package_ids:
+            freeze_source_package(
+                engine=engine,
+                tenant_id=tenant_id,
+                deal_id=deal_id,
+                package_id=package_id,
+                terminal_exclusion_authority=authority,
+            )
+    except Task7SourceFreezeError as exc:
+        raise StrictPreflightProofError(exc.code) from exc
+    return package_ids
 
 
 @router.post("/deals/{deal_id}/runs", response_model=RunRef, status_code=202)
@@ -250,6 +499,18 @@ async def start_run(
             message="An active run already exists for this deal",
         )
 
+    methodologies_repo: Any | None = None
+    if request_body.mode == "FULL":
+        # Validate both frozen, source-stable methodology families before the
+        # run INSERT.  Versions become immutable once frozen, so the later
+        # selection INSERT can share the request transaction with run creation
+        # without a check-then-mutate race.
+        methodologies_repo = _validate_full_methodology_selection(
+            request=request,
+            tenant_id=tenant_ctx.tenant_id,
+            selection=cast(RunMethodologySelectionRequest, request_body.methodology_selection),
+        )
+
     preflight_corpus = _gather_preflight_corpus(request, tenant_ctx.tenant_id, deal_id)
     preflight_corpus = _apply_run_source_to_preflight_corpus(
         preflight_corpus=preflight_corpus,
@@ -269,7 +530,14 @@ async def start_run(
     strict_live_extraction_required = request_body.mode == "FULL" and is_strict_full_live_required(
         dotenv_path=strict_dotenv_path
     )
+    strict_report: Any | None = None
     if strict_live_extraction_required:
+        if request_body.strict_preflight_proof_id is None:
+            raise IdisHttpError(
+                status_code=409,
+                code="STRICT_PREFLIGHT_PROOF_REQUIRED",
+                message="A fresh strict preflight proof is required for this run",
+            )
         strict_report = build_strict_full_live_admission_report(
             db_conn=db_conn,
             tenant_id=tenant_ctx.tenant_id,
@@ -284,18 +552,66 @@ async def start_run(
                 details=build_strict_block_operator_safe_details(strict_report),
             )
 
-    try:
-        run_data = runs_repo.create(
-            run_id=run_id,
-            deal_id=deal_id,
-            mode=request_body.mode,
-            idempotency_key=idempotency_key,
-            source=(
-                request_body.source.to_storage_dict() if request_body.source is not None else None
-            ),
-            created_by_actor_id=tenant_ctx.actor_id,
-            created_by_actor_type=tenant_ctx.actor_type,
+    extractor_configured = getattr(request.app.state, "extractor_configured", True)
+    if not extractor_configured:
+        raise IdisHttpError(
+            status_code=503,
+            code="EXTRACTOR_NOT_CONFIGURED",
+            message="No claim extractor is configured. Cannot proceed.",
         )
+
+    try:
+        source = request_body.source.to_storage_dict() if request_body.source is not None else None
+        if strict_live_extraction_required:
+            expected_binding = resolve_strict_preflight_binding(
+                request=request,
+                tenant_id=tenant_ctx.tenant_id,
+                deal_id=deal_id,
+                preflight_corpus=preflight_corpus,
+                strict_report=strict_report,
+            )
+            selected_document_ids = tuple(
+                sorted(
+                    str(document["document_id"])
+                    for document in preflight_corpus
+                    if document.get("document_id") is not None
+                )
+            )
+            selected_source_package_ids = _freeze_task7_selected_source_packages(
+                request=request,
+                tenant_id=tenant_ctx.tenant_id,
+                deal_id=deal_id,
+                selected_document_ids=selected_document_ids,
+            )
+            proof_repo = get_strict_preflight_proofs_repository(db_conn, tenant_ctx.tenant_id)
+            run_data = proof_repo.consume_and_admit_contract_run(
+                proof_id=cast(str, request_body.strict_preflight_proof_id),
+                expected_binding=expected_binding,
+                run_id=run_id,
+                deal_id=deal_id,
+                mode=request_body.mode,
+                idempotency_key=idempotency_key,
+                source=source,
+                created_by_actor_id=tenant_ctx.actor_id,
+                created_by_actor_type=tenant_ctx.actor_type,
+                selected_source_package_ids=selected_source_package_ids,
+            )
+        else:
+            run_data = runs_repo.create(
+                run_id=run_id,
+                deal_id=deal_id,
+                mode=request_body.mode,
+                idempotency_key=idempotency_key,
+                source=source,
+                created_by_actor_id=tenant_ctx.actor_id,
+                created_by_actor_type=tenant_ctx.actor_type,
+            )
+    except StrictPreflightProofError as exc:
+        raise IdisHttpError(
+            status_code=409,
+            code=exc.code,
+            message="Strict preflight proof did not authorize this run",
+        ) from exc
     except RunAlreadyActiveError as exc:
         # Loser of a concurrent create race (past the fail-fast check) -> same safe 409.
         raise IdisHttpError(
@@ -304,14 +620,47 @@ async def start_run(
             message="An active run already exists for this deal",
         ) from exc
 
+    if methodologies_repo is not None:
+        selection_audit_event_id = str(uuid.uuid4())
+        try:
+            methodologies_repo.create_run_selection(
+                deal_id=deal_id,
+                run_id=run_id,
+                commercial_dd_version_record_id=str(
+                    cast(
+                        RunMethodologySelectionRequest,
+                        request_body.methodology_selection,
+                    ).commercial_dd_version_record_id
+                ),
+                financial_dd_version_record_id=str(
+                    cast(
+                        RunMethodologySelectionRequest,
+                        request_body.methodology_selection,
+                    ).financial_dd_version_record_id
+                ),
+                created_by_actor_id=tenant_ctx.actor_id,
+                selection_audit_event_id=selection_audit_event_id,
+            )
+        except Exception as exc:
+            # A failure after run insertion must be a 5xx so the request-scoped
+            # transaction rolls back the run and selection together.  Returning
+            # a 4xx here would commit an orphan FULL run.
+            logger.error("Durable methodology selection failed for run %s", run_id)
+            raise IdisHttpError(
+                status_code=500,
+                code="METHODOLOGY_COVERAGE_INCOMPLETE",
+                message="Run methodology selection could not be persisted",
+            ) from exc
+        request.state.audit_event_id = selection_audit_event_id
+
     request.state.audit_resource_id = run_id
 
-    extractor_configured = getattr(request.app.state, "extractor_configured", True)
-    if not extractor_configured:
-        raise IdisHttpError(
-            status_code=503,
-            code="EXTRACTOR_NOT_CONFIGURED",
-            message="No claim extractor is configured. Cannot proceed.",
+    if strict_live_extraction_required:
+        return RunRef(
+            run_id=run_data["run_id"],
+            status=run_data["status"],
+            steps=[],
+            block_reason=None,
         )
 
     audit_sink = _get_audit_sink(request)
@@ -334,6 +683,15 @@ async def start_run(
         audit_sink=audit_sink,
         strict_live_extraction_required=strict_live_extraction_required,
         strict_live_debate_backend_required=strict_live_extraction_required,
+        pipeline_contract_version=(
+            run_data.get("pipeline_contract_version") if strict_live_extraction_required else None
+        ),
+        pipeline_contract_hash=(
+            run_data.get("pipeline_contract_hash") if strict_live_extraction_required else None
+        ),
+        pipeline_resume_state=(
+            run_data.get("pipeline_resume_state") if strict_live_extraction_required else None
+        ),
     )
 
     try:
@@ -839,7 +1197,7 @@ def _extraction_ready_documents_from_preflight_corpus(
 
 
 def _get_audit_sink(request: Request) -> AuditSink:
-    """Get the audit sink from app state, falling back to in-memory.
+    """Get the application audit sink under the strict durability contract.
 
     Args:
         request: FastAPI request.
@@ -847,12 +1205,25 @@ def _get_audit_sink(request: Request) -> AuditSink:
     Returns:
         AuditSink instance.
     """
+    sink: AuditSink | None = getattr(request.app.state, "audit_sink", None)
+    return _resolve_run_audit_sink(sink)
+
+
+def _resolve_run_audit_sink(audit_sink: AuditSink | None) -> AuditSink:
+    """Resolve hermetic fallback only when strict FULL mode is not active."""
+    strict_dotenv_path = os.environ.get(IDIS_STRICT_DOTENV_PATH_ENV)
+    if is_strict_full_live_required(dotenv_path=strict_dotenv_path):
+        from idis.audit.postgres_sink import PostgresAuditSink
+
+        if not isinstance(audit_sink, PostgresAuditSink):
+            raise RuntimeError("AUDIT_FAILURE: strict run helper requires PostgresAuditSink")
+        return audit_sink
+
+    if audit_sink is not None:
+        return audit_sink
     from idis.audit.sink import InMemoryAuditSink
 
-    sink: AuditSink | None = getattr(request.app.state, "audit_sink", None)
-    if sink is None:
-        return InMemoryAuditSink()
-    return sink
+    return InMemoryAuditSink()
 
 
 def _build_step_responses(steps: list[Any]) -> list[RunStepResponse]:
@@ -957,11 +1328,7 @@ def _emit_run_completed_audit(
         tenant_id: Tenant UUID.
         status: Final run status.
     """
-    from idis.audit.sink import InMemoryAuditSink
-
-    audit_sink = getattr(request.app.state, "audit_sink", None)
-    if audit_sink is None:
-        audit_sink = InMemoryAuditSink()
+    audit_sink = _resolve_run_audit_sink(getattr(request.app.state, "audit_sink", None))
 
     event = {
         "event_type": "deal.run.completed",
@@ -1161,6 +1528,7 @@ def _run_full_enrichment(
     created_claim_ids: list[str],
     calc_ids: list[str],
     db_conn: Any = None,
+    audit_sink: AuditSink | None = None,
 ) -> dict[str, Any]:
     """Run enrichment for all configured providers in a FULL pipeline run.
 
@@ -1179,7 +1547,6 @@ def _run_full_enrichment(
     Returns:
         Dict with provider_count, result_count, blocked_count, enrichment_refs.
     """
-    from idis.audit.sink import InMemoryAuditSink
     from idis.persistence.repositories.enrichment_credentials import (
         get_enrichment_credentials_repository,
     )
@@ -1192,11 +1559,11 @@ def _run_full_enrichment(
     )
     from idis.services.enrichment.service import create_default_enrichment_service
 
-    audit_sink = InMemoryAuditSink()
+    effective_audit_sink = _resolve_run_audit_sink(audit_sink)
     strict_dotenv_path = os.environ.get(IDIS_STRICT_DOTENV_PATH_ENV)
     strict_full_live = is_strict_full_live_required(dotenv_path=strict_dotenv_path)
     service = create_default_enrichment_service(
-        audit_sink=audit_sink,
+        audit_sink=effective_audit_sink,
         credential_repo=get_enrichment_credentials_repository(db_conn, tenant_id),
         strict_full_live=strict_full_live,
         tenant_id=tenant_id,
@@ -1380,6 +1747,7 @@ def _run_full_layer2_ic_challenge(
     vep_package_ids: list[str] | None = None,
     db_conn: Any = None,
     challenge_repository: Any = None,
+    defer_persistence: bool = False,
 ) -> dict[str, Any]:
     """Run the distinct Layer 2 IC challenge for a FULL pipeline run.
 
@@ -1442,29 +1810,39 @@ def _run_full_layer2_ic_challenge(
     # Persist the durable safe rows (Slice93). Deterministic ids -> idempotent upserts;
     # the InMemory twin keeps non-database runs green. Fail closed with a static,
     # ledger-safe reason (no raw exception text; cause chained for logs).
-    from idis.models.layer2_durability import Layer2ChallengeRow, Layer2FindingRow
-    from idis.persistence.repositories.layer2_challenge import get_layer2_challenge_repository
+    if defer_persistence:
+        result["_layer2_ic_challenge_record"] = record
+        result["layer2_persistence"] = {
+            "status": "staged",
+            "challenge_ids": [record.layer2_challenge_id],
+            "finding_row_count": len(record.findings),
+        }
+    else:
+        from idis.models.layer2_durability import Layer2ChallengeRow, Layer2FindingRow
+        from idis.persistence.repositories.layer2_challenge import (
+            get_layer2_challenge_repository,
+        )
 
-    repository = challenge_repository or get_layer2_challenge_repository(db_conn, tenant_id)
-    try:
-        repository.upsert_challenge(Layer2ChallengeRow.from_record(record))
-        for finding in record.findings:
-            repository.upsert_finding(
-                Layer2FindingRow.from_finding(
-                    finding,
-                    tenant_id=record.tenant_id,
-                    deal_id=record.deal_id,
-                    run_id=record.run_id,
-                    challenge_id=record.layer2_challenge_id,
+        repository = challenge_repository or get_layer2_challenge_repository(db_conn, tenant_id)
+        try:
+            repository.upsert_challenge(Layer2ChallengeRow.from_record(record))
+            for finding in record.findings:
+                repository.upsert_finding(
+                    Layer2FindingRow.from_finding(
+                        finding,
+                        tenant_id=record.tenant_id,
+                        deal_id=record.deal_id,
+                        run_id=record.run_id,
+                        challenge_id=record.layer2_challenge_id,
+                    )
                 )
-            )
-    except Exception as exc:
-        raise Layer2ICChallengeBlockedError("LAYER2_PERSISTENCE_FAILED") from exc
-    result["layer2_persistence"] = {
-        "status": "persisted",
-        "challenge_ids": [record.layer2_challenge_id],
-        "finding_row_count": len(record.findings),
-    }
+        except Exception as exc:
+            raise Layer2ICChallengeBlockedError("LAYER2_PERSISTENCE_FAILED") from exc
+        result["layer2_persistence"] = {
+            "status": "persisted",
+            "challenge_ids": [record.layer2_challenge_id],
+            "finding_row_count": len(record.findings),
+        }
 
     # Safe durable Layer-1 reference: sorted, deduped, non-empty strings only.
     result["vep_ref_ids"] = sorted(
@@ -1498,6 +1876,7 @@ def _run_full_analysis(
     db_conn: Any = None,
     analysis_client_factory: AnalysisClientFactory | None = None,
     strict_live_debate_backend_required: bool = False,
+    audit_sink: AuditSink | None = None,
 ) -> dict[str, Any]:
     """Run analysis agents for a FULL pipeline run.
 
@@ -1522,7 +1901,6 @@ def _run_full_analysis(
     from idis.analysis.models import AnalysisContext, AnalysisRagEvidence, EnrichmentRef
     from idis.analysis.registry import AnalysisAgentRegistry
     from idis.analysis.runner import AnalysisEngine
-    from idis.audit.sink import InMemoryAuditSink
 
     llm_client = _build_analysis_llm_client(
         analysis_client_factory=analysis_client_factory,
@@ -1569,8 +1947,8 @@ def _run_full_analysis(
         sector=str((deal_metadata or {}).get("sector") or ""),
     )
 
-    audit_sink = InMemoryAuditSink()
-    engine = AnalysisEngine(registry=registry, audit_sink=audit_sink)
+    effective_audit_sink = _resolve_run_audit_sink(audit_sink)
+    engine = AnalysisEngine(registry=registry, audit_sink=effective_audit_sink)
     agent_ids = [a.agent_id for a in registry.list_agents()]
     bundle = engine.run(analysis_ctx, agent_ids)
 
@@ -1743,6 +2121,7 @@ def _run_full_scoring(
     analysis_context: Any,
     scoring_client_factory: ScoringClientFactory | None = None,
     strict_live_debate_backend_required: bool = False,
+    audit_sink: AuditSink | None = None,
 ) -> dict[str, Any]:
     """Run scoring engine for a FULL pipeline run.
 
@@ -1763,7 +2142,6 @@ def _run_full_scoring(
     from idis.analysis.scoring.engine import ScoringEngine
     from idis.analysis.scoring.llm_scorecard_runner import LLMScorecardRunner
     from idis.analysis.scoring.models import Stage
-    from idis.audit.sink import InMemoryAuditSink
 
     llm_client = _build_scoring_llm_client(
         scoring_client_factory=scoring_client_factory,
@@ -1771,8 +2149,8 @@ def _run_full_scoring(
         tenant_id=tenant_id,
     )
     runner = LLMScorecardRunner(llm_client=llm_client)
-    audit_sink = InMemoryAuditSink()
-    engine = ScoringEngine(runner=runner, audit_sink=audit_sink)
+    effective_audit_sink = _resolve_run_audit_sink(audit_sink)
+    engine = ScoringEngine(runner=runner, audit_sink=effective_audit_sink)
 
     stage = Stage.SEED
     scorecard = engine.score(analysis_context, analysis_bundle, stage)
@@ -1806,6 +2184,7 @@ def _run_full_deliverables(
     run_provenance: dict[str, Any] | None = None,
     db_conn: Any = None,
     object_store: Any = None,
+    audit_sink: AuditSink | None = None,
 ) -> dict[str, Any]:
     """Run deliverables generation for a FULL pipeline run.
 
@@ -1823,11 +2202,10 @@ def _run_full_deliverables(
     Returns:
         Dict with deliverable_count, types, deliverable_ids.
     """
-    from idis.audit.sink import InMemoryAuditSink
     from idis.deliverables.generator import DeliverablesGenerator
 
-    audit_sink = InMemoryAuditSink()
-    generator = DeliverablesGenerator(audit_sink=audit_sink)
+    effective_audit_sink = _resolve_run_audit_sink(audit_sink)
+    generator = DeliverablesGenerator(audit_sink=effective_audit_sink)
 
     graph_conclusions: dict[str, Any] | None = None
     if isinstance(graph_evidence, dict):
@@ -2102,6 +2480,7 @@ def _run_full_graph_evidence(
     neo4j_health_checker: Any = None,
     projection_service: Any = None,
     retrieval_service: Any = None,
+    audit_sink: AuditSink | None = None,
 ) -> dict[str, Any]:
     """Project and retrieve Neo4j graph evidence for product visibility."""
     from idis.persistence.neo4j_driver import Neo4jHealthStatus, check_neo4j_health
@@ -2143,6 +2522,7 @@ def _run_full_graph_evidence(
         db_conn=db_conn,
         projection_service=projection_service,
         calc_ids=calc_ids,
+        audit_sink=audit_sink,
     )
     projection_status = projection_summary["status"]
     if projection_status != "projected":
@@ -2549,10 +2929,13 @@ def _project_graph_evidence(
     db_conn: Any,
     projection_service: Any = None,
     calc_ids: list[str] | None = None,
+    audit_sink: AuditSink | None = None,
 ) -> dict[str, Any]:
     from idis.persistence.graph_consistency import GraphProjectionService, ProjectionStatus
 
-    service = projection_service or GraphProjectionService()
+    service = projection_service or GraphProjectionService(
+        audit_sink=_resolve_run_audit_sink(audit_sink)
+    )
     calcs_by_claim = _graph_calculations_by_claim(
         tenant_id=tenant_id,
         deal_id=deal_id,
@@ -3234,6 +3617,7 @@ def _run_snapshot_extraction(
     db_conn: Any = None,
     extractor_client_factory: ExtractorClientFactory | None = None,
     strict_live_extraction_required: bool = False,
+    audit_sink: AuditSink | None = None,
 ) -> dict[str, Any]:
     """Execute SNAPSHOT extraction pipeline synchronously.
 
@@ -3247,7 +3631,6 @@ def _run_snapshot_extraction(
     Returns:
         Dict with pipeline result status and stats.
     """
-    from idis.audit.sink import InMemoryAuditSink
     from idis.persistence.repositories.evidence import get_evidence_repository
     from idis.services.claims.service import ClaimService
     from idis.services.extraction.chunking.service import ChunkingService
@@ -3274,11 +3657,11 @@ def _run_snapshot_extraction(
         confidence_scorer=scorer,
     )
 
-    audit_sink = InMemoryAuditSink()
+    effective_audit_sink = _resolve_run_audit_sink(audit_sink)
     claim_service = ClaimService(
         tenant_id=tenant_id,
         db_conn=db_conn,
-        audit_sink=audit_sink,
+        audit_sink=effective_audit_sink,
     )
     evidence_repo = get_evidence_repository(db_conn, tenant_id)
 
@@ -3289,7 +3672,7 @@ def _run_snapshot_extraction(
         conflict_detector=ConflictDetector(),
         claim_service=claim_service,
         evidence_repo=evidence_repo,
-        audit_sink=audit_sink,
+        audit_sink=effective_audit_sink,
     )
 
     result = pipeline.run(
@@ -3403,6 +3786,7 @@ ExtractorClientFactory = Callable[[ExtractorClientSelection], Any]
 
 _DEFAULT_ANTHROPIC_EXTRACT_MODEL = "claude-sonnet-4-20250514"
 _EXTRACTION_PROMPT_ID = "EXTRACT_CLAIMS_V1"
+_METHODOLOGY_EXTRACTION_PROMPT_ID = "METHODOLOGY_QUESTION_EXTRACTION_V1"
 
 
 def _resolve_extraction_selection() -> ExtractorClientSelection:

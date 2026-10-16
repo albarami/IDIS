@@ -53,6 +53,10 @@ class ExtractionTaskBaseModel(BaseModel):
 class SourceSpanReference(ExtractionTaskBaseModel):
     """Source span that can support a future extraction task."""
 
+    # Raw source text is content-addressed and must retain its exact UTF-8 bytes.
+    # Identifier/type/tag validators below still normalize their own fields.
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
+
     document_id: str
     span_id: str
     evidence_tags: list[str] = Field(default_factory=list)
@@ -89,6 +93,8 @@ class SourceSpanReference(ExtractionTaskBaseModel):
 class ExpectedAnswerSchema(ExtractionTaskBaseModel):
     """Metadata describing the future extractor output shape."""
 
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
+
     answer_type: str
     question_text: str
     required_evidence: list[RequiredEvidence]
@@ -99,12 +105,24 @@ class ExpectedAnswerSchema(ExtractionTaskBaseModel):
     methodology_type: MethodologyType
     methodology_section: str
 
-    @field_validator("answer_type", "question_text", "report_section", "methodology_section")
+    @field_validator("answer_type", "report_section", "methodology_section")
     @classmethod
     def _not_blank(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("field must not be blank")
         return value.strip()
+
+    @field_validator("question_text")
+    @classmethod
+    def _question_text_not_blank_and_exact(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("question_text must not be blank")
+        return value
+
+    @field_validator("report_subsection")
+    @classmethod
+    def _normalize_report_subsection(cls, value: str | None) -> str | None:
+        return value.strip() if value is not None else None
 
     @field_validator("required_evidence", "validation_requirements")
     @classmethod
@@ -120,6 +138,51 @@ class ExpectedAnswerSchema(ExtractionTaskBaseModel):
         if any(not item for item in cleaned):
             raise ValueError("list items must not be blank")
         return cleaned
+
+
+class StrictExtractionTaskAdmission(ExtractionTaskBaseModel):
+    """Content-bound strict category/classifier admission carried by a task."""
+
+    contract_version: str
+    matched_category: str
+    classified_primary_fdd_category: FddDocumentCategory
+    classified_primary_cdd_category: CddDocumentCategory
+    classified_secondary_fdd_categories: list[FddDocumentCategory]
+    classified_secondary_cdd_categories: list[CddDocumentCategory]
+    cdd_category_mapping_version: str
+    cdd_category_mapping_sha256: str
+    classifier_contract_version: str
+    classifier_reachable_categories_sha256: str
+
+    @field_validator(
+        "contract_version",
+        "matched_category",
+        "cdd_category_mapping_version",
+        "classifier_contract_version",
+    )
+    @classmethod
+    def _strict_admission_string_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("strict admission field must not be blank")
+        return value.strip()
+
+    @field_validator("cdd_category_mapping_sha256", "classifier_reachable_categories_sha256")
+    @classmethod
+    def _strict_admission_hash_is_lowercase_sha256(cls, value: str) -> str:
+        if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+            raise ValueError("strict admission hash must be a lowercase SHA-256")
+        return value
+
+    @field_validator(
+        "classified_secondary_fdd_categories",
+        "classified_secondary_cdd_categories",
+    )
+    @classmethod
+    def _strict_admission_secondaries_are_canonical(cls, value: list[Any]) -> list[Any]:
+        canonical = [item.value for item in value]
+        if canonical != sorted(set(canonical)):
+            raise ValueError("strict admission secondaries must be sorted and unique")
+        return value
 
 
 class ExtractionTask(ExtractionTaskBaseModel):
@@ -143,6 +206,7 @@ class ExtractionTask(ExtractionTaskBaseModel):
     source_spans: list[SourceSpanReference] = Field(default_factory=list)
     target_fdd_category: FddDocumentCategory | None = None
     target_cdd_category: CddDocumentCategory | None = None
+    strict_admission: StrictExtractionTaskAdmission | None = None
     required_evidence: list[RequiredEvidence]
     expected_answer_schema: ExpectedAnswerSchema
     validation_requirements: list[str]
@@ -225,6 +289,7 @@ class ExtractionTask(ExtractionTaskBaseModel):
                 source_span_ids=self.source_span_ids,
                 target_fdd_category=self.target_fdd_category,
                 target_cdd_category=self.target_cdd_category,
+                strict_admission=self.strict_admission,
                 status=self.status,
                 blocker_reason=self.blocker_reason,
             )
@@ -360,6 +425,7 @@ def generate_extraction_task_id(
     source_span_ids: list[str],
     target_fdd_category: FddDocumentCategory | None,
     target_cdd_category: CddDocumentCategory | None,
+    strict_admission: StrictExtractionTaskAdmission | None = None,
     status: ExtractionTaskStatus,
     blocker_reason: ExtractionTaskBlockerReason | None,
 ) -> str:
@@ -379,6 +445,9 @@ def generate_extraction_task_id(
         "source_span_ids": sorted(source_span_ids),
         "target_fdd_category": target_fdd_category.value if target_fdd_category else "none",
         "target_cdd_category": target_cdd_category.value if target_cdd_category else "none",
+        "strict_admission": (
+            strict_admission.model_dump(mode="json") if strict_admission is not None else None
+        ),
         "status": status.value,
         "blocker_reason": blocker_reason.value if blocker_reason else "none",
     }

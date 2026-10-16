@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from idis.api.auth import RequireTenantContext
 from idis.api.errors import IdisHttpError
 from idis.api.routes.runs import _gather_preflight_corpus
+from idis.models.source_package_manifest import SourcePackageManifest
 from idis.persistence.repositories.data_room_packages import get_data_room_packages_repository
 from idis.persistence.repositories.runs import get_runs_repository
 from idis.services.data_room.package_service import (
@@ -31,11 +32,12 @@ router = APIRouter(prefix="/v1", tags=["DataRoomPackages"])
 
 
 class CreateDataRoomPackageRequest(BaseModel):
-    """Request body for creating a data-room package (document ids only)."""
+    """Request body for a legacy or strictly source-bound data-room package."""
 
     model_config = ConfigDict(extra="forbid")
 
     document_ids: list[str]
+    source_manifest: SourcePackageManifest | None = None
 
 
 def _validate_create_body(body: Any) -> CreateDataRoomPackageRequest:
@@ -44,7 +46,8 @@ def _validate_create_body(body: Any) -> CreateDataRoomPackageRequest:
             status_code=400, code="INVALID_REQUEST", message="Request body is required"
         )
     try:
-        return CreateDataRoomPackageRequest.model_validate(body)
+        validated: CreateDataRoomPackageRequest = CreateDataRoomPackageRequest.model_validate(body)
+        return validated
     except ValidationError as exc:
         raise IdisHttpError(
             status_code=400,
@@ -82,6 +85,7 @@ async def create_data_room_package_route(
             created_by_actor_type=tenant_ctx.actor_type,
             document_ids=request_body.document_ids,
             documents=documents,
+            source_manifest=request_body.source_manifest,
         )
     except DataRoomPackageError as exc:
         raise IdisHttpError(status_code=400, code=exc.reason_code, message=str(exc)) from exc
@@ -116,12 +120,15 @@ def list_data_room_packages_route(
         raise IdisHttpError(status_code=404, code="NOT_FOUND", message="Deal not found")
 
     repo = get_data_room_packages_repository(db_conn, tenant_ctx.tenant_id)
-    items = [
-        build_data_room_package_summary(
-            package, repo.list_files_by_package(str(package.package_id), deal_id)
-        )
-        for package in repo.list_packages_by_deal(deal_id)
-    ]
+    try:
+        items = [
+            build_data_room_package_summary(
+                package, repo.list_files_by_package(str(package.package_id), deal_id)
+            )
+            for package in repo.list_packages_by_deal(deal_id)
+        ]
+    except DataRoomPackageError as exc:
+        raise IdisHttpError(status_code=409, code=exc.reason_code, message=str(exc)) from exc
     return {"items": items}
 
 
@@ -143,6 +150,10 @@ def get_data_room_package_route(
             message="Data-room package not found",
         )
     files = repo.list_files_by_package(package_id, deal_id)
-    record = build_data_room_package_summary(package, files)
-    record["files"] = [file.safe_dict() for file in files]
+    try:
+        record = build_data_room_package_summary(package, files)
+    except DataRoomPackageError as exc:
+        raise IdisHttpError(status_code=409, code=exc.reason_code, message=str(exc)) from exc
+    strict_source_bound = "source_manifest" in record
+    record["files"] = [file.safe_dict(include_sequence=strict_source_bound) for file in files]
     return record

@@ -59,14 +59,14 @@ def test_full_system_report_renders_phase_2_1_canonical_truthfulness() -> None:
 
 
 def test_full_system_inventory_detects_phase_2_2_methodology_foundation() -> None:
-    """Methodology components are detected without claiming extraction planning."""
+    """Methodology components include Task 5's durable persistence foundation."""
     inventory = collect_wiring_inventory(REPO_ROOT)
 
     assert inventory["methodology_registry_models"].status in {"WIRED", "PARTIAL"}
     assert inventory["fdd_synthetic_excel_importer"].status == "PARTIAL"
     assert inventory["commercial_dd_template"].status == "PARTIAL"
     assert inventory["methodology_coverage_service"].status == "PARTIAL"
-    assert inventory["methodology_postgres_persistence"].status in {"NOT_FOUND", "DEFERRED"}
+    assert inventory["methodology_postgres_persistence"].status == "PARTIAL"
     assert inventory["methodology_run_integration"].status == "PARTIAL"
 
 
@@ -371,7 +371,8 @@ def test_full_system_inventory_detects_slice_21_single_document_upload_boundary(
 
     assert upload.status == "PARTIAL"
     assert any("application/octet-stream" in item for item in upload.evidence)
-    assert any("IngestionService.ingest_bytes" in item for item in upload.evidence)
+    # Task 4 moves authenticated intake to the bounded staged-file API.
+    assert any("IngestionService.ingest_file" in item for item in upload.evidence)
     assert upload.metadata["public_api_accepts_folder_upload"] is False
     assert upload.metadata["safe_response_exposes_content_b64"] is False
     assert upload.metadata["durable_package_table_added"] is False
@@ -507,16 +508,25 @@ def test_full_system_report_does_not_overstate_extraction_task_planning_wiring()
 
 
 def test_full_system_inventory_detects_phase_2_5_execution_foundation() -> None:
-    """Phase 2.5 synthetic execution exists while live integration remains deferred."""
+    """Task 6 exposes durable execution storage without claiming Gate-A proof."""
     inventory = collect_wiring_inventory(REPO_ROOT)
 
     assert inventory["methodology_extraction_execution_models"].status in {"WIRED", "PARTIAL"}
     assert inventory["methodology_extraction_task_executor"].status == "PARTIAL"
     assert inventory["methodology_extraction_execution_audit_contract"].status == "PARTIAL"
-    assert inventory["methodology_extraction_postgres_persistence"].status in {
-        "NOT_FOUND",
-        "DEFERRED",
-    }
+    persistence = inventory["methodology_extraction_postgres_persistence"]
+    # Slice100 migration 0037 deliberately advances this historical baseline to PARTIAL.
+    assert persistence.status == "PARTIAL"
+    assert any("0037_durable_methodology_extraction.py" in item for item in persistence.evidence)
+    assert any(
+        "methodology_extraction_attempts" in item
+        and "methodology_extraction_results" in item
+        and "tenant-scoped" in item
+        for item in persistence.evidence
+    )
+    assert any("Gate A" in item for item in persistence.gaps)
+    assert "intentionally deferred" not in persistence.summary
+    assert all("No Phase 2.5" not in item for item in persistence.evidence)
     assert inventory["methodology_extraction_api_integration"].status in {
         "NOT_FOUND",
         "DEFERRED",

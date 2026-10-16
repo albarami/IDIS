@@ -12,12 +12,18 @@ state. This module performs NO wiring into strict readiness / provisioning truth
 from __future__ import annotations
 
 import os
+import platform
 import re
 from collections.abc import Callable, Mapping, Sequence
 from enum import StrEnum
 from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from idis.parsers.poppler_runtime import (
+    PopplerRuntimeBindingError,
+    resolve_pinned_poppler_runtime,
+)
 
 IDIS_OCR_ENABLED_ENV = "IDIS_OCR_ENABLED"
 IDIS_OCR_ADAPTER_ENV = "IDIS_OCR_ADAPTER"
@@ -28,7 +34,8 @@ DEFAULT_OCR_ADAPTER = "tesseract"
 DEFAULT_OCR_LANGUAGE = "eng"
 
 TESSERACT_BINARY = "tesseract"
-POPPLER_PDFINFO_BINARY = "pdfinfo"
+POPPLER_PDFINFO_BINARY = "pdfinfo.exe" if platform.system() == "Windows" else "pdfinfo"
+POPPLER_PDFTOPPM_BINARY = "pdftoppm.exe" if platform.system() == "Windows" else "pdftoppm"
 
 # (import name, safe public identifier) — only the safe identifier is ever surfaced.
 _REQUIRED_MODULES: tuple[tuple[str, str], ...] = (
@@ -81,6 +88,13 @@ class OcrCommandRunner(Protocol):
 
     def __call__(self, args: Sequence[str]) -> None:
         """Return ``None`` on success; raise on failure (no output is surfaced)."""
+
+
+class OcrPopplerRuntimeProbe(Protocol):
+    """Admit the exact pinned Poppler runtime or raise a safe typed error."""
+
+    def __call__(self) -> None:
+        """Return ``None`` only when the complete runtime identity is admitted."""
 
 
 class OcrHealthStatus(StrEnum):
@@ -165,7 +179,7 @@ def _make_default_language_probe(env: Mapping[str, str]) -> Callable[[str], bool
     def _probe(language: str) -> bool:
         prefix = str(env.get(TESSDATA_PREFIX_ENV, "")).strip()
         if not prefix:
-            return False
+            return _default_installed_language_probe(language)
         candidates = (
             os.path.join(prefix, f"{language}.traineddata"),
             os.path.join(prefix, "tessdata", f"{language}.traineddata"),
@@ -173,6 +187,27 @@ def _make_default_language_probe(env: Mapping[str, str]) -> Callable[[str], bool
         return any(os.path.isfile(candidate) for candidate in candidates)
 
     return _probe
+
+
+def _default_installed_language_probe(language: str) -> bool:
+    """Ask the admitted Tesseract runtime for one installed language, boundedly."""
+    import subprocess
+
+    if not language or any(character.isspace() for character in language):
+        return False
+    try:
+        completed = subprocess.run(
+            [TESSERACT_BINARY, "--list-langs"],
+            capture_output=True,
+            timeout=_RUNTIME_PROBE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if completed.returncode != 0:
+        return False
+    expected = language.encode("utf-8")
+    return any(line.strip() == expected for line in completed.stdout.splitlines())
 
 
 def _default_command_runner(args: Sequence[str]) -> None:
@@ -195,11 +230,10 @@ def _default_command_runner(args: Sequence[str]) -> None:
 def _build_default_runtime_probe(
     command_runner: Callable[[Sequence[str]], None],
 ) -> Callable[[], None]:
-    """Build the default runtime probe: bounded ``--version`` checks for both binaries."""
+    """Build the Tesseract probe; Poppler has its own exact identity admission."""
 
     def _probe() -> None:
         command_runner([TESSERACT_BINARY, "--version"])
-        command_runner([POPPLER_PDFINFO_BINARY, "-v"])
 
     return _probe
 
@@ -212,6 +246,7 @@ def check_ocr_health(
     language_probe: Callable[[str], bool] | None = None,
     runtime_probe: Callable[[], None] | None = None,
     command_runner: Callable[[Sequence[str]], None] | None = None,
+    poppler_runtime_probe: Callable[[], None] | None = None,
 ) -> OcrHealthCheck:
     """Check OCR runtime readiness without exposing paths, env values, or content.
 
@@ -224,6 +259,9 @@ def check_ocr_health(
             Defaults to bounded ``tesseract --version`` / ``pdfinfo -v`` checks.
         command_runner: Injectable command executor used by the default runtime
             probe (defaults to a bounded, output-suppressing subprocess runner).
+        poppler_runtime_probe: Injectable exact Poppler identity admission. The
+            production default resolves co-located ``pdftoppm``/``pdfinfo`` and
+            pins Poppler 25.12.0 plus its executable/library hashes.
 
     Returns:
         Sanitized OCR health-check result.
@@ -250,6 +288,8 @@ def check_ocr_health(
         missing.append("tesseract")
     if resolve(POPPLER_PDFINFO_BINARY) is None:
         missing.append("poppler")
+    if resolve(POPPLER_PDFTOPPM_BINARY) is None:
+        missing.append("poppler")
     for module_name, safe_name in _REQUIRED_MODULES:
         if not has_module(module_name):
             missing.append(safe_name)
@@ -258,6 +298,18 @@ def check_ocr_health(
 
     if missing:
         return OcrHealthCheck.missing(dependencies=missing)
+
+    try:
+        if poppler_runtime_probe is not None:
+            poppler_runtime_probe()
+        else:
+            resolve_pinned_poppler_runtime(binary_resolver=resolve)
+    except PopplerRuntimeBindingError as exc:
+        if exc.code == "POPPLER_RUNTIME_UNAVAILABLE":
+            return OcrHealthCheck.missing(dependencies=["poppler"])
+        return OcrHealthCheck.failed(error=exc.code)
+    except Exception as exc:
+        return OcrHealthCheck.failed(error=type(exc).__name__)
 
     runtime = runtime_probe or _build_default_runtime_probe(
         command_runner or _default_command_runner

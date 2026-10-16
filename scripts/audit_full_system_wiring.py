@@ -1466,19 +1466,55 @@ def _methodology_extraction_execution_audit_contract(
 
 
 def _methodology_extraction_postgres_persistence(root: Path) -> WiringItem:
-    migrations_dir = root / "src/idis/persistence/migrations/versions"
-    has_migration = any(
-        "extraction_execution" in path.name or "methodology_extraction" in path.name
-        for path in migrations_dir.glob("*.py")
+    migration_path = (
+        root / "src/idis/persistence/migrations/versions/0037_durable_methodology_extraction.py"
     )
+    migration_text = _read(migration_path)
+    repository_text = _read(root / "src/idis/persistence/repositories/methodology_extraction.py")
+    has_task6_schema = migration_path.exists() and all(
+        token in migration_text
+        for token in (
+            'revision = "0037"',
+            "methodology_extraction_attempts",
+            "methodology_extraction_results",
+            "ENABLE ROW LEVEL SECURITY",
+            "FORCE ROW LEVEL SECURITY",
+        )
+    )
+    has_task6_repository = all(
+        token in repository_text
+        for token in (
+            "class PostgresMethodologyExtractionRepository",
+            "INSERT INTO methodology_extraction_attempts",
+            "INSERT INTO methodology_extraction_results",
+        )
+    )
+    has_task6_persistence = has_task6_schema and has_task6_repository
+    if has_task6_persistence:
+        summary = "Task 6 provides durable tenant-scoped methodology extraction execution storage."
+        evidence = [
+            "`0037_durable_methodology_extraction.py` creates tenant-scoped "
+            "`methodology_extraction_attempts` and `methodology_extraction_results` "
+            "with forced row-level security.",
+            "`PostgresMethodologyExtractionRepository` supplies durable attempt and "
+            "terminal-result writes.",
+        ]
+        gaps = [
+            "Static persistence wiring does not prove Task 12 prompt promotion, Gate A live "
+            "provider execution, or direct extraction API exposure."
+        ]
+    else:
+        summary = "Task 6 methodology extraction persistence is not fully detected."
+        evidence = []
+        gaps = ["Migration 0037 and its tenant-scoped attempt/result repository must both exist."]
     return WiringItem(
         key="methodology_extraction_postgres_persistence",
         label="Methodology extraction Postgres persistence",
-        status="PARTIAL" if has_migration else "DEFERRED",
-        summary="Methodology extraction execution persistence is intentionally deferred.",
-        evidence=["No Phase 2.5 methodology extraction execution migration is expected."],
-        gaps=["Future slice must define tenant-scoped persistence for execution results."],
-        phase_2_action="Phase 2.5",
+        status="PARTIAL" if has_task6_persistence else "DEFERRED",
+        summary=summary,
+        evidence=evidence,
+        gaps=gaps,
+        phase_2_action="Slice100 Task 6",
     )
 
 
@@ -2617,7 +2653,7 @@ def _single_document_upload_intake(files: dict[str, str]) -> WiringItem:
         '"/v1/deals/{deal_id}/documents/upload"' in documents_text
         and "UPLOAD_CONTENT_TYPE" in documents_text
         and "application/octet-stream" in documents_text
-        and "ingest_bytes(" in upload_body
+        and ("ingest_file(" in upload_body or "ingest_bytes(" in upload_body)
         and "IngestionContext" in documents_text
         and "ComplianceEnforcedStore" in service_text
         and "uploadDealDocument" in openapi_text
@@ -2632,20 +2668,19 @@ def _single_document_upload_intake(files: dict[str, str]) -> WiringItem:
         summary=(
             "single-document upload intake boundary exists; clients can upload one raw "
             "supported document through existing compliance storage and ingestion while "
-            "folder upload, new storage backends, UI, OCR/media, and downstream layers "
+            "folder upload, new storage backends, UI, and downstream layers "
             "remain deferred."
         ),
         evidence=[
             "Upload endpoint requires application/octet-stream.",
             "Upload route validates filename, byte size, SHA256, content type, and deal scope.",
-            "Uploaded bytes flow through IngestionService.ingest_bytes and compliant storage.",
+            "Uploaded streams flow through IngestionService.ingest_file and compliant storage.",
             "Safe summaries expose durable document_id for RunSource.document_ids.",
         ],
         gaps=[
             "data-room folder upload remains deferred.",
             "durable data-room package table remains deferred.",
             "UI remains deferred.",
-            "OCR/media/image/HTML/TXT parsing remains deferred.",
             "new S3/Supabase storage implementation remains deferred.",
             "RAG/Neo4j remains deferred.",
             "Layer 2 remains deferred.",

@@ -5,6 +5,7 @@ Provides engine creation, connection management, and tenant context setting via 
 Environment Variables:
     IDIS_DATABASE_URL: Application/runtime role connection string (non-superuser)
     IDIS_DATABASE_ADMIN_URL: Admin/superuser connection string (migrations/tests only)
+    IDIS_ERASURE_DATABASE_URL: Dedicated NO-BYPASS erasure-executor connection string
 
 Design Requirements (v6.3):
     - PostgreSQL is the canonical store (MUST)
@@ -31,9 +32,11 @@ logger = logging.getLogger(__name__)
 
 IDIS_DATABASE_URL_ENV = "IDIS_DATABASE_URL"
 IDIS_DATABASE_ADMIN_URL_ENV = "IDIS_DATABASE_ADMIN_URL"
+IDIS_ERASURE_DATABASE_URL_ENV = "IDIS_ERASURE_DATABASE_URL"
 
 _app_engine: Engine | None = None
 _admin_engine: Engine | None = None
+_erasure_engine: Engine | None = None
 
 
 class DatabaseConfigError(Exception):
@@ -157,6 +160,35 @@ def get_admin_engine() -> Engine:
     return _admin_engine
 
 
+def get_erasure_engine() -> Engine:
+    """Get the dedicated erasure-executor engine without any credential fallback.
+
+    The small pool is deliberate: each workflow holds one session advisory lock
+    while bounded object reconciliation runs, so these connections must not
+    compete with ordinary application traffic.
+    """
+
+    global _erasure_engine
+
+    if _erasure_engine is None:
+        url = os.environ.get(IDIS_ERASURE_DATABASE_URL_ENV)
+        if not url:
+            raise DatabaseConfigError(
+                "Erasure database URL not configured. "
+                f"Set {IDIS_ERASURE_DATABASE_URL_ENV} environment variable."
+            )
+        _erasure_engine = create_engine(
+            _ensure_psycopg_driver(url),
+            pool_size=2,
+            max_overflow=0,
+            pool_pre_ping=True,
+            echo=False,
+        )
+        logger.info("Created dedicated erasure database engine")
+
+    return _erasure_engine
+
+
 @contextmanager
 def begin_app_conn() -> Generator[Connection, None, None]:
     """Context manager for application database connection with transaction.
@@ -242,10 +274,13 @@ def reset_engines() -> None:
 
     Used for testing to ensure fresh engine creation.
     """
-    global _app_engine, _admin_engine
+    global _app_engine, _admin_engine, _erasure_engine
     if _app_engine is not None:
         _app_engine.dispose()
         _app_engine = None
     if _admin_engine is not None:
         _admin_engine.dispose()
         _admin_engine = None
+    if _erasure_engine is not None:
+        _erasure_engine.dispose()
+        _erasure_engine = None

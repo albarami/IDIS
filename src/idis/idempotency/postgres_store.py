@@ -13,6 +13,8 @@ Design Requirements (v6.3 API Contracts §4.1):
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -20,7 +22,12 @@ from typing import TYPE_CHECKING
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
-from idis.idempotency.store import IdempotencyRecord, IdempotencyStoreError, ScopeKey
+from idis.idempotency.store import (
+    IdempotencyKeyConflictError,
+    IdempotencyRecord,
+    IdempotencyStoreError,
+    ScopeKey,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy import Connection
@@ -51,6 +58,8 @@ class PostgresIdempotencyStore:
         """
     )
 
+    _LOCK_SQL = text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))")
+
     _INSERT_SQL = text(
         """
         INSERT INTO idempotency_records
@@ -60,12 +69,8 @@ class PostgresIdempotencyStore:
         (:tenant_id, :actor_id, :method, :operation_id, :idempotency_key,
          :payload_sha256, :status_code, :media_type, :body_bytes, :created_at)
         ON CONFLICT (tenant_id, actor_id, method, operation_id, idempotency_key)
-        DO UPDATE SET
-            payload_sha256 = EXCLUDED.payload_sha256,
-            status_code = EXCLUDED.status_code,
-            media_type = EXCLUDED.media_type,
-            body_bytes = EXCLUDED.body_bytes,
-            created_at = EXCLUDED.created_at
+        DO NOTHING
+        RETURNING 1 AS inserted
         """
     )
 
@@ -118,6 +123,32 @@ class PostgresIdempotencyStore:
         Raises:
             SQLAlchemyError: If query fails.
         """
+        self._lock_scope(scope_key, conn)
+        return self._select_with_conn(scope_key, conn)
+
+    @staticmethod
+    def _scope_lock_key(scope_key: ScopeKey) -> str:
+        """Return a non-secret fixed-width token for the complete request scope."""
+        serialized = json.dumps(
+            {
+                "actor_id": scope_key.actor_id,
+                "idempotency_key": scope_key.idempotency_key,
+                "method": scope_key.method,
+                "operation_id": scope_key.operation_id,
+                "tenant_id": scope_key.tenant_id,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        return hashlib.sha256(serialized).hexdigest()
+
+    def _lock_scope(self, scope_key: ScopeKey, conn: Connection) -> None:
+        """Serialize one idempotency scope for the surrounding transaction."""
+        conn.execute(self._LOCK_SQL, {"lock_key": self._scope_lock_key(scope_key)})
+
+    def _select_with_conn(self, scope_key: ScopeKey, conn: Connection) -> IdempotencyRecord | None:
+        """Read a record after the caller has acquired the scope lock."""
         result = conn.execute(
             self._SELECT_SQL,
             {
@@ -191,7 +222,8 @@ class PostgresIdempotencyStore:
         else:
             created_at_dt = record.created_at
 
-        conn.execute(
+        self._lock_scope(scope_key, conn)
+        result = conn.execute(
             self._INSERT_SQL,
             {
                 "tenant_id": scope_key.tenant_id,
@@ -206,6 +238,17 @@ class PostgresIdempotencyStore:
                 "created_at": created_at_dt,
             },
         )
+
+        if result.fetchone() is None:
+            existing = self._select_with_conn(scope_key, conn)
+            if existing is None:
+                raise IdempotencyStoreError(
+                    "Idempotency insert conflicted but the original record was not readable"
+                )
+            if existing.payload_sha256 != record.payload_sha256:
+                raise IdempotencyKeyConflictError()
+            # First writer wins even when a same-payload retry reaches put directly.
+            return
 
         logger.debug(
             "Stored idempotency record for %s/%s/%s",

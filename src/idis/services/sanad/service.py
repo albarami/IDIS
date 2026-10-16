@@ -17,7 +17,8 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
-from idis.audit.sink import AuditSink, InMemoryAuditSink
+from idis.audit.canonical import build_canonical_audit_event
+from idis.audit.sink import AuditSink, AuditSinkError, InMemoryAuditSink
 from idis.persistence.repositories.claims import (
     DefectsRepository,
     InMemoryDefectsRepository,
@@ -167,41 +168,51 @@ class SanadService:
         request_id: str | None = None,
     ) -> None:
         """Emit an audit event for sanad operations with request correlation."""
-        event: dict[str, Any] = {
-            "event_id": str(uuid.uuid4()),
-            "occurred_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-            "tenant_id": self._tenant_id,
-            "event_type": event_type,
-            "severity": severity,
-            "resource": {
-                "resource_type": "sanad",
-                "resource_id": sanad_id,
-            },
-            "actor": {
-                "actor_type": "SERVICE",
-                "actor_id": "sanad_service",
-                "roles": ["INTEGRATION_SERVICE"],
-                "ip": "internal",
-                "user_agent": "SanadService",
-            },
-            "request": {
-                "request_id": request_id or str(uuid.uuid4()),
-                "method": "SERVICE",
-                "path": "/internal/sanads",
-                "status_code": 200,
-            },
-            "summary": f"{event_type} for sanad {sanad_id}",
-            "payload": {
-                "hashes": [],
-                "refs": [f"sanad_id:{sanad_id}"],
-            },
+        source = details or {}
+        safe = {
+            key: source[key]
+            for key in (
+                "claim_id",
+                "grade",
+                "new_grade",
+                "old_grade",
+                "old_level",
+                "new_level",
+                "evidence_count",
+                "defect_id",
+            )
+            if key in source
         }
-        if details:
-            event["payload"]["details"] = details
+        if isinstance(source.get("errors"), list):
+            safe["failure_count"] = len(source["errors"])
+        deal_id = str(source["deal_id"]) if source.get("deal_id") else None
+        event = build_canonical_audit_event(
+            tenant_id=self._tenant_id,
+            event_type=event_type,
+            severity=severity,
+            summary=f"Sanad mutation recorded: {event_type}",
+            actor_id="idis-sanad-service",
+            request_id=request_id or f"{event_type}:{sanad_id}",
+            method="POST",
+            path=f"/internal/sanads/{sanad_id}",
+            status_code=200,
+            resource_type="sanad",
+            resource_id=sanad_id,
+            deal_id=deal_id,
+            safe=safe,
+            refs=[f"claim_id:{source['claim_id']}"] if source.get("claim_id") else [],
+        )
         try:
+            db_conn = getattr(self, "_db_conn", None)
+            emit_in_tx = getattr(self._audit_sink, "emit_in_tx", None)
+            if db_conn is not None and callable(emit_in_tx):
+                emit_in_tx(db_conn, event)
+                return
             self._audit_sink.emit(event)
-        except Exception as e:
-            logger.warning("Failed to emit audit event: %s", e)
+        except AuditSinkError:
+            raise
+        except Exception as exc:
+            raise AuditSinkError("Sanad audit emission failed") from exc
 
     def _compute_grade(
         self,

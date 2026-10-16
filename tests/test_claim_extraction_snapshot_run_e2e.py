@@ -379,8 +379,8 @@ class TestSnapshotPipelineE2E:
         )
 
         event_types = [e["event_type"] for e in sink.events]
-        assert "extraction.pipeline.started" in event_types
-        assert "extraction.pipeline.completed" in event_types
+        assert "integration.extraction.pipeline_started" in event_types
+        assert "integration.extraction.pipeline_completed" in event_types
 
     def test_no_documents_produces_completed(self) -> None:
         """Empty documents list completes successfully with 0 claims."""

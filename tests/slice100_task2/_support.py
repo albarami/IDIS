@@ -44,6 +44,7 @@ EXPECTED_BUDGET_COMPONENT_IDS = frozenset(
         "google_news_rss",
     }
 )
+EXPECTED_BUDGET_COMPONENT_COUNT = len(EXPECTED_BUDGET_COMPONENT_IDS)
 
 
 def require_module(name: str) -> ModuleType:

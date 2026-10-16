@@ -20,6 +20,7 @@ import pytest
 from tests.slice100_task2._support import (
     ACCEPTANCE_TENANT_ID,
     BUDGET_SCHEMA_VERSION,
+    EXPECTED_BUDGET_COMPONENT_COUNT,
     RIGHTS_SCHEMA_VERSION,
     SIGNER_ID,
     budget_payload,
@@ -174,7 +175,7 @@ def test_governance_import_verifies_both_documents_and_commits_one_audited_unit(
 ) -> None:
     env, private_pem, public_pem = _signed_inputs(tmp_path)
     rights_repository = _DurableRepository(RIGHTS_SCHEMA_VERSION, 4)
-    budget_repository = _DurableRepository(BUDGET_SCHEMA_VERSION, 17)
+    budget_repository = _DurableRepository(BUDGET_SCHEMA_VERSION, EXPECTED_BUDGET_COMPONENT_COUNT)
     audit_sink = _AuditSink()
     connection = object()
 
@@ -188,7 +189,7 @@ def test_governance_import_verifies_both_documents_and_commits_one_audited_unit(
 
     assert report.may_proceed is True
     assert report.rights_rows == 4
-    assert report.budget_rows == 17
+    assert report.budget_rows == EXPECTED_BUDGET_COMPONENT_COUNT
     assert report.tenant_id == ACCEPTANCE_TENANT_ID
     assert len(rights_repository.calls) == len(budget_repository.calls) == 1
     assert len(audit_sink.calls) == 1
@@ -235,7 +236,7 @@ def test_governance_import_rejects_invalid_launch_identity_before_write(
 ) -> None:
     env, _private_pem, _public_pem = _signed_inputs(tmp_path)
     rights = _DurableRepository(RIGHTS_SCHEMA_VERSION, 4)
-    budget = _DurableRepository(BUDGET_SCHEMA_VERSION, 17)
+    budget = _DurableRepository(BUDGET_SCHEMA_VERSION, EXPECTED_BUDGET_COMPONENT_COUNT)
     audit = _AuditSink()
     module = importlib.import_module("idis.runtime.governance_import")
 
@@ -268,7 +269,7 @@ def test_idempotent_replay_preserves_row_lineage_and_audits_the_noop(
     )
     budget = _DurableRepository(
         BUDGET_SCHEMA_VERSION,
-        17,
+        EXPECTED_BUDGET_COMPONENT_COUNT,
         replay_import_audit_event_id=original_event_id,
     )
     audit = _AuditSink()
@@ -306,7 +307,7 @@ def test_budget_replacement_succeeds_when_rights_document_is_a_replay(
         4,
         replay_import_audit_event_id=rights_event_id,
     )
-    budget = _DurableRepository(BUDGET_SCHEMA_VERSION, 17)
+    budget = _DurableRepository(BUDGET_SCHEMA_VERSION, EXPECTED_BUDGET_COMPONENT_COUNT)
     audit = _AuditSink()
 
     report = _import(
@@ -348,7 +349,7 @@ def test_rights_transition_succeeds_when_budget_document_is_a_replay(
     )
     budget = _DurableRepository(
         BUDGET_SCHEMA_VERSION,
-        17,
+        EXPECTED_BUDGET_COMPONENT_COUNT,
         replay_import_audit_event_id=budget_event_id,
     )
     audit = _AuditSink()
@@ -382,11 +383,13 @@ def test_governance_import_rejects_any_non_durable_repository_before_write(
 ) -> None:
     env, _private_pem, _public_pem = _signed_inputs(tmp_path)
     rights: _DurableRepository = _DurableRepository(RIGHTS_SCHEMA_VERSION, 4)
-    budget: _DurableRepository = _DurableRepository(BUDGET_SCHEMA_VERSION, 17)
+    budget: _DurableRepository = _DurableRepository(
+        BUDGET_SCHEMA_VERSION, EXPECTED_BUDGET_COMPONENT_COUNT
+    )
     if repository_name == "rights":
         rights = _NonDurableRepository(RIGHTS_SCHEMA_VERSION, 4)
     else:
-        budget = _NonDurableRepository(BUDGET_SCHEMA_VERSION, 17)
+        budget = _NonDurableRepository(BUDGET_SCHEMA_VERSION, EXPECTED_BUDGET_COMPONENT_COUNT)
     audit_sink = _AuditSink()
 
     with pytest.raises(Exception) as exc_info:
@@ -413,7 +416,7 @@ def test_governance_import_rejects_payload_tenant_mismatch_before_repository_wri
     document["payload"]["tenant_id"] = "10000000-0000-4000-8000-000000000099"
     budget_path.write_text(json.dumps(document), encoding="utf-8")
     rights = _DurableRepository(RIGHTS_SCHEMA_VERSION, 4)
-    budget = _DurableRepository(BUDGET_SCHEMA_VERSION, 17)
+    budget = _DurableRepository(BUDGET_SCHEMA_VERSION, EXPECTED_BUDGET_COMPONENT_COUNT)
 
     with pytest.raises(Exception) as exc_info:
         _import(
@@ -442,7 +445,9 @@ def test_governance_import_requires_the_exact_admin_binding(tmp_path: Path) -> N
         _import(
             env=env,
             rights_repository=_DurableRepository(RIGHTS_SCHEMA_VERSION, 4),
-            budget_repository=_DurableRepository(BUDGET_SCHEMA_VERSION, 17),
+            budget_repository=_DurableRepository(
+                BUDGET_SCHEMA_VERSION, EXPECTED_BUDGET_COMPONENT_COUNT
+            ),
             audit_sink=_AuditSink(),
             connection=object(),
         )
@@ -457,7 +462,7 @@ def test_governance_import_rejects_writable_trusted_public_pem_before_write(
     public_path = Path(env["IDIS_GOVERNANCE_TRUSTED_ED25519_PUBLIC_KEY_PATH"])
     public_path.chmod(stat.S_IREAD | stat.S_IWRITE)
     rights = _DurableRepository(RIGHTS_SCHEMA_VERSION, 4)
-    budget = _DurableRepository(BUDGET_SCHEMA_VERSION, 17)
+    budget = _DurableRepository(BUDGET_SCHEMA_VERSION, EXPECTED_BUDGET_COMPONENT_COUNT)
     audit = _AuditSink()
 
     with pytest.raises(Exception) as exc_info:
@@ -494,7 +499,9 @@ def test_governance_import_rejects_read_only_public_pem_with_other_principal_wri
         _import(
             env=env,
             rights_repository=_DurableRepository(RIGHTS_SCHEMA_VERSION, 4),
-            budget_repository=_DurableRepository(BUDGET_SCHEMA_VERSION, 17),
+            budget_repository=_DurableRepository(
+                BUDGET_SCHEMA_VERSION, EXPECTED_BUDGET_COMPONENT_COUNT
+            ),
             audit_sink=_AuditSink(),
             connection=object(),
         )
@@ -520,7 +527,9 @@ def test_governance_import_rejects_protected_public_pem_in_replaceable_parent(
         _import(
             env=env,
             rights_repository=_DurableRepository(RIGHTS_SCHEMA_VERSION, 4),
-            budget_repository=_DurableRepository(BUDGET_SCHEMA_VERSION, 17),
+            budget_repository=_DurableRepository(
+                BUDGET_SCHEMA_VERSION, EXPECTED_BUDGET_COMPONENT_COUNT
+            ),
             audit_sink=_AuditSink(),
             connection=object(),
         )
@@ -552,7 +561,9 @@ def test_governance_import_rejects_valid_key_swap_after_profile_digest_admission
         _import(
             env=env,
             rights_repository=_DurableRepository(RIGHTS_SCHEMA_VERSION, 4),
-            budget_repository=_DurableRepository(BUDGET_SCHEMA_VERSION, 17),
+            budget_repository=_DurableRepository(
+                BUDGET_SCHEMA_VERSION, EXPECTED_BUDGET_COMPONENT_COUNT
+            ),
             audit_sink=_AuditSink(),
             connection=object(),
             expected_public_key_sha256=expected_digest,
@@ -710,7 +721,7 @@ def test_governance_import_rejects_when_any_rights_approval_is_expired(
         json.dumps(envelope), encoding="utf-8"
     )
     rights = _DurableRepository(RIGHTS_SCHEMA_VERSION, 4)
-    budget = _DurableRepository(BUDGET_SCHEMA_VERSION, 17)
+    budget = _DurableRepository(BUDGET_SCHEMA_VERSION, EXPECTED_BUDGET_COMPONENT_COUNT)
     audit = _AuditSink()
 
     with pytest.raises(Exception) as exc_info:
@@ -750,7 +761,7 @@ def test_governance_import_rejects_future_dated_approval_before_any_write(
         json.dumps(envelope), encoding="utf-8"
     )
     rights = _DurableRepository(RIGHTS_SCHEMA_VERSION, 4)
-    budget = _DurableRepository(BUDGET_SCHEMA_VERSION, 17)
+    budget = _DurableRepository(BUDGET_SCHEMA_VERSION, EXPECTED_BUDGET_COMPONENT_COUNT)
     audit = _AuditSink()
 
     with pytest.raises(Exception) as exc_info:
@@ -795,7 +806,9 @@ def test_governance_import_allows_expired_revoked_snapshot_row(
     report = _import(
         env=env,
         rights_repository=_DurableRepository(RIGHTS_SCHEMA_VERSION, 4),
-        budget_repository=_DurableRepository(BUDGET_SCHEMA_VERSION, 17),
+        budget_repository=_DurableRepository(
+            BUDGET_SCHEMA_VERSION, EXPECTED_BUDGET_COMPONENT_COUNT
+        ),
         audit_sink=_AuditSink(),
         connection=object(),
     )
@@ -826,7 +839,7 @@ def test_governance_import_rejects_future_dated_revocation(
         json.dumps(envelope), encoding="utf-8"
     )
     rights = _DurableRepository(RIGHTS_SCHEMA_VERSION, 4)
-    budget = _DurableRepository(BUDGET_SCHEMA_VERSION, 17)
+    budget = _DurableRepository(BUDGET_SCHEMA_VERSION, EXPECTED_BUDGET_COMPONENT_COUNT)
     audit = _AuditSink()
 
     with pytest.raises(Exception) as exc_info:

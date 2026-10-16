@@ -927,7 +927,7 @@ class _BudgetStoreFactory:
         return store
 
 
-def test_budget_adapter_requires_signed_17_rows_and_proves_full_durable_lifecycle() -> None:
+def test_budget_adapter_requires_complete_signed_set_and_proves_full_lifecycle() -> None:
     module = _module()
     stores = _BudgetStoreFactory()
 

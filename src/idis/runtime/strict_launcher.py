@@ -359,6 +359,58 @@ def _ensure_migration_database(profile: StrictRuntimeProfile) -> None:
             engine.dispose()
 
 
+def _alembic_metadata_privileges_absent(
+    connection: Any,
+    *,
+    app_role: str,
+    text: Callable[[str], Any],
+) -> bool:
+    """Require zero effective table or column privilege on Alembic metadata."""
+    row = connection.execute(
+        text(
+            """
+            SELECT NOT (
+                has_table_privilege(
+                    CAST(:app_role AS name), 'public.alembic_version', 'SELECT'
+                )
+                OR has_table_privilege(
+                    CAST(:app_role AS name), 'public.alembic_version', 'INSERT'
+                )
+                OR has_table_privilege(
+                    CAST(:app_role AS name), 'public.alembic_version', 'UPDATE'
+                )
+                OR has_table_privilege(
+                    CAST(:app_role AS name), 'public.alembic_version', 'DELETE'
+                )
+                OR has_table_privilege(
+                    CAST(:app_role AS name), 'public.alembic_version', 'TRUNCATE'
+                )
+                OR has_table_privilege(
+                    CAST(:app_role AS name), 'public.alembic_version', 'REFERENCES'
+                )
+                OR has_table_privilege(
+                    CAST(:app_role AS name), 'public.alembic_version', 'TRIGGER'
+                )
+                OR has_any_column_privilege(
+                    CAST(:app_role AS name), 'public.alembic_version', 'SELECT'
+                )
+                OR has_any_column_privilege(
+                    CAST(:app_role AS name), 'public.alembic_version', 'INSERT'
+                )
+                OR has_any_column_privilege(
+                    CAST(:app_role AS name), 'public.alembic_version', 'UPDATE'
+                )
+                OR has_any_column_privilege(
+                    CAST(:app_role AS name), 'public.alembic_version', 'REFERENCES'
+                )
+            ) AS privileges_absent
+            """
+        ),
+        {"app_role": app_role},
+    ).one()
+    return bool(_row_value(row, "privileges_absent", 0))
+
+
 def _migration_privilege_catalog_is_exact(
     connection: Any,
     *,
@@ -368,6 +420,12 @@ def _migration_privilege_catalog_is_exact(
     text: Callable[[str], Any],
 ) -> bool:
     """Verify the direct and effective privilege boundary for the app role."""
+    if not _alembic_metadata_privileges_absent(
+        connection,
+        app_role=app_role,
+        text=text,
+    ):
+        return False
     expected_crud = {"SELECT", "INSERT", "UPDATE", "DELETE"}
     direct_rows = connection.execute(
         text(
@@ -597,7 +655,9 @@ def _grant_and_verify_migration_privileges(profile: StrictRuntimeProfile) -> Non
                         SELECT c.relname
                         FROM pg_class AS c
                         JOIN pg_namespace AS n ON n.oid = c.relnamespace
-                        WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
+                        WHERE n.nspname = 'public'
+                          AND c.relkind IN ('r', 'p')
+                          AND c.relname <> 'alembic_version'
                         ORDER BY c.relname
                         """
                     )
@@ -608,6 +668,15 @@ def _grant_and_verify_migration_privileges(profile: StrictRuntimeProfile) -> Non
             preparer = engine.dialect.identifier_preparer
             quoted_role = preparer.quote(app_role)
             connection.exec_driver_sql(f"GRANT USAGE ON SCHEMA public TO {quoted_role}")
+            connection.exec_driver_sql(
+                "REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER "
+                f"ON TABLE public.alembic_version FROM {quoted_role}"
+            )
+            connection.exec_driver_sql(
+                "REVOKE SELECT (version_num), INSERT (version_num), "
+                "UPDATE (version_num), REFERENCES (version_num) "
+                f"ON TABLE public.alembic_version FROM {quoted_role}"
+            )
             for table_name in table_names:
                 quoted_table = preparer.quote(table_name)
                 connection.exec_driver_sql(

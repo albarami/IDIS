@@ -44,7 +44,7 @@ def _components(payload: dict[str, object]) -> dict[str, dict[str, object]]:
 def test_exact_budget_component_set_is_pinned_with_sec_edgar() -> None:
     declared = _api("EXPECTED_PROVIDER_BUDGET_COMPONENT_IDS")
     assert frozenset(declared) == EXPECTED_BUDGET_COMPONENT_IDS
-    assert len(declared) == 17
+    assert len(declared) == len(EXPECTED_BUDGET_COMPONENT_IDS)
     assert "sec_edgar" in declared
     assert "edgar" not in declared
 

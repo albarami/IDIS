@@ -248,7 +248,12 @@ def _catalog_assertions(connection: Any, *, role_name: str, database_name: str) 
     for table_name, privilege in privilege_rows:
         by_table.setdefault(str(table_name), set()).add(str(privilege))
     assert set(by_table) == set(tables)
-    assert all(privileges == _CRUD for privileges in by_table.values())
+    assert by_table["alembic_version"] == set()
+    assert all(
+        privileges == _CRUD
+        for table_name, privileges in by_table.items()
+        if table_name != "alembic_version"
+    )
 
     public_table_grants = connection.execute(
         text(

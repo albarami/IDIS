@@ -607,7 +607,7 @@ REVIEWED_STEP_OUTPUT_BINDINGS: dict[StepName, _ReviewedStepOutputBinding] = {
         aggregate_type_qname=None,
         produced_write_bindings=(),
         unresolved_requirements=_task7_gaps(
-            "EnrichmentResult is per-provider, not a typed 15-provider run aggregate",
+            "EnrichmentResult is per-provider, not a typed whole-run aggregate",
             "provider outcomes, facts, provenance, and rights decisions have no repository/table",
         ),
     ),

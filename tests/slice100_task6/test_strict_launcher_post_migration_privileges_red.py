@@ -187,7 +187,12 @@ def _assert_exact_least_privilege_catalog(
     table_privileges = _direct_table_privileges(connection, role_name=role_name)
     assert set(_TASK5_TASK6_TABLES).issubset(table_privileges)
     assert all(table_privileges[table] == _CRUD for table in _TASK5_TASK6_TABLES)
-    assert all(privileges == _CRUD for privileges in table_privileges.values())
+    assert table_privileges["alembic_version"] == set()
+    assert all(
+        privileges == _CRUD
+        for table_name, privileges in table_privileges.items()
+        if table_name != "alembic_version"
+    )
 
     schema_privileges = {
         str(value)

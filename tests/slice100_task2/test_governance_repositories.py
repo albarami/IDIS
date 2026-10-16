@@ -17,6 +17,7 @@ import pytest
 from tests.slice100_task2._support import (
     ACCEPTANCE_TENANT_ID,
     BUDGET_SCHEMA_VERSION,
+    EXPECTED_BUDGET_COMPONENT_COUNT,
     RIGHTS_SCHEMA_VERSION,
     SIGNER_ID,
     budget_payload,
@@ -826,7 +827,7 @@ def test_rights_transition_matches_prior_exact_payload_by_composite_key_not_list
     assert repository.last_previous_payload == previous_payload
 
 
-def test_budget_repository_imports_exactly_seventeen_policy_rows_atomically(
+def test_budget_repository_imports_complete_policy_rows_atomically(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("idis.persistence.db.set_tenant_local", lambda *_args: None)
@@ -841,14 +842,14 @@ def test_budget_repository_imports_exactly_seventeen_policy_rows_atomically(
     )
 
     assert repository.is_durable is True
-    assert count == 17
+    assert count == EXPECTED_BUDGET_COMPONENT_COUNT
     insert_sql, insert_params = next(
         (sql, params)
         for sql, params in connection.calls
         if sql.startswith("INSERT INTO provider_budget_policies")
     )
     assert "ON CONFLICT" in insert_sql
-    assert isinstance(insert_params, list) and len(insert_params) == 17
+    assert isinstance(insert_params, list) and len(insert_params) == EXPECTED_BUDGET_COMPONENT_COUNT
     assert len({row["policy_hash"] for row in insert_params}) == 1
     assert len({row["policy_version"] for row in insert_params}) == 1
     assert {row["component_id"] for row in insert_params} == set(budget_payload()["components"])
@@ -948,7 +949,9 @@ def test_unknown_driver_rowcount_is_verified_by_exact_durable_reselect(
         imported_at=NOW,
     )
 
-    assert imported == (4 if schema_version == RIGHTS_SCHEMA_VERSION else 17)
+    assert imported == (
+        4 if schema_version == RIGHTS_SCHEMA_VERSION else EXPECTED_BUDGET_COMPONENT_COUNT
+    )
     assert any(sql.startswith("SELECT import_audit_event_id") for sql, _params in connection.calls)
 
 

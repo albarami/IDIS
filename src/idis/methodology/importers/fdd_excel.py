@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from typing import BinaryIO
@@ -15,6 +16,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 from idis.methodology.ids import generate_methodology_question_id, normalize_text
 from idis.methodology.models import (
     AssignedAgent,
+    FddFormulaRequirement,
     MethodologyQuestion,
     MethodologyRegistry,
     MethodologySourceTrace,
@@ -81,6 +83,31 @@ class FDDImporterError(ValueError):
         self.code = "FDD_IMPORT_INVALID"
 
 
+@dataclass(frozen=True, slots=True)
+class FddWorkbookRowProjection:
+    """Model-free, source-bound projection of one validated production row."""
+
+    row_ordinal: int
+    sheet_ordinal: int
+    source_sheet: str
+    source_row: int
+    source_anchor_cell: str
+    term: str
+    nature: str | None
+    line_item: str | None
+    question_text: str
+    methodology_question_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class FddWorkbookProjection:
+    """Model-free projection shared by legacy and policy-v2 importers."""
+
+    source_hash: str
+    source_byte_count: int
+    rows: tuple[FddWorkbookRowProjection, ...]
+
+
 def import_fdd_workbook(workbook: bytes | Path | str | BinaryIO) -> MethodologyRegistry:
     """Import a production FDD workbook or the isolated legacy test dialect."""
     workbook_bytes, source_name, source_path = _read_workbook(workbook)
@@ -93,10 +120,12 @@ def import_fdd_workbook(workbook: bytes | Path | str | BinaryIO) -> MethodologyR
     try:
         _require_exact_sheet_inventory(loaded.sheetnames)
         if _has_production_header_marker(loaded):
-            registry = _import_production_workbook(
+            projection = _production_workbook_projection(
                 loaded,
                 source_hash=source_hash,
+                source_byte_count=len(workbook_bytes),
             )
+            registry = _import_production_workbook(projection)
         elif _has_legacy_header_marker(loaded):
             registry = _import_legacy_fixture(
                 loaded,
@@ -122,16 +151,81 @@ def import_fdd_workbook(workbook: bytes | Path | str | BinaryIO) -> MethodologyR
     return registry
 
 
+def validated_production_fdd_workbook_projection(
+    workbook: bytes | Path | str | BinaryIO,
+) -> FddWorkbookProjection:
+    """Validate production workbook bytes without constructing question models."""
+
+    workbook_bytes, _source_name, source_path = _read_workbook(workbook)
+    source_hash = hashlib.sha256(workbook_bytes).hexdigest()
+    try:
+        loaded = load_workbook(BytesIO(workbook_bytes), data_only=True, read_only=False)
+    except Exception as exc:
+        raise FDDImporterError("invalid workbook shape") from exc
+    try:
+        _require_exact_sheet_inventory(loaded.sheetnames)
+        if not _has_production_header_marker(loaded):
+            raise FDDImporterError("invalid production workbook shape")
+        projection = _production_workbook_projection(
+            loaded,
+            source_hash=source_hash,
+            source_byte_count=len(workbook_bytes),
+        )
+    except FDDImporterError:
+        raise
+    except Exception as exc:
+        raise FDDImporterError("invalid workbook shape") from exc
+    finally:
+        loaded.close()
+    if source_path is not None:
+        try:
+            after_hash = hashlib.sha256(source_path.read_bytes()).hexdigest()
+        except OSError as exc:
+            raise FDDImporterError("source workbook changed during import") from exc
+        if after_hash != source_hash:
+            raise FDDImporterError("source workbook changed during import")
+    return projection
+
+
 def _import_production_workbook(
+    projection: FddWorkbookProjection,
+) -> MethodologyRegistry:
+    version_id = f"financial_dd:{projection.source_hash}"
+    questions = [
+        _question(
+            source_hash=projection.source_hash,
+            source_name=PRODUCTION_SOURCE_NAME,
+            source_type="operator_workbook",
+            version_id=version_id,
+            sheet_name=row.source_sheet,
+            row_number=row.source_row,
+            term=row.term,
+            nature=row.nature,
+            line_item=row.line_item,
+            question_text=row.question_text,
+            source_anchor_cell=row.source_anchor_cell,
+        )
+        for row in projection.rows
+    ]
+    return _registry(
+        source_hash=projection.source_hash,
+        source_name=PRODUCTION_SOURCE_NAME,
+        source_type="operator_workbook",
+        version_label="operator-workbook-v1",
+        questions=questions,
+    )
+
+
+def _production_workbook_projection(
     loaded: Workbook,
     *,
     source_hash: str,
-) -> MethodologyRegistry:
-    questions: list[MethodologyQuestion] = []
+    source_byte_count: int,
+) -> FddWorkbookProjection:
+    rows_out: list[FddWorkbookRowProjection] = []
     seen_semantic_rows: set[tuple[str, ...]] = set()
-    version_id = f"financial_dd:{source_hash}"
 
-    for sheet_name in REQUIRED_SHEETS:
+    for sheet_ordinal, sheet_name in enumerate(REQUIRED_SHEETS, start=1):
         sheet = loaded[sheet_name]
         _require_exact_header(sheet, sheet_name)
         _require_blank_separator_row(sheet)
@@ -148,30 +242,36 @@ def _import_production_workbook(
             if semantic_key in seen_semantic_rows:
                 raise FDDImporterError("duplicate methodology_question_id")
             seen_semantic_rows.add(semantic_key)
-            questions.append(
-                _question(
-                    source_hash=source_hash,
-                    source_name=PRODUCTION_SOURCE_NAME,
-                    source_type="operator_workbook",
-                    version_id=version_id,
-                    sheet_name=sheet_name,
-                    row_number=row_number,
+            question_id = generate_methodology_question_id(
+                methodology_type=MethodologyType.FINANCIAL_DD,
+                section=sheet_name,
+                sheet_or_section=sheet_name,
+                row_number=row_number,
+                line_item=line_item or "",
+                question_text=question_text,
+                source_hash=source_hash,
+            )
+            rows_out.append(
+                FddWorkbookRowProjection(
+                    row_ordinal=len(rows_out) + 1,
+                    sheet_ordinal=sheet_ordinal,
+                    source_sheet=sheet_name,
+                    source_row=row_number,
+                    source_anchor_cell=question_anchor,
                     term=term,
                     nature=nature,
                     line_item=line_item,
                     question_text=question_text,
-                    source_anchor_cell=question_anchor,
+                    methodology_question_id=question_id,
                 )
             )
 
-    if len(questions) != 79:
+    if len(rows_out) != 79:
         raise FDDImporterError("invalid row count: expected 79")
-    return _registry(
+    return FddWorkbookProjection(
         source_hash=source_hash,
-        source_name=PRODUCTION_SOURCE_NAME,
-        source_type="operator_workbook",
-        version_label="operator-workbook-v1",
-        questions=questions,
+        source_byte_count=source_byte_count,
+        rows=tuple(rows_out),
     )
 
 
@@ -353,6 +453,7 @@ def _question(
     line_item: str | None,
     question_text: str,
     source_anchor_cell: str | None = None,
+    required_calculations: tuple[RequiredCalculation | FddFormulaRequirement, ...] | None = None,
 ) -> MethodologyQuestion:
     question_id = generate_methodology_question_id(
         methodology_type=MethodologyType.FINANCIAL_DD,
@@ -382,7 +483,11 @@ def _question(
             ),
         ),
         target_document_categories=("financial_statement", "workbook_support"),
-        required_calculations=_required_calculations_for_sheet(sheet_name),
+        required_calculations=(
+            _required_calculations_for_sheet(sheet_name)
+            if required_calculations is None
+            else required_calculations
+        ),
         assigned_agents=(
             AssignedAgent(
                 role="financial_agent",

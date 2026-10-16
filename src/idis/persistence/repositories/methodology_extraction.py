@@ -49,6 +49,10 @@ from idis.models.methodology_pricing import (
 )
 from idis.models.run_step import STEP_ORDER, StepName
 from idis.persistence.db import set_tenant_local
+from idis.persistence.repositories._task7_native_roots import (
+    validate_durable_run_output_object_ids,
+    validate_run_output_object_ids,
+)
 from idis.persistence.repositories.provider_budget_policies import (
     VerifiedActiveProviderBudgetPolicy,
 )
@@ -130,6 +134,13 @@ _METHODOLOGY_RESULT_LINK_COLUMNS: dict[str, tuple[str, ...]] = {
         "sanad_link_id",
         "defect_id",
     ),
+}
+
+_METHODOLOGY_RESULT_LINK_ID_COLUMNS = {
+    "methodology_result_claim_links": "claim_link_id",
+    "methodology_result_evidence_links": "evidence_link_id",
+    "methodology_result_sanad_links": "sanad_link_id",
+    "methodology_result_defect_links": "defect_link_id",
 }
 
 
@@ -549,6 +560,7 @@ class PostgresMethodologyExtractionRepository:
         tasks: Sequence[ExtractionTask],
         lease_owner_id: str,
         lease_fencing_token: int,
+        run_output_object_ids: Mapping[str, str] | None = None,
     ) -> list[DurableMethodologyExtractionTaskRecord]:
         """Persist one complete selected-pair READY plan in the caller transaction."""
         self._require_fence(
@@ -586,6 +598,14 @@ class PostgresMethodologyExtractionRepository:
             tasks=validated,
             coverage=coverage,
         )
+        try:
+            root_bindings = validate_run_output_object_ids(
+                stable_native_ids=(spec.record.task_record_id for spec in expected),
+                run_output_object_ids=run_output_object_ids,
+                native_ids_are_uuids=True,
+            )
+        except ValueError:
+            _fail(METHODOLOGY_TASK_COVERAGE_INCOMPLETE)
         task_count, span_count = self._planned_graph_counts(deal_id=deal_id, run_id=run_id)
         if task_count or span_count:
             if not task_count or not span_count:
@@ -596,6 +616,7 @@ class PostgresMethodologyExtractionRepository:
                 selection_id=selection_id,
                 coverage=coverage,
                 expected=expected,
+                expected_root_bindings=root_bindings,
             )
 
         for spec in expected:
@@ -604,6 +625,9 @@ class PostgresMethodologyExtractionRepository:
                 run_id=run_id,
                 selection_id=selection_id,
                 spec=spec,
+                run_output_object_id=(
+                    None if root_bindings is None else root_bindings[spec.record.task_record_id]
+                ),
             )
         return self._validate_exact_planned_graph(
             deal_id=deal_id,
@@ -611,6 +635,7 @@ class PostgresMethodologyExtractionRepository:
             selection_id=selection_id,
             coverage=coverage,
             expected=expected,
+            expected_root_bindings=root_bindings,
         )
 
     def _load_exact_selected_coverage(
@@ -865,6 +890,7 @@ class PostgresMethodologyExtractionRepository:
         run_id: str,
         selection_id: str,
         spec: _PlannedTaskSpec,
+        run_output_object_id: str | None = None,
     ) -> None:
         task = spec.record.task
         params = {
@@ -889,9 +915,8 @@ class PostgresMethodologyExtractionRepository:
             "task_input_sha256": spec.record.task_input_sha256,
             "candidate_set_sha256": spec.record.candidate_span_set_sha256,
         }
-        self._connection.execute(
-            text(
-                """
+        if run_output_object_id is None:
+            statement = """
                 INSERT INTO methodology_extraction_tasks (
                     task_record_id, tenant_id, deal_id, run_id, selection_id,
                     coverage_record_id, methodology_version_record_id,
@@ -916,7 +941,35 @@ class PostgresMethodologyExtractionRepository:
                     :candidate_set_sha256, 'READY'
                 )
                 """
-            ),
+        else:
+            statement = """
+                INSERT INTO methodology_extraction_tasks (
+                    task_record_id, tenant_id, deal_id, run_id, selection_id,
+                    coverage_record_id, methodology_version_record_id,
+                    methodology_version_id, methodology_question_record_id,
+                    methodology_question_id, methodology_type, extraction_task_id,
+                    document_id, document_classification_id,
+                    document_classification_sha256, planner_contract_version,
+                    task_contract_version, task_payload, task_input_sha256,
+                    candidate_span_set_sha256, status, run_output_object_id
+                ) VALUES (
+                    CAST(:task_record_id AS uuid), CAST(:tenant_id AS uuid),
+                    CAST(:deal_id AS uuid), CAST(:run_id AS uuid),
+                    CAST(:selection_id AS uuid), :coverage_record_id,
+                    CAST(:methodology_version_record_id AS uuid),
+                    :methodology_version_id,
+                    CAST(:methodology_question_record_id AS uuid),
+                    :methodology_question_id, :methodology_type,
+                    :extraction_task_id, CAST(:document_id AS uuid),
+                    :classification_id, :classification_sha256,
+                    :planner_contract_version, :task_contract_version,
+                    CAST(:task_payload AS jsonb), :task_input_sha256,
+                    :candidate_set_sha256, 'READY', CAST(:run_output_object_id AS uuid)
+                )
+                """
+            params["run_output_object_id"] = run_output_object_id
+        self._connection.execute(
+            text(statement),
             params,
         )
         for span in spec.spans:
@@ -950,6 +1003,39 @@ class PostgresMethodologyExtractionRepository:
                 },
             )
 
+    def _require_planned_task_root_bindings(
+        self,
+        *,
+        deal_id: str,
+        run_id: str,
+        expected_root_bindings: Mapping[str, str],
+    ) -> None:
+        rows = (
+            self._connection.execute(
+                text(
+                    """
+                    SELECT task_record_id, run_output_object_id
+                    FROM methodology_extraction_tasks
+                    WHERE tenant_id = CAST(:tenant_id AS uuid)
+                      AND deal_id = CAST(:deal_id AS uuid)
+                      AND run_id = CAST(:run_id AS uuid)
+                    ORDER BY task_record_id
+                    """
+                ),
+                {"tenant_id": self._tenant_id, "deal_id": deal_id, "run_id": run_id},
+            )
+            .mappings()
+            .all()
+        )
+        try:
+            validate_durable_run_output_object_ids(
+                rows=rows,
+                stable_native_id_column="task_record_id",
+                expected_run_output_object_ids=expected_root_bindings,
+            )
+        except ValueError:
+            _fail(METHODOLOGY_TASK_COVERAGE_INCOMPLETE)
+
     def _validate_exact_planned_graph(
         self,
         *,
@@ -958,6 +1044,7 @@ class PostgresMethodologyExtractionRepository:
         selection_id: str,
         coverage: Mapping[str, Any],
         expected: Sequence[_PlannedTaskSpec] | None = None,
+        expected_root_bindings: Mapping[str, str] | None = None,
     ) -> list[DurableMethodologyExtractionTaskRecord]:
         task_rows = (
             self._connection.execute(
@@ -985,6 +1072,12 @@ class PostgresMethodologyExtractionRepository:
         )
         if not task_rows:
             _fail(METHODOLOGY_TASK_COVERAGE_INCOMPLETE)
+        if expected_root_bindings is not None:
+            self._require_planned_task_root_bindings(
+                deal_id=deal_id,
+                run_id=run_id,
+                expected_root_bindings=expected_root_bindings,
+            )
         durable_tasks: list[ExtractionTask] = []
         for row in task_rows:
             raw_payload = _json_value(row["task_payload"])
@@ -3563,12 +3656,21 @@ class PostgresMethodologyExtractionRepository:
         lease_owner_id: str,
         lease_fencing_token: int,
         records: Sequence[object],
+        run_output_object_ids: Mapping[str, str] | None = None,
     ) -> None:
         try:
             typed_records = tuple(MethodologyResultClaimLink.model_validate(row) for row in records)
         except (TypeError, ValueError):
             _fail()
         if not typed_records:
+            _fail()
+        try:
+            root_bindings = validate_run_output_object_ids(
+                stable_native_ids=(record.claim_link_id for record in typed_records),
+                run_output_object_ids=run_output_object_ids,
+                native_ids_are_uuids=True,
+            )
+        except ValueError:
             _fail()
         for record in typed_records:
             if (
@@ -3669,6 +3771,7 @@ class PostgresMethodologyExtractionRepository:
             deal_id=deal_id,
             run_id=run_id,
             records=payloads,
+            run_output_object_ids=root_bindings,
         )
 
     def persist_evidence_links(
@@ -3680,6 +3783,7 @@ class PostgresMethodologyExtractionRepository:
         lease_owner_id: str,
         lease_fencing_token: int,
         records: Sequence[object],
+        run_output_object_ids: Mapping[str, str] | None = None,
     ) -> None:
         try:
             typed_records = tuple(
@@ -3688,6 +3792,14 @@ class PostgresMethodologyExtractionRepository:
         except (TypeError, ValueError):
             _fail()
         if not typed_records:
+            _fail()
+        try:
+            root_bindings = validate_run_output_object_ids(
+                stable_native_ids=(record.evidence_link_id for record in typed_records),
+                run_output_object_ids=run_output_object_ids,
+                native_ids_are_uuids=True,
+            )
+        except ValueError:
             _fail()
         for record in typed_records:
             if (
@@ -3762,6 +3874,7 @@ class PostgresMethodologyExtractionRepository:
             deal_id=deal_id,
             run_id=run_id,
             records=payloads,
+            run_output_object_ids=root_bindings,
         )
 
     def persist_sanad_links(
@@ -3772,12 +3885,21 @@ class PostgresMethodologyExtractionRepository:
         lease_owner_id: str,
         lease_fencing_token: int,
         records: Sequence[object],
+        run_output_object_ids: Mapping[str, str] | None = None,
     ) -> None:
         try:
             typed_records = tuple(MethodologyResultSanadLink.model_validate(row) for row in records)
         except (TypeError, ValueError):
             _fail()
         if not typed_records:
+            _fail()
+        try:
+            root_bindings = validate_run_output_object_ids(
+                stable_native_ids=(record.sanad_link_id for record in typed_records),
+                run_output_object_ids=run_output_object_ids,
+                native_ids_are_uuids=True,
+            )
+        except ValueError:
             _fail()
         for record in typed_records:
             if (
@@ -3859,6 +3981,7 @@ class PostgresMethodologyExtractionRepository:
             deal_id=deal_id,
             run_id=run_id,
             records=payloads,
+            run_output_object_ids=root_bindings,
         )
 
     def persist_defect_links(
@@ -3869,6 +3992,7 @@ class PostgresMethodologyExtractionRepository:
         lease_owner_id: str,
         lease_fencing_token: int,
         records: Sequence[object],
+        run_output_object_ids: Mapping[str, str] | None = None,
     ) -> None:
         try:
             typed_records = tuple(
@@ -3877,6 +4001,14 @@ class PostgresMethodologyExtractionRepository:
         except (TypeError, ValueError):
             _fail()
         if not typed_records:
+            _fail()
+        try:
+            root_bindings = validate_run_output_object_ids(
+                stable_native_ids=(record.defect_link_id for record in typed_records),
+                run_output_object_ids=run_output_object_ids,
+                native_ids_are_uuids=True,
+            )
+        except ValueError:
             _fail()
         defect_ids: set[str] = set()
         for record in typed_records:
@@ -3967,6 +4099,7 @@ class PostgresMethodologyExtractionRepository:
             deal_id=deal_id,
             run_id=run_id,
             records=payloads,
+            run_output_object_ids=root_bindings,
         )
 
     def _persist_exact_links(
@@ -3976,9 +4109,19 @@ class PostgresMethodologyExtractionRepository:
         deal_id: str,
         run_id: str,
         records: Sequence[Mapping[str, Any]],
+        run_output_object_ids: Mapping[str, str] | None = None,
     ) -> None:
         expected_columns = _METHODOLOGY_RESULT_LINK_COLUMNS.get(table)
-        if expected_columns is None or not records:
+        native_id_column = _METHODOLOGY_RESULT_LINK_ID_COLUMNS.get(table)
+        if expected_columns is None or native_id_column is None or not records:
+            _fail()
+        try:
+            root_bindings = validate_run_output_object_ids(
+                stable_native_ids=(str(record[native_id_column]) for record in records),
+                run_output_object_ids=run_output_object_ids,
+                native_ids_are_uuids=True,
+            )
+        except (KeyError, ValueError):
             _fail()
         for raw in records:
             record = dict(raw)
@@ -3990,11 +4133,13 @@ class PostgresMethodologyExtractionRepository:
                 or record["run_id"] != run_id
             ):
                 _fail()
-            placeholders = ", ".join(f":{column}" for column in expected_columns)
+            columns = expected_columns
+            if root_bindings is not None:
+                columns = (*columns, "run_output_object_id")
+                record["run_output_object_id"] = root_bindings[str(record[native_id_column])]
+            placeholders = ", ".join(f":{column}" for column in columns)
             self._connection.execute(
-                text(
-                    f"INSERT INTO {table} ({', '.join(expected_columns)}) VALUES ({placeholders})"
-                ),
+                text(f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders})"),
                 record,
             )
 

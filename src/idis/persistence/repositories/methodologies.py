@@ -30,6 +30,10 @@ from idis.methodology.models import (
 )
 from idis.models.methodology_coverage import MethodologyCoverageRecord
 from idis.persistence.db import set_tenant_local
+from idis.persistence.repositories._task7_native_roots import (
+    validate_durable_run_output_object_ids,
+    validate_run_output_object_ids,
+)
 
 METHODOLOGY_COVERAGE_INCOMPLETE = "METHODOLOGY_COVERAGE_INCOMPLETE"
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z", re.ASCII)
@@ -788,7 +792,10 @@ class PostgresMethodologiesRepository:
         return commercial.registry, financial.registry
 
     def insert_coverage_records(
-        self, *, records: Iterable[MethodologyCoverageRecord]
+        self,
+        *,
+        records: Iterable[MethodologyCoverageRecord],
+        run_output_object_ids: Mapping[str, str] | None = None,
     ) -> list[MethodologyCoverageRecord]:
         """Idempotently insert the exact 100-record selection coverage ledger."""
         try:
@@ -799,6 +806,14 @@ class PostgresMethodologiesRepository:
         except (TypeError, ValueError):
             _fail()
         if len(validated) != 100 or len({record.coverage_record_id for record in validated}) != 100:
+            _fail()
+        try:
+            root_bindings = validate_run_output_object_ids(
+                stable_native_ids=(record.coverage_record_id for record in validated),
+                run_output_object_ids=run_output_object_ids,
+                native_ids_are_uuids=False,
+            )
+        except ValueError:
             _fail()
         scopes = {(r.tenant_id, r.deal_id, r.run_id) for r in validated}
         if len(scopes) != 1:
@@ -829,51 +844,22 @@ class PostgresMethodologiesRepository:
                         or stored_question.section != record.section
                     ):
                         _fail()
-                    self._conn.execute(
-                        text(
-                            """
-                            INSERT INTO methodology_coverage_records (
-                                coverage_record_id, tenant_id, deal_id, run_id,
-                                selection_id, methodology_version_record_id,
-                                methodology_version_id, methodology_question_record_id,
-                                methodology_question_id, methodology_type, status,
-                                reason_code, evidence_links, answer, conflict_ids, defect_ids
-                            ) VALUES (
-                                :coverage_record_id, CAST(:tenant_id AS uuid),
-                                CAST(:deal_id AS uuid), CAST(:run_id AS uuid),
-                                CAST(:selection_id AS uuid), CAST(:version_record_id AS uuid),
-                                :version_id, CAST(:question_record_id AS uuid),
-                                :question_id, :methodology_type, :status, :reason_code,
-                                CAST(:evidence_links AS jsonb), CAST(:answer AS jsonb),
-                                CAST(:conflict_ids AS text[]), CAST(:defect_ids AS text[])
-                            )
-                            ON CONFLICT (coverage_record_id) DO NOTHING
-                            """
+                    self._insert_coverage_record(
+                        record=record,
+                        selection_id=selection.selection_id,
+                        version_record_id=version_record_id,
+                        question_record_id=question_record_id,
+                        run_output_object_id=(
+                            None
+                            if root_bindings is None
+                            else root_bindings[record.coverage_record_id]
                         ),
-                        {
-                            "coverage_record_id": record.coverage_record_id,
-                            "tenant_id": record.tenant_id,
-                            "deal_id": record.deal_id,
-                            "run_id": record.run_id,
-                            "selection_id": selection.selection_id,
-                            "version_record_id": version_record_id,
-                            "version_id": record.methodology_version_id,
-                            "question_record_id": question_record_id,
-                            "question_id": record.methodology_question_id,
-                            "methodology_type": record.methodology_type.value,
-                            "status": record.status.value,
-                            "reason_code": record.reason_code,
-                            "evidence_links": _canonical_json(
-                                [link.model_dump(mode="json") for link in record.evidence_links]
-                            ),
-                            "answer": (
-                                None
-                                if record.answer is None
-                                else _canonical_json(record.answer.model_dump(mode="json"))
-                            ),
-                            "conflict_ids": list(record.conflict_ids),
-                            "defect_ids": list(record.defect_ids),
-                        },
+                    )
+                if root_bindings is not None:
+                    self._require_coverage_root_bindings(
+                        deal_id=deal_id,
+                        run_id=run_id,
+                        expected_root_bindings=root_bindings,
                     )
         except SQLAlchemyError:
             _fail()
@@ -882,6 +868,115 @@ class PostgresMethodologiesRepository:
         if persisted != expected:
             _fail()
         return persisted
+
+    def _insert_coverage_record(
+        self,
+        *,
+        record: MethodologyCoverageRecord,
+        selection_id: str,
+        version_record_id: str,
+        question_record_id: str,
+        run_output_object_id: str | None = None,
+    ) -> None:
+        params = {
+            "coverage_record_id": record.coverage_record_id,
+            "tenant_id": record.tenant_id,
+            "deal_id": record.deal_id,
+            "run_id": record.run_id,
+            "selection_id": selection_id,
+            "version_record_id": version_record_id,
+            "version_id": record.methodology_version_id,
+            "question_record_id": question_record_id,
+            "question_id": record.methodology_question_id,
+            "methodology_type": record.methodology_type.value,
+            "status": record.status.value,
+            "reason_code": record.reason_code,
+            "evidence_links": _canonical_json(
+                [link.model_dump(mode="json") for link in record.evidence_links]
+            ),
+            "answer": (
+                None
+                if record.answer is None
+                else _canonical_json(record.answer.model_dump(mode="json"))
+            ),
+            "conflict_ids": list(record.conflict_ids),
+            "defect_ids": list(record.defect_ids),
+        }
+        if run_output_object_id is None:
+            statement = """
+                INSERT INTO methodology_coverage_records (
+                    coverage_record_id, tenant_id, deal_id, run_id,
+                    selection_id, methodology_version_record_id,
+                    methodology_version_id, methodology_question_record_id,
+                    methodology_question_id, methodology_type, status,
+                    reason_code, evidence_links, answer, conflict_ids, defect_ids
+                ) VALUES (
+                    :coverage_record_id, CAST(:tenant_id AS uuid),
+                    CAST(:deal_id AS uuid), CAST(:run_id AS uuid),
+                    CAST(:selection_id AS uuid), CAST(:version_record_id AS uuid),
+                    :version_id, CAST(:question_record_id AS uuid),
+                    :question_id, :methodology_type, :status, :reason_code,
+                    CAST(:evidence_links AS jsonb), CAST(:answer AS jsonb),
+                    CAST(:conflict_ids AS text[]), CAST(:defect_ids AS text[])
+                )
+                ON CONFLICT (coverage_record_id) DO NOTHING
+                """
+        else:
+            statement = """
+                INSERT INTO methodology_coverage_records (
+                    coverage_record_id, tenant_id, deal_id, run_id,
+                    selection_id, methodology_version_record_id,
+                    methodology_version_id, methodology_question_record_id,
+                    methodology_question_id, methodology_type, status,
+                    reason_code, evidence_links, answer, conflict_ids, defect_ids,
+                    run_output_object_id
+                ) VALUES (
+                    :coverage_record_id, CAST(:tenant_id AS uuid),
+                    CAST(:deal_id AS uuid), CAST(:run_id AS uuid),
+                    CAST(:selection_id AS uuid), CAST(:version_record_id AS uuid),
+                    :version_id, CAST(:question_record_id AS uuid),
+                    :question_id, :methodology_type, :status, :reason_code,
+                    CAST(:evidence_links AS jsonb), CAST(:answer AS jsonb),
+                    CAST(:conflict_ids AS text[]), CAST(:defect_ids AS text[]),
+                    CAST(:run_output_object_id AS uuid)
+                )
+                ON CONFLICT (coverage_record_id) DO NOTHING
+                """
+            params["run_output_object_id"] = run_output_object_id
+        self._conn.execute(text(statement), params)
+
+    def _require_coverage_root_bindings(
+        self,
+        *,
+        deal_id: str,
+        run_id: str,
+        expected_root_bindings: Mapping[str, str],
+    ) -> None:
+        rows = (
+            self._conn.execute(
+                text(
+                    """
+                    SELECT coverage_record_id, run_output_object_id
+                    FROM methodology_coverage_records
+                    WHERE tenant_id = CAST(:tenant_id AS uuid)
+                      AND deal_id = CAST(:deal_id AS uuid)
+                      AND run_id = CAST(:run_id AS uuid)
+                    ORDER BY coverage_record_id
+                    """
+                ),
+                {"tenant_id": self._tenant_id, "deal_id": deal_id, "run_id": run_id},
+            )
+            .mappings()
+            .all()
+        )
+        try:
+            validate_durable_run_output_object_ids(
+                rows=rows,
+                stable_native_id_column="coverage_record_id",
+                expected_run_output_object_ids=expected_root_bindings,
+            )
+        except ValueError:
+            _fail()
 
     def list_coverage_records(
         self, *, deal_id: str, run_id: str

@@ -8,7 +8,7 @@ It inspects repository code/config and writes a local report under `.local_repor
 from __future__ import annotations
 
 import argparse
-import re
+import ast
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
@@ -635,14 +635,44 @@ def _contains(files: dict[str, str], path: str, needle: str) -> bool:
 
 
 def _discover_provider_ids(root: Path) -> list[str]:
-    """Discover enrichment provider IDs without calling external providers."""
-    connector_dir = root / "src/idis/services/enrichment/connectors"
-    provider_ids: set[str] = set()
-    for connector in connector_dir.glob("*.py"):
-        if connector.name == "__init__.py":
+    """Parse provider IDs from the authoritative catalog without importing it."""
+    catalog_path = root / "src/idis/services/enrichment/task9/provider_catalog.py"
+    try:
+        tree = ast.parse(catalog_path.read_text(encoding="utf-8"), filename=str(catalog_path))
+    except (OSError, SyntaxError, UnicodeError) as exc:
+        raise RuntimeError("authoritative provider catalog is unavailable") from exc
+
+    catalog_values: list[ast.expr] | None = None
+    for statement in tree.body:
+        if not isinstance(statement, ast.Assign):
             continue
-        text = _read(connector)
-        provider_ids.update(re.findall(r'PROVIDER_ID\s*=\s*"([^"]+)"', text))
+        if any(
+            isinstance(target, ast.Name) and target.id == "_PROVIDER_SPECS"
+            for target in statement.targets
+        ):
+            if catalog_values is not None or not isinstance(statement.value, (ast.List, ast.Tuple)):
+                raise RuntimeError("authoritative provider catalog shape is invalid")
+            catalog_values = list(statement.value.elts)
+
+    if not catalog_values:
+        raise RuntimeError("authoritative provider catalog is empty")
+
+    provider_ids: list[str] = []
+    for value in catalog_values:
+        if (
+            not isinstance(value, ast.Call)
+            or not isinstance(value.func, ast.Name)
+            or value.func.id != "_spec"
+            or not value.args
+            or not isinstance(value.args[0], ast.Constant)
+            or not isinstance(value.args[0].value, str)
+            or not value.args[0].value
+        ):
+            raise RuntimeError("authoritative provider catalog row is invalid")
+        provider_ids.append(value.args[0].value)
+
+    if len(provider_ids) != len(set(provider_ids)):
+        raise RuntimeError("authoritative provider catalog contains duplicate provider IDs")
     return sorted(provider_ids)
 
 

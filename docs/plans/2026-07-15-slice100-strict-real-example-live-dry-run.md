@@ -1,6 +1,6 @@
 # Slice 100 — strict `real_example` full-live acceptance
 
-- **Status:** Tasks 1-6 are independently accepted and locally committed at the hashes recorded below. Task 7's design, all eighteen decisions, implementation checkpoint, and conditional readiness remediation are approved. Sections 1.36-1.70 preserve the complete v2-v21 materialization, implementation, review, and remediation history. Frozen `full-strict-v16`, `full-strict-v17`, and `full-strict-v18` remain immutable, `INACTIVE`, superseded, and never selectable; their recorded proofs remain historical evidence. `full-strict-v19` is permanently void and was never signed, frozen, fixture-published, migration-consumed, or runtime-selected. Frozen `full-strict-v20` remains immutable, `INACTIVE`, superseded, and never selectable. `full-strict-v21` is append-frozen with a signed application-role census and hash-bound fixture, remains `INACTIVE`, and is consumed by the Task-7 migration/runtime implementation whose final evidence is recorded in section 1.70. Task 7 is authorized for local commit with no push or PR. Its checkpoint proves schema, guards, ACL, admission, derivation, and currently available producers, but the complete 27-cut restart and all-48-rule three-way equality proof is a binding Task-11 exit criterion after the reviewed FUTURE38 producers and receipt relations exist. Every earlier contract identifier is historical, void, or superseded as recorded. Task 9 provider-periphery work remains authorized in parallel under the ownership boundary in section 1.33. Task 8 may begin RED-first in parallel, but its exact formula-policy semantics require the design gate recorded after this checkpoint; Task 10+, live probes, and priced calls remain unauthorized.
+- **Status:** Tasks 1-6 are independently accepted and locally committed at the hashes recorded below. Task 7's design, all eighteen decisions, implementation checkpoint, conditional readiness remediation, and local commits are approved. Sections 1.36-1.70 preserve the complete v2-v21 materialization, implementation, review, and remediation history. Frozen `full-strict-v16`, `full-strict-v17`, and `full-strict-v18` remain immutable, `INACTIVE`, superseded, and never selectable; their recorded proofs remain historical evidence. `full-strict-v19` is permanently void and was never signed, frozen, fixture-published, migration-consumed, or runtime-selected. Frozen `full-strict-v20` remains immutable, `INACTIVE`, superseded, and never selectable. `full-strict-v21` is append-frozen with a signed application-role census and hash-bound fixture, remains `INACTIVE`, and is consumed by the Task-7 migration/runtime implementation whose final evidence is recorded in section 1.70. Its checkpoint proves schema, guards, ACL, admission, derivation, and currently available producers, but the complete 27-cut restart and all-48-rule three-way equality proof is a binding Task-11 exit criterion after the reviewed FUTURE38 producers and receipt relations exist. Every earlier contract identifier is historical, void, or superseded as recorded. Task 9 provider-periphery work remains authorized in parallel under the ownership boundary in section 1.33. All eleven Task-8 FDD semantic rulings are approved with the five binding conditions in sections 1.72 and the Task-8 design. Only Task 8.1 RED materialization and its literal artifact/fixture review package are authorized; formula implementation, migration `0039`, repository/runtime composition, durable application-data mutation, live probes, and priced calls remain unauthorized. An isolated disposable-PostgreSQL application-role census remains mandatory before a changed SQL-authority fixture embeds.
 - **Worktree:** `C:\Projects\IDIS\IDIS-slice100`
 - **Branch:** `slice100-strict-real-example-live-dry-run`
 - **Base:** `origin/main@4594ecabc4d7b598b42a67bf999b894d510f0ec9`
@@ -18,7 +18,7 @@ This document replaces the rejected Slice100 discovery. The user approved this p
 3. The Task 7 backfill migration must prove upgrade -> downgrade -> upgrade on disposable PostgreSQL before it can pass review.
 4. No table, environment variable, or feature flag outside this plan may be introduced without an explicit plan amendment.
 
-Task 7 is the latest independently approved checkpoint. It comprises the selected 21+79 methodology spine from Task 6 plus the frozen-v21 receipt/edge schema, guards, ACLs, source freeze, completion/finalization, and dedicated erasure composition described in sections 1.36-1.70. The accepted Task-4 hardening autonomy is expired and does not authorize another acceptance namespace. Task 7 is approved for local commit only and does not activate `full-strict-v21` or discharge the Task-11 27-cut boundary. In parallel, Task 9 may add only the disjoint provider-periphery modules and RED tests reserved in section 1.33; it may not edit existing orchestrator, gate, migration, worker, registry-composition, launcher, or runtime files, and it may make no live provider/model call. Task 8 may prepare RED tests and a semantic design gate, but may not invent the exact row-to-formula mapping, equation, sign, input-binding, or assumption semantics identified at the close of section 1.70. Prompt evaluation/promotion, FULL analysis runs, Gate A/B probes or spend, push, PR, and merge remain unauthorized.
+Task 7 is the latest independently approved implementation checkpoint. It comprises the selected 21+79 methodology spine from Task 6 plus the frozen-v21 receipt/edge schema, guards, ACLs, source freeze, completion/finalization, and dedicated erasure composition described in sections 1.36-1.70. The accepted Task-4 hardening autonomy is expired and does not authorize another acceptance namespace. Task 7's local commits do not activate `full-strict-v21` or discharge the Task-11 27-cut boundary. In parallel, Task 9 may add only the disjoint provider-periphery modules and RED tests reserved in section 1.33; it may not edit existing orchestrator, gate, migration, worker, registry-composition, launcher, or runtime files, and it may make no live provider/model call. The reviewer has approved every Task-8 semantic ruling and the five conditions recorded in section 1.72. Task 8 is authorized only through Task 8.1 RED materialization and the second literal artifact/fixture review gate. It must stop before formula code, migration `0039`, repositories, worker composition, dashboard, deliverable, or durable application-data mutation. The only database work inside Task 8.1 is the required isolated disposable-PostgreSQL application-role execution census for changed SQL authorities. Prompt evaluation/promotion, FULL analysis runs, Gate A/B probes or spend, push, PR, and merge remain unauthorized.
 
 The following decisions are binding:
 
@@ -4322,3 +4322,956 @@ Task-7 or Track-B checkpoint change had been pushed, merged, or placed in a
 PR; the reviewer authorized only local Task-7 commits. No live provider probe,
 priced call, acceptance namespace, future Task-7 table, or globally active
 contract was created. V21 remains `INACTIVE`.
+
+Historical authorization record (preserved verbatim): Task 7 is authorized for local commit.
+The resulting local commits did not activate v21 or discharge the Task-11
+27-cut proof.
+
+### 1.71 Task-8 pending FDD formula/lineage semantic design gate
+
+Task 8 has completed read-only discovery and design only. Its pending design
+is `docs/plans/2026-07-25-slice100-task8-fdd-formula-lineage-design.md`,
+SHA-256
+`1dc2f46a13ddc5477e1f6f9f72123d469459c27f1af9e13348c4cda3806dca70`.
+No Task-8 RED test, formula/policy artifact, contract artifact, fixture,
+production implementation, migration `0039`, database mutation, live
+provider/model call, commit, push, PR, or merge occurred at this gate.
+
+The protected operator workbook was inspected read-only. It is 24,905 bytes,
+has SHA-256
+`a3b83addfff02815c9fd44c4a3dcb7f56ce39410fe182faff12acfb845bd4352`,
+contains 79 rows split `29 + 13 + 21 + 16`, and contains zero Excel formula
+cells. Its safe row-coordinate digest is
+`fab5ab40ab300602b5d9ee59eeb9c86451048d02e419054b0675e753a0ab0bc0`;
+its safe header digest is
+`88c4ea73409b768686dd9dce7d05efe3ccb846bdb13850499caddcd55bc3229c`.
+The workbook authorizes the questions and source traces, not executable
+equations, signs, input bindings, or assumptions.
+
+Discovery found three contract boundaries that implementation may not hide:
+
+1. frozen v21 hash-binds the legacy ten-value calculation enum and
+   three-field input model, so the nine named FDD types cannot be added by
+   mutating or aliasing those classes;
+2. frozen v21's dashboard guard has no legal disposition for Task 6's valid
+   mixed found/not-found result state; and
+3. the two reviewed dashboard relations can move the installed forced-RLS
+   inventory from 67 to 69, but the full future exact-one and FUTURE38 erasure
+   authorities are not partially executable.
+
+The pending recommendation is append-frozen, still-`INACTIVE`
+`full-strict-v22`. It leaves v21 immutable and conserves the 28 steps, 48
+rules, 1,756 routes, 19 extractors, 18 providers, rights routing, complete
+relation universe, erasure ordering, and Task-11 27-cut obligation. Its
+bounded proposed deltas are separate FDD calculation schemas, an FDD-only
+signed fractional-ratio value without widening legacy `PercentageValue`, a
+version-aware Step-7/Step-11/Step-15 schema split, a mixed-result dashboard
+equation, a monotonic partial exact-one authority, and a database-enforced
+CURRENT48 erasure refusal for deals containing dashboard rows.
+
+The formula recommendation is a literal 79-row policy with ten required
+anchors, nine named FDD formula families plus `GROSS_MARGIN`, exact expanded
+source-row/predicate bindings, Decimal-only arithmetic, fractional ratios,
+explicit sign/cardinality/period/currency/unit rules, evidence-backed
+variable-set completeness, zero discretionary assumptions, complete
+claim/evidence/Sanad/CalcSanad lineage, and no default-zero fact. It does not
+fabricate reported asset or liability totals from unrelated workbook rows.
+`Assets:19` and `Liabilities:24` are proposed only as stable sheet-control
+coordinates for component-derived totals.
+
+The design returns eleven semantic rulings for review: the v22 successor
+boundary; separate FDD and signed-ratio schemas; exact formulas/bindings/hash
+rules; the two sheet-control anchors and off-balance-sheet exclusion;
+`GROSS_MARGIN`/`BURN_RATE` disposition; the immutable FDD version transition;
+the deliberately strict required-formula/no-GAP consequence; mixed-result
+dashboard semantics and 100-row durable versus 79-row financial projection;
+`OUT_OF_BALANCE` without retroactive Task-6 defect fabrication; the partial
+exact-one plus database erasure refusal/lock/ACL boundary; and a second
+literal-artifact/fixture review gate. Until all are approved, Task 8 remains
+blocked before RED implementation.
+
+After semantic approval, the only authorized first action is RED
+materialization of
+`contracts/fdd_formula_policy_v1.json`,
+`contracts/full_strict_v22_reviewed_preimage_v1.json`, and their fixtures.
+Those literal bytes return for reviewer approval before formula code,
+migration `0039`, repositories, worker composition, dashboard, or deliverable
+implementation. V22 remains `INACTIVE` even after freeze/migration and cannot
+be selected until the complete activation census, later producers, full
+48-rule three-way equality at all 27 cuts, and a separate activation ruling.
+
+Track-B Task-9 provider-periphery files and the approved registry-derived
+scanner/count cleanup were not modified by Task-8 discovery. No live call or
+priced operation occurred.
+
+### 1.72 Task-8 semantic approval and Task-8.1 literal-gate authorization
+
+On 2026-07-25 the reviewer independently verified the protected workbook
+hash, all four sheets, every proposed anchor, and every expanded binding
+against the real row text. All eleven rulings in
+`docs/plans/2026-07-25-slice100-task8-fdd-formula-lineage-design.md` are
+approved. This supersedes the pending-review status recorded in section 1.71
+without altering that section's discovery evidence.
+
+The approval carries five binding conditions:
+
+1. The debt roll-forward opening/closing balance scope is
+   `Liabilities:9` only. `Liabilities:17` and `Liabilities:18` retain their
+   mandatory 79-row diligence answers but are deliberately excluded from the
+   balance. Cash Flow rows 11 and 12 may therefore yield a governed
+   `OUT_OF_BALANCE` result.
+2. `METHODOLOGY_CALCULATION_INCOMPLETE` must enumerate every missing,
+   duplicate, ambiguous, or unconsumed binding with its role, predicate,
+   source sheet and row, and economic coordinate in one deterministic typed
+   payload.
+3. Every `*_set_complete=true` fact requires a cited documentary basis.
+   Silence, balancing arithmetic, and unsupported model assertion cannot prove
+   completeness; structured not-found is the natural result when the
+   documentary basis is absent.
+4. Every `DIRECT_SIGNED` reported binding has a version-bound convention that
+   distinguishes movement from cash effect and states which direction is
+   positive.
+5. The literal-artifact review package contains a deterministic
+   human-readable map of all ten anchors and all expanded predicate bindings
+   beside the exact pinned workbook row text.
+
+The approved consequence is intentionally strict: the first real Step-11 run
+may fail because a mandatory binding or documentary completeness fact is
+absent. That is a governed diagnostic result. The permitted remedies are
+source-data supplementation or a separately reviewed policy version, never a
+runtime weakening, default zero, balancing inference, or unsupported
+completeness assertion.
+
+Only Task 8.1 is now authorized. It follows RED-first admission, hermetic
+materialization, workbook-backed mapping verification, and deterministic
+fixture publication for:
+
+- `contracts/fdd_formula_policy_v1.json`;
+- `contracts/full_strict_v22_reviewed_preimage_v1.json`;
+- the two hash-bound fixtures; and
+- the deterministic reviewer mapping projection.
+
+The candidate bytes must preserve the frozen-v21 invariance wall and keep v22
+`INACTIVE`. The complete literal package returns for a second reviewer gate.
+No formula implementation, migration `0039`, repository or worker wiring,
+dashboard or deliverable implementation, runtime contract-lock selection,
+durable application-data mutation, live provider/model call, commit, push, or
+PR is authorized before that gate. The isolated disposable-PostgreSQL
+application-role census required by the permanent Task-7 materialization rule
+is the sole database exception. The Track-B ownership boundary in section
+1.33 remains unchanged.
+
+### 1.73 Task-8.1 second-gate identity amendment — approved
+
+Task-8.1 RED materialization exposed a semantic dependency cycle before the
+literal package was frozen or consumed. The held dashboard native-output hash
+contains `root_projection_sha256` and `row_payload_sha256`; the frozen-v21
+generic output UUID contains that native-output hash; and both held dashboard
+hash preimages contain the dashboard's own output UUID. The dependency graph
+is therefore cyclic. The candidate also has no hash-bound UUID namespace/name
+tuple for `dashboard_row_id`. Dedicated RED tests fail with
+`TASK8_DASHBOARD_NATIVE_DIGEST_CYCLE` and
+`TASK8_DASHBOARD_ROW_UUID_AUTHORITY_MISSING`.
+
+The held canonical identifiers are:
+
+- v22 artifact SHA-256
+  `94edc7b19fe73ed75872ad052c84b7a9fb341d32b9741f98a1a4c048a058b507`;
+- v22 fixture SHA-256
+  `4368d86b6bdd270f03d94bbc591a9ee2f6fbc6c36c9c65076cd1549d2a4da56b`;
+- pipeline contract hash
+  `a8294752ae392f72cbdf83ced9107df12243f3f26010347457f86603a302dc23`.
+
+They are held invalid, remain `INACTIVE`, and may not be fixture-published,
+migration-consumed, or runtime-selected. The operator-backed PostgreSQL census
+is held because executing known-invalid identity bytes would not be acceptance
+evidence.
+
+On 2026-08-13 the reviewer approved every requested correction in Task-8
+design section 3.2.2. It adds
+a dedicated methodology-dashboard-row UUIDv5 authority, removes only the
+dashboard's self output ID from the root-projection and row-payload preimages,
+retains every evidence/root link and all four immutable dashboard fields in
+the Task-7 native hash, and pins an acyclic derivation order. The proposed
+namespace is
+`UUIDv5(NAMESPACE_URL, "https://idis.local/contracts/methodology-truth-dashboard-row-v2")`
+= `6aef4159-c49a-560a-9f92-6c6089d7f7c3`. The legacy Slice-10 dashboard-row
+namespace is not reusable because its frozen name tuple is claim/Sanad based,
+not methodology-coverage based.
+
+Because the existing append-frozen, unconsumed `fdd-formula-policy-v1` bytes
+contain the cyclic row-payload recipe, they remain immutable and unconsumed;
+the corrected recipe is `fdd-formula-policy-v2`. Every policy-bearing identity,
+including the methodology external-ID template and reviewer map, retargets to
+v2. The corrected full-strict candidate is v23, leaving the rejected v22
+identifiers permanently unambiguous in the audit record.
+
+The held v22 artifact, fixture, and contract identifiers above are permanently
+rejected and join the void blocklist. They may never be fixture-published,
+migration-consumed, or runtime-selected. Regeneration and the disposable
+application-role PostgreSQL census are authorized; formula/runtime code,
+migration `0039`, commits, and live calls remain forbidden.
+
+The generation-time identity guard is artifact-wide. It derives one graph
+from every declared UUID name tuple and every declared hash/digest preimage,
+then rejects duplicate producers, unresolved governed references, self-edges,
+or any directed cycle. Dashboard tests are regression vectors only; the
+admission algorithm may not depend on a dashboard-specific name or location.
+Graph nodes are qualified by artifact, definition/runtime layer, scope, output
+kind, symbol, and source pointer; an exact source-pointer manifest and closed
+canonical recipe grammar fail on new or ambiguous shapes. The v23 fixture and
+disposable PostgreSQL census both bind the same ordered graph digest and exact
+node/edge/leaf/source counts. Graph admission occurs before any strict-profile
+load or disposable database creation.
+
+Canonical publication is an atomic gate-completion protocol, not a false
+claim that four already-materialized files were created in one operation. The
+exact policy-v2 fixture, artifact, and reviewer-map binding are immutable
+pre-admitted prerequisites and are verified before any write. The publisher
+then links only the v23 fixture followed by the v23 artifact, whose link is the
+sole commit point. Its receipt reports `preexisting_verified` separately from
+`created_publication_order`; missing, partial, byte-different, aliased, or
+non-regular prerequisite bytes fail before any v23 mutation. Fresh disposable
+targets continue to prove the complete four-file ordering and exact final-byte
+binding without rewriting canonical append-frozen files.
+
+Approved mechanical corrections continue independently under RED tests while
+this semantic gate is held: the dashboard guard proves literal 100/100 counts
+and bidirectional coverage-set equality; positive-magnitude numeric bindings
+reject negative values and bind source-to-normalized preservation; period
+ranges are strict (`period_start < period_end`); and the erasure refusal carries
+an exact `0039 -> 0038` restoration tuple. None of those changes resolves or
+masks the identity cycle. The original Task-8.1 stop boundary remains in
+force: no formula/runtime code, migration `0039`, durable application-data
+mutation, live call, commit, push, or PR.
+
+Declared-environment evidence at this stop:
+
+- stable policy artifact SHA-256
+  `750f4375bd68f79fa64ee596189a09a1a9354f2aabfa710893f6d31c85090ee4`,
+  policy fixture SHA-256
+  `5218927ddab2f58a4e09977c4e320b407bbc6dd870d598953d2b98633d12108f`,
+  and private reviewer-map SHA-256
+  `653065eebb9c84193fe9aecb7c76304529391ee0095bd766d8e751c651d168fb`;
+- publisher SHA-256
+  `f0f31b9c92c87d32bff60e506598d043ed10d7e330db27c953b502c83affecb5`,
+  v22 materializer SHA-256
+  `78add79548bd4ef47f26290f63325f4b0744f659cfcc0f8c47deb30ebc282c29`,
+  and census runner SHA-256
+  `4f614ab2788cb0137430dba11c1a82ecb0fdd0e3693186fe6242bafd5b186268`;
+- formula-policy plus operator-backed workbook mapping: `29 passed`;
+- crash-safe/no-clobber publication: `73 passed` after six adversarial RED
+  cases reproduced and were fixed (stage mutation, final-target mutation,
+  orphan target rollback, atomic takeover, impossible topology, and
+  private-byte assertion leakage);
+- artifact-gate boundary: `4 passed`;
+- approved mechanical v22 correction focus: `4 passed`;
+- hermetic 100-row PostgreSQL census preparation: `2 passed`, with literal
+  `21 CDD + 79 FDD` and missing/99/noncoverage/duplicate failure plans;
+- entire Task-8 tree: `233 passed, 28 failed, 1 skipped`. All 28 failures are
+  fail-closed effects of the held canonical candidate: 26 reject its stale
+  pre-correction artifact/fixture and two are the dedicated cycle/UUID REDs.
+  The skip is the deliberately unexecuted operator PostgreSQL census.
+- Ruff format/check over all Task-8 scripts/tests, publisher mypy, and
+  `git diff --check` are green (line-ending warnings only).
+
+### 1.74 Task-8.1 v23 void ruling and full-strict-v24 structural gate
+
+On 2026-08-14 the reviewer permanently rejected the rendered v23 draft. The
+bytes remain preserved as historical evidence, but none is an admitted
+contract authority:
+
+- artifact SHA-256
+  `ddbe234bfbac246e65b2b1c0dd30eae018e88754446d713f1defdb4d70232dfc`;
+- fixture SHA-256
+  `b7782392676e884560840fc8314dbc4a7673800e5cbeaa04a85eabdb329879c5`;
+- pipeline-contract SHA-256
+  `ce413d234aff579a4cabec8ae81e903be3fc8e70f843e3ef08ebea44907a88d7`;
+- identity-graph SHA-256
+  `1d0b374fb7e4ea3a3874c7d2c1ac1eb5d74701ef31603379ee42d753a84292bd`.
+
+All four identifiers join the permanent Task-8 void blocklist. The v23
+artifact and rendered fixture stay byte-frozen on disk. They have no Task-8
+publication lock, may not become fixture-published, migration-`0039`
+consumed, runtime-selected, relabeled, or reused, and may serve only as
+rejection evidence. The earlier reconciliation field that allowed same-label
+unpublished regeneration is superseded by an appended correction row; the
+historical row itself is not rewritten. The corrected candidate is
+`full-strict-v24`.
+
+V24 admission has five structural conditions:
+
+1. **Frozen-v21 provenance.** V24 is derived only from frozen v21 artifact
+   SHA-256
+   `2eb504ab750e9c3c96a5eeada13b22aad36c8772369c21e65d0e93705ff9cffd`
+   and contract hash
+   `46d14b1fbf6f7790bdcfd16ee211446d80ed4c95b22ec04810cd912e28706794`,
+   plus the enumerated six Task-8 semantic deltas, the approved section-3.2.2
+   acyclic identity contract, the approved mechanical corrections, and the
+   frozen policy-v2 binding. Parent version and hashes are literal artifact
+   fields. Admission fails if the parent is not exact frozen v21; rejected
+   v22/v23 bytes cannot be derivation parents.
+2. **General identity/hash graph.** Generation enumerates every UUID name
+   tuple and every hash/digest preimage in the complete artifact and bound
+   policy, then rejects unresolved producers, self-edges, or any cycle. The
+   four non-dashboard RED vectors are permanent. Audit clarification: the
+   non-dashboard cycle accepted by the v23 guard was a **synthetic
+   guard-bypass mutation** (`step_id` and `source_lineage_object_id`, plus an
+   independent synthetic-node vector), not a cycle present in unmodified v23
+   draft bytes. The defect was that the purported general guard did not
+   reject the injected cycle.
+3. **Independent fixture authority.** Expected component and final hashes are
+   recomputed by an independent verifier that does not import production
+   materializer derivation code. Hand-written golden vectors cover the full
+   dashboard chain: row UUID, projection hash, payload hash, native hashes,
+   and final generic output UUID.
+4. **SQL/recipe derived equality.** Executable dashboard SQL projection and
+   preimage references are derived-equal to frozen policy-v2 recipes at
+   generation. Any reference to a superseded recipe field fails admission;
+   SQL and contract recipes cannot drift independently.
+5. **Approved-semantics conservation.** One literal conservation manifest
+   binds strict period ordering, positive-magnitude enforcement,
+   source-normalization preservation, the exact erasure restoration tuple,
+   the 100/100 dashboard guard, the acyclic identity contract, and policy-v2
+   binding to their implementing artifact bytes. A missing or drifted entry
+   fails admission with the semantic name.
+
+Policy v2 remains unaffected, frozen, and green. The stop boundary is stricter
+than the earlier v23 preparation language: no PostgreSQL census, migration
+`0039`, formula/runtime implementation, commit, push, PR, durable application
+mutation, or live call occurs before v24 returns with identifiers and the
+hermetic admission/conservation census for review.
+
+### 1.75 Task-8.1 full-strict-v24 second-gate verification record
+
+On 2026-08-14 the full-strict-v24 second gate completed with final audit
+`PASS`. This is a hermetic, no-PostgreSQL contract-materialization census under
+the reviewer ruling; it is not runtime activation or database acceptance.
+
+The exact reviewed bytes are:
+
+- artifact SHA-256
+  `70834e33249a414e5dcc744cdc60934d9d2ed6c8ab3f09c64cf3edfa3f05e447`;
+- independently derived fixture SHA-256
+  `444e4c573e7ba44185efe0b4c39339797b2df91a0fcbf7841129e131e406526e`;
+- pipeline-contract SHA-256
+  `f05f17f98ea6a8d0356cef5939b7395fef294eb490a77cf8aeecf1ece25dd164`;
+- identity/hash graph SHA-256
+  `5c8b00d2e0930d4c1d5e5a4fbcc1db9ca74f9b28515e48da3a7021a835d84c5f`,
+  with `67` nodes, `35` edges, `834` leaves, and `67` source pointers;
+- approved-semantics conservation SHA-256
+  `635035b2e2a9e88c4cf1a90a1fb4023197f0c0df0bb84e181db2daefddfb36de`,
+  binding `7` approved semantics to `18` literal byte receipts; and
+- policy/reviewer-map binding SHA-256
+  `6e6841d07b1891b6692ba210bc1be55aaee7f40a3bb6ffafdad56e5a21212bb3`.
+
+Parent and policy provenance are exact, not descriptive. The sole parent is
+frozen full-strict-v21 artifact SHA-256
+`2eb504ab750e9c3c96a5eeada13b22aad36c8772369c21e65d0e93705ff9cffd`
+with contract SHA-256
+`46d14b1fbf6f7790bdcfd16ee211446d80ed4c95b22ec04810cd912e28706794`.
+The policy-v2 artifact SHA-256 is
+`e0e99763e7ffaa0abbf436ac102894a9f3cac15e57448c2f90019ee7cf39e064`,
+its policy SHA-256 is
+`2b9f141a54628dbc8528813cc2f58cdaa2fe3eb09925a74f881f56baac7076e9`,
+its immutable prerequisite fixture SHA-256 is
+`b95c426da57a64336da990002201f4d5fdfe616dbae095a93e3aaf9372cf242e`,
+and the raw reviewer-map SHA-256 is
+`98cf84d4498f57465cd61501ea8bbbd93f7507d8628a61d7cbcf9cede459fe2a`.
+
+Independent verification plus the CLI verification path passed `65/65`; the
+CLI terminal result was `VERIFIED`. The census proved `28` semantic steps,
+`48` edge rules, `1,756` routes, `19` extractors, `18` providers, `68`
+schemas, `34` current-DDL tables, `69` tenant-RLS tables, and erasure closure
+of `48 current + 38 future = 86` relations. Task 11 still owns all `27`
+restart cuts and the `10` undischarged edge rules; this gate does not claim
+either proof.
+
+The final audit records this closed blocker/fix chain:
+
+1. **SQL full-segment consumption:** SQL admission now consumes and validates
+   each complete hash-bound SQL segment; an accepted prefix with an
+   unvalidated suffix is impossible.
+2. **Graph producer closure:** every identity/hash graph node and edge has a
+   governed producer and source pointer, and unresolved, duplicate, or cyclic
+   production fails admission.
+3. **Byte-receipt conservation:** the seven reviewer-approved Task-8 semantics
+   are conserved by eighteen literal, hash-bound implementation receipts,
+   rather than by labels that could affirm themselves.
+4. **Reviewer-map binding:** exact raw reviewer-map bytes are pinned through
+   structural admission, independent verification, generation, and
+   publication admission without emitting private prose.
+5. **Closed grammar:** digest, identity, and reference grammars require full
+   input consumption and materializer/verifier parity; trailing or smuggled
+   expressions fail closed.
+6. **Generator prerequisite handling:** derive-only performs complete
+   admission and verification with zero writes regardless of target
+   existence; write mode verifies the exact immutable policy-v2 fixture and
+   creates only an absent v24 fixture with no clobbering.
+
+The canonical v22 fixture path was removed only after exact archive SHA-256
+proof of
+`4368d86b6bdd270f03d94bbc591a9ee2f6fbc6c36c9c65076cd1549d2a4da56b`.
+Removal does not alter its permanent void/blocklist status or the preserved
+reconciliation history.
+
+Both v24 artifact and fixture remain `INACTIVE`. No atomic gate lock or
+publication exists; no migration `0039`, formula/runtime implementation,
+PostgreSQL or other database call, live call, or commit occurred at this
+second gate.
+
+### 1.76 Standing Delegation v2 (verbatim)
+
+**Standing Delegation v2 — effective now through Task 15A, recorded in the master plan verbatim**
+
+**Tier 1 — proceed without stopping. Log every use as a numbered decision record citing the precedent.**
+
+**Version advancement after a rejected or defective candidate.** Void it, blocklist all rendered identifiers, advance the numeric version, derive from the last-good frozen parent plus the approved delta set. This is settled precedent (v19, v22, v23) and no longer needs a ruling.
+**Mechanical and closure-only contract regenerations** — executability grants, admission-literal counts, harness SQL corrections — provided the semantic-vector set is byte-identical to the last reviewer-approved set, and the conservation census, general graph guard, and independent verifier all pass. You may freeze, census, and publish the result INACTIVE without waiting for me. The three automated guards you built are exactly what makes this delegable.
+**Evidence-strictening corrections**: seed determinism, posture attestation, FK closure, teardown safety, timestamp redaction — anything that makes proofs harder to pass, never easier.
+**Environmental recovery** of existing reviewed services: restarts, fresh disposable namespaces, sealing failed attempts. Never a new service, config change, or credential.
+**Production-composition rewires that make production match an already-approved contract**, RED-first — closing a gap between approved capability and production reachability is execution of a ruling, not a new one.
+**Collection-boundary changes** only with the established guard pattern: pinned inventory plus required-current-collected assertions.
+
+**Tier 2 — still stops, no exceptions.**
+
+Any change to an approved semantic vector: equations, predicates, bindings, dispositions, event and outcome sets, UUID namespaces or name tuples, hash preimages, edge rules, the step registry, RLS predicates.
+Any authority expansion beyond minimal executability closure — anything that widens what a role can read or mutate past what the approved body strictly requires, proven minimal by census with no superset.
+New tables, roles, environment variables, flags, or services.
+Live, priced, or provider calls; prompt promotion; anything touching the real_example data.
+Activation of any contract version, ever.
+Task checkpoints and Gates A/B; commits still happen only at approved checkpoints.
+Tie-breaker: genuine doubt means stop — but check the precedent log first, and if a recorded precedent covers the case exactly, apply it and log it.
+
+**When a Tier-2 stop does occur**, package the ruling request with complete evidence and keep working on any authorized non-dependent item rather than idling — the way Track B has been running.
+
+**Audit protocol:** every Tier-1 decision record is reviewed at the next task checkpoint. A decision I would have rejected reverts at your cost and narrows this delegation. The delegation is a loan against your track record; the audit is how it stays honest.
+
+Tier-1 uses are recorded as immutable numbered entries beneath the relevant
+task record. Each entry names the delegated category, cites its controlling
+precedent, states the bounded change, and carries RED/GREEN evidence at the
+next task checkpoint.
+
+**Decision record T1-20260814-001 — constraint-valid census evidence.**
+Category: evidence-strictening corrections. Precedents: the Task-7 v12
+application-role masking correction, the v24 disposable-database ownership
+token correction, and the approved v24 second-gate census boundary. The
+bounded action is to replace replica-bypassed, placeholder-bearing Task-8
+census setup with a deterministic, trigger-enabled production-composition
+seed whose FK closure, posture, hashes, UUIDs, and application-observed
+projection are stricter than the rejected harness. This record authorizes no
+semantic-vector change, authority expansion, activation, migration, new
+configuration, or live/priced call.
+
+### 1.77 Task-8.2 requirement-model pre-slice ruling
+
+The reviewer rejected the SQL-only census alternative after production
+round-trip reproduced the exact policy/model mismatch:
+`required_calculations.0.calc_type` is missing when a frozen policy-v2
+four-field requirement is validated by the legacy two-field model. Census
+execution remains held until the production path can produce and reload the
+approved bytes without a lossy adapter. Full-strict-v24 does not advance:
+`MethodologyQuestion` and `RequiredCalculation` are outside the 68 frozen v24
+schema snapshots, while the extraction-task snapshot intentionally admits
+open requirement objects.
+
+The authorized pre-slice is bounded as follows:
+
+1. Add a disjoint frozen
+   `FddFormulaRequirement(formula_ordinal, formula_type, required, scope)`.
+   Formula type is restricted to the ten frozen policy-v2 values and scope to
+   the frozen closed scope set. Legacy versions accept only the existing
+   two-field shape; the policy-v2 successor accepts only the four-field shape;
+   mixed shapes and implicit coercion in either direction fail closed.
+2. Prove every existing question payload, payload hash, trace digest, and
+   rehydration byte unchanged against the real frozen Task-5 fixtures.
+3. Make one named constructor the sole successor path. It verifies the frozen
+   workbook hash, policy artifact SHA-256, policy SHA-256, and exact 79-row
+   join before producing any question, then uses the existing
+   import/freeze/selection repository path unchanged. Mismatch failures use
+   stable, leakage-safe codes before persistence.
+4. Prove production import -> freeze -> reload preserves all four requirement
+   fields byte-for-byte.
+5. Regenerate all 68 v24 schema snapshots byte-identically and prove the
+   contract lock remains clean.
+
+This pre-slice contains no formula evaluation, planning, dashboard behavior,
+migration `0039`, activation, live/priced call, or commit. It is explicit
+Tier-2 authorization rather than a use of Standing Delegation v2. Once green,
+the application-role PostgreSQL census resumes in a fresh namespace with the
+existing complete-FK, trigger-enabled, no-placeholder acceptance bar.
+
+### 1.78 Task-8.2 requirement-model pre-slice execution record
+
+The authorized requirement-model pre-slice completed on 2026-08-14 without
+advancing or changing full-strict-v24. The implementation adds one disjoint,
+closed `FddFormulaRequirement` shape whose four fields, ten formula types, and
+five scopes are bound to the frozen policy-v2 successor ID. Legacy methodology
+versions admit only the exact two-field `RequiredCalculation` shape; the
+successor admits only the exact four-field shape. Mixed entries, subclasses,
+unknown keys, non-list/tuple containers, and scalar coercions fail closed.
+
+The sole named constructor validates the exact policy artifact, policy hash,
+24,905-byte workbook identity, and complete ordered 79-row join before the
+first successor `MethodologyQuestion` is instantiated. The workbook projection
+used for that join is model-free; a failed artifact, policy, workbook, or join
+stage produces only a stable code and performs zero repository writes. The
+constructor remains absent from every API, selector, planner, worker, and other
+production composition root in this pre-slice.
+
+The exact scoped production-file SHA-256 values are:
+
+- `src/idis/methodology/__init__.py`:
+  `eb04b77f8a689a1700efc3ea75893f52c349338f5e5b8bbcaa349466f4ead44b`;
+- `src/idis/methodology/models.py`:
+  `6cf09d6ab0337978d1a2797cf99a0a4c6aae4eb5479e24f46faee3da35f97eac`;
+- `src/idis/methodology/importers/fdd_excel.py`:
+  `c58c4a73c1f2e910bcc91e1893ddf4f315eaf2771b73a4263088043cd20f7205`;
+- `src/idis/methodology/importers/fdd_formula_policy_v2.py`:
+  `1e9cbe46adae6b085831b9d0dc24afb8c58f0fd839b12733354a117484b1ff7d`.
+
+Configured Python 3.12 / Pydantic 2.12.5 evidence is `12/12` hermetic
+pre-slice cases green with the database case deselected, `74` Task-5 cases
+green with the existing operator skips, `46/46` adjacent model/planner/
+calculation cases green, scoped Ruff/mypy/compile/diff checks green, and an
+independent code-quality verdict of `PASS` with no Critical or Important
+findings. Real frozen CDD and legacy-FDD registry bytes, every ordered question
+payload hash, version/registry hashes, trace digests, and rehydration bytes are
+unchanged. The dedicated Task-8 schema gate inventories exactly `68` rows as
+`11` Pydantic, `55` literal-validator, and `2` append-frozen authorities,
+regenerates all eleven Pydantic snapshots, rebuilds the full artifact exactly,
+and leaves the contract lock clean.
+
+The production repository proof ran once in a fresh migration-`0038`
+disposable database. Its first RED identified only a stale test fixture that
+omitted the four current `runs` contract columns. RED-first correction bound
+the seed to frozen full-strict-v21 contract
+`46d14b1fbf6f7790bdcfd16ee211446d80ed4c95b22ec04810cd912e28706794`,
+`RESUMABLE`, and a NULL resume error. The fresh rerun passed `1/1`: policy-v2
+import, freeze, run selection, reload, and all four requirement fields
+round-tripped byte-exactly through `PostgresMethodologiesRepository` using the
+generated NOSUPERUSER/NOBYPASSRLS application credential. Admin access was
+limited to migration and parent setup; the disposable database and role were
+then removed.
+
+All six v24 identities remain those recorded in section 1.75. No contract,
+fixture, graph, conservation, policy binding, migration, activation, formula
+evaluation, planner, dashboard runtime, live/priced call, or commit changed in
+this pre-slice. Decision record `T1-20260814-001` now resumes for the stricter
+constraint-valid census seed; this pre-slice itself was explicit Tier-2
+authorization and is not a delegated semantic change.
+
+### 1.79 Frozen-v24 requirement-binding defect and census stop
+
+The resumed production-shaped census exposed a contract defect before strict
+profile loading or PostgreSQL access. Frozen authority
+`dashboard-root-equation-v2` has expected SHA-256
+`513ca92f3e3c1c610af724413a1342743fc09b781fcb6fe6d6481b50f8570708`;
+its five decoded SQL statements have joined-body SHA-256
+`6a6113a72f6e68011e7d6c992060faccf63201c3dd76153b61e5a56386cff34c`.
+The body reads `item->>'calc_type'` three times and reads
+`formula_type`, `formula_ordinal`, and `scope` zero times. The approved named
+policy-v2 constructor produces exactly ten non-empty requirements, all
+`required=true`, each with the exact four fields
+`formula_ordinal|formula_type|required|scope`, and none with `calc_type`.
+Consequently the frozen guard derives zero matching required calculations and
+rejects every production-valid policy-v2 calculation set.
+
+A permanent hermetic RED proves the mismatch using the named constructor and
+also proves the signed census stops with
+`TASK8_V24_DASHBOARD_REQUIREMENT_BINDING_INVALID` before profile, key, runner,
+or database access. Adding `calc_type` to the four-field model, coercing
+`formula_type` into a lossy legacy shape, or running direct SQL would violate
+the explicit pre-slice ruling. Changing the guard's JSON identity binding or
+predicate is an approved-semantic-vector change and therefore a Tier-2 stop.
+The application-role census, signature, atomic publication, migration `0039`,
+activation, and commit remain held. The corrected binding requires reviewer
+authorization. Version disposition does not: Standing Delegation v2 applies
+the settled v19/v22/v23 precedent once a rendered candidate is proven
+defective.
+
+**Decision record T1-20260814-003 -- defective-v24 version advancement.**
+Category: version advancement after a rejected or defective candidate.
+Precedents: v19, v22, and v23. Full-strict-v24 artifact
+`70834e33249a414e5dcc744cdc60934d9d2ed6c8ab3f09c64cf3edfa3f05e447`,
+fixture `444e4c573e7ba44185efe0b4c39339797b2df91a0fcbf7841129e131e406526e`,
+contract `f05f17f98ea6a8d0356cef5939b7395fef294eb490a77cf8aeecf1ece25dd164`,
+graph `5c8b00d2e0930d4c1d5e5a4fbcc1db9ca74f9b28515e48da3a7021a835d84c5f`,
+conservation
+`635035b2e2a9e88c4cf1a90a1fb4023197f0c0df0bb84e181db2daefddfb36de`,
+and policy binding
+`6e6841d07b1891b6692ba210bc1be55aaee7f40a3bb6ffafdad56e5a21212bb3`
+are permanently void rendered evidence. Their files remain byte-frozen and
+unpublished; they may not be migration-consumed, runtime-selected, or reused
+under the same version label. The successor label is `full-strict-v25`, built
+from frozen v21 plus the complete reviewer-approved delta set. This delegated
+version decision does not authorize the new requirement predicate; v25
+materialization remains blocked on that Tier-2 ruling.
+
+**Decision record T1-20260814-002 -- root-aware production persistence
+closure.** Category: production-composition rewires that make production match
+an already-approved contract, RED-first. Precedents: Standing Delegation v2,
+the Task-7 production erasure composition correction, and decision
+`T1-20260814-001`. The v24/current-native authorities already require coverage,
+task, claim, evidence, Sanad, and defect rows to carry their final Task-7 root
+on INSERT, but the existing Task-5/Task-6 production writers expose no root
+parameter for those six insert-bound relations. This record authorizes the
+minimal repository composition seam needed to pass already-derived root IDs
+and insert the approved rows once with final values. It authorizes no new
+table, column, role, environment variable, identifier recipe, hash preimage,
+predicate, event, outcome, ACL expansion, activation, migration, or census
+execution. Its RED/GREEN and legacy-call compatibility evidence will be
+reviewed at the Task-8 checkpoint independently of the Tier-2 dashboard
+binding ruling.
+
+### 1.80 Dashboard-root-equation-v3 SQL classification and ACL closure
+
+The approved v3 amendment is the only new semantic delta in full-strict-v25.
+An exact decoded-hex scan of frozen v24 classified every SQL function body
+containing `calc_type`:
+
+| Function body | Binding SHA-256 | Statement SHA-256 | Classification | v25 disposition |
+|---|---|---|---|---|
+| `dashboard-root-equation-v2` | `513ca92f3e3c1c610af724413a1342743fc09b781fcb6fe6d6481b50f8570708` | `010a7b178b0c67609e4441b7517a8987c37f41b584b0b55960ae0363ce018b47` | three invalid requirement-JSON `calc_type` reads plus three correct `deterministic_calculations.calc_type` column reads | replace only the three JSON reads through the approved version-discriminated v3 relation; preserve all three column reads |
+| `current-output-exact-one-v1` | `92bf381c009c0dca37544811da4c73a77e5437b34f30f1310e51fe8a0b6f87ae` | `27e4b72e010e7f181f1cfa27828e0680c99647f8a76ec537c4b293e98656d373` | one calculation-column native-hash projection | byte-identical |
+| `dashboard-partial-native-root-exact-one-v1` | `076eb51508606bacc9ff1e457ff9e1264ce25ab338b595ba4ee038dab9a1a9f4` | `2f8bed4c8d6d581579bec8b256b6623b706144ccdffd410c2ff412172e0cb4e0` | one calculation-column native-hash projection | byte-identical |
+| partial-contract downgrade restoration | Task-8 section `de969bf906442749c9013999a38a4ef27d8a69c237a7a34229b763fb94daa9e8` | `36fafe80ba3c9168bd7e0da666838a00527a85562cb8e8ea0289e22f225eaf4d` | one restored calculation-column native-hash projection | byte-identical |
+
+The three changed JSON reads are exactly the required-calculation exact-one
+comparison, undeclared-calculation-root rejection, and dashboard root-set
+calculation join. Eight additional ACL statements contain the column name
+`calc_type`; they are GRANT/REVOKE closure statements rather than function
+bodies and remain byte-identical. No sibling requirement-JSON parser remains.
+
+The version discriminator needs no privilege expansion:
+`methodology_version_id` is already in the guard owner's column grant for both
+`methodology_coverage_records` and `methodology_questions`. V3 updates only
+the authority's direct/transitive read metadata for the selected version
+coordinate and proves the coverage/question version IDs agree.
+
+The conservation proof that v3 is the only new semantic delta is external
+historical evidence. Active v25 bytes carry only frozen-v21 parent provenance
+and the enumerated v25 delta/conservation manifests; they contain no v24
+version, path, artifact hash, fixture hash, contract hash, graph hash,
+conservation hash, or policy-binding hash. Void-v24 comparison remains in the
+historical test oracle and reconciliation record only.
+
+**Decision record T1-20260814-004 -- existing question-payload read closure.**
+Category: mechanical and closure-only contract regeneration. Frozen equation
+v2 already reads `q.question_payload`, and its authority metadata already
+declares that direct read, but the guard owner's aggregate column grant omits
+`methodology_questions.question_payload`. The bounded v25 correction adds
+only column-level `SELECT(question_payload)` for the existing guard owner and
+corresponding exact revoke/downgrade evidence. It grants no table-level read,
+membership, write, or application-role execution, and it changes no equation,
+predicate, identifier, hash preimage, event, outcome, RLS rule, or other
+semantic vector. RED application-role census must prove the exact body runs
+and that no superset privilege exists.
+
+**Decision record T1-20260814-005 -- canonical publication commit-point
+closure.** Category: evidence-strictening correction and mechanical
+publication closure. Precedent: the approved fixture-first/artifact-last
+Task-8 gate and v24's proof that canonical pre-creation makes publication
+state ambiguous. For v25, materialization and independent fixture derivation
+operate in memory or an explicit noncanonical `.local_reports` candidate
+namespace. The signed PostgreSQL census consumes and binds those exact staged
+bytes. Only the atomic publisher may create the absent canonical v25 fixture,
+then link the canonical v25 artifact as the sole commit point. Materializer,
+fixture generator, census, and tests are permanently forbidden from creating
+canonical v25 outputs. Exact completed-state replay is read-only; transient
+lock absence is not publication evidence. This changes no contract semantic,
+identity, ACL, schema, or activation state.
+
+**Decision record T1-20260814-006 -- closed graph producer-symbol
+classification.** Category: evidence-strictening correction under the general
+identity/hash dependency-graph precedent from the v23 void ruling. Every
+ordinary producer symbol must match the closed ASCII identifier grammar and
+must not be a reserved recipe operator. The sole preserved exception is the
+exact frozen digest-operator declaration at
+`full_strict:#/digest_recipe_registry/rows/0`, whose complete row is
+`["H","lowercase_hex(SHA256(CJ(value)))"]` and whose independently derived
+producer coordinate remains the frozen `H`/`#/1` authority. It is classified
+as the built-in grammar operator declaration, not an ordinary referencable
+producer. Any relocated `H`, any mutation of that declaration, or any other
+empty, numeric, punctuation-bearing, or reserved producer symbol rejects
+before edge or external-input derivation. This preserves current artifact
+bytes and graph identities while closing a future-regeneration cycle-bypass
+class; it changes no UUID tuple, hash preimage, equation, predicate, ACL,
+event, or outcome.
+
+**Decision record T1-20260814-007 -- defective-v25 version advancement and
+bound-runtime graph closure.** Category: version advancement after a defective
+rendered candidate plus evidence-strictening correction, under the settled
+v19, v22, v23, and T1-20260814-003 precedents. Independent review proved that
+the v25 general graph tokenized seven governed `$...` row-payload bindings as
+ordinary identifiers before leaf classification. The `$` prefix was lost,
+the `BOUND_RUNTIME_INPUT` branch was therefore unreachable, and the seven
+leaves were incorrectly recorded as `SCALAR_OR_FOREIGN_INPUT`. Correcting the
+typed-leaf authority changes the external manifest, graph, structural,
+conservation, component, contract, artifact, and fixture identifiers. The
+rendered v25 identifiers are consequently permanently void and its version
+name is non-reusable even though neither canonical target existed and no
+census or publication occurred. V25 files remain byte-frozen as rejected
+evidence. The corrected candidate advances to full-strict-v26, derives from
+frozen v21 plus the complete approved delta set, and preserves the `$` marker
+through graph tokenization. An independently derived producer reference such
+as `$root_projection_sha256` remains an edge; each unresolved placeholder in a
+`RUNTIME_VALUE` preimage is one atomic, non-resolvable
+`BOUND_RUNTIME_INPUT` leaf. Contract-definition placeholders retain their
+separately derived authority. This reclassifies exactly the seven audited
+row-payload leaves while preserving dashboard-root-equation-v3 and every other
+approved semantic vector byte-identically after normalized version/hash
+substitution. No migration
+0039, activation, commit, database/profile access, or live/priced/provider call
+is authorized by this record.
+
+**Decision record T1-20260814-008 -- void candidate identity versus inherited
+semantic content classification.** Category: evidence-strictening correction
+under the v24 void-boundary and approved-semantics conservation precedents.
+All thirteen reported v25 hashes remain immutable reconciliation evidence.
+Eleven identify the defective candidate, fixture, graph/manifest, structural,
+contract, conservation, binding, or requirement-literal closure and therefore
+remain in the active void-selection and consumer blocklist. The equation-v3
+authority-row hash and pure SQL-body hash instead content-address the exact
+reviewer-approved semantic bytes that v26 is required to conserve. They remain
+pinned historical evidence but are not candidate-selection identifiers and are
+excluded from the active blocklist. V26 must prove their exact reuse; adding a
+version-only SQL comment or otherwise perturbing the body to evade a hash
+collision is forbidden. This classification changes no SQL, predicate, ACL,
+UUID/hash recipe, event, outcome, role authority, or activation state.
+
+**Decision record T1-20260814-009 -- exact v25 historical-suite collection
+boundary.** Category: collection-boundary change with pinned inventory and
+required-current-collected assertions. After T1-20260814-007 placed the
+rendered v25 candidate identities in the permanent void blocklist, the frozen
+v25 execution/materialization suites correctly began rejecting their own
+candidate and could no longer serve as current acceptance tests. Exactly three
+byte-pinned modules are archived independent of v26 publication:
+`test_full_strict_v25_materialization_red.py` (`905fb641...76618`),
+`test_v25_dashboard_requirement_matrix_red.py` (`0ab3a477...1ed5`), and
+`test_v25_independent_fixture_verification_red.py` (`5b5c64f7...d95d`).
+The v25 void-boundary suite and the exact v24/v26/current integrity inventory
+remain collected; v22/v23 inventories remain exactly archived; the successor
+predicate still requires an exact fixture-bound frozen INACTIVE v26 pair.
+No glob, existence-only predicate, semantic/identity change, runtime selector,
+migration, database/profile access, live/priced/provider call, or commit is
+introduced.
+
+**Decision record T1-20260815-010 -- defective-v26 installed-RLS count-domain
+closure and exact historical-suite boundary.** Category: version advancement
+after a defective candidate, mechanical admission-literal count correction,
+and collection-boundary change with a pinned inventory. Source inspection of
+the complete `0001` through `0038` migration chain proves exactly 64 persistent
+application relations with `FORCE ROW LEVEL SECURITY`; the two already
+reviewed Task-8 dashboard relations produce an installed application-domain
+count of 66. The unrelated frozen future *physical* public-table census remains
+67 and is not an installed-RLS input. V26 incorrectly copied that physical
+count into the installed partition and therefore rendered `67 -> 69` instead
+of the mechanically correct `64 -> 66`. This defect is deterministic before
+profile, key, or database access.
+
+The defective v26 candidate is permanently void and its version name is not
+reusable. Its staged artifact (`7d8d8691...78c27`), staged fixture
+(`8ad6e65d...8f0c7`), pipeline contract (`bb0bd8de...40fc`), Task-8 contract
+(`cab23cdd...d233`), structural admission (`e8c92fbd...a3fa`), producer
+manifest (`2cd98224...9bad`), external manifest (`73184db5...af25`), identity
+graph (`4fa300c8...7ece`), conservation receipt (`952e76bf...d235`), policy
+binding (`3e07e20d...a467`), and requirement literal (`2dfe78af...50a1`) are
+active void selectors. The unchanged equation-v3 authority row
+(`20250e78...eeb5`) and semantic SQL body (`50978980...13b7`) are approved
+content-addressed semantic authorities, not candidate selectors; they remain
+outside the active blocklist and v27 must reuse them byte-exactly.
+
+The exact frozen v26 production-cycle source SHA-256 values are: materializer
+`1d70cb38...ff00`, independent verifier `6bd55cdf...9fd6`, fixture generator
+`71157e79...5b06`, SQL census `e3cb7f6e...7a18`, signed wrapper
+`899a93d9...1f4`, and publisher `928f09a5...1ee8`. The staged artifact and
+fixture retain the byte identities above. Exactly seven execution suites are
+archived by name and SHA-256: `test_full_strict_v26_materialization_red.py`
+(`d1b1cebe...7a7c`), `test_v26_bound_runtime_graph_red.py`
+(`fb767517...4ac2`), `test_v26_independent_fixture_verification_red.py`
+(`b5cdf29c...9227`), `test_task8_fixture_derivation_red.py`
+(`cff1d827...a09f`), `test_v26_sql_authority_postgres_census_red.py`
+(`19f5cfee...d39a`), `test_run_task8_v26_signed_census.py`
+(`8738bfa5...1e13`), and `test_task8_v26_atomic_publication_red.py`
+(`d6d62c03...5eccb`). No glob or existence-only archive predicate is used.
+The archive guard compares lexical absolute/repo-relative paths without
+resolving symlinks or reparse aliases; a same-basename or resolving alias in
+any nested or sibling directory remains collected.
+The current-successor predicate pins the complete ordered 29-section v27
+artifact to SHA-256 `41693716...ac06`, requires a hash-bound reviewed-design
+preimage, strict-boolean `append_frozen is true`, an INACTIVE, non-selectable
+activation assertion, and the complete ordered ten-field fixture shape. Its
+first fixture authority is the independently derived 310,306-byte identity
+`78a3aedb...b0cf`. The positive successor regression writes only those exact
+independently rendered artifact/fixture bytes to a disposable path; every
+structurally complete synthetic pair remains rejected. The canonical v27
+artifact and fixture both remain absent.
+The collected v25 void-boundary suite was retargeted only at its current
+successor seam from v26 to v27; its source changed from
+`4d3ca5a6...25f0` to `c9fac0a3...8e53`, with every v25 evidence assertion and
+constant unchanged.
+
+V27 derives from frozen v21 plus the complete approved delta set and the sole
+mechanical installed-count closure. Canonical v26 artifact, fixture, signed
+census receipt, publication lock/journal, runtime selector, migration `0039`,
+and contract-lock entries were all absent when v26 was voided. No PostgreSQL,
+profile, signing-key, live/priced/provider, canonical-publication, activation,
+migration, or commit action is authorized or performed by this record.
+
+**Decision record T1-20260815-011 -- exclude Alembic metadata from production
+application authority.** Category: production-composition authority narrowing
+and evidence-strictening. Exact precedents:
+`T1-20260814-002_PRODUCTION_COMPOSITION_REWIRE`,
+`T1-20260814-004_MINIMAL_EXECUTABILITY_NO_SUPERSET`, and
+`STANDING_DELEGATION_V2_EVIDENCE_STRICTENING`. The strict launcher previously
+enumerated every ordinary `public` table and consequently granted application
+CRUD on `public.alembic_version`. The RED-first correction excludes the sole
+metadata relation `public.alembic_version` from its dynamically enumerated
+application domain, explicitly revokes any prior direct application-role
+privilege on that relation, and only then grants the enumerated nonmetadata
+`public` tables. The required physical
+public ordinary-table census is 67 (`66` governed relations plus the metadata
+singleton), but the exact pre-GRANT physical-67/domain-66 equality remains
+pending the signed v27 census. Static wiring proves the metadata exclusion and
+explicit prior-direct-privilege revoke are present; the required effective and
+direct application-role privilege counts on `alembic_version` are both zero,
+but their observed database values remain pending. Final static evidence is
+eight hermetic passes with three environment-dependent skips; independent
+review is PASS with no Critical or Important findings, and Ruff check/format,
+strict mypy, `py_compile`, and diff checks are green. The pinned source hashes
+are strict launcher `5fc4b70a...6f11`, Task-8 boundary test
+`4dd60d3d...3eb0`, Task-4 fresh-database test `54ac4f34...34d`, and Task-6
+post-migration privilege test `3bf90296...6cfc`. No database or profile access
+was made by this record. This wires an authority narrowing; it adds no table,
+role, grant, schema, predicate, semantic vector, environment variable, service,
+migration, or activation. The signed v27 census must independently prove the
+exact 67/66 split and zero metadata privilege before the narrowing is recorded
+as an observed database outcome.
+
+**Decision record T1-20260815-012 -- archive exact obsolete v24 execution
+suites while retaining current void evidence.** Category: collection boundary
+with pinned inventory and required-current-collected assertion. Exact
+precedents: `T1-20260815-010_EXACT_HISTORICAL_COLLECTION_BOUNDARY`, the pinned
+v22/v23/v25/v26 execution archives, and
+`STANDING_DELEGATION_V2_COLLECTION_BOUNDARY_GUARD_PATTERN`. The explicit v24
+atomic-publication execution suite
+`tests/slice100_task8/test_task8_atomic_publication_red.py`
+(`89c287fe...9182`) and v24 PostgreSQL-census execution suite
+`tests/slice100_task8/test_v24_sql_authority_postgres_census_red.py`
+(`6bea316e...9c5e`) are archived by exact repo-relative path and immutable
+SHA-256 only. No glob, basename, existence-only, or successor-state predicate
+can widen that inventory, and no symlink/reparse resolution can turn a lexical
+alias into an archived repo-relative path.
+
+`test_task8_v24_void_boundary_red.py` remains collected. Its prior impossible
+assertion that all historical v24 marker evidence must disappear is replaced
+with two disjoint proofs: an exact 29-path inventory of test/evidence-only
+markers and zero v24 contract/version consumption under production/runtime
+`src/idis`. Its source changes from `0af0674a...c44d` to
+`846f2b2c...bd0`. This record changes no candidate identity, semantic vector,
+schema, predicate, role, grant, service, migration, activation, or runtime
+selector, and makes no database, profile, signing-key, live/priced/provider,
+canonical-publication, or commit action.
+
+**Decision record T1-20260821-013 -- close the v27 census fixture-DML and
+signed-evidence boundary.** Category: evidence tightening and production
+composition instrumentation under Standing Delegation v2. Read-only review of
+the hermetic v27 census clone found that its first fixture-DML ledger observed
+only selected instrumented connections, accepted prefix/presence evidence, and
+therefore could not derive the claimed zero-admin-DML result. It also found
+that the signed wrapper omitted the new ledger and pre-GRANT authority receipts.
+
+The approved correction uses an independently frozen literal case-coordinate
+topology for the main dashboard, thirteen requirement cases, twenty-five
+behavior cases, RLS cases, and both race directions. Every fixture or behavior
+write transaction, including repository engines, internal source-freeze
+transactions, direct DBAPI cursors, and rollback probes, must be represented by
+an exact operation/class/role/outcome row with its deterministic tenant
+coordinate, observed `current_user`, `session_user`, and
+`session_replication_role=origin`, plus the exact nonempty normalized DML
+statement count and tuple hash. Missing, extra, duplicate, reordered,
+tenant-drifted, empty, or non-DML rows reject. Admin fixture DML is derived from
+the complete closed call-site inventory rather than an app-only subset.
+
+The signed safe projection must bind the ledger count/hash and exact pre-GRANT
+physical-67/application-66/Alembic-exclusion receipts while preserving the
+approved fifteen-field complete-execution-v2 root. Fixed and staged inputs must
+be consumed from the same admitted regular-file handles; public runner/wrapper
+APIs must expose stable codes without chained private exceptions and must not
+swallow `BaseException`. These changes add no semantic vector, SQL predicate,
+schema, table, ACL, role, environment variable, service, migration, activation,
+or provider call. Database, profile, signing-key, operator, canonical
+publication, migration `0039`, activation, and commit remain held pending RED
+to GREEN implementation and two fresh independent reviews.
+
+**Decision record T1-20260821-014 -- Linux failed-output quarantine without
+pathname deletion.** Category: evidence tightening and failure-safe cleanup.
+Portable POSIX APIs do not provide a conditional unlink-by-inode operation;
+checking a pathname identity and then calling `unlink` necessarily leaves a
+replacement window. The v27 signed census therefore supports only Windows and
+Linux and rejects every other platform before output reservation, profile, or
+database access. It must never pathname-unlink its failed output on Linux. It
+first truncates and syncs the confirmed held
+owned reservation descriptor to zero bytes regardless of current pathname
+state. It then atomically moves a still-identity-matching output name through
+the held parent directory descriptor to an unpredictable quarantine name,
+reopens that name nonblocking, verifies it is the owned regular file, and
+retains that owned tombstone. If the moved inode is not the owned
+reservation, it is never deleted; it is restored to the requested name when
+that can be done safely, otherwise retained and reported only through a stable
+cleanup code. Unknown or prior tombstones are never auto-deleted. The requested
+receipt path remains absent and can be retried. Windows may continue deletion
+through the already-held file handle. This changes no receipt semantics,
+schema, predicate, ACL, role, service, migration, activation, or candidate
+identity and authorizes no database, profile, key, publication, or commit.
+
+**Early authority audit, 2026-08-21.** The reviewer explicitly endorsed both
+`T1-20260821-013` and `T1-20260821-014` as Tier-1 decisions. The endorsement
+confirms the closed case-coordinate ledger as a census rather than an
+instrumented sample, and confirms descriptor-first Linux quarantine plus
+pre-access unsupported-platform rejection as the fail-closed cleanup model.
+The remaining sequence is unchanged: close the Alembic execution-source and
+public error-code guards RED-first, obtain fresh independent reviews, run the
+signed sealed application-role census, and publish only an INACTIVE artifact
+and fixture after every guard is green. Migration `0039`, activation, commit,
+and live or priced operations remain held. The formal decision-log audit is
+deferred to the Task 8.2 checkpoint with the signed receipt.
+
+### 1.81 T1-20260814-002 root-aware persistence execution record
+
+The delegated production-composition closure is complete. Six existing batch
+writers now accept an optional keyword-only
+`run_output_object_ids: Mapping[str, str] | None`: coverage, planned task, and
+claim/evidence/Sanad/defect result-link persistence. Supplied maps require the
+exact canonical native-row key set, unique canonical UUID roots, and no
+missing or extra binding before INSERT. Omitted maps preserve the prior SQL
+and NULL behavior. Only `run_output_object_id` is supplied; generated
+class/kind columns and every schema, identifier recipe, hash preimage,
+predicate, ACL, and transaction boundary remain unchanged.
+
+Independent spec review found one Important replay gap: coverage conflict
+reload and planned-task existing-graph reload initially failed to compare the
+durable roots. Nine REDs reproduced same-map, NULL, missing, different, and
+extra-root cases. The remediation performs exact durable comparison only when
+the caller supplied a map; same-map replay passes, mismatches fail through the
+existing stable coverage/task incomplete codes, and legacy callers execute no
+new reload query.
+
+Fresh implementation evidence is `208` focused plus adjacent Task-5/Task-6
+cases green. Spec re-review is `PASS` with `79` fresh cases; independent code-
+quality review is `APPROVED` with `24` seam and `58` adjacent cases green plus
+one existing skip. Ruff, format, mypy, compileall, and diff checks are clean.
+The final scoped SHA-256 values are:
+
+- `_task7_native_roots.py`:
+  `bfc69e4e92e875d88dc0f70d196cb8cbd592984c921b65b9227663fff44b174b`;
+- `methodologies.py`:
+  `66af74a8b7b481c2dee434991b3edaaa11d862c994288cf43615432c3a5119e1`;
+- `methodology_extraction.py`:
+  `3f241795badfcc7fc5fbde652edc7f79c6d4e886861e7fb62a8f89b97561f397`;
+- focused seam test:
+  `59116452262990a319a0df4efab9c021b01b719004437b162a66d9ac6e2fe08e`.
+
+No database, profile, live call, contract, migration, activation, commit, or
+new authority was used by this execution record.

@@ -1,0 +1,86 @@
+{
+  "schema_version": "task8-v24-dashboard-identity-golden-v1",
+  "derivation_authority": "HAND_WRITTEN_INDEPENDENT_VECTOR",
+  "inputs": {
+    "tenant_id": "11111111-1111-4111-8111-111111111111",
+    "deal_id": "22222222-2222-4222-8222-222222222222",
+    "run_id": "33333333-3333-4333-8333-333333333333",
+    "pipeline_contract_version": "full-strict-v24",
+    "pipeline_contract_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "coverage_record_id": "mc_0123456789abcdef01234567",
+    "methodology_version_record_id": "44444444-4444-4444-8444-444444444444",
+    "methodology_question_record_id": "55555555-5555-4555-8555-555555555555",
+    "question_payload_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "row_disposition": "ANSWERED",
+    "disposition_reason_code": null,
+    "row_trace_prefix": [
+      1,
+      1,
+      "P&L",
+      11,
+      "P&L!E11",
+      "44444444-4444-4444-8444-444444444444",
+      "financial_dd:version",
+      "55555555-5555-4555-8555-555555555555",
+      "financial_dd:p-and-l:11",
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ],
+    "result_records": [
+      [
+        "result",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      ]
+    ],
+    "answer_values": [
+      [
+        "answer",
+        "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      ]
+    ],
+    "task_gaps": [],
+    "calculations": [
+      [
+        "calculation",
+        "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ]
+    ],
+    "roots": [
+      {
+        "root_kind": "SANAD",
+        "root_ordinal": 2,
+        "root_output_object_id": "77777777-7777-4777-8777-777777777777",
+        "root_output_object_kind": "SANAD"
+      },
+      {
+        "root_kind": "RESULT",
+        "root_ordinal": 1,
+        "root_output_object_id": "66666666-6666-4666-8666-666666666666",
+        "root_output_object_kind": "METHODOLOGY_RESULT"
+      }
+    ]
+  },
+  "expected": {
+    "dashboard_row_id": "7c2f77a6-811d-55ee-b488-d94015620106",
+    "root_link_tuple": [
+      [
+        "RESULT",
+        1,
+        "66666666-6666-4666-8666-666666666666",
+        "METHODOLOGY_RESULT",
+        "05a5d4fa-b1c5-5e5d-90fa-160684f924f7"
+      ],
+      [
+        "SANAD",
+        2,
+        "77777777-7777-4777-8777-777777777777",
+        "SANAD",
+        "accd4fd6-dc90-54bc-914d-146e9531e897"
+      ]
+    ],
+    "root_projection_sha256": "ec406e79fa3f2d00fe33d447d85cbb5882dd746ce556779dffb3382690d0f464",
+    "row_payload_sha256": "3493edc10b2016cf54f9f56d054b52db6937fbc1a5f1e94c9133f3c2fca198aa",
+    "native_identity_sha256": "cb6533e753f3d2b643b8d7a348103f99efefe73991dba6534f0d01e0a3eaaa52",
+    "native_output_sha256": "9f5c0c93ec315569525c236631f3973cfa045187a43a2bc77ce47c0eab53a70f",
+    "output_object_id": "edd21bb0-14d8-5356-a8ba-1a3d4b6db65c"
+  }
+}

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from enum import StrEnum
 from typing import Any
 
@@ -16,6 +17,43 @@ class MethodologyType(StrEnum):
 
     FINANCIAL_DD = "financial_dd"
     COMMERCIAL_DD = "commercial_dd"
+
+
+class FddFormulaType(StrEnum):
+    """The complete formula-type set frozen by FDD policy v2."""
+
+    GROSS_MARGIN = "GROSS_MARGIN"
+    FDD_EBITDA_BRIDGE = "FDD_EBITDA_BRIDGE"
+    FDD_EBIT_BRIDGE = "FDD_EBIT_BRIDGE"
+    FDD_TAX_RECONCILIATION = "FDD_TAX_RECONCILIATION"
+    FDD_NET_INCOME_BRIDGE = "FDD_NET_INCOME_BRIDGE"
+    FDD_WORKING_CAPITAL_MOVEMENT = "FDD_WORKING_CAPITAL_MOVEMENT"
+    FDD_FREE_CASH_FLOW_CASH_BRIDGE = "FDD_FREE_CASH_FLOW_CASH_BRIDGE"
+    FDD_DEBT_ROLL_FORWARD = "FDD_DEBT_ROLL_FORWARD"
+    FDD_ASSET_TIE_OUT = "FDD_ASSET_TIE_OUT"
+    FDD_LIABILITY_TIE_OUT = "FDD_LIABILITY_TIE_OUT"
+
+
+class FddFormulaScope(StrEnum):
+    """The complete requirement-scope set frozen by FDD policy v2."""
+
+    LINE_ITEM = "line_item"
+    P_AND_L_CONTROL = "p_and_l_control"
+    CASH_FLOW_CONTROL = "cash_flow_control"
+    DEBT_CONTROL = "debt_control"
+    SHEET_CONTROL = "sheet_control"
+
+
+FDD_FORMULA_POLICY_V2_WORKBOOK_SHA256 = (
+    "a3b83addfff02815c9fd44c4a3dcb7f56ce39410fe182faff12acfb845bd4352"
+)
+FDD_FORMULA_POLICY_V2_POLICY_SHA256 = (
+    "2b9f141a54628dbc8528813cc2f58cdaa2fe3eb09925a74f881f56baac7076e9"
+)
+FDD_FORMULA_POLICY_V2_METHODOLOGY_VERSION_ID = (
+    f"financial_dd:{FDD_FORMULA_POLICY_V2_WORKBOOK_SHA256}:"
+    f"fdd-formula-policy-v2:{FDD_FORMULA_POLICY_V2_POLICY_SHA256}"
+)
 
 
 class MethodologyBaseModel(BaseModel):
@@ -45,8 +83,10 @@ class RequiredEvidence(MethodologyBaseModel):
 class RequiredCalculation(MethodologyBaseModel):
     """Calculation requirement for a methodology question."""
 
-    calc_type: str
-    required: bool = True
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    calc_type: str = Field(strict=True)
+    required: bool = Field(default=True, strict=True)
 
     @field_validator("calc_type")
     @classmethod
@@ -54,6 +94,31 @@ class RequiredCalculation(MethodologyBaseModel):
         if not value.strip():
             raise ValueError("calc_type must not be blank")
         return value.strip()
+
+
+class FddFormulaRequirement(MethodologyBaseModel):
+    """Closed, policy-v2-only FDD formula requirement."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    formula_ordinal: int = Field(ge=1, le=10, strict=True)
+    formula_type: FddFormulaType
+    required: bool = Field(strict=True)
+    scope: FddFormulaScope
+
+    @field_validator("formula_type", mode="before")
+    @classmethod
+    def _formula_type_is_an_exact_string_or_enum(cls, value: Any) -> Any:
+        if type(value) not in {str, FddFormulaType}:
+            raise ValueError("formula_type must not be coerced")
+        return value
+
+    @field_validator("scope", mode="before")
+    @classmethod
+    def _scope_is_an_exact_string_or_enum(cls, value: Any) -> Any:
+        if type(value) not in {str, FddFormulaScope}:
+            raise ValueError("scope must not be coerced")
+        return value
 
 
 class AssignedAgent(MethodologyBaseModel):
@@ -162,7 +227,7 @@ class MethodologyQuestion(MethodologyBaseModel):
     question_text: str
     required_evidence: tuple[RequiredEvidence, ...]
     target_document_categories: tuple[str, ...]
-    required_calculations: tuple[RequiredCalculation, ...] = ()
+    required_calculations: tuple[RequiredCalculation | FddFormulaRequirement, ...] = ()
     assigned_agents: tuple[AssignedAgent, ...]
     red_flag_rules: tuple[RedFlagRule, ...] = ()
     report_mapping: ReportMapping
@@ -214,6 +279,48 @@ class MethodologyQuestion(MethodologyBaseModel):
         if any(not item for item in cleaned):
             raise ValueError("list items must not be blank")
         return cleaned
+
+    @model_validator(mode="before")
+    @classmethod
+    def _calculation_requirement_shape_is_version_bound(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        if "required_calculations" not in value:
+            return value
+        raw_requirements = value["required_calculations"]
+        if not isinstance(raw_requirements, (list, tuple)):
+            raise ValueError("calculation requirement container must be a list or tuple")
+        is_policy_v2 = (
+            value.get("methodology_version_id") == FDD_FORMULA_POLICY_V2_METHODOLOGY_VERSION_ID
+        )
+        expected_keys = (
+            {"formula_ordinal", "formula_type", "required", "scope"}
+            if is_policy_v2
+            else {"calc_type", "required"}
+        )
+        expected_model = FddFormulaRequirement if is_policy_v2 else RequiredCalculation
+        rejected_model = RequiredCalculation if is_policy_v2 else FddFormulaRequirement
+        for requirement in raw_requirements:
+            if type(requirement) is rejected_model:
+                raise ValueError("calculation requirement shape does not match version")
+            if type(requirement) is expected_model:
+                continue
+            if not isinstance(requirement, Mapping) or set(requirement) != expected_keys:
+                raise ValueError("calculation requirement shape does not match version")
+        return value
+
+    @model_validator(mode="after")
+    def _calculation_requirement_runtime_type_is_exact(self) -> MethodologyQuestion:
+        expected_model = (
+            FddFormulaRequirement
+            if self.methodology_version_id == FDD_FORMULA_POLICY_V2_METHODOLOGY_VERSION_ID
+            else RequiredCalculation
+        )
+        if any(
+            type(requirement) is not expected_model for requirement in self.required_calculations
+        ):
+            raise ValueError("calculation requirement runtime type does not match version")
+        return self
 
     @model_validator(mode="after")
     def _source_trace_is_complete_and_consistent(self) -> MethodologyQuestion:

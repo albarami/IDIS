@@ -2,11 +2,13 @@
 
 This is the common working protocol for Cursor, Devin, Codex, Claude Code, other agents, and cooperating CLIs. It does not depend on a vendor, model family, or CLI flag. Read [START_HERE.md](START_HERE.md) first; [RUN_STATE.md](RUN_STATE.md) owns current authorization and status, [IMPLEMENTATION_BACKLOG.md](IMPLEMENTATION_BACKLOG.md) owns packet scope and dependencies, and [VERIFICATION_AND_RUNBOOKS.md](VERIFICATION_AND_RUNBOOKS.md) owns acceptance procedures. Do not infer permission from a proposed task, budget, prompt, or schedule.
 
-**Current owner-directed role transition:** after the completed Devin in-flight packets, **Cursor with Sol 6.1 owns orchestration, planning and implementation; an actual separate Claude CLI using Opus 5.5 independently reviews.** This supersedes the earlier Astra/Sol/Sonnet selection arrangement for subsequent Cursor work. Salim explicitly requested this switch; it is not an agent-imposed resource stop. Devin writer ownership is released as recorded in RUN_STATE. Do not resume old Devin writers behind Cursor.
+**Current owner-directed roles (AUTH-SEQUENCE-20261017): Astra xhigh in Codex orchestrates/plans; Sol6.1 implements; actual separate Claude CLI Opus5.5 independently reviews.** Astra coordinates review/correction/re-review directly; Salim is not a relay. The Cursor/Sol-all-roles arrangement and earlier permission to advance past red requirements are superseded. Historical Devin writers remain released; do not resume them behind the current owner. Verify actual model identities and a working invocation, not only configuration or saved login. Never silently substitute or simulate independent review.
+
+**Green before the next task, in every mode:** unfinished CIR-04 is the current task; its repairs are substeps, not separate overall acceptances. Require meaningful behavioral/regression/acceptance checks, actual final-candidate Opus PASS with blockers resolved, reviewed commit/push, required GitHub CI green at the exact current head, and accurate durable state/evidence before advancing. Failed, pending or skipped required checks are not passes. WIP publication is allowed for recovery/CI, not task advancement. If a required input or held operation blocks completion, preserve the checkpoint and report the exact blocker; do not dispatch GL-P02/03 or another product task. This rule overrides conflicting generic/historical prompt language below.
 
 ## 1. Authority and the implementation baseline
 
-**Current permission is AUTH-CONTINUE-20261016 in RUN_STATE: bounded CI-baseline corrections, GL-P02, GL-P03 and subsequent dependency-ready engineering.** Earlier documentation-only and stop-after-GL-P01 restrictions remain historical. Necessary edits, compatible internal designs, development dependencies, offline/disposable-service tests, CI, independent review, explicit-path publication and reviewed integration between implementation branches are authorized. Main merges, migration0039, production activation/deployment, IDIS live model/provider spending and fund communications remain held. Inspect automatic CI before pushing; do not disable or weaken checks. Publication is not product acceptance.
+**Current permission is AUTH-CONTINUE-20261016, refined by AUTH-SEQUENCE-20261017 in RUN_STATE: bounded CI-baseline corrections, then GL-P02, GL-P03 and subsequent dependency-ready engineering, in that order and subject to the green transition gate.** Earlier documentation-only and stop-after-GL-P01 restrictions remain historical. Necessary edits, compatible internal designs, development dependencies, offline/disposable-service tests, CI, independent review, explicit-path publication and reviewed integration between implementation branches are authorized. Main merges, migration0039, production activation/deployment, IDIS live model/provider spending and fund communications remain held. Inspect automatic CI before pushing; do not disable or weaken checks. Publication is not product acceptance.
 
 **Owner clarification for this grant:** Salim monitors subscription usage and decides when to move from Devin to Cursor or another tool. Do not impose an agent-created development cost, time or token budget, stop for speculative limits, or defer implementation to expand context or begin another planning cycle. Use resources efficiently and follow the agreed model policy. Maintain recoverable checkpoints throughout; initiate a tool-switch handoff only on Salim's request or an actual enforced limit that prevents continuation. New paid services and IDIS live provider spending remain restricted.
 
@@ -20,10 +22,10 @@ The solo owner is the product owner, decision-maker, operator, and authority for
 
 ## 2. Common working loop
 
-`Read state -> inspect actual checkout -> select authorized dependency-ready packet -> implement -> verify -> review -> correct -> commit -> push -> check required CI against the exact revision -> update evidence and state -> continue`
+`Relevant context and focused reuse search -> persona/ownership and plan -> Sol implementation -> verification -> actual Opus specification and quality review -> corrections/re-verification/re-review -> explicit-path commit/push -> exact-head required CI -> accepted checkpoint -> next task`
 
 1. **Read and reconcile.** Read the package and relevant project instructions. Inspect branch, HEAD, worktree status, current diff, local-only dependencies, and applicable contracts before trusting a status label. Before claiming something is absent, search relevant preserved worktrees, folders and archives and distinguish missing-from-checkout, unintegrated and unverified existing work. Resolve identity or authority conflicts before writes. Do not apply instructions for an unrelated project merely because an editor rule is present. Historical reports are claims about their recorded revisions, not proof of the current tree.
-2. **Choose one bounded packet.** Select the next dependency-ready packet under RUN_STATE's active grant. State its user-visible result, permitted files, verification, evidence requirements and remaining holds. Current order is bounded CI-baseline corrections, then GL-P02 and GL-P03; GL-P01 retains scoped acceptance. Read the packet, controlling source sections, affected contracts/interfaces and verification instructions; do not reload every historical document.
+2. **Choose one bounded current task/substep.** CIR-04 remains current until the green transition gate passes; its substeps must not be relabelled as completion. Before each task select Astra/Sol/reviewer personas with required expertise, objective, owned scope, invariants and acceptance evidence. Record actual model identities, documents/sections read and skills actually applied. Read START_HERE/RUN_STATE/AGENT_EXECUTION and the checkpoint initially, then only task requirements, controlling contracts, affected callers/consumers and verification instructions. Use the existing inventory/capability map and focused searches of relevant worktrees/branches/helpers/archives before coding. Classify existing usable, unintegrated, unverified/defective and genuinely missing capabilities within the searched scope. Inspect implementations and callers, not keyword hits alone; reuse/connect/repair rather than duplicate.
 3. **Reserve ownership.** Record writer, branch/worktree, baseline, allowed paths, and coordination owner in RUN_STATE or the packet handoff. Preserve unrelated changes. Never use blanket staging, destructive reset/clean, force-push, or automatic stash/pop to make an unsafe checkout appear clean.
 4. **Implement within scope.** Follow packet-specific RED-first requirements, frozen-schema ownership checks, and existing production interfaces. Do not conceal a type/contract defect with a cast, fabricate a persistence parent, weaken a test, or silently activate a contract. A new issue outside the packet becomes a linked task or decision, not unreviewed scope growth.
 5. **Verify the actual candidate.** Run only authorized checks. Record commands, exit statuses, test counts/skips, environment/tool versions, contract/model/prompt versions where relevant, and evidence hashes. A command listed in a plan is not proof it ran. Separate offline replay, component evaluation, and canonical FULL execution. The two-question result cannot be labelled a comprehensive investment score or recommendation.
@@ -31,7 +33,7 @@ The solo owner is the product owner, decision-maker, operator, and authority for
 7. **Correct and recheck.** Each material finding receives a disposition, correction, or owner ruling. Re-run affected checks, obtain review of the new candidate, and invalidate superseded evidence. Unresolved material failures prevent acceptance. A reviewer may reject a claimed failure with evidence; disagreement is not permission to ignore it.
 8. **Publish only the approved scope.** Inspect both the complete outgoing commit range and final file diff against the intended base. Stage explicit paths. Confirm no unrelated implementation commits, private data, secret values, or machine-only reports are included. Commit and push only when the packet's grant allows publication. Open/update the PR with scope, baseline, acceptance evidence, remaining holds, and exact next action.
 9. **Check the exact revision.** Verify the remote branch points to the pushed SHA and required files exist at that SHA. Read current merge rules and CI results. A green run for an earlier SHA is not acceptance of a later one. Record PR head SHA, CI run/check IDs, their head SHA, and any synthetic PR merge SHA separately. New code or evidence-affecting changes require appropriate checks and review again.
-10. **Record a recoverable checkpoint.** Update the packet state and evidence index, then continue eligible work without re-requesting already-covered routine permission. At a blocker, select another non-dependent authorized packet if safe; otherwise stop with an exact next action.
+10. **Record a recoverable checkpoint.** Update state/evidence without routine reconfirmation. Continue eligible substeps within the current task. Advance to the next task only after all transition gates are green. At a genuine unavailable prerequisite or held operation, preserve work and report the exact blocker/next action, not a substitute task.
 
 ## 3. Branches, integration, PRs, and merge authority
 
@@ -40,7 +42,7 @@ The solo owner is the product owner, decision-maker, operator, and authority for
 | Documentation publication | Use the dedicated documentation branch and documentation-only outgoing range. Its base is not the future implementation baseline. Do not merge it under the current grant. |
 | Implementation branch | Create one branch per packet from the owner-approved implementation baseline, for example `go-live/gl-p01-financial-schema`. The name is illustrative; confirm it is unused. Record the exact base SHA, not just a branch name. |
 | Local-only implementation | Review and establish the necessary local source as an explicitly approved baseline before relying on it. Publish only approved, sanitized source commits to make an accepted checkpoint recoverable. Until then label the dependency local-only; do not claim GitHub reproducibility. |
-| Parallel work | Initially at most two non-overlapping implementation packets plus coordination/review. Separate worktrees and explicit path ownership; no two writers in the same tree. Parallelism must not bypass dependencies. |
+| Parallel work | Safe investigation and non-overlapping substeps within the current task only; at most two isolated writers plus coordination/review. No two writers in one tree and no early dispatch of the next product task. Parallelism cannot bypass the green transition gate. |
 | Shared changes | Serialize schema, migration, contract registry, orchestrator, public API, prompt registry, and shared adapter changes. A coordinator integrates one reviewed candidate at a time. Re-review/re-verify the combined candidate. |
 | Dependent packets | Prefer starting from an accepted synchronized baseline. A stacked PR requires explicit dependency/base records and an authorized integration plan; do not silently import an unaccepted predecessor. |
 | Integration | The owner is integration authority by default. A recorded bounded grant can delegate integration of named packets to one agent; integration is not merge, release, activation, or deployment authority. |
@@ -128,11 +130,11 @@ backlog packet, verification runbooks, and applicable repository instructions.
 Inspect the actual repository, branch, HEAD, dirty changes, and local-only
 dependencies. Do not confuse the documentation publication branch with the
 approved implementation baseline. My authorization reference is [AUTH_ID].
-Select the next authorized dependency-ready packet, [PACKET_ID if specified].
-Follow AGENT_EXECUTION: implement, verify, fresh review where available,
+Finish the current task before selecting the next authorized packet.
+Follow the mandatory Astra/Sol/actual-Opus roles: delegate, verify, actual review,
 correct, scoped commit/push/PR where authorized, exact-revision CI, then
 durable evidence and state. Preserve all unrelated work and existing holds.
-If only self-review is available, say so and retain separate-review gates.
+If actual Opus review is unavailable, record the blocker; self-review cannot replace it.
 Continue eligible work within this grant; stop only at its limits or a
 material blocker. Do not infer spending, activation, merge, or deployment
 permission. Report the exact next action and any unsynchronized work.
@@ -144,9 +146,9 @@ permission. Report the exact next action and any unsynchronized work.
 Continue IDIS under [AUTH_ID]. Re-read RUN_STATE and inspect actual Git state.
 Confirm the last candidate/evidence/CI SHAs before trusting acceptance.
 Finish the current packet's missing verification, correction, review, or
-GitHub synchronization; otherwise select the next dependency-ready authorized
-packet. Do not redo accepted work or broaden scope. Use fresh review when
-available and publish only within the recorded grant. Update the durable
+GitHub synchronization; select the next task only when every current required
+gate is green. Do not redo accepted work or broaden scope. Use actual Opus
+review and publish only within the recorded grant. Update the durable
 checkpoint with the current PR/head, evidence, budget, and next action.
 ```
 
@@ -158,13 +160,13 @@ chat. Reconcile branch/HEAD, dirty diff identity, authorization, last durable
 checkpoint, remote SHA, CI, unfinished work, and private prerequisites.
 Preserve all files. If recorded and actual states disagree, diagnose before
 editing. Continue the exact unfinished action only if still authorized;
-otherwise choose another eligible packet or report the narrow blocker.
+otherwise preserve the checkpoint and report the narrow blocker; do not skip ahead.
 Never promote a local-only or unverified result to accepted.
 ```
 
 ### Mode B — two cooperating CLIs
 
-CLI 1 is implementer/coordinator and the sole writer for its reserved paths. CLI 2 is reviewer, read-only by default. Use a separate review worktree or a pinned commit/diff while the implementer pauses edits; never review a moving target without recording the exact diff identity. The owner remains merge authority unless expressly delegated.
+Astra's Codex session coordinates and delegates implementation to Sol with sole writer ownership of reserved paths. The actual Claude Opus5.5 CLI is reviewer, read-only by default. Use a separate review worktree or pinned commit/diff while the implementer pauses edits; never review a moving target without recording its exact identity. The coordinator handles all messages/corrections directly. The owner remains merge authority unless expressly delegated. Generic CLI labels below do not collapse Astra and Sol into one implementation role.
 
 **Startup, CLI 1**
 
@@ -219,21 +221,21 @@ Escalate an unavailable candidate or disputed material finding; do not bypass it
 
 ### Mode C — one overnight CLI
 
-Before starting, the owner records the bounded packet batch, authorized tools/checks and data, cost ceilings, maximum run window, permitted branch/PR actions, and exception handling. Unattended execution changes scheduling, not authority. Default: no merge, activation, deployment, new subscriptions, budget increases, or destructive operations. Work sequentially; delegate at most two non-overlapping implementation packets only when dependencies, ownership and tool support permit. A fresh review worker may run separately. A sleeping owner is not approval of an exception.
+Before starting, record the actual owner grant, authorized tools/checks/data, permitted branch/PR actions and exception handling. Record only limits the owner actually set; do not invent a development budget or run window. Unattended execution changes scheduling, not authority or roles. Default: no merge, activation, deployment, new subscriptions, budget increases or destructive operations. Work task-by-task with the green transition gate; at most two non-overlapping substep writers within the current task when ownership/tool support permits. Actual Opus review remains mandatory. A sleeping owner is not approval of an exception.
 
 **Startup**
 
 ```text
 Run the IDIS overnight batch [BATCH_ID] under the authorization in RUN_STATE
-[AUTH_ID], ending at [STOP_TIME] or earlier on a defined stop condition.
+[AUTH_ID], obeying any actually specified stop time or defined stop condition.
 Read START_HERE, backlog and runbooks, then inspect actual checkout and
 baseline. Work through dependency-ready authorized packets sequentially.
-Use bounded non-overlapping delegation where supported, at most two writers,
+Use bounded non-overlapping Sol delegation within the current task, at most two writers,
 with one integration coordinator. For each packet: implement, verify, fresh
-review if available, correct, scoped commit/push/PR if authorized, inspect
+actual Opus review, correct, scoped commit/push/PR if authorized, inspect
 required CI at the exact revision, and record durable state/evidence.
-Do not wait for routine permissions already granted. If one packet is blocked,
-record why and continue another eligible packet without crossing dependencies.
+Do not wait for routine permissions already granted. If the current task is blocked,
+record why and preserve it; no next task until all required gates are green.
 No merge or new spending/activation/service/deployment authority is implied.
 Stop on exhausted limits or material authority/safety failures. Before ending,
 leave every partial result recoverable where authorized and an exact next action.
@@ -245,7 +247,7 @@ leave every partial result recoverable where authorized and an exact next action
 Continue overnight batch [BATCH_ID] under unchanged [AUTH_ID]. Reconcile
 state, remaining time/cash limits, writer ownership and actual Git/CI status.
 Complete missing correction, review or synchronization before claiming a
-checkpoint accepted. Continue the next eligible authorized packet; do not
+checkpoint accepted. Continue the next authorized task only after every required gate is green; do not
 reopen settled design or repeat completed work without new evidence. Keep
 blocked items visible and do not solve them by weakening gates. Leave a
 checkpoint before context exhaustion and stop at the recorded end condition.
@@ -259,7 +261,7 @@ START_HERE and RUN_STATE, reconcile actual source and remote revisions,
 partial diffs, reviews, CI, budgets, time window and required local inputs.
 An expired run window or uncertain expenditure requires renewed authority;
 do not silently restart the clock or budget. Resume the exact safe action or
-choose another eligible packet. Preserve all local-only work and report its
+report the exact blocker without skipping ahead. Preserve all local-only work and report its
 unsynchronized status if publication is blocked. Default remains no merge.
 ```
 
@@ -267,28 +269,28 @@ unsynchronized status if publication is blocked. Default remains no merge.
 
 The common prompts above are authoritative; launch mechanics are conveniences. No launcher is run by this document. In Cursor or Codex, select/open the approved implementation worktree and start a new agent/session with the matching startup prompt. In Claude Code or another CLI, launch the installed tool from that same worktree using its locally documented invocation, then paste the prompt. Do not assume flags or install/upgrade tools to match an example. For two CLIs, use separate sessions and the writer/reviewer ownership described above. For Devin or any hosted agent, first confirm approved repository access and approved availability of local-only source; **do not upload private fund data or credentials** to compensate for missing local access. If those prerequisites are absent, hosted implementation is blocked, not equivalent to the local environment.
 
-Historical Devin execution used Astra xhigh for orchestration, Sol 6.1 for implementation, Sonnet for routine records and Opus5.5 for demanding independent reviews. **For the current Cursor continuation, Salim selected Sol 6.1 for all three engineering roles and actual Claude CLI Opus5.5 for independent review.** Verify supported invocation, authentication, repository access and resolved identities; never silently substitute or simulate independence. Claude subscription authentication is sufficient; a separately billed API key is not required. Installed Claude Code2.1.301 successfully invoked `claude-opus-5-5`; a saved positive login status alone is insufficient if an actual call fails.
+Historical Devin execution used Astra/Sol and Sonnet/Opus; the later Cursor instruction briefly selected Sol for all engineering roles. **Current selection is Astra xhigh in Codex for orchestration/planning, delegated Sol6.1 implementation, and actual Claude CLI Opus5.5 independent review.** Verify supported invocation, authentication, repository access and resolved identities; never silently substitute or simulate independence. Claude subscription authentication is sufficient; a separately billed API key is not required. Installed Claude Code2.1.301 successfully invoked `claude-opus-5-5`; the 2026-10-17 stdin probe in RUN_STATE reconfirmed it. A saved positive login status alone is insufficient. Use the supported CLI argument/stdin interface, no security-policy bypass, and never dump credential-bearing process arguments.
 
-Before each packet, record concise role briefs in its existing execution record: expertise/objective, owned files/interfaces, invariants/acceptance evidence, scope and responsibilities. Cursor/Sol now owns coordination/integration records and its reserved implementation paths; use separate worktrees for concurrent writers and serialize shared interfaces. Claude remains read-only against a pinned candidate and inspects source, actual diff, governing requirements and direct evidence. A reviewer must not rely solely on the implementer's summary. The same Sol session may own planner and implementer responsibilities, but cannot substitute its self-review for Claude.
+Before each task, record concise role briefs in its existing execution record: expertise/objective, owned files/interfaces, invariants/acceptance evidence, scope and responsibilities. Astra owns coordination/integration records; Sol owns reserved implementation paths. Use separate worktrees for concurrent writers and serialize shared interfaces. Claude remains read-only against a pinned candidate and inspects source, actual diff, governing requirements and direct evidence. A reviewer must not rely solely on the implementer's summary; Sol's self-review is not independent review.
 
 Discover, read and apply relevant available skills for each role. Record the skills actually used and document sections read; if none apply, record that honestly. Personas and skills grant no human approval authority. The proposed IDIS runtime model matrix remains a separate qualification decision from development models.
 
 ## 8. Stop, recover, or continue elsewhere
 
-Stop the affected action for missing/expired authority, an exhausted owner-approved spending ceiling on separately authorized priced operations, an actual enforced platform/account limit, an unauthorized destructive operation, credential/private-data exposure risk, conflicting writer ownership, an unapproved schema/contract change, unexpected live/provider access or an unavailable required input. An unresolved material acceptance failure blocks acceptance and calls for correction within the grant. Do not invent a development budget or use speculative resource exhaustion as a stop condition. Preserve evidence, report the exact blocker and continue other eligible work. Security incidents follow the runbook; do not continue publishing suspected secrets.
+Stop the affected action for missing/expired authority, an exhausted owner-approved spending ceiling on separately authorized priced operations, an actual enforced platform/account limit, an unauthorized destructive operation, credential/private-data exposure risk, conflicting writer ownership, an unapproved schema/contract change, unexpected live/provider access or an unavailable required input. An unresolved material acceptance failure blocks acceptance and next-task advancement and calls for correction within the grant. Do not invent a development budget or use speculative resource exhaustion as a stop condition. Preserve evidence, report the exact blocker and continue only eligible work within the current task. Security incidents follow the runbook; do not publish suspected secrets.
 
 A missing service, inactive strict contract, draft prompt, unresolved fund instruction, or inaccessible expert evidence is a real prerequisite when the packet needs it. Do not simulate success, create placeholder bytes, fabricate native database parents, use legacy nullability as admission, silently reduce coverage, or claim a replay is canonical production. The separate pilot-admission route remains conditional; production-relevant work plus explicitly labelled replay is the default until its decision gate is resolved.
 
-For a routine check failure within an authorized packet, diagnose and correct within its scope and any actual applicable owner-approved limits. If correction needs authority outside the grant, record it and move to another eligible independent packet; do not keep asking the same question or repeatedly retry an unchanged blocker. Never increase approved spending limits, weaken thresholds, hide skipped checks, or count owner-supplied reasoning as autonomous capability.
+For a routine check failure within the current task, diagnose and correct within its scope and actual owner-approved limits. If correction requires unavailable input or authority outside the grant, record the precise blocker and preserve the checkpoint; do not move to another product task, repeatedly retry unchanged blockers or request already-covered routine permission. Never increase spending limits, weaken thresholds, hide skipped checks or count owner-supplied reasoning as autonomous capability. Do not relabel required checks as optional or change acceptance criteria merely to obtain green.
 
 The final handoff for any session states: what changed; what was actually verified and reviewed; exact local and remote revisions; what is accepted versus pending; cost and owner time; unresolved risks; local-only dependencies; and the **single exact next action**. Documentation completion never implies implementation, Slice100, fund acceptance, or go-live completion.
 
-## 9. Cursor continuation after the owner-directed handoff
+## 9. Codex continuation after the owner-directed handoff
 
 Open the exact implementation folder and branch in RUN_STATE; reconcile HEAD with the final publication receipt before edits. Keep tested product code separate from the later documentation-only head. Read the current checkpoint and only the selected packet's controlling sections, interfaces, contracts and verification instructions. Reuse the recorded94-checkout discovery and verified unchanged evidence; search affected material when it changes or before a new absence claim.
 
-Verify Cursor's actual Sol6.1 selection and Claude CLI Opus5.5 access through supported mechanisms. Rediscover/apply the currently installed skills in each application; earlier execution used Superpowers4.3.1 source files, and the final Claude review reported7.0.0. Do not assume a cached version is current. Devin's earlier plugin discovery did not expose those Claude skills. Historical source paths and actual uses remain in RUN_STATE. Generic skill defaults do not override the standing owner grant or held operations.
+Verify Astra xhigh session metadata, supported Sol6.1 delegation and actual Claude CLI Opus5.5 invocation. Discover/read/apply the relevant available skills for each role and record actual use, not names alone; accurately state when none apply. Earlier execution used Superpowers4.3.1 source files and the final historical Claude review reported7.0.0. Do not assume cached versions are current. Historical paths/uses remain in RUN_STATE. Generic skill defaults do not override the owner grant, green transition gate or held operations.
 
-Continue: select a dependency-ready packet, record task-specific planner/implementer/reviewer briefs and ownership, implement, run meaningful checks, obtain actual independent Claude review, correct/re-review changed bytes, publish explicit-path checkpoints and record exact CI. Do not ask routine permission again, invent accounting assumptions or human approvals, use a model answer as a numerical oracle, or weaken genuine failures into green checks.
+Continue the current CIR-04 task: record task-specific Astra/Sol/Opus briefs and ownership, focused reuse/plan, Sol implementation, meaningful checks, actual independent Opus review, correction/re-review, explicit-path publication and exact-head required CI. Only green accepted checkpoints permit the next task. Do not ask routine permission again, invent accounting assumptions or human approvals, use a model answer as a numerical oracle or weaken genuine failures into green checks.
 
 The next concrete action is in RUN_STATE's checkpoint. No previous chat, broad re-audit or platform rewrite is required. Main merges,0039, production activation/deployment, IDIS live spending, new paid services and fund communications remain held. Salim continues to control usage and tool-switch decisions.

@@ -3,6 +3,18 @@
 Authority and acceptance: [RUN_STATE](docs/go-live/RUN_STATE.md), AUTH-CONTINUE-20261016.
 Packet scope: [IMPLEMENTATION_BACKLOG](docs/go-live/IMPLEMENTATION_BACKLOG.md).
 
+Current refinement: **AUTH-SEQUENCE-20261017**. Astra xhigh in Codex orchestrates/plans; Sol6.1 implements; actual Claude CLI Opus5.5 independently reviews. **CIR-04 is the current task until every required acceptance check, final-candidate review, publication and exact-current-head CI is green.** A substep pass or WIP push is not task acceptance. Do not start GL-P02/03 while required baseline checks are failed, pending or skipped. Historical entries below retain their evidence scope; superseded Cursor roles are not active.
+
+## Current CIR-04 substeps
+
+- [x] Reconcile clean local/remote69f79be and prior writer releases; reserve isolated CIR-04E worktree for Sol.
+- [x] Verify current Astra xhigh metadata and tool-selected Sol6.1 delegation; verify actual Claude CLI Opus5.5 repository read through stdin invocation, not just saved login.
+- [ ] Review/publish corrected role, task-persona, reuse and green-before-next-task records.
+- [ ] CIR-04E: reproduce9 Linux typing errors, reuse/search relevant existing code, minimal security-preserving repair, Windows/Linux behavioral verification, actual Opus review and exact-head CI.
+- [ ] Finish remaining20 PostgreSQL failures and disposition the skipped case without weaker role/schema/evidence admission.
+- [ ] Complete legitimate private-input CI admission and strict-profile health requirements without activation, placeholders or required-check waivers.
+- [ ] Accept CIR-04 only after all required gates are green; then follow the existing backlog.
+
 - [x] Reconcile starting implementation checkout and remote at `c0aeca02ec5fe381fda258426ad17ccd5c5e50c6`; clean before coordination edits.
 - [x] Verify private recovery access/visibility, pinned commit and four raw artifact hashes; retain ignore/Docker exclusions and persistent `core.autocrlf=false`.
 - [x] Record Salim's continuous engineering grant; preserve historical grants.
@@ -27,7 +39,7 @@ Packet scope: [IMPLEMENTATION_BACKLOG](docs/go-live/IMPLEMENTATION_BACKLOG.md).
 - [x] Correct the cold-import cycle: Sol candidate `4d6abaa8eb1c0635ee2b9dedc6b6f67dc625880f` is remotely preserved, qualified142 tests/full528-file mypy pass, independent Opus review PASS; integrated locally as `93a2dcde6fd7073c78e93832064d241808e36008`. Whole-system CI remains open.
 - [x] Finish the missing guard-function-owner prerequisite without altering frozen cleanliness/posture guards; preserve failed two-role evidence and verify fresh three-role bootstrap/recovery locally and in CI.
 - [ ] Preserve successful image construction versus failed strict profile admission/health as separate results.
-- [ ] Cursor next: correct9 Linux-only mypy diagnostics exposed by run38964431536 in the3 unchanged platform-specific source files; preserve security behavior and independent review.
+- [ ] Current CIR-04E: Sol under Astra corrects9 Linux-only mypy diagnostics exposed by run38964431536 in the3 unchanged platform-specific source files; preserve security behavior and actual Opus review.
 - [ ] Remaining CIR-04C:20 PostgreSQL failures and1 skipped case remain in exact CI; C1's13 document-fixture failures are resolved.
 - [ ] Remaining quality-tool observations: `scripts/run_gates.py` check/all still mutates formatting; non-acknowledged scanner `REDACTED`/example bypasses and old pre-commit Ruff pin require separate disposition.
 - [x] Publish the reviewed owner-directed Cursor checkpoint608ec17, verify matching remote/PR head and record metadata CI38967277409 (queued when observed). Private/local evidence and released ownership are mapped; final publication receipt records the subsequent closure head and its separate CI status.

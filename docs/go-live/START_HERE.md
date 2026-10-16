@@ -1,8 +1,8 @@
 # IDIS execution package — start here
 
-Status: continuous engineering under AUTH-CONTINUE-20261016; current authorization, model availability and acceptance state are recorded in RUN_STATE. This package is not go-live acceptance. Updated 2026-10-17 for the owner-directed Cursor handoff.
+Status: continuous engineering under AUTH-CONTINUE-20261016 and the 2026-10-17 owner refinement in RUN_STATE. This package is not go-live acceptance. The current task is unfinished CIR-04; no next product task may start before its required acceptance and exact-head CI are green.
 
-Current owner-directed continuation: open `C:\Projects\IDIS\IDIS-implementation-batch-20261016` in **Cursor with Sol 6.1** as orchestrator, planner and implementer. Use an actual **Claude CLI Opus 5.5** as independent reviewer. Read RUN_STATE's Cursor checkpoint first for exact code/CI identities, local evidence, released writer ownership and the next action. Do not open the older main checkout or restart a broad audit.
+Current owner-directed continuation: use `C:\Projects\IDIS\IDIS-implementation-batch-20261016` with **Astra xhigh in Codex as orchestrator/planner**, delegate implementation to **Sol 6.1**, and invoke the actual **Claude CLI Opus 5.5** as independent reviewer. The coordinator manages review/correction/re-review directly; Salim is not a message relay. Read RUN_STATE's current Codex checkpoint first. The earlier Cursor/Sol-all-roles handoff is historical and superseded, not a second active writer. Do not open the older main checkout or restart a broad audit.
 
 ## Objective
 
@@ -26,7 +26,7 @@ Repository: [albarami/IDIS](https://github.com/albarami/IDIS), **public**. Use i
 
 Before acting, inspect the actual working tree, applicable project instructions, branch, HEAD, status and current remote state. Preserve all uncommitted work. Code paths in this package are repository-relative and refer to the assessed Slice100 implementation unless explicitly labelled otherwise; many are absent from main. Do not invent missing files or treat old main as an equivalent baseline.
 
-Current milestone: **authorized CI-baseline corrections → GL-P02 → GL-P03 → subsequent dependency-ready packets**, under AUTH-CONTINUE-20261016 in RUN_STATE. Preserve the existing master plan and scoped GL-P01 acceptance. Main merges, migration0039, production activation/deployment, IDIS live model/provider spending and fund communications remain outside this engineering grant.
+Current milestone: **complete CIR-04 and pass its required checks, actual Opus review and exact-current-head CI → GL-P02 → GL-P03 → subsequent dependency-ready packets**, under AUTH-CONTINUE-20261016 as refined in RUN_STATE. A passing CIR-04 substep is not a green baseline. Failed, pending or skipped required checks prohibit advancing; WIP publication is allowed but is not acceptance. Preserve the existing master plan and scoped GL-P01 acceptance. Main merges, migration0039, production activation/deployment, new paid services, IDIS live model/provider spending and fund communications remain held.
 
 Historical handoff correction: GL-11 preserves the source Muḥāsibī disciplines; completed CI at `52c830e` is **failed**, not pending/green; and PUB-IMPL-01 specifies public-code/private-artifact recovery. AUTH-IMPL-20261016 subsequently authorized the completed bounded preservation, compatibility-repair and GL-P01 batch. AUTH-CONTINUE-20261016 now supersedes its stop-after-GL-P01 restriction; historical evidence and acceptance scopes remain unchanged.
 

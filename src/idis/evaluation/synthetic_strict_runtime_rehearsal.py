@@ -7,9 +7,10 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
+import httpx2
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -447,14 +448,14 @@ def verify_package_surfaces(
     """Verify synthetic final package list, manifest review, downloads, and hashes."""
     headers = {"X-IDIS-API-Key": api_key}
     listed_response = client.get(f"/v1/deals/{deal_id}/deliverables", headers=headers)
-    listed_response.raise_for_status()
+    _raise_safe_api_error(listed_response, reason_code="SYNTHETIC_PACKAGE_LIST_FAILED")
     listed = listed_response.json()["items"]
 
     manifest_response = client.get(
         f"/v1/deals/{deal_id}/runs/{run_id}/product-bundle/manifest",
         headers=headers,
     )
-    manifest_response.raise_for_status()
+    _raise_safe_api_error(manifest_response, reason_code="SYNTHETIC_PACKAGE_MANIFEST_FAILED")
     manifest = manifest_response.json()
     artifacts = [artifact for artifact in manifest["artifacts"] if isinstance(artifact, dict)]
     rows_by_type_format = {
@@ -477,7 +478,7 @@ def verify_package_surfaces(
         response = client.get(f"/v1/deliverables/{row['deliverable_id']}/content", headers=headers)
         try:
             response.raise_for_status()
-        except httpx.HTTPStatusError:
+        except (httpx.HTTPStatusError, httpx2.HTTPStatusError):
             download_failures.append(
                 {
                     "artifact": artifact_key,
@@ -960,7 +961,7 @@ def _upload_selected_gdbs_cases_core_with_client(
                     },
                     content=data,
                 )
-            except httpx.HTTPStatusError as exc:
+            except (httpx.HTTPStatusError, httpx2.HTTPStatusError) as exc:
                 status_code = exc.response.status_code if exc.response is not None else 0
                 raise SyntheticRehearsalScopeError(
                     f"SYNTHETIC_API_UPLOAD_FAILED:status_code={status_code}"
@@ -1242,7 +1243,7 @@ def _verified_same_run_package_surface_status(
         response = client.get(f"/v1/deliverables/{row['deliverable_id']}/content", headers=headers)
         try:
             response.raise_for_status()
-        except httpx.HTTPStatusError:
+        except (httpx.HTTPStatusError, httpx2.HTTPStatusError):
             download_failures.append(
                 {"artifact": artifact_key, "status_code": response.status_code}
             )
@@ -1310,10 +1311,19 @@ def _require_available_postgres_for_synthetic_package_surface() -> None:
         raise SyntheticRehearsalScopeError("SYNTHETIC_POSTGRES_UNAVAILABLE") from exc
 
 
-def _raise_safe_api_error(response: httpx.Response, *, reason_code: str) -> None:
+class _StatusResponse(Protocol):
+    """Only the status surface shared by legacy HTTPX and current TestClient."""
+
+    @property
+    def status_code(self) -> int: ...
+
+    def raise_for_status(self) -> object: ...
+
+
+def _raise_safe_api_error(response: _StatusResponse, *, reason_code: str) -> None:
     try:
         response.raise_for_status()
-    except httpx.HTTPStatusError:
+    except (httpx.HTTPStatusError, httpx2.HTTPStatusError):
         raise SyntheticRehearsalScopeError(
             f"{reason_code}:status_code={response.status_code}"
         ) from None

@@ -29,8 +29,8 @@ MAX_TOKENS = 4096
 class AnthropicLLMClient:
     """Anthropic-backed LLM client implementing the LLMClient protocol.
 
-    Calls Claude via the Anthropic SDK. Temperature is fixed at 0 for
-    deterministic output. Retries with exponential backoff on transient errors.
+    Calls Claude via the supported Anthropic SDK with temperature fixed at 0.
+    Model output is not guaranteed deterministic. Retries transient errors with backoff.
 
     Fail-closed: raises ValueError if ANTHROPIC_API_KEY is not set.
     """

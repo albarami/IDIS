@@ -218,7 +218,7 @@ def test_strict_fatality_is_uniform(
 
 def test_optionality_policy_exists_and_defaults_to_mandatory() -> None:
     # Slice86 Task 2 added the optional-vs-fatal policy: descriptor + register() carry
-    # optional_in_strict (default False), and all 15 default providers stay mandatory (D-C).
+    # optional_in_strict (default False), and all default providers stay mandatory (D-C).
     field_names = {f.name for f in dataclasses.fields(ProviderDescriptor)}
     assert field_names == {
         "provider_id",

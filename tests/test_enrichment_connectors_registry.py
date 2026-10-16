@@ -36,9 +36,9 @@ class TestDefaultRegistryCompleteness:
         registry = _build_default_registry()
         assert registry.provider_ids == EXPECTED_PROVIDER_IDS
 
-    def test_registry_has_15_providers(self) -> None:
+    def test_registry_count_matches_expected_inventory(self) -> None:
         registry = _build_default_registry()
-        assert len(registry.list_providers()) == 15
+        assert len(registry.list_providers()) == len(EXPECTED_PROVIDER_IDS)
 
     def test_each_provider_id_resolves(self) -> None:
         registry = _build_default_registry()

@@ -241,9 +241,7 @@ def test_default_enrichment_service_can_receive_injected_credential_repo() -> No
 def test_provider_matrix_covers_registered_public_byol_and_not_registered_providers() -> None:
     registry = _build_default_registry()
     registered_provider_ids = [descriptor.provider_id for descriptor in registry.list_providers()]
-    assert len(registered_provider_ids) == 15
-    assert len(registered_provider_ids) == len(set(registered_provider_ids))
-    assert set(registered_provider_ids) == {
+    expected_registered_provider_ids = {
         "sec_edgar",
         "companies_house",
         "github",
@@ -260,6 +258,9 @@ def test_provider_matrix_covers_registered_public_byol_and_not_registered_provid
         "wayback",
         "google_news_rss",
     }
+    assert len(registered_provider_ids) == len(expected_registered_provider_ids)
+    assert len(registered_provider_ids) == len(set(registered_provider_ids))
+    assert set(registered_provider_ids) == expected_registered_provider_ids
 
     report = build_strict_full_live_readiness_report(
         env=_full_byol_env(),
@@ -271,7 +272,7 @@ def test_provider_matrix_covers_registered_public_byol_and_not_registered_provid
     registered_rows = [
         item for item in report.enrichment_provider_matrix if item.registry_status == "registered"
     ]
-    assert len(registered_rows) == 15
+    assert len(registered_rows) == len(expected_registered_provider_ids)
     assert matrix["sec_edgar"].requires_byol is False
     assert matrix["sec_edgar"].credential_repo_status == "not_required"
     assert matrix["sec_edgar"].health_status == "not_checked"

@@ -1,0 +1,177 @@
+{
+  "acceptance_eligible": false,
+  "entries": [
+    {
+      "byte_count": 148,
+      "file_name": "sec_edgar.json",
+      "fixture_id": "apple-cik-0000320193",
+      "media_type": "application/json",
+      "operation_id": "probe",
+      "provider_id": "sec_edgar",
+      "sha256": "63c251d94653b0665fc7998dac5eee867071eb56c7853a4246a5cb451c6a73c8"
+    },
+    {
+      "byte_count": 106,
+      "file_name": "companies_house.json",
+      "fixture_id": "tesco-plc-search",
+      "media_type": "application/json",
+      "operation_id": "probe",
+      "provider_id": "companies_house",
+      "sha256": "a22eae260c3a2b5e1b412ebf1c3ecfd0de90c572507f9613a097d9f9f35dce00"
+    },
+    {
+      "byte_count": 51,
+      "file_name": "github.json",
+      "fixture_id": "github-org",
+      "media_type": "application/json",
+      "operation_id": "probe",
+      "provider_id": "github",
+      "sha256": "a8e8e501a62c5db0ceb8070a697c8c48011a7c59c2fecabb85c45cbbaa2e4e32"
+    },
+    {
+      "byte_count": 115,
+      "file_name": "fred.json",
+      "fixture_id": "fred-gdp",
+      "media_type": "application/json",
+      "operation_id": "probe",
+      "provider_id": "fred",
+      "sha256": "f493fc11925c5a1d44a3f031b3b99dc004336fd0052974ae3c04b4f24a555f89"
+    },
+    {
+      "byte_count": 89,
+      "file_name": "finnhub.json",
+      "fixture_id": "finnhub-aapl",
+      "media_type": "application/json",
+      "operation_id": "probe",
+      "provider_id": "finnhub",
+      "sha256": "2836b1657a70abc61da4c4f424689dab0eea777308d7da75b402c7b54daa8519"
+    },
+    {
+      "byte_count": 76,
+      "file_name": "fmp.json",
+      "fixture_id": "fmp-aapl",
+      "media_type": "application/json",
+      "operation_id": "probe",
+      "provider_id": "fmp",
+      "sha256": "94159b1cb956b0424be96e9adea625219493446d866d105e0b79c4277ef65552"
+    },
+    {
+      "byte_count": 176,
+      "file_name": "world_bank.json",
+      "fixture_id": "world-bank-us-gdp",
+      "media_type": "application/json",
+      "operation_id": "probe",
+      "provider_id": "world_bank",
+      "sha256": "61633a77be7dbdbed82f8e256d76c67ec0cf475e510ae0353d873f50ba0953a7"
+    },
+    {
+      "byte_count": 128,
+      "file_name": "escwa_catalog.json",
+      "fixture_id": "escwa-catalog-economy",
+      "media_type": "application/json",
+      "operation_id": "probe",
+      "provider_id": "escwa_catalog",
+      "sha256": "91c26e1f1ffd4ece5ed4b15df74cbaed0c7699104275030f6c3b5d1b621670ba"
+    },
+    {
+      "byte_count": 135,
+      "file_name": "escwa_ispar.json",
+      "fixture_id": "escwa-ispar-qat",
+      "media_type": "application/json",
+      "operation_id": "probe",
+      "provider_id": "escwa_ispar",
+      "sha256": "a331e252a4621d6cce771820bcbfee21f20177909461f59950c35c9581cdd131"
+    },
+    {
+      "byte_count": 107,
+      "file_name": "qatar_open_data.json",
+      "fixture_id": "qatar-open-data-economy",
+      "media_type": "application/json",
+      "operation_id": "probe",
+      "provider_id": "qatar_open_data",
+      "sha256": "cc540e8167a68950298734abf50e294c504d845f3a81362e4dd9ec88074b800c"
+    },
+    {
+      "byte_count": 109,
+      "file_name": "hackernews.json",
+      "fixture_id": "hn-microsoft",
+      "media_type": "application/json",
+      "operation_id": "probe",
+      "provider_id": "hackernews",
+      "sha256": "55af0957a6c16566e982e1eaf9f7c2a36f3a2e45c111c54295010b9d41c450fe"
+    },
+    {
+      "byte_count": 116,
+      "file_name": "gdelt.json",
+      "fixture_id": "gdelt-microsoft",
+      "media_type": "application/json",
+      "operation_id": "probe",
+      "provider_id": "gdelt",
+      "sha256": "9e0cb3c45a9612757e4956293d1e7b62fe8d8095ea0ee41897564a4b85573d65"
+    },
+    {
+      "byte_count": 180,
+      "file_name": "patentsview.json",
+      "fixture_id": "patentsview-microsoft",
+      "media_type": "application/json",
+      "operation_id": "probe",
+      "provider_id": "patentsview",
+      "sha256": "2bc256fc00562215936d2e7d324c189c2b884f5e09c4af9e8916dca14ca70bb3"
+    },
+    {
+      "byte_count": 88,
+      "file_name": "wayback.json",
+      "fixture_id": "wayback-example",
+      "media_type": "application/json",
+      "operation_id": "probe",
+      "provider_id": "wayback",
+      "sha256": "12bf74782b5dad30be88ba0bcc0767867b11deab09691d083ba3ebb3f8bd79a4"
+    },
+    {
+      "byte_count": 249,
+      "file_name": "google_news_rss.xml",
+      "fixture_id": "google-news-microsoft",
+      "media_type": "application/rss+xml",
+      "operation_id": "probe",
+      "provider_id": "google_news_rss",
+      "sha256": "66a091dd7a5e881a1a6747d3ea59b5e2e8aae724e4ad3e8e2f0b9fd73b31df43"
+    },
+    {
+      "byte_count": 310,
+      "file_name": "epo_oauth.json",
+      "fixture_id": "epo-ops-microsoft-assignee",
+      "media_type": "application/json",
+      "operation_id": "oauth",
+      "provider_id": "epo_open_patent",
+      "sha256": "bd69ca9863e3b2247ed9154ffec17c0b53ad015423f180fe6007a14cae488e5d"
+    },
+    {
+      "byte_count": 1964,
+      "file_name": "epo_search.xml",
+      "fixture_id": "epo-ops-microsoft-assignee",
+      "media_type": "application/exchange+xml",
+      "operation_id": "search",
+      "provider_id": "epo_open_patent",
+      "sha256": "1758020a3a05613e0619d3f8fcef78da515aedf2e7c74154a1fe453955dc90e8"
+    },
+    {
+      "byte_count": 213,
+      "file_name": "semantic_scholar.json",
+      "fixture_id": "semantic-scholar-corpus-215416146",
+      "media_type": "application/json",
+      "operation_id": "probe",
+      "provider_id": "semantic_scholar",
+      "sha256": "d3fedaa5a4c122a400fbeeed2f7cdee7cd1dee3662b2a32801c49ab9bc5c3a4c"
+    },
+    {
+      "byte_count": 153,
+      "file_name": "perplexity.json",
+      "fixture_id": "perplexity-public-cited-company-query",
+      "media_type": "application/json",
+      "operation_id": "probe",
+      "provider_id": "perplexity",
+      "sha256": "c6d811279d8dafc2da56d1f84366a53292b0ff38995f1dbc5ff10d824f2a85b9"
+    }
+  ],
+  "execution_mode": "HERMETIC_TEST"
+}

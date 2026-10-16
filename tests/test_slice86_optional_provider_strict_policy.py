@@ -2,7 +2,7 @@
 
 Implements master-plan acceptance (1): "Provider errors are fatal in strict mode unless policy
 says optional." Decisions D-B/D-C locked: ``optional_in_strict: bool = False`` lives on
-``ProviderDescriptor`` and is set at registration; **all 15 default providers stay mandatory**
+``ProviderDescriptor`` and is set at registration; **all default providers stay mandatory**
 (today's strict semantics preserved). In strict FULL, an OPTIONAL provider's error/blocked/
 exception is recorded-and-continued (same handling as the non-strict path; the rich per-provider
 ledger is Task 3), while a MANDATORY provider's failure stays fatal exactly as today. The strict
@@ -85,7 +85,7 @@ def test_descriptor_and_register_accept_optional_in_strict() -> None:
 
 def test_all_default_providers_remain_mandatory() -> None:
     descriptors = _build_default_registry().list_providers()
-    assert len(descriptors) == 15
+    assert descriptors
     assert all(d.optional_in_strict is False for d in descriptors)  # D-C: no defaults flipped
 
 

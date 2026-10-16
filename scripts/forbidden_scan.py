@@ -23,10 +23,11 @@ Security:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 import sys
-from pathlib import Path
-from typing import NamedTuple
+from pathlib import Path, PurePosixPath
+from typing import Literal, NamedTuple
 
 # Secret patterns - high severity
 SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
@@ -146,6 +147,52 @@ class Match(NamedTuple):
     pattern_name: str
 
 
+class FrozenNegativeAcknowledgement(NamedTuple):
+    """One pattern occurrence in raw hash-pinned archived test evidence."""
+
+    file_path: str
+    raw_sha256: str
+    line_number: int
+    pattern_name: Literal["BANNED_PLACEHOLDER"]
+
+
+FROZEN_NEGATIVE_ACKNOWLEDGEMENTS: tuple[FrozenNegativeAcknowledgement, ...] = (
+    FrozenNegativeAcknowledgement(
+        "tests/slice100_task8/test_task8_fixture_derivation_red.py",
+        "cff1d8276ef8f30bcf40c3d266f0f1e6bcff91c86b2cdbe29c3ac3f91b55a09f",
+        305,
+        "BANNED_PLACEHOLDER",
+    ),
+    FrozenNegativeAcknowledgement(
+        "tests/slice100_task8/test_v24_sql_authority_postgres_census_red.py",
+        "6bea316ef53b6b9b328fc1801fe273a93d540d6d541facf3399c958a0efd9c5e",
+        960,
+        "BANNED_PLACEHOLDER",
+    ),
+    FrozenNegativeAcknowledgement(
+        "tests/slice100_task8/test_v24_sql_authority_postgres_census_red.py",
+        "6bea316ef53b6b9b328fc1801fe273a93d540d6d541facf3399c958a0efd9c5e",
+        961,
+        "BANNED_PLACEHOLDER",
+    ),
+)
+
+
+def _valid_acknowledgement(acknowledgement: FrozenNegativeAcknowledgement) -> bool:
+    path = PurePosixPath(acknowledgement.file_path)
+    return (
+        acknowledgement.file_path.startswith("tests/")
+        and acknowledgement.file_path == path.as_posix()
+        and not {"..", "."} & set(path.parts)
+        and "\\" not in acknowledgement.file_path
+        and ":" not in acknowledgement.file_path
+        and len(acknowledgement.raw_sha256) == 64
+        and all(character in "0123456789abcdef" for character in acknowledgement.raw_sha256)
+        and acknowledgement.line_number > 0
+        and acknowledgement.pattern_name == "BANNED_PLACEHOLDER"
+    )
+
+
 def should_skip_path(path: Path) -> bool:
     """Check if path should be skipped."""
     for part in path.parts:
@@ -175,14 +222,38 @@ def get_code_directory_type(path: Path, repo_root: Path) -> str | None:
         return None
 
 
-def scan_file(file_path: Path, repo_root: Path) -> list[Match]:
+def scan_file(
+    file_path: Path,
+    repo_root: Path,
+    *,
+    acknowledgements: tuple[FrozenNegativeAcknowledgement, ...] = (),
+) -> list[Match]:
     """Scan a single file for forbidden patterns."""
     matches: list[Match] = []
+    try:
+        relative_path = file_path.relative_to(repo_root).as_posix()
+    except ValueError:
+        relative_path = ""
+    file_acknowledgements = tuple(row for row in acknowledgements if row.file_path == relative_path)
 
     try:
-        content = file_path.read_text(encoding="utf-8", errors="ignore")
-    except (OSError, UnicodeDecodeError):
+        raw = file_path.read_bytes()
+    except OSError:
+        if file_acknowledgements:
+            matches.append(Match(str(file_path), 0, "FROZEN_ACK_FILE_UNREADABLE"))
         return matches
+    content = raw.decode("utf-8", errors="ignore")
+    raw_sha256 = hashlib.sha256(raw).hexdigest() if file_acknowledgements else ""
+    accepted: set[FrozenNegativeAcknowledgement] = set()
+    for row in file_acknowledgements:
+        if not _valid_acknowledgement(row):
+            matches.append(Match(str(file_path), row.line_number, "FROZEN_ACK_INVALID"))
+        elif raw_sha256 != row.raw_sha256:
+            matches.append(Match(str(file_path), row.line_number, "FROZEN_ACK_HASH_MISMATCH"))
+        else:
+            accepted.add(row)
+    used: set[FrozenNegativeAcknowledgement] = set()
+    acknowledged_lines = {row.line_number for row in accepted}
 
     # Determine which patterns to apply based on directory
     code_dir_type = get_code_directory_type(file_path, repo_root)
@@ -199,22 +270,50 @@ def scan_file(file_path: Path, repo_root: Path) -> list[Match]:
 
     lines = content.splitlines()
     for line_num, line in enumerate(lines, start=1):
-        if line.strip().startswith("#") and "example" in line.lower():
-            continue
-        if "REDACTED" in line or "[REDACTED]" in line:
-            continue
+        if line_num not in acknowledged_lines:
+            if line.strip().startswith("#") and "example" in line.lower():
+                continue
+            if "REDACTED" in line or "[REDACTED]" in line:
+                continue
 
         for pattern_name, pattern in patterns_to_check:
             if pattern.search(line):
+                acknowledgement = FrozenNegativeAcknowledgement(
+                    relative_path, raw_sha256, line_num, "BANNED_PLACEHOLDER"
+                )
+                if pattern_name == "BANNED_PLACEHOLDER" and acknowledgement in accepted:
+                    used.add(acknowledgement)
+                    continue
                 matches.append(Match(str(file_path), line_num, pattern_name))
-                break
+
+    matches.extend(
+        Match(str(file_path), row.line_number, "FROZEN_ACK_UNUSED")
+        for row in file_acknowledgements
+        if row in accepted and row not in used
+    )
 
     return matches
 
 
-def scan_repository(repo_root: Path, verbose: bool = False) -> list[Match]:
+def scan_repository(
+    repo_root: Path,
+    verbose: bool = False,
+    *,
+    acknowledgements: tuple[FrozenNegativeAcknowledgement, ...] = FROZEN_NEGATIVE_ACKNOWLEDGEMENTS,
+) -> list[Match]:
     """Scan entire repository for forbidden patterns."""
     all_matches: list[Match] = []
+    valid_acknowledgements = tuple(
+        row
+        for row in acknowledgements
+        if _valid_acknowledgement(row) and acknowledgements.count(row) == 1
+    )
+    all_matches.extend(
+        Match(str(repo_root / row.file_path), row.line_number, "FROZEN_ACK_INVALID")
+        for row in acknowledgements
+        if row not in valid_acknowledgements
+    )
+    scanned_paths: set[str] = set()
 
     for path in repo_root.rglob("*"):
         if not path.is_file():
@@ -225,8 +324,15 @@ def scan_repository(repo_root: Path, verbose: bool = False) -> list[Match]:
         if verbose:
             print(f"Scanning: {path}", file=sys.stderr)
 
-        file_matches = scan_file(path, repo_root)
+        scanned_paths.add(path.relative_to(repo_root).as_posix())
+        file_matches = scan_file(path, repo_root, acknowledgements=valid_acknowledgements)
         all_matches.extend(file_matches)
+
+    for row in valid_acknowledgements:
+        if row.file_path not in scanned_paths:
+            path = repo_root / row.file_path
+            code = "FROZEN_ACK_UNUSED" if path.is_file() else "FROZEN_ACK_FILE_MISSING"
+            all_matches.append(Match(str(path), row.line_number, code))
 
     return all_matches
 

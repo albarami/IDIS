@@ -22,7 +22,7 @@ ui-check:
 	cd ui && npm ci && npm run lint && npm run typecheck && npm run test && npm run build
 
 check:
-	ruff format .
+	ruff format --check .
 	ruff check .
 	mypy src/idis --ignore-missing-imports
 	pytest

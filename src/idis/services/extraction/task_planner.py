@@ -15,7 +15,12 @@ from idis.methodology.category_mapping import (
     CommercialDDQuestionCategoryMap,
     validate_commercial_dd_question_category_map,
 )
-from idis.methodology.models import MethodologyQuestion, MethodologyRegistry, MethodologyType
+from idis.methodology.models import (
+    FDD_FORMULA_POLICY_V2_METHODOLOGY_VERSION_ID,
+    MethodologyQuestion,
+    MethodologyRegistry,
+    MethodologyType,
+)
 from idis.models.document_classification import (
     CddDocumentCategory,
     DocumentClassification,
@@ -30,8 +35,13 @@ from idis.models.extraction_task import (
     ExtractionTaskPlanningResult,
     ExtractionTaskStatus,
     ExtractionTaskSummary,
+    FddPolicyV2ExpectedAnswerSchema,
+    FddPolicyV2ExtractionTask,
+    FddPolicyV2ExtractionTaskPlanningResult,
+    PlannedExtractionTask,
     SourceSpanReference,
     StrictExtractionTaskAdmission,
+    decode_extraction_task,
 )
 from idis.models.methodology_coverage import MethodologyCoverageRecord
 
@@ -292,7 +302,7 @@ class StrictDurableCategorySpanAdmissionPolicy:
             seen_span_ids.add(span.span_id)
         return None
 
-    def validate_rehydrated_tasks(self, tasks: Sequence[ExtractionTask]) -> None:
+    def validate_rehydrated_tasks(self, tasks: Sequence[PlannedExtractionTask]) -> None:
         """Reject stale task payloads under the current governed map/classifier."""
         current = validate_commercial_dd_question_category_map(self._category_map_loader())
         if current != self._category_map or not tasks:
@@ -385,7 +395,7 @@ class InMemoryExtractionTaskPlanner:
         classifications: Sequence[PlannerClassification],
         source_spans_by_document_id: dict[str, list[SourceSpanReference]],
         coverage_records: list[MethodologyCoverageRecord] | None = None,
-    ) -> ExtractionTaskPlanningResult:
+    ) -> ExtractionTaskPlanningResult | FddPolicyV2ExtractionTaskPlanningResult:
         """Plan deterministic extraction task metadata."""
         scoped_classifications = sorted(
             [
@@ -399,7 +409,7 @@ class InMemoryExtractionTaskPlanner:
             ),
         )
 
-        tasks: list[ExtractionTask] = []
+        tasks: list[PlannedExtractionTask] = []
         question_records = _question_records_for_planning(
             tenant_id=tenant_id,
             deal_id=deal_id,
@@ -429,15 +439,28 @@ class InMemoryExtractionTaskPlanner:
                 task.extraction_task_id or "",
             ),
         )
-        return ExtractionTaskPlanningResult(
+        summary = _build_summary(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            run_id=run_id,
             tasks=tasks,
-            summary=_build_summary(
-                tenant_id=tenant_id,
-                deal_id=deal_id,
-                run_id=run_id,
-                tasks=tasks,
-            ),
         )
+        if (
+            methodology_registry.current_version.methodology_version_id
+            == FDD_FORMULA_POLICY_V2_METHODOLOGY_VERSION_ID
+        ):
+            policy_tasks: list[FddPolicyV2ExtractionTask] = []
+            for task in tasks:
+                if not isinstance(task, FddPolicyV2ExtractionTask):
+                    raise ValueError("policy-v2 planning produced a different task family")
+                policy_tasks.append(task)
+            return FddPolicyV2ExtractionTaskPlanningResult(tasks=policy_tasks, summary=summary)
+        legacy_tasks: list[ExtractionTask] = []
+        for task in tasks:
+            if not isinstance(task, ExtractionTask):
+                raise ValueError("legacy planning produced a different task family")
+            legacy_tasks.append(task)
+        return ExtractionTaskPlanningResult(tasks=legacy_tasks, summary=summary)
 
     def _plan_for_question(
         self,
@@ -449,7 +472,7 @@ class InMemoryExtractionTaskPlanner:
         coverage_record_id: str | None,
         classifications: Sequence[PlannerClassification],
         source_spans_by_document_id: dict[str, list[SourceSpanReference]],
-    ) -> list[ExtractionTask]:
+    ) -> list[PlannedExtractionTask]:
         if not classifications:
             return [
                 _blocked_task(
@@ -489,7 +512,7 @@ class InMemoryExtractionTaskPlanner:
                 )
             ]
 
-        tasks: list[ExtractionTask] = []
+        tasks: list[PlannedExtractionTask] = []
         for classification, admission in category_matches:
             blocker_reason = _triage_blocker_for(classification)
             spans = sorted(
@@ -519,45 +542,52 @@ class InMemoryExtractionTaskPlanner:
                 continue
 
             tasks.append(
-                ExtractionTask(
-                    tenant_id=tenant_id,
-                    deal_id=deal_id,
-                    run_id=run_id,
-                    status=ExtractionTaskStatus.READY,
-                    methodology_id=question.methodology_id,
-                    methodology_version_id=question.methodology_version_id,
-                    methodology_question_id=question.methodology_question_id,
-                    methodology_type=question.methodology_type,
-                    methodology_section=question.section,
-                    coverage_record_id=coverage_record_id,
-                    document_id=classification.document_id,
-                    classification_id=classification.classification_id,
-                    source_spans=spans,
-                    target_fdd_category=admission.target_fdd_category,
-                    target_cdd_category=admission.target_cdd_category,
-                    strict_admission=admission.strict_admission,
-                    required_evidence=list(question.required_evidence),
-                    expected_answer_schema=build_expected_answer_schema(question),
-                    validation_requirements=list(question.validation_requirements),
-                    reason_codes=["ready"],
+                decode_extraction_task(
+                    {
+                        "tenant_id": tenant_id,
+                        "deal_id": deal_id,
+                        "run_id": run_id,
+                        "status": ExtractionTaskStatus.READY,
+                        "methodology_id": question.methodology_id,
+                        "methodology_version_id": question.methodology_version_id,
+                        "methodology_question_id": question.methodology_question_id,
+                        "methodology_type": question.methodology_type,
+                        "methodology_section": question.section,
+                        "coverage_record_id": coverage_record_id,
+                        "document_id": classification.document_id,
+                        "classification_id": classification.classification_id,
+                        "source_spans": spans,
+                        "target_fdd_category": admission.target_fdd_category,
+                        "target_cdd_category": admission.target_cdd_category,
+                        "strict_admission": admission.strict_admission,
+                        "required_evidence": list(question.required_evidence),
+                        "expected_answer_schema": build_expected_answer_schema(question),
+                        "validation_requirements": list(question.validation_requirements),
+                        "reason_codes": ["ready"],
+                    }
                 )
             )
         return tasks
 
 
-def build_expected_answer_schema(question: MethodologyQuestion) -> ExpectedAnswerSchema:
+def build_expected_answer_schema(
+    question: MethodologyQuestion,
+) -> ExpectedAnswerSchema | FddPolicyV2ExpectedAnswerSchema:
     """Build deterministic expected answer schema metadata from methodology."""
-    return ExpectedAnswerSchema(
-        answer_type=_infer_answer_type(question),
-        question_text=question.question_text,
-        required_evidence=list(question.required_evidence),
-        required_calculations=list(question.required_calculations),
-        validation_requirements=list(question.validation_requirements),
-        report_section=question.report_mapping.report_section,
-        report_subsection=question.report_mapping.report_subsection,
-        methodology_type=question.methodology_type,
-        methodology_section=question.section,
-    )
+    payload = {
+        "answer_type": _infer_answer_type(question),
+        "question_text": question.question_text,
+        "required_evidence": list(question.required_evidence),
+        "required_calculations": list(question.required_calculations),
+        "validation_requirements": list(question.validation_requirements),
+        "report_section": question.report_mapping.report_section,
+        "report_subsection": question.report_mapping.report_subsection,
+        "methodology_type": question.methodology_type,
+        "methodology_section": question.section,
+    }
+    if question.methodology_version_id == FDD_FORMULA_POLICY_V2_METHODOLOGY_VERSION_ID:
+        return FddPolicyV2ExpectedAnswerSchema.model_validate(payload)
+    return ExpectedAnswerSchema.model_validate(payload)
 
 
 def _blocked_task(
@@ -570,33 +600,35 @@ def _blocked_task(
     classification: PlannerClassification | None,
     source_spans: list[SourceSpanReference],
     blocker_reason: ExtractionTaskBlockerReason,
-) -> ExtractionTask:
+) -> PlannedExtractionTask:
     status = (
         ExtractionTaskStatus.EVIDENCE_MISSING
         if blocker_reason == ExtractionTaskBlockerReason.REQUIRED_EVIDENCE_MISSING
         else ExtractionTaskStatus.BLOCKED
     )
-    return ExtractionTask(
-        tenant_id=tenant_id,
-        deal_id=deal_id,
-        run_id=run_id,
-        status=status,
-        blocker_reason=blocker_reason,
-        methodology_id=question.methodology_id,
-        methodology_version_id=question.methodology_version_id,
-        methodology_question_id=question.methodology_question_id,
-        methodology_type=question.methodology_type,
-        methodology_section=question.section,
-        coverage_record_id=coverage_record_id,
-        document_id=classification.document_id if classification else None,
-        classification_id=classification.classification_id if classification else None,
-        source_spans=source_spans,
-        target_fdd_category=classification.fdd_category if classification else None,
-        target_cdd_category=classification.cdd_category if classification else None,
-        required_evidence=list(question.required_evidence),
-        expected_answer_schema=build_expected_answer_schema(question),
-        validation_requirements=list(question.validation_requirements),
-        reason_codes=[blocker_reason.value],
+    return decode_extraction_task(
+        {
+            "tenant_id": tenant_id,
+            "deal_id": deal_id,
+            "run_id": run_id,
+            "status": status,
+            "blocker_reason": blocker_reason,
+            "methodology_id": question.methodology_id,
+            "methodology_version_id": question.methodology_version_id,
+            "methodology_question_id": question.methodology_question_id,
+            "methodology_type": question.methodology_type,
+            "methodology_section": question.section,
+            "coverage_record_id": coverage_record_id,
+            "document_id": classification.document_id if classification else None,
+            "classification_id": classification.classification_id if classification else None,
+            "source_spans": source_spans,
+            "target_fdd_category": classification.fdd_category if classification else None,
+            "target_cdd_category": classification.cdd_category if classification else None,
+            "required_evidence": list(question.required_evidence),
+            "expected_answer_schema": build_expected_answer_schema(question),
+            "validation_requirements": list(question.validation_requirements),
+            "reason_codes": [blocker_reason.value],
+        }
     )
 
 
@@ -655,7 +687,7 @@ def _methodology_question_sha256(question: MethodologyQuestion) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def _classification_from_admission(task: ExtractionTask) -> SafePreflightClassificationInput:
+def _classification_from_admission(task: PlannedExtractionTask) -> SafePreflightClassificationInput:
     admission = task.strict_admission
     if admission is None or task.document_id is None:
         raise ValueError("strict admission is absent")
@@ -725,7 +757,7 @@ def _build_summary(
     tenant_id: str,
     deal_id: str,
     run_id: str,
-    tasks: list[ExtractionTask],
+    tasks: list[PlannedExtractionTask],
 ) -> ExtractionTaskSummary:
     return ExtractionTaskSummary(
         tenant_id=tenant_id,

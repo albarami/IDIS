@@ -21,7 +21,7 @@ from idis.models.extraction_execution import (
     MethodologyExtractionExecutionResult,
     MethodologyExtractionExecutionRunResult,
 )
-from idis.models.extraction_task import ExtractionTask, ExtractionTaskPlanningRunResult
+from idis.models.extraction_task import ExtractionTaskPlanningRunResult, PlannedExtractionTask
 from idis.models.methodology_coverage import (
     DurableMethodologyCoverageInitializationResult,
     MethodologyCoverageInitializationResult,
@@ -54,7 +54,7 @@ CoverageInitFn = Callable[
 CoverageRehydrateFn = Callable[..., list[MethodologyCoverageRecord]]
 TaskPlanningFn = Callable[
     ...,
-    tuple[ExtractionTaskPlanningRunResult, list[ExtractionTask]],
+    tuple[ExtractionTaskPlanningRunResult, list[PlannedExtractionTask]],
 ]
 TaskExecutionFn = Callable[
     ...,

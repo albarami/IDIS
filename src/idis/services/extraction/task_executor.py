@@ -18,7 +18,11 @@ from idis.models.extraction_execution import (
     MethodologyTaskExecutionStatus,
     generate_methodology_claim_draft_id,
 )
-from idis.models.extraction_task import ExtractionTask, ExtractionTaskStatus, SourceSpanReference
+from idis.models.extraction_task import (
+    ExtractionTaskStatus,
+    PlannedExtractionTask,
+    SourceSpanReference,
+)
 from idis.services.extraction.service import ExtractedClaimDraft, Extractor
 from idis.validators.extraction_gate import (
     ExtractionGateBlockReason,
@@ -39,7 +43,7 @@ class InMemoryMethodologyExtractionTaskExecutor:
         tenant_id: str,
         deal_id: str,
         run_id: str,
-        tasks: list[ExtractionTask],
+        tasks: list[PlannedExtractionTask],
         extractor: Extractor | None,
     ) -> MethodologyExtractionExecutionResult:
         """Execute task-scoped extraction and return claim draft metadata only."""
@@ -89,7 +93,7 @@ class InMemoryMethodologyExtractionTaskExecutor:
         tenant_id: str,
         deal_id: str,
         run_id: str,
-        task: ExtractionTask,
+        task: PlannedExtractionTask,
         extractor: Extractor | None,
     ) -> MethodologyTaskExecutionResult:
         if task.status != ExtractionTaskStatus.READY:
@@ -222,7 +226,7 @@ def _validate_and_convert_draft(
     tenant_id: str,
     deal_id: str,
     run_id: str,
-    task: ExtractionTask,
+    task: PlannedExtractionTask,
     raw_draft: Any,
 ) -> tuple[
     MethodologyClaimDraft | None,
@@ -328,7 +332,7 @@ def _validate_and_convert_draft(
 
 def _answer_from_schema(
     *,
-    task: ExtractionTask,
+    task: PlannedExtractionTask,
     raw_draft: ExtractedClaimDraft,
 ) -> dict[str, Any] | None:
     raw_value = raw_draft.value
@@ -357,7 +361,7 @@ def _answer_from_schema(
 
 def _build_future_claim_input_preview(
     *,
-    task: ExtractionTask,
+    task: PlannedExtractionTask,
     draft: ExtractedClaimDraft,
     draft_id: str,
     confidence: Decimal,
@@ -396,7 +400,7 @@ def _task_result(
     tenant_id: str,
     deal_id: str,
     run_id: str,
-    task: ExtractionTask,
+    task: PlannedExtractionTask,
     status: MethodologyTaskExecutionStatus,
     reason: MethodologyExtractionExecutionReason | None,
     reason_codes: list[str] | None = None,
@@ -441,13 +445,13 @@ def _skip_reason(status: ExtractionTaskStatus) -> MethodologyExtractionExecution
     return MethodologyExtractionExecutionReason.BLOCKED_TASK
 
 
-def _skipped_reason_codes(task: ExtractionTask) -> list[str]:
+def _skipped_reason_codes(task: PlannedExtractionTask) -> list[str]:
     if task.blocker_reason is not None:
         return [task.blocker_reason.value]
     return [_skip_reason(task.status).value]
 
 
-def _source_span_metadata(task: ExtractionTask, span_id: str) -> list[dict[str, Any]]:
+def _source_span_metadata(task: PlannedExtractionTask, span_id: str) -> list[dict[str, Any]]:
     return [
         {
             "span_id": span.span_id,
@@ -461,7 +465,7 @@ def _source_span_metadata(task: ExtractionTask, span_id: str) -> list[dict[str, 
 
 
 def _missing_linkage_reason(
-    task: ExtractionTask,
+    task: PlannedExtractionTask,
 ) -> MethodologyExtractionExecutionReason | None:
     required = [
         task.extraction_task_id,

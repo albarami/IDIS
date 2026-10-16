@@ -86,7 +86,7 @@ from idis.models.extraction_execution import (
     MethodologyTaskExecutionResult,
     MethodologyTaskExecutionStatus,
 )
-from idis.models.extraction_task import ExtractionTask, ExtractionTaskPlanningRunResult
+from idis.models.extraction_task import ExtractionTaskPlanningRunResult, PlannedExtractionTask
 from idis.models.layer2_readiness_package_materialization import (
     MethodologyLayer2ReadinessPackageConstructionStatus,
     MethodologyLayer2ReadinessPackageRunResult,
@@ -278,7 +278,7 @@ class RunContext:
     methodology_coverage_rehydrate_fn: Callable[..., list[MethodologyCoverageRecord]] | None = None
     methodology_coverage_records: list[MethodologyCoverageRecord] = field(default_factory=list)
     methodology_extraction_task_planning_fn: Callable[..., Any] | None = None
-    methodology_extraction_tasks: list[ExtractionTask] = field(default_factory=list)
+    methodology_extraction_tasks: list[PlannedExtractionTask] = field(default_factory=list)
     methodology_extraction_task_execution_fn: Callable[..., Any] | None = None
     methodology_extraction_execution_result: MethodologyExtractionExecutionResult | None = None
     methodology_claim_materialization_fn: Callable[..., Any] | None = None
@@ -1162,7 +1162,7 @@ class RunOrchestrator:
         self,
         ctx: RunContext,
         accumulated: dict[str, Any],
-    ) -> tuple[ExtractionTaskPlanningRunResult, list[ExtractionTask]]:
+    ) -> tuple[ExtractionTaskPlanningRunResult, list[PlannedExtractionTask]]:
         from idis.services.runs.methodology_extraction_task_planning import (
             InMemoryRunMethodologyExtractionTaskPlanningService,
         )
@@ -4408,5 +4408,5 @@ def _validate_strict_methodology_summary(summary: Mapping[str, Any]) -> None:
     visit(summary, "")
 
 
-def _tasks_request_calculations(tasks: list[ExtractionTask]) -> bool:
+def _tasks_request_calculations(tasks: list[PlannedExtractionTask]) -> bool:
     return any(task.expected_answer_schema.required_calculations for task in tasks)

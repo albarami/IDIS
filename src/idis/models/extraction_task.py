@@ -5,13 +5,15 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from enum import StrEnum
-from typing import Any
+from typing import Any, Generic, Self, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from idis.methodology.models import (
+    FDD_FORMULA_POLICY_V2_METHODOLOGY_VERSION_ID,
+    FddFormulaRequirement,
     MethodologyType,
     RequiredCalculation,
     RequiredEvidence,
@@ -140,6 +142,72 @@ class ExpectedAnswerSchema(ExtractionTaskBaseModel):
         return cleaned
 
 
+class FddPolicyV2ExpectedAnswerSchema(ExtractionTaskBaseModel):
+    """Closed expected-answer metadata for the exact FDD policy-v2 version."""
+
+    model_config = ConfigDict(
+        extra="forbid", str_strip_whitespace=False, revalidate_instances="always"
+    )
+
+    answer_type: str
+    question_text: str
+    required_evidence: list[RequiredEvidence]
+    required_calculations: list[FddFormulaRequirement]
+    validation_requirements: list[str]
+    report_section: str
+    report_subsection: str | None = None
+    methodology_type: MethodologyType
+    methodology_section: str
+
+    @field_validator("answer_type", "report_section", "methodology_section")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("field must not be blank")
+        return value.strip()
+
+    @field_validator("question_text")
+    @classmethod
+    def _question_text_not_blank_and_exact(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("question_text must not be blank")
+        return value
+
+    @field_validator("report_subsection")
+    @classmethod
+    def _normalize_report_subsection(cls, value: str | None) -> str | None:
+        return value.strip() if value is not None else None
+
+    @field_validator("required_evidence", "validation_requirements")
+    @classmethod
+    def _non_empty_list(cls, value: list[object]) -> list[object]:
+        if not value:
+            raise ValueError("list must not be empty")
+        return value
+
+    @field_validator("validation_requirements")
+    @classmethod
+    def _list_items_not_blank(cls, value: list[str]) -> list[str]:
+        cleaned = [item.strip() for item in value]
+        if any(not item for item in cleaned):
+            raise ValueError("list items must not be blank")
+        return cleaned
+
+    @field_validator("required_calculations", mode="before")
+    @classmethod
+    def _closed_requirements(cls, value: object) -> object:
+        if not isinstance(value, (list, tuple)):
+            raise ValueError("policy-v2 requirements must be a sequence")
+        checked: list[FddFormulaRequirement] = []
+        for item in value:
+            if isinstance(item, BaseModel):
+                if type(item) is not FddFormulaRequirement:
+                    raise ValueError("policy-v2 requirement type is not admitted")
+                item = item.model_dump(mode="python", warnings="error")
+            checked.append(FddFormulaRequirement.model_validate(item))
+        return checked
+
+
 class StrictExtractionTaskAdmission(ExtractionTaskBaseModel):
     """Content-bound strict category/classifier admission carried by a task."""
 
@@ -185,8 +253,11 @@ class StrictExtractionTaskAdmission(ExtractionTaskBaseModel):
         return value
 
 
-class ExtractionTask(ExtractionTaskBaseModel):
-    """Metadata-only extraction task produced by deterministic planning."""
+_AnswerSchemaT = TypeVar("_AnswerSchemaT", ExpectedAnswerSchema, FddPolicyV2ExpectedAnswerSchema)
+
+
+class _ExtractionTask(ExtractionTaskBaseModel, Generic[_AnswerSchemaT]):
+    """Shared task identity and status behavior; concrete families stay disjoint."""
 
     tenant_id: str
     deal_id: str
@@ -208,13 +279,49 @@ class ExtractionTask(ExtractionTaskBaseModel):
     target_cdd_category: CddDocumentCategory | None = None
     strict_admission: StrictExtractionTaskAdmission | None = None
     required_evidence: list[RequiredEvidence]
-    expected_answer_schema: ExpectedAnswerSchema
+    expected_answer_schema: _AnswerSchemaT
     validation_requirements: list[str]
 
     @property
     def source_span_ids(self) -> list[str]:
         """Return deterministic source span IDs."""
         return sorted(span.span_id for span in self.source_spans)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _admit_exact_version(cls, value: object) -> object:
+        if isinstance(value, Mapping):
+            version = value.get("methodology_version_id")
+            if cls is FddPolicyV2ExtractionTask:
+                if version != FDD_FORMULA_POLICY_V2_METHODOLOGY_VERSION_ID:
+                    raise ValueError("policy-v2 task requires its exact methodology version")
+            elif cls is ExtractionTask and version == FDD_FORMULA_POLICY_V2_METHODOLOGY_VERSION_ID:
+                raise ValueError("policy-v2 methodology requires its disjoint task model")
+        return value
+
+    @field_validator("expected_answer_schema", mode="before")
+    @classmethod
+    def _admit_exact_answer_schema(cls, value: object) -> object:
+        expected = (
+            FddPolicyV2ExpectedAnswerSchema
+            if cls is FddPolicyV2ExtractionTask
+            else ExpectedAnswerSchema
+        )
+        if isinstance(value, (ExpectedAnswerSchema, FddPolicyV2ExpectedAnswerSchema)):
+            if type(value) is not expected:
+                raise ValueError("expected-answer schema type is not admitted")
+            for requirement in value.required_calculations:
+                admitted = (
+                    FddFormulaRequirement
+                    if cls is FddPolicyV2ExtractionTask
+                    else RequiredCalculation
+                )
+                if type(requirement) is not admitted:
+                    raise ValueError("calculation requirement type is not admitted")
+            value = value.model_dump(mode="python", warnings="error")
+        elif isinstance(value, BaseModel):
+            raise ValueError("expected-answer schema type is not admitted")
+        return expected.model_validate(value)
 
     @field_validator(
         "tenant_id",
@@ -265,7 +372,19 @@ class ExtractionTask(ExtractionTaskBaseModel):
         return value
 
     @model_validator(mode="after")
-    def _validate_status_invariants(self) -> ExtractionTask:
+    def _validate_status_invariants(self) -> Self:
+        if type(self) not in {ExtractionTask, FddPolicyV2ExtractionTask}:
+            raise ValueError("extraction task subclass is not admitted")
+        is_policy = self.methodology_version_id == FDD_FORMULA_POLICY_V2_METHODOLOGY_VERSION_ID
+        if is_policy != (type(self) is FddPolicyV2ExtractionTask):
+            raise ValueError("extraction task family and methodology version disagree")
+        self._admit_exact_answer_schema(self.expected_answer_schema)
+        if is_policy and (
+            self.methodology_id != MethodologyType.FINANCIAL_DD.value
+            or self.methodology_type is not MethodologyType.FINANCIAL_DD
+            or self.expected_answer_schema.methodology_type is not MethodologyType.FINANCIAL_DD
+        ):
+            raise ValueError("policy-v2 task requires financial methodology identity")
         if self.status == ExtractionTaskStatus.READY:
             if not self.source_spans:
                 raise ValueError("ready extraction tasks require source spans")
@@ -304,6 +423,37 @@ class ExtractionTask(ExtractionTaskBaseModel):
         )
 
 
+class ExtractionTask(_ExtractionTask[ExpectedAnswerSchema]):
+    """Metadata-only extraction task produced by deterministic planning."""
+
+
+class FddPolicyV2ExtractionTask(_ExtractionTask[FddPolicyV2ExpectedAnswerSchema]):
+    """Extraction task admitted only for the exact FDD policy-v2 methodology."""
+
+
+PlannedExtractionTask = ExtractionTask | FddPolicyV2ExtractionTask
+
+
+def decode_extraction_task(value: object) -> PlannedExtractionTask:
+    """Decode one task by its existing outer version, never by shape guessing."""
+    if isinstance(value, (ExtractionTask, FddPolicyV2ExtractionTask)):
+        if type(value) not in {ExtractionTask, FddPolicyV2ExtractionTask}:
+            raise ValueError("extraction task type is not admitted")
+        if (value.methodology_version_id == FDD_FORMULA_POLICY_V2_METHODOLOGY_VERSION_ID) != (
+            type(value) is FddPolicyV2ExtractionTask
+        ):
+            raise ValueError("extraction task family and methodology version disagree")
+        value._admit_exact_answer_schema(value.expected_answer_schema)
+        value = value.model_dump(mode="python")
+    elif isinstance(value, BaseModel):
+        raise ValueError("extraction task type is not admitted")
+    if not isinstance(value, Mapping) or type(value.get("methodology_version_id")) is not str:
+        raise ValueError("extraction task requires an outer methodology version")
+    if value["methodology_version_id"] == FDD_FORMULA_POLICY_V2_METHODOLOGY_VERSION_ID:
+        return FddPolicyV2ExtractionTask.model_validate(value)
+    return ExtractionTask.model_validate(value)
+
+
 class ExtractionTaskSummary(ExtractionTaskBaseModel):
     """Deterministic summary of planned extraction tasks."""
 
@@ -319,6 +469,13 @@ class ExtractionTaskPlanningResult(ExtractionTaskBaseModel):
     """Planning result containing tasks and summary."""
 
     tasks: list[ExtractionTask]
+    summary: ExtractionTaskSummary
+
+
+class FddPolicyV2ExtractionTaskPlanningResult(ExtractionTaskBaseModel):
+    """Planning result for the disjoint FDD policy-v2 task family."""
+
+    tasks: list[FddPolicyV2ExtractionTask]
     summary: ExtractionTaskSummary
 
 
@@ -339,7 +496,7 @@ class ExtractionTaskRunStepSummaryRecord(ExtractionTaskBaseModel):
     source_span_count: int
 
     @classmethod
-    def from_task(cls, task: ExtractionTask) -> ExtractionTaskRunStepSummaryRecord:
+    def from_task(cls, task: PlannedExtractionTask) -> ExtractionTaskRunStepSummaryRecord:
         """Build a safe summary from a full in-memory extraction task."""
         if task.extraction_task_id is None:
             raise ValueError("extraction_task_id must be populated before summarizing")
@@ -378,7 +535,7 @@ class ExtractionTaskPlanningRunResult(ExtractionTaskBaseModel):
         tenant_id: str,
         deal_id: str,
         run_id: str,
-        tasks: list[ExtractionTask],
+        tasks: list[PlannedExtractionTask],
     ) -> ExtractionTaskPlanningRunResult:
         """Build a run-step-safe planning result from full task records."""
         task_summaries = [ExtractionTaskRunStepSummaryRecord.from_task(task) for task in tasks]
@@ -460,7 +617,7 @@ def _build_task_summary(
     tenant_id: str,
     deal_id: str,
     run_id: str,
-    tasks: list[ExtractionTask],
+    tasks: list[PlannedExtractionTask],
 ) -> ExtractionTaskSummary:
     return ExtractionTaskSummary(
         tenant_id=tenant_id,

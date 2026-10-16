@@ -27,7 +27,7 @@ from idis.models.claim_materialization import (
     RunScopedMaterializedClaimShell,
 )
 from idis.models.deterministic_calculation import CalcType
-from idis.models.extraction_task import ExtractionTask
+from idis.models.extraction_task import PlannedExtractionTask
 from idis.models.sanad_materialization import (
     RunScopedSanadGradeRecord,
     RunScopedSanadRecord,
@@ -66,7 +66,7 @@ class InMemoryRunMethodologyDeterministicCalculationService:
         materialized_claims: list[RunScopedMaterializedClaim | RunScopedMaterializedClaimShell],
         sanads: list[RunScopedSanadRecord | RunScopedSanadShell],
         sanad_grades: list[RunScopedSanadGradeRecord],
-        extraction_tasks: list[ExtractionTask],
+        extraction_tasks: list[PlannedExtractionTask],
     ) -> tuple[
         MethodologyCalculationRunResult,
         list[RunScopedDeterministicCalculationRecord],
@@ -298,7 +298,7 @@ class InMemoryRunMethodologyDeterministicCalculationService:
         grades_by_claim: dict[str, RunScopedSanadGradeRecord],
         sanads_by_claim: dict[str, RunScopedSanadRecord],
         required: bool,
-        task: ExtractionTask,
+        task: PlannedExtractionTask,
     ) -> (
         tuple[dict[str, Decimal], list[InputGradeInfo], list[str]] | MethodologyCalculationRejection
     ):

@@ -14,8 +14,8 @@ from idis.models.extraction_execution import (
     MethodologyTaskExecutionStatus,
 )
 from idis.models.extraction_task import (
-    ExtractionTask,
     ExtractionTaskStatus,
+    PlannedExtractionTask,
     SourceSpanReference,
 )
 from idis.models.methodology_extraction import (
@@ -429,7 +429,7 @@ class InMemoryRunMethodologyExtractionTaskExecutionService:
         tenant_id: str,
         deal_id: str,
         run_id: str,
-        tasks: list[ExtractionTask],
+        tasks: list[PlannedExtractionTask],
         documents: list[dict[str, Any]],
         extractor: Extractor | None,
     ) -> tuple[MethodologyExtractionExecutionRunResult, MethodologyExtractionExecutionResult]:
@@ -513,9 +513,9 @@ def _build_span_index(
 
 
 def _hydrate_task_source_spans(
-    task: ExtractionTask,
+    task: PlannedExtractionTask,
     span_index: dict[tuple[str, str], dict[str, Any]],
-) -> ExtractionTask | None:
+) -> PlannedExtractionTask | None:
     hydrated_spans: list[SourceSpanReference] = []
     for span in task.source_spans:
         raw_span = span_index.get((span.document_id, span.span_id))
@@ -543,7 +543,7 @@ def _failed_task_result(
     tenant_id: str,
     deal_id: str,
     run_id: str,
-    task: ExtractionTask,
+    task: PlannedExtractionTask,
     reason: MethodologyExtractionExecutionReason,
 ) -> MethodologyTaskExecutionResult:
     return MethodologyTaskExecutionResult(

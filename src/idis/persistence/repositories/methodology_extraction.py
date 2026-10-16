@@ -19,14 +19,16 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Never
 
+from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
 
 from idis.models.extraction_task import (
-    ExtractionTask,
     ExtractionTaskStatus,
+    PlannedExtractionTask,
     SourceSpanReference,
+    decode_extraction_task,
 )
 from idis.models.methodology_extraction import (
     CanonicalMethodologyClaimIdentity,
@@ -226,10 +228,10 @@ def _validated_canonical_claim_identity(
     return identity, canonical_value.model_dump(mode="json")
 
 
-def _canonicalize_planned_task(value: object) -> ExtractionTask:
+def _canonicalize_planned_task(value: object) -> PlannedExtractionTask:
     """Bind task hashing and durable span ordinals to one exact span order."""
     try:
-        task = ExtractionTask.model_validate(_as_payload(value))
+        task = decode_extraction_task(value if isinstance(value, BaseModel) else _as_payload(value))
         payload = task.model_dump(mode="json")
         spans = payload.get("source_spans")
         if not isinstance(spans, list):
@@ -238,7 +240,7 @@ def _canonicalize_planned_task(value: object) -> ExtractionTask:
             spans,
             key=lambda span: (str(span.get("document_id", "")), str(span.get("span_id", ""))),
         )
-        return ExtractionTask.model_validate(payload)
+        return decode_extraction_task(payload)
     except (AttributeError, TypeError, ValueError):
         _fail(METHODOLOGY_TASK_COVERAGE_INCOMPLETE)
 
@@ -347,7 +349,7 @@ class DurableMethodologyExtractionTaskRecord:
     methodology_question_record_id: str
     task_input_sha256: str
     candidate_span_set_sha256: str
-    task: ExtractionTask
+    task: PlannedExtractionTask
 
 
 @dataclass(frozen=True, slots=True)
@@ -557,7 +559,7 @@ class PostgresMethodologyExtractionRepository:
         deal_id: str,
         run_id: str,
         selection_id: str,
-        tasks: Sequence[ExtractionTask],
+        tasks: Sequence[PlannedExtractionTask],
         lease_owner_id: str,
         lease_fencing_token: int,
         run_output_object_ids: Mapping[str, str] | None = None,
@@ -746,7 +748,7 @@ class PostgresMethodologyExtractionRepository:
         deal_id: str,
         run_id: str,
         selection_id: str,
-        tasks: Sequence[ExtractionTask],
+        tasks: Sequence[PlannedExtractionTask],
         coverage: Mapping[str, Any],
     ) -> tuple[_PlannedTaskSpec, ...]:
         ordered_tasks = sorted(
@@ -1078,7 +1080,7 @@ class PostgresMethodologyExtractionRepository:
                 run_id=run_id,
                 expected_root_bindings=expected_root_bindings,
             )
-        durable_tasks: list[ExtractionTask] = []
+        durable_tasks: list[PlannedExtractionTask] = []
         for row in task_rows:
             raw_payload = _json_value(row["task_payload"])
             if not isinstance(raw_payload, Mapping):
@@ -1235,10 +1237,10 @@ class PostgresMethodologyExtractionRepository:
     def insert_ready_task_batch(
         self,
         *,
-        tasks: list[ExtractionTask],
+        tasks: list[PlannedExtractionTask],
         lease_owner_id: str,
         lease_fencing_token: int,
-    ) -> list[ExtractionTask]:
+    ) -> list[PlannedExtractionTask]:
         """Compatibility seam used by the durable planning service."""
         if not tasks:
             _fail(METHODOLOGY_TASK_COVERAGE_INCOMPLETE)
@@ -1290,7 +1292,7 @@ class PostgresMethodologyExtractionRepository:
         deal_id: str,
         run_id: str,
         selection_id: str,
-        tasks: Sequence[ExtractionTask],
+        tasks: Sequence[PlannedExtractionTask],
     ) -> list[DurableMethodologyExtractionTaskRecord]:
         """Compare a freshly recomputed plan with the exact durable task graph.
 
@@ -1321,7 +1323,7 @@ class PostgresMethodologyExtractionRepository:
             expected=expected,
         )
 
-    def load_planned_tasks(self, *, deal_id: str, run_id: str) -> list[ExtractionTask]:
+    def load_planned_tasks(self, *, deal_id: str, run_id: str) -> list[PlannedExtractionTask]:
         return [
             record.task for record in self.load_planned_task_records(deal_id=deal_id, run_id=run_id)
         ]

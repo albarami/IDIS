@@ -18,9 +18,9 @@ from idis.models.document_preflight import (
     DocumentPreflightStatus,
 )
 from idis.models.extraction_task import (
-    ExtractionTask,
     ExtractionTaskPlanningRunResult,
     ExtractionTaskStatus,
+    PlannedExtractionTask,
     SourceSpanReference,
 )
 from idis.models.methodology_coverage import (
@@ -66,7 +66,7 @@ class StagedMethodologyTaskPlanWrite:
     deal_id: str
     run_id: str
     selection_id: str
-    tasks: tuple[ExtractionTask, ...]
+    tasks: tuple[PlannedExtractionTask, ...]
     repository_factory: Callable[[Any], Any]
     lease_owner_id: str
     lease_fencing_token: int
@@ -150,7 +150,7 @@ class DurableRunMethodologyExtractionTaskPlanningService:
         document_preflight_summary: dict[str, Any],
     ) -> tuple[
         ExtractionTaskPlanningRunResult,
-        list[ExtractionTask],
+        list[PlannedExtractionTask],
         StagedMethodologyTaskPlanWrite,
     ]:
         """Validate a complete plan and return its completion-boundary write."""
@@ -286,7 +286,7 @@ class InMemoryRunMethodologyExtractionTaskPlanningService:
         registry: MethodologyRegistry,
         coverage_records: list[MethodologyCoverageRecord],
         document_preflight_summary: dict[str, Any],
-    ) -> tuple[ExtractionTaskPlanningRunResult, list[ExtractionTask]]:
+    ) -> tuple[ExtractionTaskPlanningRunResult, list[PlannedExtractionTask]]:
         """Build extraction task metadata without executing extraction."""
         try:
             classifications = _legacy_classifications_from_preflight_summary(
@@ -311,14 +311,15 @@ class InMemoryRunMethodologyExtractionTaskPlanningService:
         except ValueError as exc:
             raise MethodologyExtractionTaskPlanningInputError(str(exc)) from exc
 
+        tasks: list[PlannedExtractionTask] = list(planning_result.tasks)
         return (
             ExtractionTaskPlanningRunResult.from_tasks(
                 tenant_id=tenant_id,
                 deal_id=deal_id,
                 run_id=run_id,
-                tasks=planning_result.tasks,
+                tasks=tasks,
             ),
-            planning_result.tasks,
+            tasks,
         )
 
 
@@ -404,14 +405,14 @@ def _plan_selected_pair(
     classifications: Sequence[PlannerClassification],
     source_spans_by_document_id: dict[str, list[SourceSpanReference]],
     admission_policy: StrictDurableCategorySpanAdmissionPolicy,
-) -> list[ExtractionTask]:
+) -> list[PlannedExtractionTask]:
     by_type: dict[MethodologyType, list[MethodologyCoverageRecord]] = {
         methodology_type: [
             record for record in coverage_records if record.methodology_type is methodology_type
         ]
         for methodology_type in (MethodologyType.COMMERCIAL_DD, MethodologyType.FINANCIAL_DD)
     }
-    ready_tasks: list[ExtractionTask] = []
+    ready_tasks: list[PlannedExtractionTask] = []
     planner = InMemoryExtractionTaskPlanner(admission_policy=admission_policy)
     for registry in sorted(registries, key=lambda item: item.methodology_type.value):
         result = planner.plan_tasks(
@@ -446,7 +447,7 @@ def _plan_selected_pair(
     )
 
 
-def _task_identity_set(tasks: Sequence[ExtractionTask]) -> set[str]:
+def _task_identity_set(tasks: Sequence[PlannedExtractionTask]) -> set[str]:
     identities = {str(task.extraction_task_id or "") for task in tasks}
     if "" in identities or len(identities) != len(tasks):
         raise MethodologyTaskCoverageError("ready task identity set is invalid")

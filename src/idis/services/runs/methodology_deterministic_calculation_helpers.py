@@ -15,7 +15,12 @@ from idis.models.claim_materialization import (
     RunScopedMaterializedClaimShell,
 )
 from idis.models.deterministic_calculation import CalcType
-from idis.models.extraction_task import ExtractionTask
+from idis.models.extraction_task import (
+    ExtractionTask,
+    FddPolicyV2ExtractionTask,
+    PlannedExtractionTask,
+    decode_extraction_task,
+)
 from idis.models.sanad_materialization import (
     RunScopedSanadGradeRecord,
     RunScopedSanadRecord,
@@ -26,13 +31,19 @@ from idis.validators.extraction_gate import ExtractionGateBlockedError
 
 
 def requested_calculations(
-    extraction_tasks: list[ExtractionTask],
+    extraction_tasks: list[PlannedExtractionTask],
 ) -> list[tuple[ExtractionTask, RequiredCalculation]]:
     """Return calculation requirements from each task's expected answer schema."""
+    admitted: list[ExtractionTask] = []
+    for value in extraction_tasks:
+        task = decode_extraction_task(value)
+        if isinstance(task, FddPolicyV2ExtractionTask):
+            raise ValueError("METHODOLOGY_FDD_POLICY_V2_CALCULATION_UNSUPPORTED")
+        admitted.append(task)
     return [
-        (task, required_calc)
-        for task in extraction_tasks
-        for required_calc in task.expected_answer_schema.required_calculations
+        (task, calc)
+        for task in admitted
+        for calc in task.expected_answer_schema.required_calculations
     ]
 
 
@@ -95,7 +106,7 @@ def claims_by_input_key(
 
 def claims_for_task(
     claims: list[RunScopedMaterializedClaim | RunScopedMaterializedClaimShell],
-    task: ExtractionTask,
+    task: PlannedExtractionTask,
 ) -> list[RunScopedMaterializedClaim | RunScopedMaterializedClaimShell]:
     """Return only claims produced for the same task/question/coverage tuple."""
     return [
@@ -199,7 +210,7 @@ def common_attr(
 def gate_rejection(
     calc_type: CalcType,
     exc: ExtractionGateBlockedError,
-    task: ExtractionTask,
+    task: PlannedExtractionTask,
     required: bool,
 ) -> MethodologyCalculationRejection:
     """Convert extraction gate failures into stable Slice 9 reason codes."""
@@ -228,7 +239,7 @@ def rejection(
     reason: MethodologyCalculationReason,
     message: str,
     calc_type: str,
-    task: ExtractionTask,
+    task: PlannedExtractionTask,
     required: bool,
     reason_codes: list[str] | None = None,
     claim_ids: list[str] | None = None,

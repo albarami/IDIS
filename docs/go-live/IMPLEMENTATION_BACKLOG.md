@@ -27,7 +27,9 @@ The controlling technical plan is `docs/plans/2026-07-15-slice100-strict-real-ex
 
 ### Current CI-baseline follow-up
 
-These are bounded children of CIR-04's still-open whole-system acceptance, authorized by AUTH-CONTINUE-20261016. Diagnose/review each actual cause before correction; do not turn an absent private or operational prerequisite into a blanket stop. [Runbook section10](VERIFICATION_AND_RUNBOOKS.md#10-continuation-ci-baseline-diagnosis-and-recovery) records evidence. Each child needs its own role briefs, owned paths and affected verification before implementation.
+These are bounded children of CIR-04's still-open whole-system acceptance, authorized by AUTH-CONTINUE-20261016 and refined by AUTH-SEQUENCE-20261017. Diagnose/review each actual cause before correction and continue eligible substeps, but never advance to another product task while required checks are red, pending or skipped. [Runbook section10](VERIFICATION_AND_RUNBOOKS.md#10-continuation-ci-baseline-diagnosis-and-recovery) records historical evidence; RUN_STATE owns current exact identities. Each child needs its own role briefs, owned paths and affected verification before implementation.
+
+ID reconciliation: the earlier table used E for container admission and F for historical-candidate recovery. Current Codex receipts use E for platform typing and F for truthful health reporting. Preserve those historical labels as aliases only: their unfinished obligations are now H (strict container admission) and I (private/historical recovery and CI admission). No obligation is removed or treated as accepted by this bookkeeping correction.
 
 | Child | Scope / acceptance boundary | Current state |
 |---|---|---|
@@ -35,12 +37,15 @@ These are bounded children of CIR-04's still-open whole-system acceptance, autho
 | CIR-04B | Disposable PostgreSQL preparation: provision0038's two erasure roles and existing guard-function owner with exact posture/zero memberships; preserve frozen cleanliness checks, app-role isolation and migration ceiling; verify bootstrap/recovery | Scoped fix complete at `17f55dc789a5a22f1ce1367d7af7739791e78d8b`: independent PASS,69 local role/ceiling tests and5 recovery tests pass; exact CI run38951041704 confirms both fresh role steps, bootstrap/verify and backup job pass. Broader fixture/CI failures remain |
 | CIR-04C | Older database fixtures: reconcile explicit document source-binding and run contract fields, real UUID/data shapes and remaining behavior failures; preserve schema invariants | C1 storage/RLS fixture subset reviewed/published:47 original cases pass; exact CI at05a1f44 and7dbebdc shows142 passes/20 failures/1 skip. Remaining20 cases require actual-cause correction; no fake native parents or defaults |
 | CIR-04D | Cold import: remove the eager initialization dependency cycle while preserving exported interfaces and normal/cold import behavior | Reviewed/verified repair published in integration `93a2dcde6fd7073c78e93832064d241808e36008`:142 tests and528-file mypy pass; whole-system CI remains failed |
-| CIR-04E | Container: retain successful image construction as separate evidence; require genuine profile admission and health. No entrypoint/health shortcut or fabricated profile | CI missing-profile rejection confirmed; admitted environment unavailable |
-| CIR-04F | Missing historical candidate: recover exact original bytes or follow legitimate successor/review procedure | Local evidence gap: original v27 candidate restored and raw hash matched both oracles;19 materialization tests pass but only one reads its LF/newline bytes. This CI run stopped before pytest; private-input consumer/CI admission remains separate |
+| CIR-04E | Windows/POSIX platform typing and filesystem-security behavior; no casts/ignores masking defects | Reviewed sourceffd7af4 integrated/publishedfcb3b79. Both528-file mypy runs pass; Windows235/Linux228 targeted passes with complementary platform skips. Actual Opus scoped PASS; whole CI remains unaccepted |
+| CIR-04F | Truthful container-health summary and unchanged mandatory gate | Three-path tree4397991f: Windows/Linux44 passes plus33 subtests each; actual Opus PASS with evidence finding closed; sourced502c65 integrated/published5b5965a. Does not provide positive runtime health or green whole CI |
+| CIR-04G | Strict FULL worker version/hash/RESUMABLE and admission-graph checks before provider composition | Frozen verified treedff2f1a0;164 focused cases and528-file mypy pass per OS, actual Opus scoped PASS; stronger raw command/tree/node evidence and publication pending. No claim-SQL or lifecycle-policy change authorized by this substep |
+| CIR-04H (historical E) | Strict container admission: retain successful image construction as separate evidence; require genuine profile/services/launch audit and health | Missing-profile rejection confirmed. Restricted bootstrap route exists; Linux native renderer/frozen identity and real dependency qualification remain. No entrypoint/health shortcut, fake DLL/profile or snapshot repin |
+| CIR-04I (historical F) | Exact private/historical evidence recovery and trusted exact-head CI admission | v27 historical candidate restored locally, not complete CI recovery. AUTH-RECOVERY-20261017 adds exactly five existing historical records plus the public verification key to the original four-artifact private scope. Privacy review, exact manifest, private publication and fresh restoration in progress; trusted exact-head CI admission remains required, not implicitly configured |
 
-Continue GL-P02 preparation using the existing calculation/Calc-Sanad interfaces while operational admission is blocked; preserve CIR-04's failed required CI state. GL-P03 requires GL-P02's accepted supported-answer producer. GL-02 mapping and GL-05 design may proceed independently where their own inputs and ownership permit; no full-product requirement is dropped.
+Do not dispatch GL-P02/03, GL-02/05 preparation or another product task while the current CIR-04 task lacks required acceptance, final-candidate actual Opus PASS, reviewed publication and exact-current-head green CI. Earlier permission to skip ahead is superseded. Preserve the existing later backlog and every full-product obligation.
 
-Cursor's next bounded action is the newly exposed Linux typing failure (run38964431536):9 errors across `runtime/secure_files.py`, `storage/filesystem_store.py` and `tools/real_example_source_lookup.py`, all unchanged from the starting source. Use the existing qualification/repair loop and platform security contracts; do not hide errors with ignores/casts. This is remaining CIR-04 work, not a new master-plan cycle. After it, continue remaining fixture/private-admission/financial work by actual dependencies.
+Astra in Codex coordinates Sol6.1 implementation and actual Claude CLI Opus5.5 review. The Linux typing substep is published, not whole-task acceptance. Continue C2/F/G and the legitimate H/I prerequisites from the current RUN_STATE; do not restart the inventory or planning exercise. All main-merge,0039, activation/deployment, live-provider, new-paid-service and fund-communication holds remain.
 
 ### Common completion protocol — applies to every packet below
 
@@ -74,7 +79,7 @@ Do not substitute `make check`: it runs a mutating formatter and the full test s
 
 ## 2. First implementation cycle
 
-Dependency chain: `GL-01 baseline/authority → GL-P01 → GL-P02 → GL-P03`. Independent GL-02 requirement decomposition and GL-05 adapter design may proceed in parallel after authorization if they do not write the same files. Do not parallelize writers to the shared methodology/analysis schemas or `src/idis/api/routes/runs.py`.
+Dependency chain: `GL-01 baseline/authority → GL-P01 → GL-P02 → GL-P03`. Only after the current CIR-04 green transition gate, independent GL-02 requirement decomposition and GL-05 adapter design may proceed in parallel under their authorization if they do not write the same files. Do not parallelize writers to the shared methodology/analysis schemas or `src/idis/api/routes/runs.py`.
 
 The first cycle uses production-relevant pure components with honestly labelled offline/replay inputs. It does not need the entire Tasks 8–15 backlog. It does not obtain live extraction admission by bypassing the strict contract. A later two-question pilot must cover the additional paths in GL-16; these three packets alone are not that full pilot, canonical FULL success, comprehensive scoring, or Slice100 acceptance.
 
@@ -452,7 +457,7 @@ The following packages retain the complete agreed product. They are not all prer
 
 ## 4. Critical path, parallelism and stop points
 
-**First cycle:** GL-01 → GL-P01 → GL-P02 → GL-P03 → measured recalibration. GL-02 mapping and GL-05 design can proceed in parallel under non-overlapping ownership. Current guidance is at most two implementation packets plus a fresh reviewer; this is a coordination limit, not a staffed team.
+**First cycle:** GL-01 → GL-P01 → GL-P02 → GL-P03 → measured recalibration. After the current CIR-04 green transition gate, GL-02 mapping and GL-05 design can proceed in parallel under non-overlapping ownership. Current guidance is at most two implementation writers plus a fresh reviewer within the eligible current task; this is a coordination limit, not a staffed team or permission to skip the transition gate.
 
 **Minimum useful two-question pilot:** first cycle + relevant GL-06/09/10/11/12/13/15 slices → GL-16. Use replay to expose integration/quality failures early. A live pilot additionally needs legitimate admission, terminal persistence, qualified prompts/models, services, rights and budget. The choice is canonical production admission when available, or an explicitly approved GL-04—not a hidden bypass.
 

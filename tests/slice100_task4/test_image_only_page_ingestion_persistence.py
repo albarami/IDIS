@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -14,6 +15,7 @@ from idis.services.ingestion.image_only_page import ImageOnlyPageContractError
 from idis.services.ingestion.service import IngestionContext, IngestionService
 from idis.storage.compliant_store import ComplianceEnforcedStore
 from idis.storage.filesystem_store import FilesystemObjectStore
+from idis.storage.models import StoredObjectMetadata
 from tests.slice100_task4.test_image_only_page_red import (
     CONTENT_SHA256,
     _expected_evaluation,
@@ -37,18 +39,30 @@ def _materialize(
     service: IngestionService,
     parse_result: ParseResult,
 ):
+    ctx = IngestionContext(
+        tenant_id=TENANT_ID,
+        actor_id="fictional-image-only-worker",
+        request_id="fictional-image-only-request",
+    )
+    storage_key = "tenant-safe/fictional-image-only.pdf"
+    stored_object = service._store_raw_bytes(
+        ctx=ctx,
+        storage_key=storage_key,
+        data=b"fictional-parent-pdf",
+        content_type="application/pdf",
+    )
+    assert isinstance(stored_object, StoredObjectMetadata)
     return service._materialize_parse_result(
-        ctx=IngestionContext(
-            tenant_id=TENANT_ID,
-            actor_id="fictional-image-only-worker",
-            request_id="fictional-image-only-request",
-        ),
+        ctx=ctx,
         deal_id=DEAL_ID,
         filename="company-002-document-00105.pdf",
         metadata={"upload_filename": "company-002-document-00105.pdf"},
         sha256=CONTENT_SHA256,
-        storage_key="tenant-safe/fictional-image-only.pdf",
+        storage_key=storage_key,
         parse_result=parse_result,
+        stored_object=stored_object,
+        parser_started_at=datetime(2026, 10, 17, 0, 0, tzinfo=UTC),
+        parser_finished_at=datetime(2026, 10, 17, 0, 0, 1, tzinfo=UTC),
         phase_recorder=None,
         db_conn=None,
     )

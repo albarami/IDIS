@@ -29,12 +29,14 @@ from idis.parsers.video_frame_ocr import (
     VideoFrameOcrSegment,
     build_frame_ocr_receipt,
 )
+from idis.persistence.repositories import task7_source_freeze as source_freeze_module
 from idis.persistence.repositories.task7_source_freeze import (
     LOCKED_SOURCE_QUERY_ORDER,
     PostgresTask7SourceFreezeRepository,
     SourceFreezeObservation,
     SourceFreezeSnapshot,
     Task7SourceFreezeError,
+    _sha256_json,
     _validated_span_locator,
     build_source_freeze_plan,
     freeze_source_package,
@@ -52,6 +54,8 @@ from idis.services.ingestion.no_substantive_content_attestation import (
     DOCUMENT_NO_SUBSTANTIVE_CONTENT_CONFIRMED,
     NO_SUBSTANTIVE_CONTENT_ATTESTATION_PATH_ENV,
     build_document_no_substantive_content_receipt,
+    build_document_no_substantive_content_receipt_v2_verifier,
+    build_document_no_substantive_content_receipt_verifier,
     load_document_no_substantive_content_attestation,
     validate_document_no_substantive_content_receipt_v2,
     verify_document_no_substantive_content_attestation_manifest,
@@ -80,6 +84,31 @@ APPROVED_AT = "2026-07-22T00:00:00Z"
 EXPIRES_AT = "2026-10-15T00:00:00Z"
 SIGNER_ID = "fictional-task7-governance-signer-v1"
 REVIEWER_ID = "fictional-task7-reviewer-v1"
+
+
+@pytest.fixture
+def _signed_test_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Use the existing clock seam only for ephemeral synthetic signed fixtures.
+
+    These tests already create/verify their signatures at ACTIVE_NOW. Revalidation
+    must use that same explicit test time; production clocks and canonical evidence
+    are untouched. The January-expired negative remains expired at this time.
+    """
+    monkeypatch.setattr(
+        source_freeze_module,
+        "build_document_no_substantive_content_receipt_verifier",
+        lambda authority: build_document_no_substantive_content_receipt_verifier(
+            authority, clock=lambda: ACTIVE_NOW
+        ),
+    )
+    monkeypatch.setattr(
+        source_freeze_module,
+        "build_document_no_substantive_content_receipt_v2_verifier",
+        lambda authority: build_document_no_substantive_content_receipt_v2_verifier(
+            authority, clock=lambda: ACTIVE_NOW
+        ),
+    )
+
 
 _FORMAT_LOCATOR_CASES: tuple[tuple[str, str, Mapping[str, object]], ...] = (
     ("PDF", "PAGE_TEXT", {"page": 1, "line": 1}),
@@ -1186,6 +1215,7 @@ def test_root_derivation_is_repeatable_and_identity_sensitive() -> None:
 
 def test_current_trust_root_verified_zero_span_exclusion_builds_non_evidence_roots(
     tmp_path: Path,
+    _signed_test_clock: None,
 ) -> None:
     receipt, authority = _signed_exclusion(tmp_path)
     plan = build_source_freeze_plan(
@@ -1210,7 +1240,9 @@ def test_current_trust_root_verified_zero_span_exclusion_builds_non_evidence_roo
     assert not any(binding.object_kind == "SPAN" for binding in plan.bindings)
 
 
-def test_current_signed_batch_authority_admits_production_built_v2_receipt() -> None:
+def test_current_signed_batch_authority_admits_production_built_v2_receipt(
+    _signed_test_clock: None,
+) -> None:
     receipt, authority = _signed_v2_exclusion()
 
     plan = build_source_freeze_plan(
@@ -1245,7 +1277,10 @@ def test_boolean_only_verifier_cannot_substitute_for_signed_authority() -> None:
     assert caught.value.code == "TASK7_SOURCE_TERMINAL_STATE_INVALID"
 
 
-def test_expired_signed_exclusion_is_revalidated_at_freeze_time(tmp_path: Path) -> None:
+def test_expired_signed_exclusion_is_revalidated_at_freeze_time(
+    tmp_path: Path,
+    _signed_test_clock: None,
+) -> None:
     receipt, expired_authority = _signed_exclusion(
         tmp_path,
         approved_at="2026-01-01T00:00:00Z",
@@ -1262,17 +1297,44 @@ def test_expired_signed_exclusion_is_revalidated_at_freeze_time(tmp_path: Path) 
     assert caught.value.code == "TASK7_SOURCE_TERMINAL_STATE_INVALID"
 
 
-def test_receipt_from_untrusted_signing_key_cannot_admit_exclusion(tmp_path: Path) -> None:
-    receipt, _trusted_for_receipt = _signed_exclusion(tmp_path)
+def test_receipt_from_untrusted_signing_key_cannot_admit_exclusion(
+    tmp_path: Path,
+    _signed_test_clock: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import idis.persistence.repositories.task7_source_freeze as freeze_module
+
+    receipt, trusted_for_receipt = _signed_exclusion(tmp_path)
     _other_receipt, other_authority = _signed_exclusion(tmp_path)
+    snapshot = _exclusion_snapshot(receipt)
+    # Positive control: the exact signed receipt is admissible under its real
+    # ephemeral test authority, not merely a syntactically valid receipt blob.
+    build_source_freeze_plan(snapshot, terminal_exclusion_authority=trusted_for_receipt)
+    actual_factory = freeze_module.build_document_no_substantive_content_receipt_verifier
+    verified_results: list[bool] = []
+
+    def observing_factory(authority: Any) -> Any:
+        verifier = actual_factory(authority)
+
+        def verify(document: Any) -> bool:
+            result = verifier(document)
+            verified_results.append(result)
+            return result
+
+        return verify
+
+    monkeypatch.setattr(
+        freeze_module, "build_document_no_substantive_content_receipt_verifier", observing_factory
+    )
 
     with pytest.raises(Task7SourceFreezeError) as caught:
         build_source_freeze_plan(
-            _exclusion_snapshot(receipt),
+            snapshot,
             terminal_exclusion_authority=other_authority,
         )
 
     assert caught.value.code == "TASK7_SOURCE_TERMINAL_STATE_INVALID"
+    assert verified_results == [False]
 
 
 def test_parsed_pdf_requires_typed_ocr_and_page_census_authorities() -> None:
@@ -1359,7 +1421,94 @@ def test_each_format_accepts_only_its_production_span_locator_variants(
         locator,
         doc_type=doc_type,
     )
-    assert all(normalized.get(key) == value for key, value in locator.items())
+    _assert_exact_persisted_locator(normalized, locator)
+
+
+def _assert_exact_persisted_locator(actual: object, persisted: object) -> None:
+    """Equality must retain JSON numeric types, not merely Python 1 == 1.0."""
+    assert type(actual) is type(persisted)
+    if isinstance(persisted, dict):
+        assert isinstance(actual, dict) and actual.keys() == persisted.keys()
+        for key, value in persisted.items():
+            _assert_exact_persisted_locator(actual[key], value)
+    elif isinstance(persisted, list):
+        assert isinstance(actual, list) and len(actual) == len(persisted)
+        for observed, value in zip(actual, persisted, strict=True):
+            _assert_exact_persisted_locator(observed, value)
+    else:
+        assert actual == persisted
+
+
+def _locator_identity_cases() -> list[tuple[str, str, Mapping[str, object]]]:
+    """Pure synthetic schema fixtures, never native OCR/runtime evidence."""
+    from tests.slice100_task4.test_ocr_render_admission_adapter import _legacy_admission
+    from tests.slice100_task4.test_ocr_rescue_terminal_reconciliation import _provenance
+    from tests.slice100_task4.test_pdf_page_ocr_merge import _source_render_plan
+
+    base = {"page": 1, "line": 1, "source": "ocr"}
+    legacy = _legacy_admission(1, chosen_dpi=200, width=100, height=100).to_span_dict()
+    observed = _source_render_plan(page=1, chosen_dpi=200, width=100, height=100)
+    observed.pop("page")
+    observed.update(
+        {
+            "actual_render_width": 100,
+            "actual_render_height": 100,
+            "actual_render_pixel_count": 10_000,
+            "width_delta_pixels": 0,
+            "height_delta_pixels": 0,
+        }
+    )
+    rescue = {"page": 1, "line": 1, "source": "ocr_rescue", **_provenance()}
+    integer_rescue = {
+        **rescue,
+        **dict.fromkeys(
+            (
+                "winner_mean_confidence",
+                "winner_median_confidence",
+                "winner_minimum_confidence",
+                "winner_maximum_confidence",
+                "winner_fraction_at_or_above_0_50",
+                "minimum_clique_agreement",
+                "mean_clique_agreement",
+            ),
+            1,
+        ),
+    }
+    return [
+        *_FORMAT_LOCATOR_CASES,
+        ("PDF", "PAGE_TEXT", base),
+        ("PDF", "PAGE_TEXT", {**base, "ocr_render_admission": legacy}),
+        ("PDF", "PAGE_TEXT", {**base, "ocr_render_admission": observed}),
+        ("PDF", "PAGE_TEXT", rescue),
+        ("PDF", "PAGE_TEXT", integer_rescue),
+        ("VIDEO", "TIMECODE", {"start_ms": 0, "end_ms": 1, "source": "media_transcript"}),
+        *[
+            (
+                "VIDEO",
+                "TIMECODE",
+                {
+                    "start_ms": 0,
+                    "end_ms": 1,
+                    "source": "video_frame_ocr",
+                    "sample_index": 0,
+                    "confidence": confidence,
+                },
+            )
+            for confidence in (0, 1, 0.0, 1.0, -0.0)
+        ],
+    ]
+
+
+@pytest.mark.parametrize(("doc_type", "span_type", "locator"), _locator_identity_cases())
+def test_registered_locator_identity_preserves_exact_persisted_keys_and_types(
+    doc_type: str,
+    span_type: str,
+    locator: Mapping[str, object],
+) -> None:
+    before = json.dumps(locator, sort_keys=True, allow_nan=False)
+    validated = _validated_span_locator(span_type, locator, doc_type=doc_type)
+    _assert_exact_persisted_locator(validated, locator)
+    assert json.dumps(locator, sort_keys=True, allow_nan=False) == before
 
 
 @pytest.mark.parametrize(
@@ -1486,14 +1635,34 @@ def test_negative_and_positive_zero_have_identical_span_root_identity() -> None:
     assert negative_span.source_lineage_object_id == positive_span.source_lineage_object_id
 
 
-def test_integer_and_float_timecode_confidence_have_identical_span_root_identity() -> None:
-    integer = build_source_freeze_plan(_media_snapshot(confidence=0))  # type: ignore[arg-type]
-    binary64 = build_source_freeze_plan(_media_snapshot(confidence=0.0))
+def test_integer_and_float_timecode_confidence_preserve_distinct_sql_span_identity() -> None:
+    # Installed0038's unchanged SQL hashes the validated persisted locator. Its
+    # read-only synthetic-constant oracle distinguishes int0/float0.0 but retains
+    # -0.0/+0.0 equivalence. The original contrary assertion is retained in the
+    # additive span-before snapshot and baseline receipt, not silently repinned.
+    integer_snapshot = _media_snapshot(confidence=0)  # type: ignore[arg-type]
+    binary64_snapshot = _media_snapshot(confidence=0.0)
+    integer = build_source_freeze_plan(integer_snapshot)
+    binary64 = build_source_freeze_plan(binary64_snapshot)
     integer_span = next(root for root in integer.roots if root.object_kind == "SPAN")
     binary64_span = next(root for root in binary64.roots if root.object_kind == "SPAN")
 
-    assert integer_span.object_identity_sha256 == binary64_span.object_identity_sha256
-    assert integer_span.source_lineage_object_id == binary64_span.source_lineage_object_id
+    for snapshot, root in ((integer_snapshot, integer_span), (binary64_snapshot, binary64_span)):
+        span = snapshot.spans[0]
+        expected = _sha256_json(
+            [
+                "document-span-identity-v1",
+                str(span["span_id"]),
+                str(span["document_id"]),
+                str(snapshot.attempts[0]["parse_attempt_id"]),
+                span["span_type"],
+                _sha256_json(["span-locator-v1", span["span_type"], span["locator"]]),
+                span["content_hash"],
+            ]
+        )
+        assert root.object_identity_sha256 == expected
+    assert integer_span.object_identity_sha256 != binary64_span.object_identity_sha256
+    assert integer_span.source_lineage_object_id != binary64_span.source_lineage_object_id
 
 
 @pytest.mark.parametrize("confidence", [float("nan"), float("inf"), float("-inf")])

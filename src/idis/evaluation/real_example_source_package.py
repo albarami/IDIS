@@ -1870,6 +1870,9 @@ def _validate_durable_package_record(
         _fail_durable("The durable package file ledger is incomplete")
     if len(files) != len(expected_files):
         _fail_durable("The durable package file ledger cardinality has drifted")
+    status = record.get("status")
+    if status not in {"OPEN", "SEALED"}:
+        _fail_durable("The durable package lifecycle state is invalid")
     for actual, expected in zip(files, expected_files, strict=True):
         if not isinstance(actual, Mapping) or not isinstance(expected, Mapping):
             _fail_durable("The durable package file ledger is invalid")
@@ -1878,10 +1881,17 @@ def _validate_durable_package_record(
             "path_hash": expected["source_locator_sha256"],
             "sha256": expected["content_sha256"],
             "extension": expected["extension"],
-            "document_id": expected["document_id"],
-            "doc_id": expected["doc_id"],
         }
         if any(actual.get(key) != value for key, value in required.items()):
+            _fail_durable("The durable package file ledger does not match its manifest")
+        exact_pair = (
+            actual.get("document_id") == expected["document_id"]
+            and actual.get("doc_id") == expected["doc_id"]
+        )
+        staged_pair = (
+            status == "OPEN" and actual.get("document_id") is None and actual.get("doc_id") is None
+        )
+        if not (exact_pair or staged_pair):
             _fail_durable("The durable package file ledger does not match its manifest")
 
 

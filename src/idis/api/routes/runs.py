@@ -19,17 +19,32 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from idis.persistence.repositories.evidence import EvidenceRepo
+    from idis.services.calc.runner import CalculationsWriter
+    from idis.services.claims.service import ClaimCreateWriter
+    from idis.services.defects.service import DefectCreateWriter
+    from idis.services.sanad.auto_grade import ClaimsGradingRepository
+    from idis.services.sanad.service import SanadCreateWriter
 
 from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from idis.api.auth import RequireTenantContext
 from idis.api.errors import IdisHttpError
+from idis.audit.canonical import build_canonical_audit_event
+from idis.audit.postgres_sink import PostgresAuditSink
+from idis.audit.request_bound_sink import RequestBoundPostgresAuditSink
 from idis.audit.sink import AuditSink, AuditSinkError
 from idis.models.run_source import RunSource
 from idis.persistence.repositories.run_steps import get_run_steps_repository
-from idis.persistence.repositories.runs import RunAlreadyActiveError, get_runs_repository
+from idis.persistence.repositories.runs import (
+    RunAlreadyActiveError,
+    WorkerLeaseFencedError,
+    get_runs_repository,
+)
 from idis.persistence.repositories.strict_preflight_proofs import (
     StrictPreflightProofError,
     get_strict_preflight_proofs_repository,
@@ -351,6 +366,86 @@ def resolve_strict_preflight_binding(
     return binding
 
 
+def _public_source_freeze_code(exc: Exception) -> str | None:
+    """Return the safe 409 code for a freeze failure, or None to propagate it.
+
+    Only prerequisite-class codes map to SOURCE_PREPARATION_PREREQUISITE_UNMET.
+    Fence races map to the retryable SOURCE_FREEZE_CONFLICT code. The internal
+    code is logged server-side and is not placed on the returned public code.
+    Any other freeze code returns None so the caller re-raises it as a 500.
+
+    Args:
+        exc: Failure raised by ``freeze_source_package``.
+
+    Returns:
+        A public 409 code, or None when the failure must not be relabelled.
+    """
+    from idis.persistence.repositories.task7_source_freeze import (
+        TASK7_PARSE_ATTEMPT_LINEAGE_UNRECONSTRUCTIBLE,
+        TASK7_SOURCE_FREEZE_FENCED,
+        TASK7_SOURCE_TERMINAL_STATE_INVALID,
+        Task7SourceFreezeError,
+    )
+
+    if not isinstance(exc, Task7SourceFreezeError):
+        return None
+    logger.error("Task 7 source freeze refused with internal code %s", exc.code)
+    if exc.code in {
+        TASK7_SOURCE_TERMINAL_STATE_INVALID,
+        TASK7_PARSE_ATTEMPT_LINEAGE_UNRECONSTRUCTIBLE,
+    }:
+        return "SOURCE_PREPARATION_PREREQUISITE_UNMET"
+    if exc.code == TASK7_SOURCE_FREEZE_FENCED:
+        return "SOURCE_FREEZE_CONFLICT"
+    return None
+
+
+def _reload_frozen_preflight_corpus(
+    *,
+    db_conn: Any,
+    tenant_id: str,
+    deal_id: str,
+    selected_document_ids: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    """Reload a frozen corpus, mapping only the missing-source refusal.
+
+    ``FROZEN_SOURCE_REQUIRED`` becomes SOURCE_PACKAGE_REQUIRED. Any other
+    ``ValueError`` propagates so a loader bug is a 500, not a package refusal.
+    The internal code is logged server-side only.
+
+    Args:
+        db_conn: Request-scoped database connection.
+        tenant_id: Tenant that owns the deal.
+        deal_id: Deal whose frozen corpus is reloaded.
+        selected_document_ids: Document ids admitted for this run.
+
+    Returns:
+        The frozen preflight corpus.
+
+    Raises:
+        StrictPreflightProofError: When the frozen source is absent.
+        ValueError: When the loader fails for any other reason.
+    """
+    from idis.services.runs.steps import load_document_preflight_corpus_for_deal
+
+    try:
+        return load_document_preflight_corpus_for_deal(
+            db_conn=db_conn,
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            selected_document_ids=selected_document_ids,
+            require_frozen=True,
+        )
+    except ValueError as exc:
+        if exc.args != ("FROZEN_SOURCE_REQUIRED",):
+            raise
+        logger.error(
+            "Frozen source reload refused with internal code %s",
+            "FROZEN_SOURCE_REQUIRED",
+        )
+        raise StrictPreflightProofError("SOURCE_PACKAGE_REQUIRED") from exc
+
+
 def _freeze_task7_selected_source_packages(
     *,
     request: Request,
@@ -358,7 +453,7 @@ def _freeze_task7_selected_source_packages(
     deal_id: str,
     selected_document_ids: tuple[str, ...],
 ) -> tuple[str, ...]:
-    """Freeze every complete selected package before strict-run admission."""
+    """Freeze every complete selected package before any run admission."""
 
     from sqlalchemy import text
 
@@ -376,13 +471,13 @@ def _freeze_task7_selected_source_packages(
 
     db_conn = getattr(request.state, "db_conn", None)
     if db_conn is None or not selected_document_ids:
-        raise StrictPreflightProofError("PIPELINE_CONTRACT_UNAVAILABLE")
+        raise StrictPreflightProofError("SOURCE_PACKAGE_REQUIRED")
     try:
         selected = tuple(sorted(str(uuid.UUID(value)) for value in selected_document_ids))
     except (AttributeError, TypeError, ValueError) as exc:
-        raise StrictPreflightProofError("PIPELINE_CONTRACT_UNAVAILABLE") from exc
+        raise StrictPreflightProofError("SOURCE_PACKAGE_REQUIRED") from exc
     if len(set(selected)) != len(selected):
-        raise StrictPreflightProofError("PIPELINE_CONTRACT_UNAVAILABLE")
+        raise StrictPreflightProofError("SOURCE_PACKAGE_REQUIRED")
 
     package_rows = db_conn.execute(
         text(
@@ -415,20 +510,23 @@ def _freeze_task7_selected_source_packages(
                 document_owner[document_id] = package_id
             matched_packages.append((package_id, members))
     except (KeyError, TypeError, ValueError, ValidationError) as exc:
-        raise StrictPreflightProofError("PIPELINE_CONTRACT_UNAVAILABLE") from exc
+        raise StrictPreflightProofError("SOURCE_PACKAGE_REQUIRED") from exc
 
     if set(document_owner) != selected_set or not matched_packages:
-        raise StrictPreflightProofError("PIPELINE_CONTRACT_UNAVAILABLE")
+        raise StrictPreflightProofError("SOURCE_PACKAGE_REQUIRED")
     selected_package_members = frozenset(
         document_id for _package_id, members in matched_packages for document_id in members
     )
     if selected_package_members != selected_set:
-        # Strict admission binds one complete manifest corpus. A partial
-        # package selection would create inventory edges for unselected files.
-        raise StrictPreflightProofError("PIPELINE_CONTRACT_UNAVAILABLE")
+        # Current-limitation diagnostic for RUN_STATE input-support mapping
+        # item 3. Subset selection of one document from a multi-document
+        # package remains a documented obligation. Until subset binding lands,
+        # this refusal only reports that a partial selection is not yet
+        # admitted. It does not retire that obligation.
+        raise StrictPreflightProofError("PARTIAL_PACKAGE_SELECTION_REFUSED")
     package_ids = tuple(sorted(package_id for package_id, _members in matched_packages))
     if len(set(package_ids)) != len(package_ids):
-        raise StrictPreflightProofError("PIPELINE_CONTRACT_UNAVAILABLE")
+        raise StrictPreflightProofError("SOURCE_PACKAGE_REQUIRED")
 
     authority = load_document_no_substantive_content_attestation(
         env=_methodology_configuration(request)
@@ -440,7 +538,13 @@ def _freeze_task7_selected_source_packages(
             VerifiedDocumentNoSubstantiveContentAttestationManifest,
         ),
     ):
-        raise StrictPreflightProofError("PIPELINE_CONTRACT_UNAVAILABLE")
+        logger.error("NO_SUBSTANTIVE_CONTENT_ATTESTATION_AUTHORITY_INVALID")
+        raise RuntimeError("NO_SUBSTANTIVE_CONTENT_ATTESTATION_AUTHORITY_INVALID")
+    # CR-C23J-07: freeze_source_package commits on its own get_app_engine()
+    # connection before run admission. Request-scoped db_conn relies on READ
+    # COMMITTED visibility to observe the newly SEALED/BOUND rows below; if a
+    # later 409 (e.g. RUN_ALREADY_ACTIVE) or 500 stops run creation, the
+    # package intentionally remains SEALED/BOUND for idempotent reuse.
     engine = get_app_engine()
     try:
         for package_id in package_ids:
@@ -452,7 +556,10 @@ def _freeze_task7_selected_source_packages(
                 terminal_exclusion_authority=authority,
             )
     except Task7SourceFreezeError as exc:
-        raise StrictPreflightProofError(exc.code) from exc
+        public_code = _public_source_freeze_code(exc)
+        if public_code is None:
+            raise
+        raise StrictPreflightProofError(public_code) from exc
     return package_ids
 
 
@@ -469,12 +576,12 @@ async def start_run(
         request: FastAPI request for DB connection and body access.
         tenant_ctx: Injected tenant context from auth dependency.
 
-    Returns:
-        RunRef with run_id and initial status.
-
     Raises:
         IdisHttpError: 400 if invalid/missing fields, 404 if deal not found,
             500 if audit emission fails (fail-closed).
+
+    Returns:
+        RunRef with run_id and initial status.
     """
     try:
         body = await request.json()
@@ -561,7 +668,29 @@ async def start_run(
         )
 
     try:
-        source = request_body.source.to_storage_dict() if request_body.source is not None else None
+        selected_document_ids = tuple(
+            sorted(
+                str(document["document_id"])
+                for document in preflight_corpus
+                if document.get("document_id") is not None
+            )
+        )
+        source = RunSource.model_validate(
+            {"type": "deal_documents", "document_ids": list(selected_document_ids)}
+        ).to_storage_dict()
+        selected_source_package_ids = _freeze_task7_selected_source_packages(
+            request=request,
+            tenant_id=tenant_ctx.tenant_id,
+            deal_id=deal_id,
+            selected_document_ids=selected_document_ids,
+        )
+        preflight_corpus = _reload_frozen_preflight_corpus(
+            db_conn=db_conn,
+            tenant_id=tenant_ctx.tenant_id,
+            deal_id=deal_id,
+            selected_document_ids=selected_document_ids,
+        )
+        documents = _extraction_ready_documents_from_preflight_corpus(preflight_corpus)
         if strict_live_extraction_required:
             expected_binding = resolve_strict_preflight_binding(
                 request=request,
@@ -569,19 +698,6 @@ async def start_run(
                 deal_id=deal_id,
                 preflight_corpus=preflight_corpus,
                 strict_report=strict_report,
-            )
-            selected_document_ids = tuple(
-                sorted(
-                    str(document["document_id"])
-                    for document in preflight_corpus
-                    if document.get("document_id") is not None
-                )
-            )
-            selected_source_package_ids = _freeze_task7_selected_source_packages(
-                request=request,
-                tenant_id=tenant_ctx.tenant_id,
-                deal_id=deal_id,
-                selected_document_ids=selected_document_ids,
             )
             proof_repo = get_strict_preflight_proofs_repository(db_conn, tenant_ctx.tenant_id)
             run_data = proof_repo.consume_and_admit_contract_run(
@@ -607,10 +723,15 @@ async def start_run(
                 created_by_actor_type=tenant_ctx.actor_type,
             )
     except StrictPreflightProofError as exc:
+        message = (
+            "Source freeze conflict; retry the request"
+            if exc.code == "SOURCE_FREEZE_CONFLICT"
+            else "Frozen source preparation or strict proof did not authorize this run"
+        )
         raise IdisHttpError(
             status_code=409,
             code=exc.code,
-            message="Strict preflight proof did not authorize this run",
+            message=message,
         ) from exc
     except RunAlreadyActiveError as exc:
         # Loser of a concurrent create race (past the fail-fast check) -> same safe 409.
@@ -664,11 +785,64 @@ async def start_run(
         )
 
     audit_sink = _get_audit_sink(request)
+    if db_conn is not None and isinstance(audit_sink, PostgresAuditSink):
+        audit_sink = RequestBoundPostgresAuditSink(
+            connection=db_conn,
+            delegate=audit_sink,
+            tenant_id=tenant_ctx.tenant_id,
+            actor_id=tenant_ctx.actor_id,
+            actor_type=tenant_ctx.actor_type,
+            actor_roles=tenant_ctx.roles,
+            request_id=request.state.request_id,
+            method=request.method,
+            path=request.url.path,
+            status_code=202,
+        )
+        request.state.run_audit_sink = audit_sink
+
+    def emit_inline_claim(ctx: Any, _identity: dict[str, str]) -> None:
+        claimed = runs_repo.get(ctx.run_id)
+        if (
+            claimed is None
+            or claimed.get("lease_owner_id") != ctx.lease_owner_id
+            or claimed.get("lease_fencing_token") != ctx.lease_fencing_token
+            or claimed.get("lease_expires_at") is None
+        ):
+            raise AuditSinkError("INLINE_CLAIM_AUDIT_IDENTITY_UNAVAILABLE")
+        audit_sink.emit(
+            build_canonical_audit_event(
+                tenant_id=tenant_ctx.tenant_id,
+                event_type="worker.lease.claimed",
+                severity="MEDIUM",
+                summary="API-inline execution lease claimed",
+                actor_id=tenant_ctx.actor_id,
+                actor_type=tenant_ctx.actor_type,
+                actor_roles=tenant_ctx.roles,
+                request_id=request.state.request_id,
+                method=request.method,
+                path=request.url.path,
+                status_code=202,
+                resource_type="deal",
+                resource_id=deal_id,
+                deal_id=deal_id,
+                safe={
+                    "code": "WORKER_LEASE_CLAIMED",
+                    "run_id": ctx.run_id,
+                    "lease_owner_id": ctx.lease_owner_id,
+                    "new_fencing_token": ctx.lease_fencing_token,
+                    "lease_expires_at": str(claimed["lease_expires_at"]),
+                    "execution_origin": "API_INLINE",
+                },
+            )
+        )
+
     run_steps_repo = get_run_steps_repository(db_conn, tenant_ctx.tenant_id)
     execution_service = RunExecutionService(
         audit_sink=audit_sink,
         runs_repo=runs_repo,
         run_steps_repo=run_steps_repo,
+        claim_audit_emitter=emit_inline_claim,
+        webhook_connection=db_conn,
     )
 
     ctx = build_run_context(
@@ -677,25 +851,29 @@ async def start_run(
         tenant_id=tenant_ctx.tenant_id,
         deal_id=deal_id,
         mode=request_body.mode,
+        created_by_actor_id=tenant_ctx.actor_id,
+        created_by_actor_type=tenant_ctx.actor_type,
         documents=documents,
         deal_metadata=_load_deal_metadata_for_run(request, tenant_ctx.tenant_id, deal_id),
         preflight_corpus=preflight_corpus,
         audit_sink=audit_sink,
         strict_live_extraction_required=strict_live_extraction_required,
         strict_live_debate_backend_required=strict_live_extraction_required,
-        pipeline_contract_version=(
-            run_data.get("pipeline_contract_version") if strict_live_extraction_required else None
-        ),
-        pipeline_contract_hash=(
-            run_data.get("pipeline_contract_hash") if strict_live_extraction_required else None
-        ),
-        pipeline_resume_state=(
-            run_data.get("pipeline_resume_state") if strict_live_extraction_required else None
-        ),
+        pipeline_contract_version=(run_data.get("pipeline_contract_version")),
+        pipeline_contract_hash=(run_data.get("pipeline_contract_hash")),
+        pipeline_resume_state=(run_data.get("pipeline_resume_state")),
     )
 
     try:
         execution_result = await asyncio.to_thread(execution_service.execute, ctx)
+        if isinstance(audit_sink, RequestBoundPostgresAuditSink):
+            audit_sink.raise_if_failed()
+    except WorkerLeaseFencedError as exc:
+        raise IdisHttpError(
+            status_code=503,
+            code="WORKER_LEASE_FENCED",
+            message="Execution lease expired or was fenced; start a fresh frozen-source run",
+        ) from exc
     except AuditSinkError as exc:
         logger.error("Audit failure aborted run %s: %s", run_id, exc)
         raise IdisHttpError(
@@ -883,6 +1061,12 @@ def _retry_or_resume_run(
             status_code=409,
             code="RUN_NOT_RETRYABLE",
             message="Only failed runs can be retried",
+        )
+    if run_data.get("pipeline_resume_state") != "RESUMABLE":
+        raise IdisHttpError(
+            status_code=409,
+            code="LEGACY_RUN_RESUME_UNSAFE",
+            message="This run cannot resume; start a new run after frozen-source admission",
         )
 
     run_source = _run_source_from_storage(run_data.get("source"))
@@ -1205,7 +1389,9 @@ def _get_audit_sink(request: Request) -> AuditSink:
     Returns:
         AuditSink instance.
     """
-    sink: AuditSink | None = getattr(request.app.state, "audit_sink", None)
+    sink: AuditSink | None = getattr(request.state, "run_audit_sink", None)
+    if sink is None:
+        sink = getattr(request.app.state, "audit_sink", None)
     return _resolve_run_audit_sink(sink)
 
 
@@ -1328,21 +1514,26 @@ def _emit_run_completed_audit(
         tenant_id: Tenant UUID.
         status: Final run status.
     """
-    audit_sink = _resolve_run_audit_sink(getattr(request.app.state, "audit_sink", None))
-
-    event = {
-        "event_type": "deal.run.completed",
-        "tenant_id": tenant_id,
-        "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-        "details": {
-            "run_id": run_id,
-            "status": status,
-        },
-        "resource": {
-            "resource_type": "deal",
-            "resource_id": run_id,
-        },
-    }
+    audit_sink = _get_audit_sink(request)
+    tenant_ctx = request.state.tenant_context
+    deal_id = str(request.path_params["deal_id"])
+    event = build_canonical_audit_event(
+        tenant_id=tenant_id,
+        event_type="deal.run.completed",
+        severity="LOW",
+        summary="API-inline run execution completed",
+        actor_id=tenant_ctx.actor_id,
+        actor_type=tenant_ctx.actor_type,
+        actor_roles=tenant_ctx.roles,
+        request_id=request.state.request_id,
+        method=request.method,
+        path=request.url.path,
+        status_code=202,
+        resource_type="deal",
+        resource_id=deal_id,
+        deal_id=deal_id,
+        safe={"run_id": run_id, "status": status, "execution_origin": "API_INLINE"},
+    )
     audit_sink.emit(event)
 
 
@@ -3424,6 +3615,7 @@ def _run_snapshot_calc(
     created_claim_ids: list[str],
     calc_types: list[Any] | None = None,
     db_conn: Any = None,
+    calculations_writer: CalculationsWriter | None = None,
 ) -> dict[str, Any]:
     """Run deterministic calculations for claims produced by extraction.
 
@@ -3471,7 +3663,11 @@ def _run_snapshot_calc(
         deal_id=deal_id,
         claims_repo=claims_repo,
         sanads_repo=sanads_repo,
-        calculations_repo=get_calculations_repository(db_conn, tenant_id),
+        calculations_repo=(
+            calculations_writer
+            if calculations_writer is not None
+            else get_calculations_repository(db_conn, tenant_id)
+        ),
     )
     result = runner.run(
         created_claim_ids=created_claim_ids,
@@ -3539,6 +3735,11 @@ def _run_snapshot_auto_grade(
     created_claim_ids: list[str],
     audit_sink: AuditSink,
     db_conn: Any = None,
+    claims_grading_repo: ClaimsGradingRepository | None = None,
+    sanad_create_writer: SanadCreateWriter | None = None,
+    defect_create_writer: DefectCreateWriter | None = None,
+    evidence_repo: EvidenceRepo | None = None,
+    staged_audit_sink: AuditSink | None = None,
 ) -> dict[str, Any]:
     """Run Sanad auto-grading for all claims produced by SNAPSHOT extraction.
 
@@ -3558,6 +3759,19 @@ def _run_snapshot_auto_grade(
     from idis.services.runs.orchestrator import RunStepBlockedError
     from idis.services.sanad.auto_grade import auto_grade_claims_for_run
 
+    staged_dependencies = (
+        claims_grading_repo,
+        sanad_create_writer,
+        defect_create_writer,
+        evidence_repo,
+        staged_audit_sink,
+    )
+    staged = any(value is not None for value in staged_dependencies)
+    if staged and any(value is None for value in staged_dependencies):
+        raise RunStepBlockedError(
+            "PIPELINE_CONTRACT_UNAVAILABLE", "SNAPSHOT grading staged dependencies are incomplete"
+        )
+
     if not created_claim_ids:
         return {
             "graded_count": 0,
@@ -3567,7 +3781,34 @@ def _run_snapshot_auto_grade(
         }
 
     try:
-        if db_conn is not None:
+        if staged:
+            from idis.services.defects.service import DefectService
+            from idis.services.sanad.service import SanadService
+
+            assert staged_audit_sink is not None
+            grade_result = auto_grade_claims_for_run(
+                run_id=run_id,
+                tenant_id=tenant_id,
+                deal_id=deal_id,
+                created_claim_ids=created_claim_ids,
+                db_conn=db_conn,
+                claims_repo=claims_grading_repo,
+                evidence_repo=evidence_repo,
+                sanad_service=SanadService(
+                    tenant_id=tenant_id,
+                    db_conn=db_conn,
+                    audit_sink=staged_audit_sink,
+                    create_writer=sanad_create_writer,
+                ),
+                defect_service=DefectService(
+                    tenant_id=tenant_id,
+                    db_conn=db_conn,
+                    audit_sink=staged_audit_sink,
+                    create_writer=defect_create_writer,
+                ),
+                audit_sink=staged_audit_sink,
+            )
+        elif db_conn is not None:
             with db_conn.begin_nested():
                 grade_result = auto_grade_claims_for_run(
                     run_id=run_id,
@@ -3618,6 +3859,10 @@ def _run_snapshot_extraction(
     extractor_client_factory: ExtractorClientFactory | None = None,
     strict_live_extraction_required: bool = False,
     audit_sink: AuditSink | None = None,
+    claim_create_writer: ClaimCreateWriter | None = None,
+    evidence_repo: EvidenceRepo | None = None,
+    staged_audit_sink: AuditSink | None = None,
+    on_persistence_failure: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Execute SNAPSHOT extraction pipeline synchronously.
 
@@ -3640,6 +3885,21 @@ def _run_snapshot_extraction(
     from idis.services.extraction.resolution.conflict_detector import ConflictDetector
     from idis.services.extraction.resolution.deduplicator import Deduplicator
 
+    staged_dependencies = (
+        claim_create_writer,
+        evidence_repo,
+        staged_audit_sink,
+        on_persistence_failure,
+    )
+    staged = any(value is not None for value in staged_dependencies)
+    if staged and any(value is None for value in staged_dependencies):
+        from idis.services.runs.orchestrator import RunStepBlockedError
+
+        raise RunStepBlockedError(
+            "PIPELINE_CONTRACT_UNAVAILABLE",
+            "SNAPSHOT extraction staged dependencies are incomplete",
+        )
+
     prompt_text = _get_extraction_prompt()
     output_schema = _get_extraction_output_schema()
 
@@ -3657,13 +3917,16 @@ def _run_snapshot_extraction(
         confidence_scorer=scorer,
     )
 
-    effective_audit_sink = _resolve_run_audit_sink(audit_sink)
+    effective_audit_sink = staged_audit_sink if staged else _resolve_run_audit_sink(audit_sink)
+    assert effective_audit_sink is not None
     claim_service = ClaimService(
         tenant_id=tenant_id,
         db_conn=db_conn,
         audit_sink=effective_audit_sink,
+        create_writer=claim_create_writer,
     )
-    evidence_repo = get_evidence_repository(db_conn, tenant_id)
+    if evidence_repo is None:
+        evidence_repo = get_evidence_repository(db_conn, tenant_id)
 
     pipeline = ExtractionPipeline(
         chunking_service=ChunkingService(),
@@ -3673,6 +3936,7 @@ def _run_snapshot_extraction(
         claim_service=claim_service,
         evidence_repo=evidence_repo,
         audit_sink=effective_audit_sink,
+        on_persistence_failure=on_persistence_failure,
     )
 
     result = pipeline.run(

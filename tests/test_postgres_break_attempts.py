@@ -594,7 +594,6 @@ class TestPostgresClaimDealResolution:
             f"Sanad endpoint should not fail with 500: {sanad_response.text}"
         )
 
-    @pytest.mark.skip(reason="Defects table schema missing deal_id column - separate fix needed")
     def test_claim_defects_endpoint_uses_claim_resolution(
         self,
         client_with_postgres: TestClient,

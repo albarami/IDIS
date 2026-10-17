@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
-from sqlalchemy import text
+from sqlalchemy import Connection, text
 
 from idis.audit.sink import AuditSink
 from idis.models.run_step import RunStep
@@ -221,15 +221,20 @@ def build_postgres_step_boundary_uow(
 
 
 def _notify_run_webhook(
-    ctx: RunContext, event_type: str, data: dict[str, object] | None = None
+    ctx: RunContext,
+    event_type: str,
+    data: dict[str, object] | None = None,
+    *,
+    connection: Connection | None = None,
 ) -> None:
-    """Best-effort run lifecycle webhook (never raises; opens its own tenant-scoped conn)."""
+    """Reuse the caller transaction when present; otherwise retain worker behavior."""
     webhook_lifecycle.notify_webhook_lifecycle(
         tenant_id=ctx.tenant_id,
         event_type=event_type,
         resource_type="run",
         resource_id=ctx.run_id,
         data=data,
+        conn=connection,
     )
 
 
@@ -283,6 +288,7 @@ class RunExecutionService:
         claim_audit_emitter: Callable[[RunContext, dict[str, str]], None] | None = None,
         after_claim_commit: Callable[[], None] | None = None,
         task7_completion_service: Task7CompletionFinalizationService | None = None,
+        webhook_connection: Connection | None = None,
     ) -> None:
         """Initialize the canonical execution service."""
         self._audit_sink = audit_sink
@@ -292,6 +298,7 @@ class RunExecutionService:
         self._claim_audit_emitter = claim_audit_emitter
         self._after_claim_commit = after_claim_commit
         self._task7_completion_service = task7_completion_service
+        self._webhook_connection = webhook_connection
 
     def execute(self, ctx: RunContext) -> RunExecutionResult:
         """Claim a queued run and execute it through RunOrchestrator.
@@ -337,7 +344,7 @@ class RunExecutionService:
             tenant_id=ctx.tenant_id,
             details={"run_id": ctx.run_id, "mode": ctx.mode},
         )
-        _notify_run_webhook(ctx, webhook_lifecycle.RUN_CLAIMED, {"mode": ctx.mode})
+        self._notify_webhook(ctx, webhook_lifecycle.RUN_CLAIMED, {"mode": ctx.mode})
 
         orchestrator = RunOrchestrator(
             audit_sink=self._audit_sink,
@@ -350,19 +357,19 @@ class RunExecutionService:
         except Exception:
             finished_at = _utc_now()
             if self._is_currently_cancelled(ctx.run_id):
-                _notify_run_webhook(ctx, webhook_lifecycle.RUN_CANCELLED)
+                self._notify_webhook(ctx, webhook_lifecycle.RUN_CANCELLED)
                 return _cancelled_execution_result(finished_at=finished_at)
             if not self._try_complete_running(ctx.run_id, status="FAILED", finished_at=finished_at):
                 if self._is_currently_cancelled(ctx.run_id):
-                    _notify_run_webhook(ctx, webhook_lifecycle.RUN_CANCELLED)
+                    self._notify_webhook(ctx, webhook_lifecycle.RUN_CANCELLED)
                     return _cancelled_execution_result(finished_at=finished_at)
                 self._complete(ctx.run_id, status="FAILED", finished_at=finished_at)
-            _notify_run_webhook(ctx, webhook_lifecycle.RUN_FAILED)
+            self._notify_webhook(ctx, webhook_lifecycle.RUN_FAILED)
             raise
 
         finished_at = _utc_now()
         if self._is_currently_cancelled(ctx.run_id):
-            _notify_run_webhook(ctx, webhook_lifecycle.RUN_CANCELLED)
+            self._notify_webhook(ctx, webhook_lifecycle.RUN_CANCELLED)
             return _cancelled_execution_result(
                 steps=orch_result.steps,
                 finished_at=finished_at,
@@ -371,13 +378,13 @@ class RunExecutionService:
             ctx.run_id, status=orch_result.status, finished_at=finished_at
         ):
             if self._is_currently_cancelled(ctx.run_id):
-                _notify_run_webhook(ctx, webhook_lifecycle.RUN_CANCELLED)
+                self._notify_webhook(ctx, webhook_lifecycle.RUN_CANCELLED)
                 return _cancelled_execution_result(
                     steps=orch_result.steps,
                     finished_at=finished_at,
                 )
             self._complete(ctx.run_id, status=orch_result.status, finished_at=finished_at)
-        _notify_run_webhook(
+        self._notify_webhook(
             ctx,
             _TERMINAL_RUN_WEBHOOK_EVENT.get(orch_result.status, webhook_lifecycle.RUN_COMPLETED),
         )
@@ -400,7 +407,7 @@ class RunExecutionService:
             tenant_id=ctx.tenant_id,
             details={"run_id": ctx.run_id, "mode": ctx.mode},
         )
-        _notify_run_webhook(ctx, webhook_lifecycle.RUN_CLAIMED, {"mode": ctx.mode})
+        self._notify_webhook(ctx, webhook_lifecycle.RUN_CLAIMED, {"mode": ctx.mode})
         orchestrator = RunOrchestrator(
             audit_sink=self._audit_sink,
             run_steps_repo=self._run_steps_repo,
@@ -414,7 +421,7 @@ class RunExecutionService:
                 raise
             finished_at = _utc_now()
             if self._is_currently_cancelled(ctx.run_id):
-                _notify_run_webhook(ctx, webhook_lifecycle.RUN_CANCELLED)
+                self._notify_webhook(ctx, webhook_lifecycle.RUN_CANCELLED)
                 return _cancelled_execution_result(finished_at=finished_at)
             if not self._try_complete_running_with_lease(
                 ctx.run_id,
@@ -424,15 +431,15 @@ class RunExecutionService:
                 lease_fencing_token=fencing_token,
             ):
                 if self._is_currently_cancelled(ctx.run_id):
-                    _notify_run_webhook(ctx, webhook_lifecycle.RUN_CANCELLED)
+                    self._notify_webhook(ctx, webhook_lifecycle.RUN_CANCELLED)
                     return _cancelled_execution_result(finished_at=finished_at)
                 raise WorkerLeaseFencedError("terminal failure write was fenced") from exc
-            _notify_run_webhook(ctx, webhook_lifecycle.RUN_FAILED)
+            self._notify_webhook(ctx, webhook_lifecycle.RUN_FAILED)
             raise
 
         finished_at = _utc_now()
         if self._is_currently_cancelled(ctx.run_id):
-            _notify_run_webhook(ctx, webhook_lifecycle.RUN_CANCELLED)
+            self._notify_webhook(ctx, webhook_lifecycle.RUN_CANCELLED)
             return _cancelled_execution_result(
                 steps=orch_result.steps,
                 finished_at=finished_at,
@@ -446,7 +453,7 @@ class RunExecutionService:
                     "CONSUMER_RECEIPT_INCOMPLETE",
                     "CONSUMER_RECEIPT_INCOMPLETE",
                 )
-            _notify_run_webhook(ctx, webhook_lifecycle.RUN_COMPLETED)
+            self._notify_webhook(ctx, webhook_lifecycle.RUN_COMPLETED)
             return _to_execution_result(orch_result, finished_at=finished_at)
 
         terminal_status = "FAILED" if task7_scope is not None else orch_result.status
@@ -458,13 +465,13 @@ class RunExecutionService:
             lease_fencing_token=fencing_token,
         ):
             if self._is_currently_cancelled(ctx.run_id):
-                _notify_run_webhook(ctx, webhook_lifecycle.RUN_CANCELLED)
+                self._notify_webhook(ctx, webhook_lifecycle.RUN_CANCELLED)
                 return _cancelled_execution_result(
                     steps=orch_result.steps,
                     finished_at=finished_at,
                 )
             raise WorkerLeaseFencedError("terminal completion write was fenced")
-        _notify_run_webhook(
+        self._notify_webhook(
             ctx,
             _TERMINAL_RUN_WEBHOOK_EVENT.get(
                 terminal_status,
@@ -518,6 +525,11 @@ class RunExecutionService:
     def _commit_after_claim(self) -> None:
         if self._after_claim_commit is not None:
             self._after_claim_commit()
+
+    def _notify_webhook(
+        self, ctx: RunContext, event_type: str, data: dict[str, object] | None = None
+    ) -> None:
+        _notify_run_webhook(ctx, event_type, data, connection=self._webhook_connection)
 
     def _emit_claim_audit(self, ctx: RunContext) -> None:
         if self._claim_audit_emitter is None:

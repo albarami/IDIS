@@ -291,6 +291,7 @@ class FakePreparationApi:
             record = {
                 "package_id": package_id,
                 "deal_id": response_deal_id,
+                "status": "OPEN",
                 "file_count": len(files),
                 "source_manifest": {
                     key: manifest[key]

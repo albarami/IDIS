@@ -7,10 +7,11 @@ API server, database, network, or private data-room path is used.
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib
 import json
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -18,6 +19,7 @@ from uuid import UUID
 
 import pytest
 
+from idis.api.auth import TenantContext
 from idis.api.document_upload_replay import (
     DocumentUploadReplayInvariantError,
     validate_upload_replay_invariant,
@@ -28,6 +30,7 @@ from idis.evaluation import real_example_source_package as source_package
 from idis.evaluation.real_example_source_package import _preparation_idempotency_key
 from idis.idempotency.store import IdempotencyRecord
 from idis.parsers.base import ParseResult, SpanDraft
+from idis.persistence.repositories.runs import _resolve_run_contract_identity
 from idis.services.ingestion.service import (
     IngestionContext,
     IngestionResult,
@@ -47,7 +50,10 @@ from tests.slice100_task4.test_watermark_batch_attestation_red import (
     SIGNER_ID,
     SOURCE_TREE_FINGERPRINT,
     _manifest,
+    _prescan_receipt,
     _private_and_public_pem,
+    _sha256,
+    _valid_batch_payload,
 )
 
 RUNTIME_API_MISSING = "TASK4_WATERMARK_RUNTIME_API_MISSING"
@@ -55,7 +61,10 @@ TENANT_ID = UUID("30000000-0000-4000-8000-000000000001")
 DEAL_ID = UUID("40000000-0000-4000-8000-000000000001")
 DOCUMENT_ID = "50000000-0000-4000-8000-000000000001"
 ARTIFACT_ID = "60000000-0000-4000-8000-000000000001"
-MANDATORY_CONTENT_SHA256 = "9" * 64
+# These bytes exercise storage and an explicit post-parser component input. They
+# are not represented as an actually parsed PDF/OCR result or a native corpus.
+DOCUMENT_BYTES = b"PUBLIC SYNTHETIC POST-PARSER WATERMARK COMPONENT OBJECT\n"
+MANDATORY_CONTENT_SHA256 = hashlib.sha256(DOCUMENT_BYTES).hexdigest()
 MANDATORY_RENDER_SHA256 = "a" * 64
 
 
@@ -69,9 +78,27 @@ def _runtime_api(name: str) -> Any:
 
 def _verified_manifest() -> object:
     private_pem, public_pem = _private_and_public_pem()
+    batch_payload = _valid_batch_payload(private_pem)
+    candidates = batch_payload["candidates"]
+    assert isinstance(candidates, list)
+    mandatory = [row for row in candidates if row["safe_alias"] == MANDATORY_ALIAS]
+    assert len(mandatory) == 1
+    mandatory[0]["content_sha256"] = MANDATORY_CONTENT_SHA256
+    candidate_hash = _sha256(candidates)
+    prescan = _prescan_receipt()
+    prescan.update(
+        candidate_count=len(candidates),
+        candidate_set_sha256=candidate_hash,
+        sample_set_sha256=candidate_hash,
+    )
+    batch_payload.update(
+        candidate_set_sha256=candidate_hash,
+        sample_set_sha256=candidate_hash,
+        prescan_receipt_sha256=_sha256(prescan),
+    )
     verifier = _runtime_api("verify_document_no_substantive_content_attestation_manifest")
     return verifier(
-        manifest=_manifest(private_pem),
+        manifest=_manifest(private_pem, batch_payload=batch_payload, prescan_receipt=prescan),
         trusted_signer_id=SIGNER_ID,
         trusted_public_key_pem=public_pem,
         now=ACTIVE_NOW,
@@ -191,25 +218,99 @@ def _materialize(
     service: IngestionService,
     parse_result: ParseResult,
 ) -> IngestionResult:
-    return service._materialize_parse_result(
-        ctx=IngestionContext(
-            tenant_id=TENANT_ID,
-            actor_id="fictional-slice100-worker",
-            request_id="fictional-watermark-runtime-request",
-            idempotency_key="fictional-watermark-runtime-key",
-        ),
-        deal_id=DEAL_ID,
-        filename=MANDATORY_ALIAS,
-        metadata={
-            "upload_filename": MANDATORY_ALIAS,
-            "source_tree_fingerprint": SOURCE_TREE_FINGERPRINT,
-        },
-        sha256=MANDATORY_CONTENT_SHA256,
-        storage_key="tenant-safe/fictional-watermark-object.pdf",
-        parse_result=parse_result,
-        phase_recorder=None,
-        db_conn=None,
+    import idis.services.ingestion.service as ingestion_module
+
+    tenant_ctx = TenantContext(
+        tenant_id=str(TENANT_ID),
+        actor_id="fictional-slice100-worker",
+        name="Synthetic component",
+        timezone="UTC",
+        data_region="me-south-1",
     )
+    key = f"synthetic-components/{TENANT_ID}/{MANDATORY_CONTENT_SHA256}/{MANDATORY_ALIAS}"
+    stored = service._compliant_store.put(
+        tenant_ctx=tenant_ctx,
+        key=key,
+        data=DOCUMENT_BYTES,
+        content_type="application/octet-stream",
+    )
+    assert stored.key == key and stored.sha256 == MANDATORY_CONTENT_SHA256
+    assert stored.size_bytes == len(DOCUMENT_BYTES)
+    assert stored.content_type == "application/octet-stream"
+    assert str(UUID(stored.version_id)) == stored.version_id
+    assert (
+        service._compliant_store.verify_integrity(
+            tenant_ctx=tenant_ctx,
+            key=key,
+            version_id=stored.version_id,
+        )
+        == stored
+    )
+    # Honest brackets around an already supplied component ParseResult, not a
+    # claim that a parser/OCR process ran. The injected fixed clock gives equality.
+    started_at = ingestion_module.datetime.now(UTC)
+    finished_at = ingestion_module.datetime.now(UTC)
+    assert started_at == finished_at == ACTIVE_NOW
+    identity = service._runtime_parser_identity(parse_result)
+    attempts: list[dict[str, Any]] = []
+    actual_attempt = service._persist_runtime_attempt
+
+    def observe_attempt(**kwargs: Any) -> str:
+        attempts.append(kwargs)
+        return actual_attempt(**kwargs)
+
+    service._persist_runtime_attempt = observe_attempt  # type: ignore[method-assign]
+    try:
+        result = service._materialize_parse_result(
+            ctx=IngestionContext(
+                tenant_id=TENANT_ID,
+                actor_id="fictional-slice100-worker",
+                request_id="fictional-watermark-runtime-request",
+                idempotency_key="fictional-watermark-runtime-key",
+            ),
+            deal_id=DEAL_ID,
+            filename=MANDATORY_ALIAS,
+            metadata={
+                "upload_filename": MANDATORY_ALIAS,
+                "source_tree_fingerprint": SOURCE_TREE_FINGERPRINT,
+            },
+            sha256=MANDATORY_CONTENT_SHA256,
+            storage_key=key,
+            parse_result=parse_result,
+            stored_object=stored,
+            parser_started_at=started_at,
+            parser_finished_at=finished_at,
+            phase_recorder=None,
+            db_conn=None,
+        )
+    finally:
+        service._persist_runtime_attempt = actual_attempt  # type: ignore[method-assign]
+        # Even a rejected attempted invocation is forbidden for these supplied
+        # post-parser component results; restoration must also survive failure.
+        assert attempts == []
+    assert result.artifact_id is not None and result.document_id is not None
+    artifact = service.get_artifact(TENANT_ID, result.artifact_id)
+    document = service.get_document(TENANT_ID, result.document_id)
+    assert artifact is not None and document is not None
+    assert artifact.metadata["durable_object_integrity"]["version_id"] == stored.version_id
+    assert artifact.metadata["size_bytes"] == len(DOCUMENT_BYTES)
+    if identity is None:
+        prerequisite = "PARSER_NATIVE_IDENTITY_UNAVAILABLE"
+    else:
+        prerequisite = "PARSER_TERMINAL_RECEIPT_UNAVAILABLE"
+    assert document.metadata["source_preparation_prerequisite"] == prerequisite
+    assert artifact.metadata["source_preparation_prerequisite"] == prerequisite
+    for metadata in (document.metadata, artifact.metadata):
+        assert (
+            not {
+                "parser_started_at",
+                "parser_finished_at",
+                "parser_duration_seconds",
+                "duration_seconds",
+            }
+            & metadata.keys()
+        )
+    return result
 
 
 def _persisted_receipt(
@@ -512,6 +613,13 @@ def test_source_package_revalidates_v2_receipt_before_membership(
         "idis.services.ingestion.service.datetime",
         type("FixedDateTime", (), {"now": staticmethod(lambda _tz: ACTIVE_NOW)}),
     )
+    # The same newly signed component authority is revalidated at its declared
+    # fixture instant, not the wall clock. Its signed expiry is not extended.
+    monkeypatch.setattr(
+        source_package,
+        "datetime",
+        type("FixedDateTime", (), {"now": staticmethod(lambda _tz: ACTIVE_NOW)}),
+    )
     service, _audit, _result, receipt = _persisted_receipt(
         tmp_path,
         parse_result_factory=parse_result_factory,
@@ -521,7 +629,7 @@ def test_source_package_revalidates_v2_receipt_before_membership(
         generated_upload_name=MANDATORY_ALIAS,
         source_locator_sha256="7" * 64,
         content_sha256=MANDATORY_CONTENT_SHA256,
-        size_bytes=321,
+        size_bytes=len(DOCUMENT_BYTES),
         extension="pdf",
     )
     response = {
@@ -532,7 +640,7 @@ def test_source_package_revalidates_v2_receipt_before_membership(
         "parse_status": parse_status,
         "terminal_disposition": terminal_disposition,
         "metadata": {"document_no_substantive_content_receipt": receipt},
-        "source_metadata": {"upload_filename": MANDATORY_ALIAS, "size_bytes": 321},
+        "source_metadata": {"upload_filename": MANDATORY_ALIAS, "size_bytes": len(DOCUMENT_BYTES)},
     }
 
     admitted = source_package._validated_upload_receipt(
@@ -545,6 +653,28 @@ def test_source_package_revalidates_v2_receipt_before_membership(
 
     assert admitted["document_id"] == DOCUMENT_ID
     assert admitted["doc_id"] == ARTIFACT_ID
+    admission = service._no_substantive_content_attestation
+    assert admission is not None
+    monkeypatch.setattr(
+        source_package,
+        "datetime",
+        type(
+            "ExpiredDateTime",
+            (),
+            {
+                "now": staticmethod(lambda _tz: admission.exemplar.expires_at),
+            },
+        ),
+    )
+    with pytest.raises(source_package.SourcePackageContractError) as expired:
+        source_package._validated_upload_receipt(
+            response=response,
+            deal_id=str(DEAL_ID),
+            source_file=source_file,
+            source_tree_fingerprint=SOURCE_TREE_FINGERPRINT,
+            no_substantive_content_attestation=admission,
+        )
+    assert expired.value.code == "DOCUMENT_NO_SUBSTANTIVE_CONTENT_ATTESTATION_NOT_ACTIVE"
 
 
 def test_worker_threads_current_v2_verifier_into_preflight_and_rejects_drift(
@@ -582,6 +712,15 @@ def test_worker_threads_current_v2_verifier_into_preflight_and_rejects_drift(
         "spans": [],
     }
     observed: dict[str, object] = {}
+    # Explicit injected verifier-wiring component, not a real worker claim or
+    # source admission. Forward the actual existing closed compatibility tuple.
+    version, contract_hash, resume_state, _error = _resolve_run_contract_identity(
+        mode="SNAPSHOT",
+        pipeline_contract_version=None,
+        pipeline_contract_hash=None,
+        pipeline_resume_state=None,
+        pipeline_resume_error_code=None,
+    )
     profile = SimpleNamespace(values={"IDIS_ACCEPTANCE_TENANT_ID": str(TENANT_ID)})
     monkeypatch.setattr(worker, "_load_worker_preflight_corpus", lambda **_kwargs: [document])
     monkeypatch.setattr(worker, "_load_worker_deal_metadata", lambda **_kwargs: None)
@@ -613,6 +752,9 @@ def test_worker_threads_current_v2_verifier_into_preflight_and_rejects_drift(
             "strict_preflight_proof_id": None,
             "lease_owner_id": None,
             "lease_fencing_token": None,
+            "pipeline_contract_version": version,
+            "pipeline_contract_hash": contract_hash,
+            "pipeline_resume_state": resume_state,
         },
         audit_sink=object(),
         strict_profile=profile,  # type: ignore[arg-type]
@@ -620,6 +762,11 @@ def test_worker_threads_current_v2_verifier_into_preflight_and_rejects_drift(
 
     context = observed["context"]
     assert isinstance(context, dict)
+    assert (
+        context["pipeline_contract_version"],
+        context["pipeline_contract_hash"],
+        context["pipeline_resume_state"],
+    ) == (version, contract_hash, resume_state)
     verifier = context["no_substantive_content_receipt_verifier"]
     assert callable(verifier)
     assert verifier(document) is True

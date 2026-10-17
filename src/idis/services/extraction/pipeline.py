@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
@@ -97,6 +98,7 @@ class ExtractionPipeline:
         claim_service: ClaimService,
         evidence_repo: EvidenceRepo | None = None,
         audit_sink: AuditSink | None = None,
+        on_persistence_failure: Callable[[], None] | None = None,
     ) -> None:
         """Initialize the extraction pipeline.
 
@@ -118,6 +120,7 @@ class ExtractionPipeline:
             claim_service.tenant_id,
         )
         self._audit_sink = audit_sink or InMemoryAuditSink()
+        self._on_persistence_failure = on_persistence_failure
 
     def run(
         self,
@@ -339,6 +342,8 @@ class ExtractionPipeline:
                 )
 
             except Exception as e:
+                if self._on_persistence_failure is not None:
+                    self._on_persistence_failure()
                 logger.error(
                     "Failed to persist claim '%s': %s",
                     claim.claim_text[:80],

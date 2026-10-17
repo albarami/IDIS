@@ -20,8 +20,12 @@ Requirements per v6.3:
 from __future__ import annotations
 
 import hashlib
+import importlib
+import importlib.metadata
 import logging
 import os
+import platform
+import sys
 import time
 from collections import Counter
 from collections.abc import Mapping
@@ -31,9 +35,10 @@ from enum import StrEnum
 from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING, Any
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from idis.api.auth import TenantContext
+from idis.api.errors import IdisHttpError
 from idis.audit.canonical import build_canonical_audit_event
 from idis.audit.sink import AuditSink, AuditSinkError, InMemoryAuditSink
 from idis.compliance.byok import DataClass
@@ -75,11 +80,23 @@ from idis.services.ingestion.no_substantive_content_attestation import (
 from idis.services.ingestion.password_manifest import DocumentPasswordManifest
 from idis.services.ingestion.span_generator import SpanGenerator
 from idis.storage.compliant_store import ComplianceEnforcedStore
+from idis.storage.models import StoredObjectMetadata
 
 if TYPE_CHECKING:
     from sqlalchemy import Connection
 
 logger = logging.getLogger(__name__)
+
+_COMPLIANCE_DENIAL_CODES = frozenset(
+    {
+        "BYOK_KEY_REVOKED",
+        "BYOK_AUDIT_REQUIRED",
+        "BYOK_AUDIT_FAILED",
+        "DELETION_BLOCKED_BY_HOLD",
+        "RESIDENCY_REGION_MISMATCH",
+        "RESIDENCY_SERVICE_REGION_UNSET",
+    }
+)
 
 DEFAULT_MAX_BYTES = 50 * 1024 * 1024  # 50 MB
 STREAMING_CONTRACT_VERSION = "bounded-streaming-v1"
@@ -914,6 +931,12 @@ class IngestionService:
         except DocumentNoSubstantiveContentAttestationError as error:
             return self._no_substantive_content_attestation_failure(error)
         except Exception as e:
+            if (
+                isinstance(e, IdisHttpError)
+                and e.status_code == 403
+                and e.code in _COMPLIANCE_DENIAL_CODES
+            ):
+                raise
             logger.exception("Unexpected error during ingestion")
             return IngestionResult(
                 success=False,
@@ -960,6 +983,12 @@ class IngestionService:
         except DocumentNoSubstantiveContentAttestationError as error:
             return self._no_substantive_content_attestation_failure(error)
         except Exception as error:
+            if (
+                isinstance(error, IdisHttpError)
+                and error.status_code == 403
+                and error.code in _COMPLIANCE_DENIAL_CODES
+            ):
+                raise
             logger.exception("Unexpected error during streamed ingestion")
             return IngestionResult(
                 success=False,
@@ -1019,7 +1048,7 @@ class IngestionService:
                 UploadIngestionPhase.OBJECT_STORE_WRITE,
                 phase_started_at,
             )
-        if storage_result is not None:
+        if isinstance(storage_result, IngestionError):
             return IngestionResult(
                 success=False,
                 sha256=sha256,
@@ -1027,6 +1056,7 @@ class IngestionService:
             )
 
         phase_started_at = time.monotonic()
+        parser_started_at = datetime.now(UTC)
         try:
             parse_result = self._parse_document(
                 data,
@@ -1035,6 +1065,7 @@ class IngestionService:
                 sha256=sha256,
             )
         finally:
+            parser_finished_at = datetime.now(UTC)
             _record_upload_phase(phase_recorder, UploadIngestionPhase.PARSE, phase_started_at)
         _record_parser_diagnostics(
             phase_recorder,
@@ -1051,6 +1082,9 @@ class IngestionService:
             sha256=sha256,
             storage_key=storage_key,
             parse_result=parse_result,
+            stored_object=storage_result,
+            parser_started_at=parser_started_at,
+            parser_finished_at=parser_finished_at,
             phase_recorder=phase_recorder,
             db_conn=db_conn,
         )
@@ -1103,11 +1137,12 @@ class IngestionService:
                 UploadIngestionPhase.OBJECT_STORE_WRITE,
                 phase_started_at,
             )
-        if storage_error is not None:
+        if isinstance(storage_error, IngestionError):
             return IngestionResult(success=False, sha256=sha256, errors=[storage_error])
         durable_metadata = _with_streaming_proof(metadata)
 
         phase_started_at = time.monotonic()
+        parser_started_at = datetime.now(UTC)
         try:
             parse_result = self._parse_document_file(
                 source_path=source_path,
@@ -1117,6 +1152,7 @@ class IngestionService:
                 sha256=sha256,
             )
         finally:
+            parser_finished_at = datetime.now(UTC)
             _record_upload_phase(phase_recorder, UploadIngestionPhase.PARSE, phase_started_at)
         _record_parser_diagnostics(
             phase_recorder,
@@ -1132,6 +1168,9 @@ class IngestionService:
             sha256=sha256,
             storage_key=storage_key,
             parse_result=parse_result,
+            stored_object=storage_error,
+            parser_started_at=parser_started_at,
+            parser_finished_at=parser_finished_at,
             phase_recorder=phase_recorder,
             db_conn=db_conn,
         )
@@ -1146,6 +1185,9 @@ class IngestionService:
         sha256: str,
         storage_key: str,
         parse_result: ParseResult,
+        stored_object: StoredObjectMetadata,
+        parser_started_at: datetime,
+        parser_finished_at: datetime,
         phase_recorder: object | None,
         db_conn: Connection | None,
     ) -> IngestionResult:
@@ -1159,6 +1201,9 @@ class IngestionService:
                 sha256=sha256,
                 storage_key=storage_key,
                 parse_result=parse_result,
+                stored_object=stored_object,
+                parser_started_at=parser_started_at,
+                parser_finished_at=parser_finished_at,
                 phase_recorder=phase_recorder,
                 db_conn=db_conn,
             )
@@ -1171,6 +1216,9 @@ class IngestionService:
                 sha256=sha256,
                 storage_key=storage_key,
                 parse_result=parse_result,
+                stored_object=stored_object,
+                parser_started_at=parser_started_at,
+                parser_finished_at=parser_finished_at,
                 phase_recorder=phase_recorder,
                 db_conn=db_conn,
             )
@@ -1185,6 +1233,9 @@ class IngestionService:
         sha256: str,
         storage_key: str,
         parse_result: ParseResult,
+        stored_object: StoredObjectMetadata,
+        parser_started_at: datetime,
+        parser_finished_at: datetime,
         phase_recorder: object | None,
         db_conn: Connection | None,
     ) -> IngestionResult:
@@ -1192,6 +1243,45 @@ class IngestionService:
         artifact_id = uuid4()
         document_id = uuid4()
         now = datetime.now(UTC)
+        verified_object = self._compliant_store.verify_integrity(
+            tenant_ctx=TenantContext(
+                tenant_id=str(ctx.tenant_id),
+                actor_id=ctx.actor_id,
+                name="ingestion",
+                timezone="UTC",
+                data_region="me-south-1",
+            ),
+            key=storage_key,
+            version_id=stored_object.version_id,
+        )
+        if verified_object != stored_object or verified_object.sha256 != sha256:
+            raise ValueError("stored object integrity receipt does not match upload")
+        metadata = {**metadata, "size_bytes": verified_object.size_bytes}
+        try:
+            actual_version = str(UUID(verified_object.version_id))
+        except (ValueError, TypeError, AttributeError):
+            actual_version = None
+        if actual_version == verified_object.version_id:
+            metadata["durable_object_integrity"] = {
+                "schema_version": "durable-object-integrity-v1",
+                "doc_id": str(artifact_id),
+                "content_sha256": sha256,
+                "size_bytes": verified_object.size_bytes,
+                "uri_sha256": hashlib.sha256(storage_key.encode("utf-8")).hexdigest(),
+                "version_id": actual_version,
+                "backend": self._compliant_store.backend_name,
+                "streaming_verified": True,
+            }
+        parser_identity = self._runtime_parser_identity(parse_result)
+        prerequisite = (
+            "DURABLE_OBJECT_IDENTITY_UNAVAILABLE"
+            if actual_version != verified_object.version_id
+            else "PARSER_NATIVE_IDENTITY_UNAVAILABLE"
+            if parser_identity is None
+            else None
+        )
+        if prerequisite is not None:
+            metadata["source_preparation_prerequisite"] = prerequisite
 
         no_substantive_content_receipt: dict[str, object] | None = None
         if "watermark_page_classifications" in parse_result.metadata:
@@ -1229,6 +1319,7 @@ class IngestionService:
             sha256=sha256,
             storage_uri=storage_key,
             metadata=metadata,
+            version_id=verified_object.version_id,
             timestamp=now,
         )
 
@@ -1240,6 +1331,8 @@ class IngestionService:
             artifact_id=artifact_id,
             content_sha256=sha256,
         )
+        if prerequisite is not None:
+            parse_metadata["source_preparation_prerequisite"] = prerequisite
         if no_substantive_content_receipt is not None:
             parse_metadata.pop("watermark_page_classifications", None)
             parse_metadata["document_no_substantive_content_receipt"] = (
@@ -1273,12 +1366,52 @@ class IngestionService:
                 phase_started_at,
             )
 
+        if prerequisite is None and document.doc_type is DocumentType.PDF and parse_result.success:
+            from idis.evaluation.real_example_terminal_reconciliation import (
+                TerminalIngestionReconciliationError,
+            )
+
+            try:
+                terminal_metadata = self._native_pdf_terminal_metadata(document, spans, sha256)
+            except TerminalIngestionReconciliationError:
+                prerequisite = "PARSER_TERMINAL_RECEIPT_UNAVAILABLE"
+                terminal_metadata = {
+                    **document.metadata,
+                    "source_preparation_prerequisite": prerequisite,
+                }
+                artifact = artifact.model_copy(
+                    update={
+                        "metadata": {
+                            **artifact.metadata,
+                            "source_preparation_prerequisite": prerequisite,
+                        },
+                    }
+                )
+            document = document.model_copy(update={"metadata": terminal_metadata})
+
         try:
             phase_started_at = time.monotonic()
             try:
                 self._persist_artifact(ctx.tenant_id, artifact, db_conn=db_conn)
                 self._persist_document(ctx.tenant_id, document, db_conn=db_conn)
-                self._persist_spans(ctx.tenant_id, deal_id, document_id, spans, db_conn=db_conn)
+                if prerequisite is None and parser_identity is not None:
+                    self._persist_runtime_attempt(
+                        ctx=ctx,
+                        document=document,
+                        spans=spans,
+                        input_sha256=sha256,
+                        parser_identity=parser_identity,
+                        started_at=parser_started_at,
+                        finished_at=parser_finished_at,
+                        db_conn=db_conn,
+                    )
+                self._persist_spans(
+                    ctx.tenant_id,
+                    deal_id,
+                    document_id,
+                    spans,
+                    db_conn=db_conn,
+                )
             finally:
                 _record_upload_phase(
                     phase_recorder,
@@ -1773,7 +1906,7 @@ class IngestionService:
         storage_key: str,
         data: bytes,
         content_type: str | None,
-    ) -> IngestionError | None:
+    ) -> StoredObjectMetadata | IngestionError:
         """Store raw bytes via compliance-enforced store.
 
         This method routes through ComplianceEnforcedStore which enforces:
@@ -1787,19 +1920,6 @@ class IngestionService:
             IdisHttpError: Re-raised for compliance denials (403 BYOK/hold errors).
                           These must NOT be swallowed into run failures.
         """
-        from idis.api.errors import IdisHttpError
-
-        _COMPLIANCE_DENIAL_CODES = frozenset(
-            {
-                "BYOK_KEY_REVOKED",
-                "BYOK_AUDIT_REQUIRED",
-                "BYOK_AUDIT_FAILED",
-                "DELETION_BLOCKED_BY_HOLD",
-                "RESIDENCY_REGION_MISMATCH",
-                "RESIDENCY_SERVICE_REGION_UNSET",
-            }
-        )
-
         try:
             tenant_ctx = TenantContext(
                 tenant_id=str(ctx.tenant_id),
@@ -1808,14 +1928,21 @@ class IngestionService:
                 timezone="UTC",
                 data_region="me-south-1",
             )
-            self._compliant_store.put(
+            stored = self._compliant_store.put(
                 tenant_ctx=tenant_ctx,
                 key=storage_key,
                 data=data,
                 content_type=content_type,
                 data_class=DataClass.CLASS_2,
             )
-            return None
+            if (
+                stored.tenant_id != str(ctx.tenant_id)
+                or stored.key != storage_key
+                or stored.sha256 != hashlib.sha256(data).hexdigest()
+                or stored.size_bytes != len(data)
+            ):
+                raise ValueError("object store returned inconsistent upload metadata")
+            return stored
         except IdisHttpError as e:
             if e.status_code == 403 and e.code in _COMPLIANCE_DENIAL_CODES:
                 logger.warning("Compliance denial during storage (re-raising): code=%s", e.code)
@@ -1843,20 +1970,10 @@ class IngestionService:
         size_bytes: int,
         sha256: str,
         content_type: str | None,
-    ) -> IngestionError | None:
+    ) -> StoredObjectMetadata | IngestionError:
         """Stream a staged upload through the compliance-enforced object store."""
         from idis.api.errors import IdisHttpError
 
-        compliance_denial_codes = frozenset(
-            {
-                "BYOK_KEY_REVOKED",
-                "BYOK_AUDIT_REQUIRED",
-                "BYOK_AUDIT_FAILED",
-                "DELETION_BLOCKED_BY_HOLD",
-                "RESIDENCY_REGION_MISMATCH",
-                "RESIDENCY_SERVICE_REGION_UNSET",
-            }
-        )
         try:
             tenant_ctx = TenantContext(
                 tenant_id=str(ctx.tenant_id),
@@ -1866,7 +1983,7 @@ class IngestionService:
                 data_region="me-south-1",
             )
             with source_path.open("rb") as source:
-                self._compliant_store.put_stream(
+                stored = self._compliant_store.put_stream(
                     tenant_ctx=tenant_ctx,
                     key=storage_key,
                     source=source,
@@ -1875,9 +1992,16 @@ class IngestionService:
                     expected_sha256=sha256,
                     expected_size_bytes=size_bytes,
                 )
-            return None
+            if (
+                stored.tenant_id != str(ctx.tenant_id)
+                or stored.key != storage_key
+                or stored.sha256 != sha256
+                or stored.size_bytes != size_bytes
+            ):
+                raise ValueError("object store returned inconsistent upload metadata")
+            return stored
         except IdisHttpError as error:
-            if error.status_code == 403 and error.code in compliance_denial_codes:
+            if error.status_code == 403 and error.code in _COMPLIANCE_DENIAL_CODES:
                 raise
             logger.error("HTTP error during streamed storage: %s", type(error).__name__)
         except Exception as error:
@@ -2221,20 +2345,198 @@ class IngestionService:
         return metadata
 
     def _parser_mode(self, parse_result: ParseResult) -> str:
-        if (
-            parse_result.metadata.get("media_transcription_performed") is True
-            and parse_result.metadata.get("media_frame_ocr_performed") is True
-        ):
+        if parse_result.metadata.get(
+            "media_transcription_performed"
+        ) is True and self._ocr_participated(parse_result):
             return "media_multitrack"
         if parse_result.metadata.get("media_transcription_performed") is True:
             return "media_stt"
-        if parse_result.metadata.get("ocr_performed") is True:
+        if self._ocr_participated(parse_result):
             return "ocr"
         if parse_result.doc_type in {"IMAGE"}:
             return "ocr"
         if parse_result.doc_type in {"MEDIA"}:
             return "media_stt"
         return "native"
+
+    @staticmethod
+    def _ocr_participated(parse_result: ParseResult) -> bool:
+        """Recognize unsuccessful dispatch too; absence of success is not native proof."""
+        required = parse_result.metadata.get("ocr_required_page_count")
+        required_pages = parse_result.metadata.get("ocr_required_page_numbers")
+        return (
+            parse_result.metadata.get("ocr_performed") is True
+            or parse_result.metadata.get("media_frame_ocr_performed") is True
+            or any(
+                error.code.name.startswith(("OCR_", "MEDIA_FRAME_OCR_"))
+                for error in parse_result.errors
+            )
+            or (type(required) is int and required > 0)
+            or (isinstance(required_pages, (list, tuple, set, frozenset)) and bool(required_pages))
+        )
+
+    def _runtime_parser_identity(self, parse_result: ParseResult) -> tuple[str, str] | None:
+        """Bind native code actually loaded; unqualified OCR/media has no attempt."""
+        if self._parser_mode(parse_result) != "native":
+            # Poppler has a real binding but Tesseract/tessdata does not yet.
+            # Native/H2 qualification must supply the complete closure first.
+            return None
+        backing = {
+            "PDF": ("pypdf", "pypdf"),
+            "XLSX": ("openpyxl", "openpyxl"),
+            "DOCX": ("docx", "python-docx"),
+            "PPTX": ("pptx", "python-pptx"),
+        }.get(parse_result.doc_type)
+        versions = []
+        if backing is not None:
+            module_name, distribution_name = backing
+            try:
+                module = importlib.import_module(module_name)
+                distribution = importlib.metadata.distribution(distribution_name)
+                if not module.__file__ or not distribution.version or not distribution.files:
+                    return None
+                executing = Path(module.__file__).resolve()
+                if not any(
+                    Path(str(distribution.locate_file(entry))).resolve() == executing
+                    for entry in distribution.files
+                ):
+                    return None
+                versions.append([distribution_name, distribution.version])
+            except (ImportError, OSError, importlib.metadata.PackageNotFoundError):
+                return None
+        elif parse_result.doc_type not in {"TEXT", "HTML"}:
+            return None
+        digest = hashlib.sha256(
+            canonicalize_json(
+                [
+                    "idis-parser-runtime-v1",
+                    sys.implementation.name,
+                    platform.python_version(),
+                    sorted(versions),
+                    [],
+                ]
+            )
+        ).hexdigest()
+        name = (
+            f"idis-ingestion/{self._parser_runtime(parse_result)}/"
+            f"{self._parser_source_type(parse_result)}/{parse_result.doc_type.lower()}"
+        )
+        return name, "idis-parser-runtime-v1:" + digest
+
+    def _persist_runtime_attempt(
+        self,
+        *,
+        ctx: IngestionContext,
+        document: Document,
+        spans: list[DocumentSpan],
+        input_sha256: str,
+        parser_identity: tuple[str, str],
+        started_at: datetime,
+        finished_at: datetime,
+        db_conn: Connection | None,
+    ) -> str:
+        """Reuse the freezer's exact terminal projection and persist ordinal one."""
+        from idis.persistence.repositories.task7_source_freeze import (
+            _sha256_json,
+            _terminal_document_projection,
+        )
+
+        document_id = str(document.document_id)
+        attempt_id = str(
+            uuid5(
+                NAMESPACE_URL,
+                canonicalize_json(
+                    [
+                        "idis-runtime-parse-attempt-v1",
+                        str(ctx.tenant_id),
+                        str(document.deal_id),
+                        document_id,
+                        1,
+                    ]
+                ).decode("utf-8"),
+            )
+        )
+        projection = _terminal_document_projection(
+            document.metadata,
+            doc_type=document.doc_type.value,
+            parse_status=document.parse_status.value,
+            spans=[
+                {
+                    "locator": span.locator,
+                    "span_type": span.span_type.value,
+                    "content_hash": span.content_hash,
+                }
+                for span in spans
+            ],
+        )
+        receipt = _sha256_json(
+            [
+                "terminal-document-metadata-v2",
+                document.doc_type.value,
+                document.parse_status.value,
+                projection,
+            ]
+        )
+        repo = self._documents_repo(ctx.tenant_id, db_conn=db_conn)
+        if repo is not None:
+            repo.create_runtime_parse_attempt(
+                parse_attempt_id=attempt_id,
+                deal_id=str(document.deal_id),
+                document_id=document_id,
+                parser_name=parser_identity[0],
+                parser_version=parser_identity[1],
+                input_sha256=input_sha256,
+                receipt_sha256=receipt,
+                status=document.parse_status.value,
+                started_at=started_at,
+                finished_at=finished_at,
+            )
+        return attempt_id
+
+    @staticmethod
+    def _native_pdf_terminal_metadata(
+        document: Document,
+        spans: list[DocumentSpan],
+        content_sha256: str,
+    ) -> dict[str, Any]:
+        """Compose existing receipt builders over the exact rows being persisted."""
+        from idis.evaluation.real_example_terminal_reconciliation import (
+            _safe_durable_span_receipts,
+            _safe_pdf_ocr_evidence_v5,
+        )
+        from idis.persistence.repositories.task7_source_freeze import _SOURCE_SCHEMA_AUTHORITIES
+
+        _, locator_proof = _safe_durable_span_receipts(
+            {"items": [span.model_dump(mode="json") for span in spans], "total": len(spans)},
+            document_id=str(document.document_id),
+            is_media=False,
+            extension="pdf",
+            ocr_performed=False,
+            require_pdf_page_census=True,
+        )
+        evidence = _safe_pdf_ocr_evidence_v5(
+            document.metadata,
+            content_sha256=content_sha256,
+            parse_status=document.parse_status.value,
+            locator_proof=locator_proof,
+            watermark_receipt=None,
+            expected_page_count=None,
+            whole_document_terminal=False,
+        )
+        payloads = {
+            "ocr-terminal-evidence": evidence,
+            "pdf-page-disposition-census": evidence["pdf_page_census"],
+        }
+        refs = [
+            {
+                "schema_id": schema_id,
+                "schema_version": payload["schema_version"],
+                "schema_sha256": _SOURCE_SCHEMA_AUTHORITIES[(schema_id, payload["schema_version"])],
+                "validated_payload": payload,
+            }
+            for schema_id, payload in sorted(payloads.items())
+        ]
+        return {**document.metadata, "applicable_schema_refs": refs}
 
     def _parser_runtime(self, parse_result: ParseResult) -> str:
         if self._parser_mode(parse_result) == "ocr":
@@ -2260,7 +2562,7 @@ class IngestionService:
             if self._parser_mode(parse_result) == "media_multitrack":
                 return "media_dual_track"
             return "media_stt"
-        if parse_result.metadata.get("ocr_performed") is True:
+        if self._parser_mode(parse_result) == "ocr":
             return "pdf_ocr_fallback"
         return "native_parser"
 
@@ -2273,6 +2575,7 @@ class IngestionService:
         sha256: str,
         storage_uri: str,
         metadata: dict[str, Any],
+        version_id: str,
         timestamp: datetime,
     ) -> DocumentArtifact:
         """Create DocumentArtifact model."""
@@ -2285,7 +2588,7 @@ class IngestionService:
             doc_type=doc_type,
             title=filename,
             source_system=source_system if isinstance(source_system, str) else "upload",
-            version_id=sha256[:12],
+            version_id=version_id,
             ingested_at=timestamp,
             sha256=sha256,
             uri=storage_uri,

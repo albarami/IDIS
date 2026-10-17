@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from idis.persistence.repositories.runs import RunAlreadyActiveError
+from tests.slice100_task7 import test_task7_atomic_admission_red as admission_mechanics
 
 TENANT_ID = "11111111-1111-1111-1111-111111111111"
 DEAL_ID = "22222222-2222-2222-2222-222222222222"
@@ -152,63 +153,88 @@ def _consume(repo: Any, binding: Any) -> dict[str, Any]:
 
 
 def test_valid_proof_inserts_run_before_marking_proof_consumed() -> None:
-    module = _proof_module()
-    binding = _binding(module)
-    repo, events = _repository(module, record=_record(module, binding=binding))
+    # Reuse the existing modern unit-mechanics graph, not a native DB fixture.
+    repo, events, _steps, _bindings, _edges = admission_mechanics._repository(
+        registry=admission_mechanics._activated_registry()
+    )
 
-    result = _consume(repo, binding)
+    result = admission_mechanics._admit(repo)
 
-    assert result == {"run_id": RUN_ID, "status": "QUEUED"}
+    assert result["run_id"] == admission_mechanics.RUN_ID
+    assert result["status"] == "QUEUED"
     assert events == [
-        "savepoint_begin",
+        "transaction_begin",
+        "bound_sources_locked",
         "proof_locked",
-        "run_insert",
+        "run_inserted",
+        "steps_inserted",
+        "steps_reloaded",
         "proof_consumed",
-        "savepoint_release",
+        "bindings_inserted",
+        "bindings_reloaded",
+        "admission_edges_inserted",
+        "admission_edges_reloaded",
+        "transaction_commit",
     ]
 
 
-def test_active_run_conflict_rolls_back_without_consuming_proof() -> None:
-    module = _proof_module()
-    binding = _binding(module)
-    repo, events = _repository(
-        module,
-        record=_record(module, binding=binding),
-        insert_error=RunAlreadyActiveError(DEAL_ID),
+def test_active_run_conflict_rolls_back_without_consuming_proof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo, events, _steps, _bindings, _edges = admission_mechanics._repository(
+        registry=admission_mechanics._activated_registry()
     )
 
+    def conflict(**_values: Any) -> dict[str, Any]:
+        events.append("run_inserted")
+        raise RunAlreadyActiveError(admission_mechanics.DEAL_ID)
+
+    monkeypatch.setattr(repo, "_insert_task7_run", conflict)
     with pytest.raises(RunAlreadyActiveError):
-        _consume(repo, binding)
+        admission_mechanics._admit(repo)
 
     assert events == [
-        "savepoint_begin",
+        "transaction_begin",
+        "bound_sources_locked",
         "proof_locked",
-        "run_insert",
-        "savepoint_rollback",
+        "run_inserted",
+        "transaction_rollback",
     ]
 
 
-def test_expiry_at_final_consume_rolls_back_inserted_run() -> None:
+def test_expiry_at_final_consume_rolls_back_inserted_run(monkeypatch: pytest.MonkeyPatch) -> None:
     module = _proof_module()
-    binding = _binding(module)
-    repo, events = _repository(
-        module,
-        record=_record(module, binding=binding),
-        mark_consumed=False,
-        consumption_failure_code="STRICT_PREFLIGHT_PROOF_EXPIRED",
+    repo, events, _steps, _bindings, _edges = admission_mechanics._repository(
+        registry=admission_mechanics._activated_registry()
     )
 
+    def expired(*, proof_id: str, run_id: str) -> bool:
+        assert proof_id == admission_mechanics.PROOF_ID
+        assert run_id == admission_mechanics.RUN_ID
+        events.append("proof_consumed")
+        return False
+
+    def classify(proof_id: str) -> str:
+        assert proof_id == admission_mechanics.PROOF_ID
+        events.append("consumption_failure_classified")
+        return "STRICT_PREFLIGHT_PROOF_EXPIRED"
+
+    monkeypatch.setattr(repo, "_mark_consumed", expired)
+    monkeypatch.setattr(repo, "_consumption_failure_code", classify)
     with pytest.raises(module.StrictPreflightProofError) as exc_info:
-        _consume(repo, binding)
+        admission_mechanics._admit(repo)
 
     assert exc_info.value.code == "STRICT_PREFLIGHT_PROOF_EXPIRED"
     assert events == [
-        "savepoint_begin",
+        "transaction_begin",
+        "bound_sources_locked",
         "proof_locked",
-        "run_insert",
+        "run_inserted",
+        "steps_inserted",
+        "steps_reloaded",
         "proof_consumed",
         "consumption_failure_classified",
-        "savepoint_rollback",
+        "transaction_rollback",
     ]
 
 

@@ -454,6 +454,11 @@ def test_worker_composition_loads_and_threads_the_profile_attestation(
             "run_id": "80000000-0000-4000-8000-000000000001",
             "deal_id": _DEAL_ID,
             "mode": "SNAPSHOT",
+            "pipeline_contract_version": "snapshot-v1",
+            "pipeline_contract_hash": (
+                "6365adbfe07f1818fe9e8e634587feb59a6bda5238b625481940d9ea9efce723"
+            ),
+            "pipeline_resume_state": "NON_RESUMABLE",
             "created_by_actor_id": None,
             "created_by_actor_type": None,
             "strict_preflight_proof_id": None,

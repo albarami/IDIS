@@ -129,6 +129,77 @@ class DependencyResolutionTests(unittest.TestCase):
 
 
 class DependencyWiringTests(unittest.TestCase):
+    def test_required_caller_bootstrap_precedes_private_overlay_without_global_db_exports(
+        self,
+    ) -> None:
+        workflow = yaml.safe_load((REPO_ROOT / ".github/workflows/ci.yml").read_text())
+        self._assert_required_caller_wiring(workflow)
+
+    def _assert_required_caller_wiring(self, workflow: dict[str, Any]) -> None:
+        job = workflow["jobs"]["check"]
+        self.assertIn("postgres", job["services"])
+        self.assertIn("@sha256:", job["services"]["postgres"]["image"])
+        steps = job["steps"]
+        setup = [i for i, step in enumerate(steps) if step.get("id") == "required-callers-setup"]
+        self.assertEqual(len(setup), 1)
+        index = setup[0]
+        ceiling = next(
+            i
+            for i, s in enumerate(steps)
+            if s.get("run") == "python scripts/check_migration_ceiling.py"
+        )
+        overlay = next(i for i, s in enumerate(steps) if s.get("id") == "private-overlay")
+        governance_upload = next(
+            i for i, s in enumerate(steps) if s.get("name") == "Upload prompt governance report"
+        )
+        self.assertLess(ceiling, index)
+        self.assertLess(index, governance_upload)
+        self.assertLess(index, overlay)
+        step = steps[index]
+        self.assertEqual(step["run"], "python scripts/pg_bootstrap_ci.py --required-preview check")
+        self.assertNotIn("if", step)
+        self.assertNotIn("continue-on-error", step)
+        self.assertEqual(
+            set(step["env"]),
+            {
+                "IDIS_PG_HOST",
+                "IDIS_PG_PORT",
+                "IDIS_CI_POSTGRES_SERVICE_ID",
+                "PG_ADMIN_USER",
+                "PG_ADMIN_PASSWORD",
+                "IDIS_PG_APP_USER",
+                "IDIS_PG_APP_PASSWORD",
+            },
+        )
+        self.assertNotIn("IDIS_REQUIRE_POSTGRES", job.get("env", {}))
+        self.assertFalse(any(name.startswith("IDIS_DATABASE_") for name in job.get("env", {})))
+        self.assertNotIn("secrets.", str(step))
+        self.assertNotIn("IDIS_CI_READ_TOKEN", str(step))
+
+    def test_required_caller_wiring_rejects_order_scope_and_success_bypasses(self) -> None:
+        for mutation in ("late", "early", "always", "ignored", "global", "no-service"):
+            with self.subTest(mutation=mutation):
+                workflow = yaml.safe_load((REPO_ROOT / ".github/workflows/ci.yml").read_text())
+                job = workflow["jobs"]["check"]
+                steps = job["steps"]
+                setup = next(s for s in steps if s.get("id") == "required-callers-setup")
+                if mutation == "late":
+                    steps.remove(setup)
+                    steps.append(setup)
+                elif mutation == "early":
+                    steps.remove(setup)
+                    steps.insert(0, setup)
+                elif mutation == "always":
+                    setup["if"] = "always()"
+                elif mutation == "ignored":
+                    setup["continue-on-error"] = True
+                elif mutation == "global":
+                    job["env"]["IDIS_DATABASE_URL"] = "postgresql://foreign"
+                else:
+                    del job["services"]["postgres"]
+                with self.assertRaises((AssertionError, StopIteration)):
+                    self._assert_required_caller_wiring(workflow)
+
     def test_declared_fastapi_floor_covers_the_qualified_public_routing_api(self) -> None:
         project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         declared = [

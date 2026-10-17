@@ -7,13 +7,16 @@ from typing import Any
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.sql.elements import TextClause
 
 import idis.pipeline.worker as worker_module
 from idis.models.run_step import StepName
+from idis.persistence.db import DatabaseConfigError, set_tenant_local
 from idis.persistence.provider_reads import (
     ProviderReadConnection,
     UnstagedProviderPersistenceError,
 )
+from idis.persistence.repositories.layer1_evidence import PostgresLayer1EvidenceRepository
 from idis.pipeline.worker import (
     WorkerLeaseConfig,
     _build_provider_output_guard,
@@ -107,6 +110,142 @@ def test_provider_reads_use_one_detached_tenant_transaction_per_query() -> None:
         assert opened.statements[0] == "SET TRANSACTION READ ONLY"
         assert opened.statements[1] == f"SET LOCAL idis.tenant_id = '{_TENANT_ID}'"
         assert opened.statements[2].startswith("SELECT")
+
+
+@pytest.mark.parametrize(
+    "tenant", ["abcdefab-cdef-4abc-8abc-abcdefabcdef", "ABCDEFAB-CDEF-4ABC-8ABC-ABCDEFABCDEF"]
+)
+def test_repository_same_tenant_assertion_opens_no_connection_before_detached_read(
+    tenant: str,
+) -> None:
+    factory = _ReadConnectionFactory()
+    connection = ProviderReadConnection(connection_factory=factory, tenant_id=tenant)
+
+    PostgresLayer1EvidenceRepository(connection, tenant)
+    assert factory.connections == []
+    assert connection.execute(text(f"SET LOCAL idis.tenant_id = '{tenant}'")) is None
+    connection.assert_no_write_attempt()
+    assert connection.execute(text("SELECT 1")).scalar_one() == 1
+    assert len(factory.connections) == 1
+    assert factory.connections[0].active is False
+    assert factory.connections[0].statements == [
+        "SET TRANSACTION READ ONLY",
+        f"SET LOCAL idis.tenant_id = '{tenant}'",
+        "SELECT 1",
+    ]
+
+
+@pytest.mark.parametrize(
+    "tenant", ["not-a-uuid", "", "abcdefab-cdef-4abc-8abc-abcdefabcdef; SELECT 1"]
+)
+def test_provider_scope_constructor_reuses_existing_uuid_format_refusal(tenant: str) -> None:
+    factory = _ReadConnectionFactory()
+    with pytest.raises(DatabaseConfigError):
+        ProviderReadConnection(connection_factory=factory, tenant_id=tenant)
+    assert factory.connections == []
+
+
+class _TextClauseSubclass(TextClause):
+    pass
+
+
+@pytest.mark.parametrize(
+    "variant",
+    [
+        "wrong-tenant",
+        "tenant-case",
+        "sql-case",
+        "trailing-space",
+        "semicolon",
+        "extra-sql",
+        "string",
+        "subclass",
+        "empty-parameters",
+        "parameters",
+        "args",
+        "kwargs",
+    ],
+)
+def test_only_exact_typed_tenant_assertion_is_accepted_and_denials_latch(variant: str) -> None:
+    tenant = "abcdefab-cdef-4abc-8abc-abcdefabcdef"
+    sql = f"SET LOCAL idis.tenant_id = '{tenant}'"
+    statement: Any = text(sql)
+    parameters: Any = None
+    args: tuple[Any, ...] = ()
+    kwargs: dict[str, Any] = {}
+    if variant == "wrong-tenant":
+        statement = text(f"SET LOCAL idis.tenant_id = '{_TENANT_ID}'")
+    elif variant == "tenant-case":
+        statement = text(f"SET LOCAL idis.tenant_id = '{tenant.upper()}'")
+    elif variant == "sql-case":
+        statement = text(sql.lower())
+    elif variant == "trailing-space":
+        statement = text(sql + " ")
+    elif variant == "semicolon":
+        statement = text(sql + ";")
+    elif variant == "extra-sql":
+        statement = text(sql + "; SELECT 1")
+    elif variant == "string":
+        statement = sql
+    elif variant == "subclass":
+        statement = _TextClauseSubclass(sql)
+    elif variant == "empty-parameters":
+        parameters = {}
+    elif variant == "parameters":
+        parameters = {"tenant": tenant}
+    elif variant == "args":
+        args = ({},)
+    else:
+        kwargs = {"execution_options": {}}
+    factory = _ReadConnectionFactory()
+    connection = ProviderReadConnection(connection_factory=factory, tenant_id=tenant)
+    with pytest.raises(UnstagedProviderPersistenceError):
+        connection.execute(statement, parameters, *args, **kwargs)
+    assert factory.connections == []
+    with pytest.raises(UnstagedProviderPersistenceError):
+        connection.assert_no_write_attempt()
+
+
+def test_driver_sql_tenant_set_stays_denied_and_ordinary_connection_still_executes_set() -> None:
+    factory = _ReadConnectionFactory()
+    facade = ProviderReadConnection(connection_factory=factory, tenant_id=_TENANT_ID)
+    with pytest.raises(UnstagedProviderPersistenceError):
+        facade.exec_driver_sql(f"SET LOCAL idis.tenant_id = '{_TENANT_ID}'")
+    assert factory.connections == []
+    with pytest.raises(UnstagedProviderPersistenceError):
+        facade.assert_no_write_attempt()
+    with factory() as ordinary:
+        set_tenant_local(ordinary, _TENANT_ID)
+        assert ordinary.statements == [f"SET LOCAL idis.tenant_id = '{_TENANT_ID}'"]
+
+
+def test_swallowed_foreign_tenant_assertion_cannot_reach_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    factory = _ReadConnectionFactory()
+    facade = ProviderReadConnection(connection_factory=factory, tenant_id=_TENANT_ID)
+    guard = _build_provider_output_guard(provider_reads=facade, contracts={})
+    ctx = RunContext(
+        run_id="run-foreign-scope-latch",
+        tenant_id=_TENANT_ID,
+        deal_id="deal-scope-latch",
+        mode="SNAPSHOT",
+        documents=[],
+        extract_fn=lambda **_kwargs: {},
+        grade_fn=lambda **_kwargs: {},
+        provider_output_guard_fn=guard,
+    )
+    orchestrator = RunOrchestrator(audit_sink=object(), run_steps_repo=object())  # type: ignore[arg-type]
+
+    def swallowed_scope(_step: Any, _ctx: Any, _accumulated: Any) -> dict[str, bool]:
+        with suppress(UnstagedProviderPersistenceError):
+            set_tenant_local(facade, "22222222-2222-4222-8222-222222222222")
+        return {"completed_looking": True}
+
+    monkeypatch.setattr(orchestrator, "_dispatch_step", swallowed_scope)
+    with pytest.raises(UnstagedProviderPersistenceError):
+        orchestrator._dispatch_guarded_step(StepName.ENRICHMENT, ctx, {})
+    assert factory.connections == []
 
 
 @pytest.mark.parametrize(

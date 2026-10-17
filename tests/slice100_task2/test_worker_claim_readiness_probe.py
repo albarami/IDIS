@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -105,6 +106,20 @@ def test_worker_readiness_accepts_a_complete_operational_claim_probe() -> None:
 
 
 @pytest.mark.parametrize(
+    "audit_origin,expected_claim_audit_ok",
+    [
+        ("canonical-worker", True),
+        ("api-inline-equal-request-id", False),
+        ("extra-api-inline-equal-request-id", True),
+        ("wrong-actor", False),
+        ("missing-actor", False),
+        ("wrong-path", False),
+        ("wrong-method", False),
+        ("wrong-status", False),
+        ("unknown-origin", False),
+    ],
+)
+@pytest.mark.parametrize(
     (
         "heartbeat_advances",
         "boundary_probe_result",
@@ -134,6 +149,8 @@ def test_worker_claim_collector_proves_persisted_heartbeat_and_rolls_back(
     boundary_probe_result: bool,
     expected_heartbeat_ok: bool,
     expected_boundary_rollback_ok: bool,
+    audit_origin: str,
+    expected_claim_audit_ok: bool,
 ) -> None:
     import idis.pipeline.worker as worker_module
     import idis.runtime.dependency_probes as module
@@ -189,16 +206,37 @@ def test_worker_claim_collector_proves_persisted_heartbeat_and_rolls_back(
                 audit_inserts.append(dict(params))
                 return Result()
             if "FROM audit_events" in rendered and "EXISTS" not in rendered:
-                return Result(
-                    rows=[
-                        {
-                            "event_type": inserted["event_type"],
-                            "request_id": inserted["request_id"],
-                            "event": inserted["event"],
+                rows: list[object] = []
+                for inserted in audit_inserts:
+                    event = json.loads(str(inserted["event"]))
+                    assert event["request"]["request_id"] == event["payload"]["safe"]["run_id"]
+                    if audit_origin in {
+                        "api-inline-equal-request-id",
+                        "extra-api-inline-equal-request-id",
+                    }:
+                        if audit_origin == "extra-api-inline-equal-request-id":
+                            rows.append(dict(inserted))
+                        event["actor"] = {
+                            "actor_type": "SERVICE",
+                            "actor_id": "idis-api-inline-executor",
                         }
-                        for inserted in audit_inserts
-                    ]
-                )
+                        event["request"]["path"] = "/v1/deals/test-deal/runs"
+                        event["request"]["status_code"] = 202
+                        event["payload"]["safe"]["execution_origin"] = "API_INLINE"
+                    elif audit_origin == "wrong-actor":
+                        event["actor"]["actor_id"] = "another-component"
+                    elif audit_origin == "missing-actor":
+                        event.pop("actor")
+                    elif audit_origin == "wrong-path":
+                        event["request"]["path"] = "/v1/other"
+                    elif audit_origin == "wrong-method":
+                        event["request"]["method"] = "GET"
+                    elif audit_origin == "wrong-status":
+                        event["request"]["status_code"] = 202
+                    elif audit_origin == "unknown-origin":
+                        event["payload"]["safe"]["execution_origin"] = "UNKNOWN_COMPONENT"
+                    rows.append({**inserted, "event": event})
+                return Result(rows=rows)
             if "SELECT last_heartbeat_at, lease_expires_at" in rendered:
                 return Result(rows=[dict(lease_state)])
             if "UPDATE runs" in rendered and "lease_expires_at" in rendered:
@@ -341,7 +379,7 @@ def test_worker_claim_collector_proves_persisted_heartbeat_and_rolls_back(
         queued_row_ok=True,
         claim_ok=True,
         fencing_ok=True,
-        claim_audit_ok=True,
+        claim_audit_ok=expected_claim_audit_ok,
         heartbeat_ok=expected_heartbeat_ok,
         reclaim_ok=True,
         fresh_claim_ok=True,

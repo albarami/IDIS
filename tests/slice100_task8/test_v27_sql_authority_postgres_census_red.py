@@ -12,7 +12,12 @@ import hashlib
 import importlib.util
 import inspect
 import json
+import os
+import shutil
+import stat
+import subprocess
 import sys
+import traceback
 import uuid
 from copy import deepcopy
 from pathlib import Path
@@ -129,6 +134,22 @@ EXPECTED_DML_SEQUENCE_SHA256 = "f36eecb83fdfdb61a5fe91c9b4ece935550fd5aa795400dc
 EXPECTED_MIGRATION_EXECUTION_SOURCE_SHA256 = (
     "1b8aa20b7684bb259545b282c9f70a12107bfa15981f54116246a6102c4fb243"
 )
+# Public historical inputs ONLY; never a replacement for the current runtime.
+_HISTORICAL_SOURCE_COMMIT = "17c2b3b265b3c09121febd90c61a368e827a00ab"
+_HISTORICAL_INTERNAL_SOURCES = (
+    (
+        "src/idis/persistence/db.py",
+        "4f9818e15368641d252607edcad29b0a57e1832f",
+        8274,
+        "9e359cb8a69b370ae31c6ef313ac80ffd6f288adb83e17fdd2a3fc71ae9227eb",
+    ),
+    (
+        "src/idis/models/run_step.py",
+        "286209b55f4406921fa312b451be6f8c1ca5e330",
+        9496,
+        "19f6eb21d96f121c6ab9bd8c68413dabec31005bdeef0240c24772a15fcc7715",
+    ),
+)
 EXPECTED_REQUIREMENT_CASE_IDS = (
     "LEGACY_FOUR_FIELD",
     "POLICY_V2_TWO_FIELD",
@@ -236,6 +257,305 @@ def _signed() -> ModuleType:
 
 def _verifier() -> ModuleType:
     return _load(INDEPENDENT_VERIFIER, "_task8_v27_census_independent_verifier")
+
+
+def _materialize_historical_internal_sources(destination: Path) -> Path:
+    """Extract exactly two pinned local Git blobs; no checkout, fetch or fallback."""
+    try:
+        if destination.absolute() != destination.resolve():
+            raise ValueError("alias")
+        destination.mkdir(mode=0o700)
+        git = shutil.which("git")
+        if git is None:
+            raise ValueError("git unavailable")
+        # Reuse the existing Git-environment policy without private-CI authority.
+        environment = {
+            key: os.environ[key] for key in ("PATH", "SYSTEMROOT", "WINDIR") if key in os.environ
+        }
+        environment.update(
+            {
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CONFIG_GLOBAL": os.devnull,
+                "GIT_TERMINAL_PROMPT": "0",
+                "GIT_ATTR_NOSYSTEM": "1",
+                "GIT_NO_LAZY_FETCH": "1",
+                "LC_ALL": "C",
+            }
+        )
+        command = [
+            str(Path(git).resolve(strict=True)),
+            "--no-replace-objects",
+            "-c",
+            "core.hooksPath=" + os.devnull,
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "protocol.allow=never",
+            "-c",
+            "credential.helper=",
+            "-C",
+            str(REPO_ROOT),
+        ]
+        captured: list[tuple[str, bytes]] = []
+        for relative, blob, length, sha256 in _HISTORICAL_INTERNAL_SOURCES:
+            identity = subprocess.run(
+                [*command, "rev-parse", "--verify", _HISTORICAL_SOURCE_COMMIT + ":" + relative],
+                env=environment,
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+            if identity.returncode or identity.stdout != (blob + "\n").encode("ascii"):
+                raise ValueError("object identity")
+            result = subprocess.run(
+                [*command, "cat-file", "blob", blob],
+                env=environment,
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+            raw = result.stdout
+            if result.returncode or len(raw) != length or hashlib.sha256(raw).hexdigest() != sha256:
+                raise ValueError("blob integrity")
+            captured.append((relative, raw))
+        for relative, raw in captured:
+            path = destination / relative
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            with path.open("xb") as handle:
+                handle.write(raw)
+                info = os.fstat(handle.fileno())
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_nlink != 1
+                or path.resolve() != path.absolute()
+                or path.read_bytes() != raw
+            ):
+                raise ValueError("materialized integrity")
+        return destination
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+        raise AssertionError("TASK8_V27_HISTORICAL_SOURCE_UNAVAILABLE") from None
+
+
+@pytest.fixture(
+    params=[_HISTORICAL_SOURCE_COMMIT],
+    ids=["historical-source-17c2b3b"],
+)
+def historical_internal_source_root(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+) -> Path:
+    """Hermetic historical source integrity, NOT an executed PostgreSQL census."""
+    assert request.param == _HISTORICAL_SOURCE_COMMIT
+    request.node.user_properties.append(("verification_scope", "historical-source"))
+    return _materialize_historical_internal_sources(tmp_path / "historical-internal-sources")
+
+
+def test_v27_historical_internal_sources_are_exact_fresh_git_blobs(
+    tmp_path: Path,
+    request: pytest.FixtureRequest,
+    historical_internal_source_root: Path,
+) -> None:
+    assert request.node.name.endswith("[historical-source-17c2b3b]")
+    assert ("verification_scope", "historical-source") in request.node.user_properties
+    assert historical_internal_source_root.is_dir()
+    materialize = globals().get("_materialize_historical_internal_sources")
+    assert callable(materialize), "explicit historical Git fixture is missing"
+    root = materialize(tmp_path / "historical")
+    expected = (
+        (
+            "src/idis/persistence/db.py",
+            8274,
+            "9e359cb8a69b370ae31c6ef313ac80ffd6f288adb83e17fdd2a3fc71ae9227eb",
+        ),
+        (
+            "src/idis/models/run_step.py",
+            9496,
+            "19f6eb21d96f121c6ab9bd8c68413dabec31005bdeef0240c24772a15fcc7715",
+        ),
+    )
+    assert root == tmp_path / "historical"
+    assert sorted(
+        path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()
+    ) == sorted(row[0] for row in expected)
+    for relative, length, sha256 in expected:
+        path = root / relative
+        assert path.resolve() == path.absolute()
+        assert stat.S_ISREG(path.lstat().st_mode)
+        assert path.stat().st_nlink == 1
+        assert len(path.read_bytes()) == length
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == sha256
+    snapshot = _sql()._capture_migration_source_snapshot(internal_source_root=root)
+    assert len(snapshot.file_rows) + len(snapshot.internal_module_rows) == 42
+    assert snapshot.expected_sha256 == EXPECTED_MIGRATION_EXECUTION_SOURCE_SHA256
+
+
+@pytest.mark.parametrize(
+    "failure",
+    (
+        "missing-object",
+        "missing-blob",
+        "missing-git",
+        "tampered-bytes",
+        "wrong-length",
+        "crlf",
+        "timeout",
+        "resolve-loop",
+    ),
+)
+def test_v27_historical_internal_sources_fail_closed_without_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    materialize = globals().get("_materialize_historical_internal_sources")
+    assert callable(materialize), "explicit historical Git fixture is missing"
+    prior_runtime_bytes = {
+        relative: (REPO_ROOT / relative).read_bytes()
+        for relative, *_ in _HISTORICAL_INTERNAL_SOURCES
+    }
+    prior_runtime_hashes = {
+        relative: hashlib.sha256(raw).hexdigest() for relative, raw in prior_runtime_bytes.items()
+    }
+    real_run = subprocess.run
+    if failure == "missing-object":
+        monkeypatch.setitem(globals(), "_HISTORICAL_SOURCE_COMMIT", "0" * 40)
+    elif failure == "missing-git":
+        monkeypatch.setattr(shutil, "which", lambda _name: None)
+    elif failure == "resolve-loop":
+
+        def broken_resolve(_self: Path, strict: bool = False) -> Path:
+            del strict
+            raise RuntimeError("PRIVATE_DIAGNOSTIC")
+
+        monkeypatch.setattr(Path, "resolve", broken_resolve)
+    else:
+
+        def altered_run(
+            command: list[str],
+            *,
+            env: dict[str, str],
+            capture_output: bool,
+            timeout: int,
+            check: bool,
+        ) -> subprocess.CompletedProcess[bytes]:
+            if env.get("GIT_NO_LAZY_FETCH") != "1":
+                raise AssertionError("missing GIT_NO_LAZY_FETCH")
+            if failure == "timeout":
+                raise subprocess.TimeoutExpired("PRIVATE_DIAGNOSTIC", 30)
+            result = real_run(
+                command, env=env, capture_output=capture_output, timeout=timeout, check=check
+            )
+            if "cat-file" not in command:
+                return result
+            if failure == "missing-blob":
+                return subprocess.CompletedProcess(result.args, 128, b"", b"PRIVATE_DIAGNOSTIC")
+            raw = result.stdout
+            altered = (
+                b"x" + raw[1:]
+                if failure == "tampered-bytes"
+                else raw + b"x"
+                if failure == "wrong-length"
+                else raw.replace(b"\n", b"\r\n")
+            )
+            return subprocess.CompletedProcess(
+                result.args, result.returncode, altered, b"PRIVATE_DIAGNOSTIC"
+            )
+
+        monkeypatch.setattr(subprocess, "run", altered_run)
+    destination = tmp_path / "historical"
+    with pytest.raises(AssertionError, match="^TASK8_V27_HISTORICAL_SOURCE_UNAVAILABLE$") as raised:
+        materialize(destination)
+    assert raised.value.__cause__ is None
+    assert raised.value.__suppress_context__ is True
+    assert str(raised.value) == "TASK8_V27_HISTORICAL_SOURCE_UNAVAILABLE"
+    assert "PRIVATE_DIAGNOSTIC" not in "".join(traceback.format_exception(raised.value))
+    assert not list(destination.rglob("*.py"))
+    after_runtime_bytes = {
+        relative: (REPO_ROOT / relative).read_bytes()
+        for relative, *_ in _HISTORICAL_INTERNAL_SOURCES
+    }
+    assert after_runtime_bytes == prior_runtime_bytes
+    assert {
+        relative: hashlib.sha256(raw).hexdigest() for relative, raw in after_runtime_bytes.items()
+    } == prior_runtime_hashes
+
+
+def test_v27_historical_internal_sources_refuse_existing_destination(tmp_path: Path) -> None:
+    materialize = globals().get("_materialize_historical_internal_sources")
+    assert callable(materialize), "explicit historical Git fixture is missing"
+    destination = tmp_path / "historical"
+    destination.mkdir()
+    sentinel = destination / "foreign"
+    sentinel.write_bytes(b"preserve")
+    with pytest.raises(AssertionError, match="^TASK8_V27_HISTORICAL_SOURCE_UNAVAILABLE$"):
+        materialize(destination)
+    assert sentinel.read_bytes() == b"preserve"
+    assert tuple(destination.iterdir()) == (sentinel,)
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="directory symlink creation requires Windows privilege; real Linux case is required",
+)
+def test_v27_historical_internal_sources_refuse_alias_destination(tmp_path: Path) -> None:
+    materialize = globals().get("_materialize_historical_internal_sources")
+    assert callable(materialize), "explicit historical Git fixture is missing"
+    target = tmp_path / "target"
+    target.mkdir()
+    alias = tmp_path / "historical"
+    alias.symlink_to(target, target_is_directory=True)
+    with pytest.raises(AssertionError, match="^TASK8_V27_HISTORICAL_SOURCE_UNAVAILABLE$"):
+        materialize(alias)
+    assert alias.is_symlink()
+    assert not tuple(target.iterdir())
+
+
+def test_v27_historical_sources_do_not_replace_current_default_or_imports(tmp_path: Path) -> None:
+    materialize = globals().get("_materialize_historical_internal_sources")
+    assert callable(materialize), "explicit historical Git fixture is missing"
+    current_db = importlib.import_module("idis.persistence.db")
+    assert isinstance(current_db.__file__, str)
+    assert Path(current_db.__file__).resolve() == (SRC_ROOT / "idis/persistence/db.py").resolve()
+    assert current_db._ensure_psycopg_driver("postgresql://user:example@localhost/example") == (
+        "postgresql+psycopg2://user:example@localhost/example"
+    )
+    runner = _sql()
+    with pytest.raises(
+        runner.Task8V27CensusError, match="^TASK8_V27_CENSUS_MIGRATION_SOURCE_INVALID$"
+    ):
+        runner._capture_migration_source_snapshot()
+    root = materialize(tmp_path / "historical")
+    snapshot = runner._capture_migration_source_snapshot(internal_source_root=root)
+    prior = {
+        name: module
+        for name, module in sys.modules.items()
+        if name == "idis" or name.startswith("idis.")
+    }
+    prior_path = tuple(sys.path)
+    prior_meta = tuple(sys.meta_path)
+    with (
+        pytest.raises(RuntimeError, match="^controlled-scope-exit$"),
+        runner._captured_migration_internal_module_scope(snapshot),
+    ):
+        assert sys.modules["idis.persistence.db"] is not current_db
+        historical_db = sys.modules["idis.persistence.db"]
+        assert (
+            historical_db._ensure_psycopg_driver("postgresql://user:example@localhost/example")
+            == "postgresql://user:example@localhost/example"
+        )
+        raise RuntimeError("controlled-scope-exit")
+    assert {
+        name: module
+        for name, module in sys.modules.items()
+        if name == "idis" or name.startswith("idis.")
+    } == prior
+    assert sys.modules["idis.persistence.db"] is current_db
+    assert tuple(sys.path) == prior_path
+    assert tuple(sys.meta_path) == prior_meta
+    with pytest.raises(
+        runner.Task8V27CensusError, match="^TASK8_V27_CENSUS_MIGRATION_SOURCE_INVALID$"
+    ):
+        runner._capture_migration_source_snapshot()
 
 
 def _test_canonical_sha256(value: object) -> str:
@@ -969,9 +1289,14 @@ def test_v27_cdd_constructor_import_and_persistence_share_one_byte_capture(
     assert "cdd_byte_count=len(cdd_raw)" in runtime + requirement
 
 
-def test_v27_migrations_execute_only_an_lf_pinned_captured_snapshot(tmp_path: Path) -> None:
+def test_v27_migrations_execute_only_an_lf_pinned_captured_snapshot(
+    tmp_path: Path,
+    historical_internal_source_root: Path,
+) -> None:
     runner = _sql()
-    snapshot = runner._capture_migration_source_snapshot()
+    snapshot = runner._capture_migration_source_snapshot(
+        internal_source_root=historical_internal_source_root,
+    )
     assert len(snapshot.file_rows) == 40
     assert snapshot.file_rows[0][0] == "env.py"
     assert snapshot.file_rows[1][0] == "script.py.mako"
@@ -985,7 +1310,10 @@ def test_v27_migrations_execute_only_an_lf_pinned_captured_snapshot(tmp_path: Pa
         path = source_root / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(raw)
-    captured = runner._capture_migration_source_snapshot(source_root)
+    captured = runner._capture_migration_source_snapshot(
+        source_root,
+        internal_source_root=historical_internal_source_root,
+    )
     swapped = source_root / captured.file_rows[-1][0]
     swapped.write_bytes(b"x" * len(captured.file_rows[-1][1]))
     materialized = tmp_path / "execution-snapshot"
@@ -1011,9 +1339,12 @@ def test_v27_migrations_execute_only_an_lf_pinned_captured_snapshot(tmp_path: Pa
 
 def test_v27_migration_snapshot_closes_exact_internal_imports_after_capture(
     tmp_path: Path,
+    historical_internal_source_root: Path,
 ) -> None:
     runner = _sql()
-    snapshot = runner._capture_migration_source_snapshot()
+    snapshot = runner._capture_migration_source_snapshot(
+        internal_source_root=historical_internal_source_root,
+    )
     expected_modules = (
         ("idis.persistence.db", "src/idis/persistence/db.py"),
         ("idis.models.run_step", "src/idis/models/run_step.py"),
@@ -1065,9 +1396,12 @@ def test_v27_migration_snapshot_closes_exact_internal_imports_after_capture(
 
 def test_v27_migration_execution_loader_never_reopens_swapped_snapshot_bytes(
     tmp_path: Path,
+    historical_internal_source_root: Path,
 ) -> None:
     runner = _sql()
-    snapshot = runner._capture_migration_source_snapshot()
+    snapshot = runner._capture_migration_source_snapshot(
+        internal_source_root=historical_internal_source_root,
+    )
     materialized = tmp_path / "execution-snapshot"
     runner._materialize_migration_source_snapshot(snapshot, materialized)
     relative_path, captured_raw, _sha256 = next(

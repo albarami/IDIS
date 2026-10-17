@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import uuid
@@ -9,17 +10,21 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 from idis.api.auth import IDIS_API_KEYS_ENV
+from idis.audit.postgres_sink import PostgresAuditSink
 from idis.audit.sink import InMemoryAuditSink
 from idis.models.run_step import STEP_ORDER, RunStep, StepName, StepStatus
-from idis.persistence.repositories.run_steps import PostgresRunStepsRepository
+from idis.persistence.db import set_tenant_local
+from idis.persistence.repositories.documents import PostgresDocumentsRepository
 from idis.persistence.repositories.runs import PostgresRunsRepository
-from idis.pipeline.worker import _default_run_context_factory
-from idis.services.ingestion import IngestionContext, IngestionService
-from idis.services.runs.execution import RunExecutionService
-from idis.services.runs.orchestrator import RunOrchestrator
+from idis.persistence.repositories.task7_source_freeze import freeze_source_package
+from idis.pipeline.worker import PipelineWorker, WorkerLeaseConfig
+from idis.services.ingestion import IngestionContext
+from idis.services.runs.orchestrator import RunOrchestrator, RunStepBlockedError
 from idis.storage.compliant_store import ComplianceEnforcedStore
+from idis.tools.preview_source_preparation import PreviewSourceFile, prepare_preview_source_package
 from tests import test_ingestion_persists_documents_postgres as pg_helpers
 from tests.test_api_upload_to_run_smoke_postgres import (
     _assert_safe_public_payload,
@@ -61,27 +66,72 @@ def _configure_two_tenant_api_keys(monkeypatch: Any) -> None:
     )
 
 
-def _run_client(monkeypatch: Any) -> tuple[TestClient, InMemoryAuditSink]:
+class _CapturingPostgresAuditSink(PostgresAuditSink):
+    """Capture safe-event assertions without replacing durable transaction writes."""
+
+    def __init__(self, events: list[dict[str, Any]]) -> None:
+        super().__init__()
+        self.events = events
+
+    def _insert_event(self, conn: Any, event: dict[str, Any]) -> None:
+        super()._insert_event(conn, event)
+        self.events.append(event)
+
+
+def _run_client(monkeypatch: Any) -> tuple[TestClient, _CapturingPostgresAuditSink]:
     _configure_two_tenant_api_keys(monkeypatch)
     client, audit_sink, byok_registry = _make_client_context()
     _configure_byok(byok_registry, audit_sink)
-    return client, audit_sink
+    durable_sink = _CapturingPostgresAuditSink(audit_sink.events)
+    client.app.state.audit_sink = durable_sink
+    return client, durable_sink
+
+
+def _prepare_selected_preview(
+    app_engine: Any,
+    compliant_store: ComplianceEnforcedStore,
+    deal_id: str,
+) -> dict[str, Any]:
+    # Public fictional input, genuine production upload/package mechanics. It is
+    # not a canonical acceptance corpus or operator-authorized exclusion.
+    prepared = prepare_preview_source_package(
+        engine=app_engine,
+        ctx=IngestionContext(
+            tenant_id=pg_helpers.TENANT_ID,
+            actor_id=pg_helpers.ACTOR_ID,
+            request_id=str(uuid.uuid4()),
+        ),
+        deal_id=uuid.UUID(deal_id),
+        files=[PreviewSourceFile("pdf", "application/pdf", pg_helpers._pdf_bytes())],
+        compliant_store=compliant_store,
+        audit_sink=PostgresAuditSink(),
+    )
+    with app_engine.begin() as conn:
+        row = PostgresDocumentsRepository(conn, str(pg_helpers.TENANT_ID)).get_document(
+            prepared.document_ids[0]
+        )
+        assert row is not None
+        assert (
+            conn.execute(
+                text("SELECT source_binding_state FROM documents WHERE document_id=:document"),
+                {"document": prepared.document_ids[0]},
+            ).scalar_one()
+            == "UNBOUND"
+        )
+        row["prepared_package_id"] = prepared.package_id
+        return row
 
 
 def test_get_run_status_exposes_selected_source_and_safe_step_summaries(
     app_engine: Any,
     clean_tables: None,
     monkeypatch: Any,
+    compliant_store: ComplianceEnforcedStore,
 ) -> None:
     """GET run status should explain the selected-document run without raw content."""
     client, audit_sink = _run_client(monkeypatch)
     deal_id = _create_deal(client, name="Slice 23 Observability Deal")
-    selected_upload = _upload_document(
-        client,
-        deal_id=deal_id,
-        filename="selected-observability.pdf",
-        data=pg_helpers._pdf_bytes(),
-    )
+    selected_upload = _prepare_selected_preview(app_engine, compliant_store, deal_id)
     unselected_upload = _upload_document(
         client,
         deal_id=deal_id,
@@ -140,70 +190,38 @@ def test_get_run_status_reflects_worker_updated_persisted_run(
 ) -> None:
     """GET run status should read status and steps written by the worker path."""
     client, audit_sink = _run_client(monkeypatch)
-
+    deal_id = _create_deal(client, name="Slice 23 Worker Observability Deal")
+    selected = _prepare_selected_preview(app_engine, compliant_store, deal_id)
+    unselected = _upload_document(
+        client,
+        deal_id=deal_id,
+        filename="worker-unselected.xlsx",
+        data=pg_helpers._xlsx_bytes(),
+    )
+    assert selected["document_id"] != unselected["document_id"]
+    freeze_source_package(
+        engine=app_engine,
+        tenant_id=str(pg_helpers.TENANT_ID),
+        deal_id=deal_id,
+        package_id=selected["prepared_package_id"],
+    )
+    source = {"type": "deal_documents", "document_ids": [selected["document_id"]]}
+    run_id = str(uuid.uuid4())
     with app_engine.begin() as conn:
-        pg_helpers._create_deal(conn)
-        ingestion_service = IngestionService(
-            compliant_store=compliant_store,
-            audit_sink=audit_sink,
-            db_conn=conn,
-        )
-        selected_result = ingestion_service.ingest_bytes(
-            ctx=IngestionContext(
-                tenant_id=pg_helpers.TENANT_ID,
-                actor_id=pg_helpers.ACTOR_ID,
-                request_id="slice-23-worker-selected",
-            ),
-            deal_id=pg_helpers.DEAL_ID,
-            filename="worker-observable.pdf",
-            media_type="application/pdf",
-            data=pg_helpers._pdf_bytes(),
-            metadata={"source_system": "slice-23-worker-observability"},
-        )
-        unselected_result = ingestion_service.ingest_bytes(
-            ctx=IngestionContext(
-                tenant_id=pg_helpers.TENANT_ID,
-                actor_id=pg_helpers.ACTOR_ID,
-                request_id="slice-23-worker-unselected",
-            ),
-            deal_id=pg_helpers.DEAL_ID,
-            filename="worker-unselected.xlsx",
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            data=pg_helpers._xlsx_bytes(),
-            metadata={"source_system": "slice-23-worker-observability"},
-        )
-        assert selected_result.document_id != unselected_result.document_id
-        source = {
-            "type": "deal_documents",
-            "document_ids": [str(selected_result.document_id)],
-        }
         runs_repo = PostgresRunsRepository(conn, str(pg_helpers.TENANT_ID))
-        run_id = str(uuid.uuid4())
-        runs_repo.create(
+        queued = runs_repo.create(
             run_id=run_id,
-            deal_id=str(pg_helpers.DEAL_ID),
+            deal_id=deal_id,
             mode="SNAPSHOT",
             source=source,
         )
-        claimed = runs_repo.claim_queued_runs(limit=10)
-        assert len(claimed) == 1
-
-        monkeypatch.setattr(
-            "idis.pipeline.worker._load_worker_deal_metadata",
-            lambda **_: {"company_name": "Synthetic Ingestion Deal"},
-        )
-        ctx = _default_run_context_factory(
-            db_conn=conn,
-            tenant_id=str(pg_helpers.TENANT_ID),
-            run_data=claimed[0],
-            audit_sink=audit_sink,
-        )
-        service = RunExecutionService(
-            audit_sink=audit_sink,
-            runs_repo=runs_repo,
-            run_steps_repo=PostgresRunStepsRepository(conn, str(pg_helpers.TENANT_ID)),
-        )
-        service.execute(ctx)
+        assert queued["status"] == "QUEUED" and queued["lease_owner_id"] is None
+    worker = PipelineWorker(
+        tenant_ids=[str(pg_helpers.TENANT_ID)],
+        lease_config=WorkerLeaseConfig(lease_seconds=60, heartbeat_seconds=10),
+    )
+    assert worker._uses_production_runtime is True
+    assert asyncio.run(worker._process_queued_runs()) == 1
 
     status_response = client.get(
         f"/v1/runs/{run_id}",
@@ -217,12 +235,33 @@ def test_get_run_status_reflects_worker_updated_persisted_run(
     assert body["source"] == source
     assert body["steps"]
     _assert_safe_public_payload(body)
+    _assert_safe_public_payload(audit_sink.events)
+    with app_engine.begin() as conn:
+        set_tenant_local(conn, str(pg_helpers.TENANT_ID))
+        assert (
+            conn.execute(
+                text(
+                    "SELECT count(*) FROM audit_events WHERE event_type='worker.lease.claimed' "
+                    "AND event->'payload'->'safe'->>'run_id'=:run"
+                ),
+                {"run": run_id},
+            ).scalar_one()
+            == 1
+        )
+        assert (
+            conn.execute(
+                text("SELECT source_binding_state FROM documents WHERE document_id=:document"),
+                {"document": unselected["document_id"]},
+            ).scalar_one()
+            == "UNBOUND"
+        )
 
 
 def test_get_run_status_derives_block_reason_from_step_ledger(
     app_engine: Any,
     clean_tables: None,
     monkeypatch: Any,
+    compliant_store: ComplianceEnforcedStore,
 ) -> None:
     """A failed selected run should expose a durable safe block reason."""
     client, _audit_sink = _run_client(monkeypatch)
@@ -253,6 +292,60 @@ def test_get_run_status_derives_block_reason_from_step_ledger(
     failed_upload = listed_response.json()["items"][0]
     assert failed_upload["parse_status"] == "FAILED"
 
+    from idis.api.routes import runs as routes
+
+    forbidden_calls: list[str] = []
+
+    def forbidden_boundary(*_args: Any, **_kwargs: Any) -> Any:
+        forbidden_calls.append("post-admission")
+        raise AssertionError("unfrozen corrupt input must not reach a claim or producer context")
+
+    with monkeypatch.context() as negative:
+        negative.setattr(routes, "build_run_context", forbidden_boundary)
+        negative.setattr(
+            PostgresRunsRepository, "claim_queued_run_for_execution", forbidden_boundary
+        )
+        run_response = client.post(
+            f"/v1/deals/{deal_id}/runs",
+            headers={"X-IDIS-API-Key": pg_helpers.API_KEY},
+            json={
+                "mode": "SNAPSHOT",
+                "source": {
+                    "type": "deal_documents",
+                    "document_ids": [failed_upload["document_id"]],
+                },
+            },
+        )
+    # AUTH-FROZEN-PREVIEWS forbids admitting this unreadable, unfrozen upload.
+    # Preserve that security negative; it is not a NO_USABLE frozen-corpus proof.
+    assert run_response.status_code == 409
+    assert run_response.json()["code"] == "SOURCE_PACKAGE_REQUIRED"
+    assert run_response.json().get("details") is None
+    assert forbidden_calls == []
+    with app_engine.begin() as conn:
+        set_tenant_local(conn, str(pg_helpers.TENANT_ID))
+        for table in ("runs", "run_steps", "claims", "webhook_delivery_attempts"):
+            assert conn.execute(text(f"SELECT count(*) FROM {table}")).scalar_one() == 0
+
+    # The original durable GET ledger/privacy oracle uses genuine frozen input
+    # and an explicit controlled producer fault, not fabricated empty evidence.
+    valid_upload = _prepare_selected_preview(app_engine, compliant_store, deal_id)
+    actual_build = routes.build_run_context
+    calls: list[str] = []
+
+    def controlled_fault(**_kwargs: Any) -> Any:
+        calls.append("extract")
+        raise RunStepBlockedError(
+            "C3_CONTROLLED_EXTRACT_FAILURE",
+            "Private controlled test failure must not appear in public output",
+        )
+
+    def controlled_context(**kwargs: Any) -> Any:
+        context = actual_build(**kwargs)
+        context.extract_fn = controlled_fault
+        return context
+
+    monkeypatch.setattr(routes, "build_run_context", controlled_context)
     run_response = client.post(
         f"/v1/deals/{deal_id}/runs",
         headers={"X-IDIS-API-Key": pg_helpers.API_KEY},
@@ -260,12 +353,13 @@ def test_get_run_status_derives_block_reason_from_step_ledger(
             "mode": "SNAPSHOT",
             "source": {
                 "type": "deal_documents",
-                "document_ids": [failed_upload["document_id"]],
+                "document_ids": [valid_upload["document_id"]],
             },
         },
     )
-    assert run_response.status_code == 202
-    assert run_response.json()["block_reason"] == "NO_USABLE_DOCUMENTS"
+    assert run_response.status_code == 202, run_response.text
+    assert calls == ["extract"]
+    assert run_response.json()["block_reason"] == "C3_CONTROLLED_EXTRACT_FAILURE"
 
     status_response = client.get(
         f"/v1/runs/{run_response.json()['run_id']}",
@@ -275,29 +369,30 @@ def test_get_run_status_derives_block_reason_from_step_ledger(
     assert status_response.status_code == 200
     body = status_response.json()
     assert body["status"] == "FAILED"
-    assert body["block_reason"] == "NO_USABLE_DOCUMENTS"
+    assert body["block_reason"] == "C3_CONTROLLED_EXTRACT_FAILURE"
     failed_steps = [step for step in body["steps"] if step["status"] == "FAILED"]
-    assert failed_steps[-1]["error"]["code"] == "NO_USABLE_DOCUMENTS"
+    assert failed_steps[-1]["error"]["code"] == "C3_CONTROLLED_EXTRACT_FAILURE"
     assert failed_steps[-1]["error"]["message"] != (
         "No usable documents remain after document preflight"
     )
     _assert_safe_public_payload(body)
+    assert "Private controlled test failure" not in json.dumps(body)
+    assert any(step["status"] == "COMPLETED" for step in body["steps"])
+    assert len(failed_steps) == 1
+    assert failed_steps[0]["step_name"] == "EXTRACT"
+    assert body["steps"][-1] == failed_steps[0]
 
 
 def test_get_run_status_cross_tenant_returns_404_without_existence_leak(
     app_engine: Any,
     clean_tables: None,
     monkeypatch: Any,
+    compliant_store: ComplianceEnforcedStore,
 ) -> None:
     """Cross-tenant run reads must not reveal run existence or source details."""
     client, _audit_sink = _run_client(monkeypatch)
     deal_id = _create_deal(client, name="Slice 23 Tenant Isolation Deal")
-    upload = _upload_document(
-        client,
-        deal_id=deal_id,
-        filename="tenant-isolation.pdf",
-        data=pg_helpers._pdf_bytes(),
-    )
+    upload = _prepare_selected_preview(app_engine, compliant_store, deal_id)
     run_response = client.post(
         f"/v1/deals/{deal_id}/runs",
         headers={"X-IDIS-API-Key": pg_helpers.API_KEY},

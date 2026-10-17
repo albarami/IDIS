@@ -168,7 +168,10 @@ def test_strict_manifest_is_persisted_and_drives_exact_safe_file_rows() -> None:
 
     files = repo.list_files_by_package(summary["package_id"], str(DEAL))
     assert [row.sequence for row in files] == [0, 1]
-    assert [str(row.document_id) for row in files] == [str(DOC_A), str(DOC_B)]
+    # Upload-first staging is not a durable source binding. The unchanged
+    # manifest pins real upload IDs; only actual freeze attaches ledger IDs.
+    assert all(row.document_id is None and row.doc_id is None for row in files)
+    assert [row.document_id for row in manifest.files] == [DOC_A, DOC_B]
     assert [row.path_hash for row in files] == [PATH_A, PATH_B]
     assert [row.sha256 for row in files] == [SHA_A, SHA_B]
     assert [row.extension for row in files] == ["pdf", "xlsx"]
@@ -580,5 +583,86 @@ def test_strict_manifest_roundtrips_through_real_http_route_with_idempotent_repl
     )
     assert record.status_code == 200
     assert record.json()["source_manifest"]["run_alias"] == "run-001"
-    assert record.json()["files"][0]["doc_id"] == str(DOC_A)
+    assert "doc_id" not in record.json()["files"][0]
+    assert "document_id" not in record.json()["files"][0]
     assert record.json()["files"][0]["sequence"] == 0
+
+
+@pytest.mark.parametrize(
+    ("status", "pair", "allowed"),
+    [
+        ("OPEN", "null", True),
+        ("OPEN", "exact", True),
+        ("SEALED", "exact", True),
+        ("SEALED", "null", False),
+        ("OPEN", "half", False),
+        ("SEALED", "half", False),
+        ("OPEN", "wrong", False),
+        (None, "null", False),
+        (None, "exact", False),
+        ("UNKNOWN", "exact", False),
+    ],
+)
+def test_acceptance_producer_reconciles_only_open_null_or_exact_known_state(
+    status: str | None, pair: str, allowed: bool
+) -> None:
+    from idis.evaluation.real_example_source_package import (
+        SourcePackageContractError,
+        _validate_durable_package_record,
+    )
+
+    repo = InMemoryDataRoomPackagesRepository(str(TENANT))
+    manifest = _manifest_payload()
+    record = _create(repo, source_manifest=manifest)
+    package_id = record["package_id"]
+    files = repo.list_files_by_package(package_id, str(DEAL))
+    record["files"] = [row.safe_dict(include_sequence=True) for row in files]
+    if status is None:
+        record.pop("status")
+    else:
+        record["status"] = status
+    for actual, expected in zip(record["files"], manifest["files"], strict=True):
+        actual.pop("doc_id", None)
+        actual.pop("document_id", None)
+        if pair in {"exact", "half", "wrong"}:
+            actual["document_id"] = expected["document_id"]
+        if pair in {"exact", "wrong"}:
+            actual["doc_id"] = expected["doc_id"] if pair == "exact" else str(OTHER_DEAL)
+
+    def call() -> None:
+        _validate_durable_package_record(
+            record=record, deal_id=str(DEAL), package_id=package_id, manifest_payload=manifest
+        )
+
+    if allowed:
+        call()
+    else:
+        with pytest.raises(SourcePackageContractError) as caught:
+            call()
+        assert caught.value.code == "DATA_ROOM_DURABLE_HANDOFF_INCOMPLETE"
+
+
+@pytest.mark.parametrize("field", ["sequence", "path_hash", "sha256", "extension"])
+def test_acceptance_open_null_pair_never_waives_other_file_identity(field: str) -> None:
+    from idis.evaluation.real_example_source_package import (
+        SourcePackageContractError,
+        _validate_durable_package_record,
+    )
+
+    repo = InMemoryDataRoomPackagesRepository(str(TENANT))
+    manifest = _manifest_payload()
+    record = _create(repo, source_manifest=manifest)
+    files = repo.list_files_by_package(record["package_id"], str(DEAL))
+    record["files"] = [row.safe_dict(include_sequence=True) for row in files]
+    for row in record["files"]:
+        row.pop("document_id", None)
+        row.pop("doc_id", None)
+    record["files"][0][field] = 99 if field == "sequence" else "drift"
+    with pytest.raises(SourcePackageContractError) as caught:
+        _validate_durable_package_record(
+            record=record,
+            deal_id=str(DEAL),
+            package_id=record["package_id"],
+            manifest_payload=manifest,
+        )
+    assert caught.value.code == "DATA_ROOM_DURABLE_HANDOFF_INCOMPLETE"

@@ -1162,7 +1162,11 @@ class PostgresStrictPreflightProofsRepository:
         created_by_actor_id: str | None,
         created_by_actor_type: str | None,
     ) -> dict[str, Any]:
-        """Lock and validate a proof, create its run, then consume it atomically."""
+        """Retain validation precedence, then reject this source-unbound entry.
+
+        Strict admission requires frozen source packages, which this historical
+        signature cannot carry. Use consume_and_admit_contract_run instead.
+        """
         try:
             proof_id = str(uuid.UUID(proof_id))
         except (AttributeError, TypeError, ValueError) as exc:
@@ -1177,19 +1181,7 @@ class PostgresStrictPreflightProofsRepository:
                 expected_binding=expected_binding,
                 deal_id=deal_id,
             )
-            run = self._insert_run(
-                run_id=run_id,
-                deal_id=deal_id,
-                mode=mode,
-                idempotency_key=idempotency_key,
-                source=source,
-                created_by_actor_id=created_by_actor_id,
-                created_by_actor_type=created_by_actor_type,
-                strict_preflight_proof_id=proof_id,
-            )
-            if not self._mark_consumed(proof_id=proof_id, run_id=run_id):
-                raise StrictPreflightProofError(self._consumption_failure_code(proof_id))
-            return run
+            raise StrictPreflightProofError("PIPELINE_CONTRACT_UNAVAILABLE")
 
     def require_consumed_for_run(
         self,

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -135,6 +137,18 @@ def test_summary_binds_actual_step_outcome_as_environment_data() -> None:
     assert "${{ steps." not in summary["run"]
 
 
+def _pinned_release_gate() -> tuple[str, str]:
+    """Reuse the J-03 release-gate literals so this pin cannot drift from them."""
+    path = ROOT / "tests" / "test_pg_bootstrap_ci_required_preview.py"
+    spec = importlib.util.spec_from_file_location("cir04j_release_gate_pins", path)
+    if spec is None or spec.loader is None:
+        raise AssertionError("release-gate pin module is missing")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module._RELEASE_GATE_IF, module._required_job_gate_run()
+
+
 def test_required_health_invocation_and_release_dependencies_are_unchanged() -> None:
     workflow = _workflow()
     jobs = workflow["jobs"]
@@ -147,7 +161,12 @@ def test_required_health_invocation_and_release_dependencies_are_unchanged() -> 
     assert "continue-on-error" not in container
     assert "if" not in container
     assert set(jobs["release-gate"]["needs"]) == set(jobs) - {"release-gate"}
-    assert jobs["release-gate"].get("if") is None
+    expression, guard_run = _pinned_release_gate()
+    gate = jobs["release-gate"]
+    assert gate.get("if") == expression
+    guard = gate["steps"][0]
+    assert guard["name"] == "Fail unless every required job succeeded"
+    assert guard["run"] == guard_run
     assert (
         'CMD ["python", "-m", "idis.runtime.strict_launcher", "api", '
         '"--host", "0.0.0.0", "--port", "8000", "--pid-file", "/tmp/idis-api.pid"]'

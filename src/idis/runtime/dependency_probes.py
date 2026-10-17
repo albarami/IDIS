@@ -2961,9 +2961,20 @@ def collect_worker_claim_facts(
                         if isinstance(raw_event, Mapping)
                         else {}
                     )
+                    actor = raw_event.get("actor") if isinstance(raw_event, Mapping) else None
+                    request = raw_event.get("request") if isinstance(raw_event, Mapping) else None
                     if not (
                         isinstance(raw_event, Mapping)
                         and isinstance(safe, Mapping)
+                        and isinstance(actor, Mapping)
+                        and actor.get("actor_type") == "SERVICE"
+                        and actor.get("actor_id") == "idis-pipeline-worker"
+                        and isinstance(request, Mapping)
+                        and request.get("request_id") == run_id
+                        and request.get("method") == "POST"
+                        and request.get("path") == f"/v1/runs/{run_id}/worker-lease"
+                        and request.get("status_code") == 200
+                        and "execution_origin" not in safe
                         and raw_event.get("tenant_id") == probe_tenant_id
                         and str(_row_value(audit_row, "request_id", 1)) == run_id
                         and str(safe.get("run_id")) == run_id

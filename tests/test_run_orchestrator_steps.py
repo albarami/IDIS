@@ -1,5 +1,12 @@
 """Tests for RunOrchestrator step ledger - Phase 5 orchestration.
 
+Module-wide harness ``_clear_stores`` sets ``IDIS_REQUIRE_FULL_LIVE=0`` and
+removes ``IDIS_DATABASE_URL`` before every test, including held cases. This
+module does not replace ``asyncio.run`` or ``asyncio.to_thread``; that override
+lives in the pipeline-worker harness. Step-level corpus positives that inject
+documents into in-memory deal state are component injections, not proof that
+production can freeze those corpora.
+
 Covers:
 - SNAPSHOT records seven steps in order
   (DATA_ROOM_INVENTORY_PACKAGE -> DATA_ROOM_INGESTION_HANDOFF -> INGEST_CHECK -> DOCUMENT_PREFLIGHT
@@ -15,7 +22,9 @@ Updated for Phase 3.0 Slice 4: FULL mode now has 12 steps.
 from __future__ import annotations
 
 import json
+import secrets
 import uuid
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -33,6 +42,10 @@ from idis.persistence.repositories.run_steps import (
     clear_run_steps_store,
 )
 from idis.services.runs.orchestrator import RunContext, RunOrchestrator
+from tests._cir04c3_required_frozen_preview import (
+    CapturingRequiredPostgresAuditSink,
+    required_frozen_preview,
+)
 from tests.abac_seed import seed_deal_access
 
 TENANT_A = "11111111-1111-1111-1111-111111111111"
@@ -255,8 +268,10 @@ def _make_failed_preflight_document() -> dict[str, Any]:
 
 
 @pytest.fixture(autouse=True)
-def _clear_stores() -> None:
+def _clear_stores(monkeypatch: pytest.MonkeyPatch) -> None:
     """Reset in-memory stores before each test."""
+    monkeypatch.setenv("IDIS_REQUIRE_FULL_LIVE", "0")
+    monkeypatch.delenv("IDIS_DATABASE_URL", raising=False)
     clear_deals_store()
     clear_runs_store()
     clear_run_steps_store()
@@ -912,41 +927,121 @@ class TestFullCompletesAllSteps:
 class TestCrossTenantRunStepReadReturns404:
     """test_cross_tenant_run_step_read_returns_404."""
 
-    def test_cross_tenant_run_step_read_returns_404(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_cross_tenant_run_step_read_returns_404(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
         """Cross-tenant GET /v1/runs/{runId} returns 404 with no existence leak."""
-        monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(_make_api_keys()))
-        audit_sink = InMemoryAuditSink()
-        app = create_app(audit_sink=audit_sink, service_region="me-south-1")
-        app.state.deal_documents = {}
-        client = TestClient(app)
+        tenant_a = str(uuid.uuid4())
+        tenant_b = str(uuid.uuid4())
+        api_keys = _make_api_keys()
+        api_keys[API_KEY_A]["tenant_id"] = tenant_a
+        api_keys[API_KEY_B]["tenant_id"] = tenant_b
+        with required_frozen_preview(monkeypatch) as preview_db:
+            preview_db.add_tenant(tenant_a, "me-south-1")
+            preview_db.add_tenant(tenant_b, "me-south-1")
+            monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys))
+            audit_sink = InMemoryAuditSink()
+            app = create_app(
+                audit_sink=CapturingRequiredPostgresAuditSink(audit_sink),
+                service_region="me-south-1",
+            )
+            client = TestClient(app)
 
-        create_resp = client.post(
-            "/v1/deals",
-            json={"name": "Test Deal", "company_name": "TestCo"},
-            headers={"X-IDIS-API-Key": API_KEY_A},
-        )
-        assert create_resp.status_code == 201
-        deal_id = create_resp.json()["deal_id"]
-        seed_deal_access(TENANT_A, deal_id, "actor-a")
-        app.state.deal_documents[deal_id] = _make_documents()
+            create_resp = client.post(
+                "/v1/deals",
+                json={"name": "Test Deal", "company_name": "TestCo"},
+                headers={"X-IDIS-API-Key": API_KEY_A},
+            )
+            assert create_resp.status_code == 201
+            deal_id = create_resp.json()["deal_id"]
+            seed_deal_access(tenant_a, deal_id, "actor-a")
+            preview_db.prepare_pdf(tenant_a, deal_id, tmp_path / "preview-cross-tenant")
 
-        run_resp = client.post(
-            f"/v1/deals/{deal_id}/runs",
-            json={"mode": "SNAPSHOT"},
-            headers={"X-IDIS-API-Key": API_KEY_A},
-        )
-        assert run_resp.status_code == 202
-        run_id = run_resp.json()["run_id"]
+            run_resp = client.post(
+                f"/v1/deals/{deal_id}/runs",
+                json={"mode": "SNAPSHOT"},
+                headers={"X-IDIS-API-Key": API_KEY_A},
+            )
+            assert run_resp.status_code == 202
+            run_id = run_resp.json()["run_id"]
 
-        cross_resp = client.get(
-            f"/v1/runs/{run_id}",
-            headers={"X-IDIS-API-Key": API_KEY_B},
+            cross_resp = client.get(
+                f"/v1/runs/{run_id}",
+                headers={"X-IDIS-API-Key": API_KEY_B},
+            )
+            assert cross_resp.status_code == 404
+            body = cross_resp.json()
+            assert body["code"] == "NOT_FOUND"
+            details = body.get("details") or {}
+            assert "run_id" not in details
+
+
+def _open_preview_package(
+    preview_db: Any,
+    *,
+    tenant_id: str,
+    deal_id: str,
+    root: Path,
+    payloads: list[bytes],
+) -> list[str]:
+    """Ingest bytes into one OPEN manifest package. Does not freeze or attest."""
+    from idis.audit.postgres_sink import PostgresAuditSink
+    from idis.persistence.repositories.data_room_packages import PostgresDataRoomPackagesRepository
+    from idis.persistence.repositories.documents import PostgresDocumentsRepository
+    from idis.services.data_room.package_service import create_data_room_package
+    from idis.services.ingestion import IngestionContext, IngestionService
+    from idis.storage.compliant_store import ComplianceEnforcedStore
+    from idis.storage.filesystem_store import FilesystemObjectStore
+    from idis.tools.preview_source_preparation import create_preview_preparation
+
+    preparation = create_preview_preparation(
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        files=[("pdf", payload) for payload in payloads],
+    )
+    store = ComplianceEnforcedStore(inner_store=FilesystemObjectStore(base_dir=root))
+    uploaded: list[str] = []
+    with preview_db.engine.begin() as conn:
+        service = IngestionService(
+            compliant_store=store,
+            audit_sink=PostgresAuditSink(),
+            db_conn=conn,
         )
-        assert cross_resp.status_code == 404
-        body = cross_resp.json()
-        assert body["code"] == "NOT_FOUND"
-        details = body.get("details") or {}
-        assert "run_id" not in details
+        ctx = IngestionContext(
+            tenant_id=uuid.UUID(tenant_id), actor_id="actor-a", request_id="c3b3"
+        )
+        for sequence, payload in enumerate(payloads):
+            result = service.ingest_bytes(
+                ctx=ctx,
+                deal_id=uuid.UUID(deal_id),
+                filename=preparation.files[sequence].generated_upload_name,
+                media_type="application/pdf",
+                data=payload,
+                metadata=preparation.upload_metadata(sequence),
+            )
+            assert result.document_id is not None
+            uploaded.append(str(result.document_id))
+        documents_repository = PostgresDocumentsRepository(conn, tenant_id)
+        documents = []
+        for document_id in uploaded:
+            document = documents_repository.get_document(document_id)
+            if document is None:
+                raise AssertionError("uploaded document was not persisted")
+            documents.append(document)
+        manifest = preparation.build_manifest(documents)
+        create_data_room_package(
+            repo=PostgresDataRoomPackagesRepository(conn, tenant_id),
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            created_by_actor_id="actor-a",
+            created_by_actor_type="SERVICE",
+            document_ids=uploaded,
+            documents=documents,
+            source_manifest=manifest,
+        )
+    return uploaded
 
 
 class TestStartRunPreflightCorpusBehavior:
@@ -1019,6 +1114,61 @@ class TestStartRunPreflightCorpusBehavior:
             "INGEST_CHECK",
             "DOCUMENT_PREFLIGHT",
         ]
+
+    def test_api_all_failed_package_without_attestation_is_refused_before_run_creation(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """An all-failed encrypted package is refused before a run is created."""
+        from sqlalchemy import text
+
+        from idis.persistence.db import set_tenant_local
+        from tests.test_pdf_parser import create_encrypted_test_pdf
+
+        tenant_id = str(uuid.uuid4())
+        api_keys = _make_api_keys()
+        api_keys[API_KEY_A]["tenant_id"] = tenant_id
+        with required_frozen_preview(monkeypatch) as preview_db:
+            preview_db.add_tenant(tenant_id, "me-south-1")
+            monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys))
+            app = create_app(
+                audit_sink=CapturingRequiredPostgresAuditSink(InMemoryAuditSink()),
+                service_region="me-south-1",
+            )
+            client = TestClient(app)
+            create_resp = client.post(
+                "/v1/deals",
+                json={"name": "Unattested Failed Corpus", "company_name": "TestCo"},
+                headers={"X-IDIS-API-Key": API_KEY_A},
+            )
+            assert create_resp.status_code == 201
+            deal_id = create_resp.json()["deal_id"]
+            seed_deal_access(tenant_id, deal_id, "actor-a")
+            _open_preview_package(
+                preview_db,
+                tenant_id=tenant_id,
+                deal_id=deal_id,
+                root=tmp_path / "unattested",
+                payloads=[
+                    create_encrypted_test_pdf(
+                        ["PUBLIC SYNTHETIC UNATTESTED"],
+                        user_password=secrets.token_hex(8),
+                    )
+                ],
+            )
+            run_resp = client.post(
+                f"/v1/deals/{deal_id}/runs",
+                json={"mode": "SNAPSHOT"},
+                headers={"X-IDIS-API-Key": API_KEY_A},
+            )
+            assert run_resp.status_code == 409
+            body = run_resp.json()
+            assert body["code"] == "SOURCE_PREPARATION_PREREQUISITE_UNMET"
+            assert body.get("details") is None
+            with preview_db.engine.begin() as conn:
+                set_tenant_local(conn, tenant_id)
+                assert conn.execute(text("SELECT count(*) FROM runs")).scalar_one() == 0
 
     def test_api_mixed_corpus_continues_with_eligible_docs_only(
         self,
@@ -1113,46 +1263,52 @@ class TestStartRunPreflightCorpusBehavior:
     def test_api_source_selects_only_requested_durable_documents(
         self,
         monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
     ) -> None:
         """Selected document refs should narrow the corpus before extraction."""
-        monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(_make_api_keys()))
-        captured_documents: list[dict[str, Any]] = []
+        tenant_a = str(uuid.uuid4())
+        api_keys = _make_api_keys()
+        api_keys[API_KEY_A]["tenant_id"] = tenant_a
+        with required_frozen_preview(monkeypatch) as preview_db:
+            preview_db.add_tenant(tenant_a, "me-south-1")
+            monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys))
+            captured_documents: list[dict[str, Any]] = []
 
-        def capture_extract(**kwargs: Any) -> dict[str, Any]:
-            captured_documents.extend(kwargs["documents"])
-            return _stub_extract(**kwargs)
+            def capture_extract(**kwargs: Any) -> dict[str, Any]:
+                captured_documents.extend(kwargs["documents"])
+                return _stub_extract(**kwargs)
 
-        monkeypatch.setattr("idis.api.routes.runs._run_snapshot_extraction", capture_extract)
-        app = create_app(audit_sink=InMemoryAuditSink(), service_region="me-south-1")
-        app.state.deal_documents = {}
-        client = TestClient(app)
+            monkeypatch.setattr("idis.api.routes.runs._run_snapshot_extraction", capture_extract)
+            audit_sink = InMemoryAuditSink()
+            app = create_app(
+                audit_sink=CapturingRequiredPostgresAuditSink(audit_sink),
+                service_region="me-south-1",
+            )
+            client = TestClient(app)
 
-        create_resp = client.post(
-            "/v1/deals",
-            json={"name": "Selected Corpus Deal", "company_name": "TestCo"},
-            headers={"X-IDIS-API-Key": API_KEY_A},
-        )
-        assert create_resp.status_code == 201
-        deal_id = create_resp.json()["deal_id"]
-        seed_deal_access(TENANT_A, deal_id, "actor-a")
-        doc_1 = _make_preflight_document(document_id="doc-1")
-        doc_2 = _make_preflight_document(document_id="doc-2")
-        for doc in (doc_1, doc_2):
-            doc["deal_id"] = deal_id
-            doc["spans"][0]["deal_id"] = deal_id
-        app.state.deal_documents[deal_id] = [doc_1, doc_2]
+            create_resp = client.post(
+                "/v1/deals",
+                json={"name": "Selected Corpus Deal", "company_name": "TestCo"},
+                headers={"X-IDIS-API-Key": API_KEY_A},
+            )
+            assert create_resp.status_code == 201
+            deal_id = create_resp.json()["deal_id"]
+            seed_deal_access(tenant_a, deal_id, "actor-a")
+            preview_db.prepare_pdf(tenant_a, deal_id, tmp_path / "pkg-1")
+            pkg_2 = preview_db.prepare_pdf(tenant_a, deal_id, tmp_path / "pkg-2")
+            doc_2 = str(preview_db.package_rows(tenant_a, deal_id, pkg_2)[0]["document_id"])
 
-        run_resp = client.post(
-            f"/v1/deals/{deal_id}/runs",
-            json={
-                "mode": "SNAPSHOT",
-                "source": {"type": "deal_documents", "document_ids": ["doc-2"]},
-            },
-            headers={"X-IDIS-API-Key": API_KEY_A},
-        )
+            run_resp = client.post(
+                f"/v1/deals/{deal_id}/runs",
+                json={
+                    "mode": "SNAPSHOT",
+                    "source": {"type": "deal_documents", "document_ids": [doc_2]},
+                },
+                headers={"X-IDIS-API-Key": API_KEY_A},
+            )
 
-        assert run_resp.status_code == 202
-        assert [doc["document_id"] for doc in captured_documents] == ["doc-2"]
+            assert run_resp.status_code == 202
+            assert [doc["document_id"] for doc in captured_documents] == [doc_2]
 
     def test_api_source_rejects_missing_or_cross_deal_documents(
         self,
@@ -1221,3 +1377,226 @@ class TestAuditFailureAbortsRunFailClosed:
 
         with pytest.raises(AuditSinkError, match="Disk full"):
             orchestrator.execute(ctx)
+
+
+def test_invalid_attestation_authority_is_a_server_fault_not_a_tenant_prerequisite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A wrong authority type is a server fault, not SOURCE_PREPARATION_PREREQUISITE_UNMET."""
+    from types import SimpleNamespace
+
+    from idis.api.routes.runs import _freeze_task7_selected_source_packages
+    from idis.models.source_package_manifest import (
+        SourcePackageManifest,
+        SourcePackageManifestFile,
+        canonical_source_manifest_sha256,
+    )
+
+    document_id = uuid.uuid4()
+    digest = "a" * 64
+    other = "b" * 64
+    payload = {
+        "schema_version": "source-package-manifest-v1",
+        "company_alias": "company-999",
+        "deal_alias": "deal-999",
+        "document_set_alias": "documents-999",
+        "run_alias": "run-999",
+        "ledger_alias": "ledger-999",
+        "package_alias": "package-999",
+        "source_tree_fingerprint": other,
+        "file_count": 1,
+        "total_bytes": 4,
+        "files": [
+            SourcePackageManifestFile(
+                sequence=0,
+                generated_upload_name="company-999-document-00001.pdf",
+                source_locator_sha256=digest,
+                content_sha256=other,
+                size_bytes=4,
+                extension="pdf",
+                document_id=document_id,
+                doc_id=uuid.uuid4(),
+            ).model_dump(mode="json")
+        ],
+    }
+    payload["manifest_sha256"] = canonical_source_manifest_sha256(payload)
+    manifest = SourcePackageManifest.model_validate(payload)
+
+    class _Rows:
+        def fetchall(self) -> list[SimpleNamespace]:
+            return [
+                SimpleNamespace(
+                    _mapping={
+                        "package_id": str(uuid.uuid4()),
+                        "source_manifest": manifest.model_dump(mode="json"),
+                    }
+                )
+            ]
+
+    class _Conn:
+        def execute(self, *_args: object, **_kwargs: object) -> _Rows:
+            return _Rows()
+
+    monkeypatch.setattr(
+        "idis.services.ingestion.no_substantive_content_attestation."
+        "load_document_no_substantive_content_attestation",
+        lambda **_kwargs: object(),
+    )
+    request = SimpleNamespace(
+        state=SimpleNamespace(db_conn=_Conn()),
+        app=SimpleNamespace(state=SimpleNamespace(strict_runtime_profile=None)),
+    )
+    with pytest.raises(RuntimeError, match="NO_SUBSTANTIVE_CONTENT_ATTESTATION_AUTHORITY_INVALID"):
+        _freeze_task7_selected_source_packages(
+            request=request,
+            tenant_id=str(uuid.uuid4()),
+            deal_id=str(uuid.uuid4()),
+            selected_document_ids=(str(document_id),),
+        )
+
+
+def _preview_client(
+    monkeypatch: pytest.MonkeyPatch,
+    preview_db: Any,
+    tenant_id: str,
+) -> tuple[TestClient, str]:
+    api_keys = _make_api_keys()
+    api_keys[API_KEY_A]["tenant_id"] = tenant_id
+    preview_db.add_tenant(tenant_id, "me-south-1")
+    monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys))
+    app = create_app(
+        audit_sink=CapturingRequiredPostgresAuditSink(InMemoryAuditSink()),
+        service_region="me-south-1",
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+    created = client.post(
+        "/v1/deals",
+        json={"name": "Authority Fault Deal", "company_name": "TestCo"},
+        headers={"X-IDIS-API-Key": API_KEY_A},
+    )
+    assert created.status_code == 201
+    deal_id = created.json()["deal_id"]
+    seed_deal_access(tenant_id, deal_id, "actor-a")
+    return client, deal_id
+
+
+def test_api_invalid_attestation_authority_returns_internal_error_and_creates_no_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Clients see a sanitised 500 and no run when the authority object is the wrong type."""
+    from sqlalchemy import text
+
+    from idis.persistence.db import set_tenant_local
+
+    tenant_id = str(uuid.uuid4())
+    with required_frozen_preview(monkeypatch) as preview_db:
+        client, deal_id = _preview_client(monkeypatch, preview_db, tenant_id)
+        package_id = preview_db.prepare_pdf(tenant_id, deal_id, tmp_path / "authority")
+        document_id = str(preview_db.package_rows(tenant_id, deal_id, package_id)[0]["document_id"])
+        monkeypatch.setattr(
+            "idis.services.ingestion.no_substantive_content_attestation."
+            "load_document_no_substantive_content_attestation",
+            lambda **_kwargs: object(),
+        )
+        response = client.post(
+            f"/v1/deals/{deal_id}/runs",
+            json={
+                "mode": "SNAPSHOT",
+                "source": {"type": "deal_documents", "document_ids": [document_id]},
+            },
+            headers={"X-IDIS-API-Key": API_KEY_A},
+        )
+        assert response.status_code == 500
+        body = response.json()
+        assert body["code"] == "INTERNAL_ERROR"
+        assert body.get("details") is None
+        assert "NO_SUBSTANTIVE_CONTENT_ATTESTATION_AUTHORITY_INVALID" not in response.text
+        with preview_db.engine.begin() as conn:
+            set_tenant_local(conn, tenant_id)
+            assert conn.execute(text("SELECT count(*) FROM runs")).scalar_one() == 0
+
+
+def test_api_unmapped_source_freeze_error_is_sanitised_and_commits_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """An unmapped freeze code is a sanitised 500 and leaves the package unchanged."""
+    from sqlalchemy import text
+
+    from idis.persistence.db import set_tenant_local
+    from idis.persistence.repositories.task7_source_freeze import Task7SourceFreezeError
+
+    tenant_id = str(uuid.uuid4())
+
+    def _raise_unmapped(**_kwargs: object) -> None:
+        raise Task7SourceFreezeError("TASK7_UNMAPPED_SENTINEL")
+
+    with required_frozen_preview(monkeypatch) as preview_db:
+        client, deal_id = _preview_client(monkeypatch, preview_db, tenant_id)
+        package_id = preview_db.prepare_pdf(tenant_id, deal_id, tmp_path / "unmapped")
+        before = preview_db.package_rows(tenant_id, deal_id, package_id)[0]
+        document_id = str(before["document_id"])
+        monkeypatch.setattr(
+            "idis.persistence.repositories.task7_source_freeze.freeze_source_package",
+            _raise_unmapped,
+        )
+        response = client.post(
+            f"/v1/deals/{deal_id}/runs",
+            json={
+                "mode": "SNAPSHOT",
+                "source": {"type": "deal_documents", "document_ids": [document_id]},
+            },
+            headers={"X-IDIS-API-Key": API_KEY_A},
+        )
+        assert response.status_code == 500
+        body = response.json()
+        assert body["code"] == "INTERNAL_ERROR"
+        assert body.get("details") is None
+        assert body["message"] == "An internal error occurred"
+        assert "TASK7_UNMAPPED_SENTINEL" not in response.text
+        after = preview_db.package_rows(tenant_id, deal_id, package_id)[0]
+        assert after["status"] == before["status"] == "SEALED"
+        assert after["source_binding_state"] == before["source_binding_state"] == "BOUND"
+        with preview_db.engine.begin() as conn:
+            set_tenant_local(conn, tenant_id)
+            assert conn.execute(text("SELECT count(*) FROM runs")).scalar_one() == 0
+
+
+def test_api_source_freeze_conflict_uses_a_retry_message_without_internal_codes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """SOURCE_FREEZE_CONFLICT tells the caller to retry and hides the freezer code."""
+    from idis.persistence.repositories.task7_source_freeze import (
+        TASK7_SOURCE_FREEZE_FENCED,
+        Task7SourceFreezeError,
+    )
+
+    tenant_id = str(uuid.uuid4())
+
+    def _raise_fenced(**_kwargs: object) -> None:
+        raise Task7SourceFreezeError(TASK7_SOURCE_FREEZE_FENCED)
+
+    with required_frozen_preview(monkeypatch) as preview_db:
+        client, deal_id = _preview_client(monkeypatch, preview_db, tenant_id)
+        package_id = preview_db.prepare_pdf(tenant_id, deal_id, tmp_path / "fenced")
+        document_id = str(preview_db.package_rows(tenant_id, deal_id, package_id)[0]["document_id"])
+        monkeypatch.setattr(
+            "idis.persistence.repositories.task7_source_freeze.freeze_source_package",
+            _raise_fenced,
+        )
+        response = client.post(
+            f"/v1/deals/{deal_id}/runs",
+            json={
+                "mode": "SNAPSHOT",
+                "source": {"type": "deal_documents", "document_ids": [document_id]},
+            },
+            headers={"X-IDIS-API-Key": API_KEY_A},
+        )
+    assert response.status_code == 409
+    body = response.json()
+    assert body["code"] == "SOURCE_FREEZE_CONFLICT"
+    assert body["message"] == "Source freeze conflict; retry the request"
+    assert body.get("details") is None
+    assert "TASK7" not in response.text

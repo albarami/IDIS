@@ -160,52 +160,68 @@ class MixedPreflightCorpusConnection(ParsedCorpusConnection):
         raise AssertionError(f"Unexpected SQL: {sql}")
 
 
-class MultiParsedCorpusConnection(ParsedCorpusConnection):
-    """SQLAlchemy-like test double with two parsed persisted documents."""
+DOC_1_ID = "00000000-0000-4000-8000-000000000001"
+DOC_2_ID = "00000000-0000-4000-8000-000000000002"
+SNAPSHOT_CONTRACT_HASH = "6365adbfe07f1818fe9e8e634587feb59a6bda5238b625481940d9ea9efce723"
 
-    def execute(self, statement: object, params: dict[str, str] | None = None) -> MagicMock:
+
+class MultiParsedCorpusConnection(ParsedCorpusConnection):
+    """SQLAlchemy-like test double with two parsed, frozen persisted documents."""
+
+    def execute(self, statement: object, params: dict[str, Any] | None = None) -> MagicMock:
         sql = str(statement)
         self.executed_sql.append(sql)
         result = MagicMock()
+        rows_by_id = {
+            DOC_1_ID: MagicMock(
+                _mapping={
+                    "document_id": DOC_1_ID,
+                    "tenant_id": TENANT_ID,
+                    "deal_id": DEAL_ID,
+                    "doc_id": "artifact-1",
+                    "doc_type": "PDF",
+                    "parse_status": "PARSED",
+                    "document_metadata": {"name": "first.pdf"},
+                    "artifact_metadata": {"source": "synthetic"},
+                    "document_name": "first.pdf",
+                    "sha256": "a" * 64,
+                    "uri": "deals/first.pdf",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                }
+            ),
+            DOC_2_ID: MagicMock(
+                _mapping={
+                    "document_id": DOC_2_ID,
+                    "tenant_id": TENANT_ID,
+                    "deal_id": DEAL_ID,
+                    "doc_id": "artifact-2",
+                    "doc_type": "XLSX",
+                    "parse_status": "PARSED",
+                    "document_metadata": {"name": "second.xlsx"},
+                    "artifact_metadata": {"source": "synthetic"},
+                    "document_name": "second.xlsx",
+                    "sha256": "c" * 64,
+                    "uri": "deals/second.xlsx",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                }
+            ),
+        }
         if "SET LOCAL idis.tenant_id" in sql:
             return result
-        if "FROM documents" in sql:
-            result.fetchall.return_value = [
-                MagicMock(
-                    _mapping={
-                        "document_id": "doc-1",
-                        "tenant_id": TENANT_ID,
-                        "deal_id": DEAL_ID,
-                        "doc_id": "artifact-1",
-                        "doc_type": "PDF",
-                        "parse_status": "PARSED",
-                        "document_metadata": {"name": "first.pdf"},
-                        "artifact_metadata": {"source": "synthetic"},
-                        "document_name": "first.pdf",
-                        "sha256": "a" * 64,
-                        "uri": "deals/first.pdf",
-                        "created_at": "2026-01-01T00:00:00Z",
-                        "updated_at": "2026-01-01T00:00:00Z",
-                    }
-                ),
-                MagicMock(
-                    _mapping={
-                        "document_id": "doc-2",
-                        "tenant_id": TENANT_ID,
-                        "deal_id": DEAL_ID,
-                        "doc_id": "artifact-2",
-                        "doc_type": "XLSX",
-                        "parse_status": "PARSED",
-                        "document_metadata": {"name": "second.xlsx"},
-                        "artifact_metadata": {"source": "synthetic"},
-                        "document_name": "second.xlsx",
-                        "sha256": "c" * 64,
-                        "uri": "deals/second.xlsx",
-                        "created_at": "2026-01-01T00:00:00Z",
-                        "updated_at": "2026-01-01T00:00:00Z",
-                    }
-                ),
+        if "JOIN source_lineage_objects root" in sql:
+            requested = (params or {}).get("document_ids") or []
+            result.scalars.return_value.all.return_value = [
+                doc_id for doc_id in sorted(requested) if doc_id in rows_by_id
             ]
+            return result
+        if "WHERE documents.document_id = :document_id" in sql:
+            document_id = str((params or {}).get("document_id") or "")
+            result.fetchone.return_value = rows_by_id.get(document_id)
+            return result
+        if "FROM documents" in sql:
+            result.fetchall.return_value = list(rows_by_id.values())
             return result
         if "FROM document_spans" in sql:
             document_id = (params or {}).get("document_id")
@@ -389,7 +405,10 @@ def test_worker_context_factory_applies_persisted_run_source_filter(
         "deal_id": DEAL_ID,
         "run_id": "run-source-worker-smoke",
         "mode": "SNAPSHOT",
-        "source": {"type": "deal_documents", "document_ids": ["doc-2"]},
+        "source": {"type": "deal_documents", "document_ids": [DOC_2_ID]},
+        "pipeline_contract_version": "snapshot-v1",
+        "pipeline_contract_hash": SNAPSHOT_CONTRACT_HASH,
+        "pipeline_resume_state": "NON_RESUMABLE",
     }
     monkeypatch.setattr(
         "idis.pipeline.worker._load_worker_deal_metadata",
@@ -403,6 +422,6 @@ def test_worker_context_factory_applies_persisted_run_source_filter(
         audit_sink=MagicMock(),
     )
 
-    assert [doc["document_id"] for doc in ctx.documents] == ["doc-2"]
-    assert [doc["document_id"] for doc in ctx.preflight_corpus] == ["doc-2"]
+    assert [doc["document_id"] for doc in ctx.documents] == [DOC_2_ID]
+    assert [doc["document_id"] for doc in ctx.preflight_corpus] == [DOC_2_ID]
     assert ctx.deal_metadata["company_name"] == "Synthetic Co"

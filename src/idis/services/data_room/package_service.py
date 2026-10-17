@@ -294,13 +294,22 @@ def _reconcile_stored_source_manifest(
             "The persisted source package file ledger is incomplete",
         )
     for expected, actual in zip(manifest.files, files, strict=True):
+        exact_document_pair = (
+            actual.document_id == expected.document_id and actual.doc_id == expected.doc_id
+        )
+        # Current0038 stores no document pair before freeze. The immutable
+        # manifest already pins the actual uploads; freeze alone binds the row.
+        staged_document_pair = (
+            package.status is DataRoomPackageStatus.OPEN
+            and actual.document_id is None
+            and actual.doc_id is None
+        )
         if (
             actual.sequence != expected.sequence
             or actual.path_hash != expected.source_locator_sha256
             or actual.sha256 != expected.content_sha256
             or actual.extension != expected.extension
-            or actual.document_id != expected.document_id
-            or actual.doc_id != expected.doc_id
+            or not (exact_document_pair or staged_document_pair)
             or actual.package_id != package.package_id
             or actual.deal_id != package.deal_id
             or actual.tenant_id != package.tenant_id

@@ -110,6 +110,14 @@ def test_default_run_context_factory_binds_claim_to_production_lease_callbacks(
         "extraction_ready_documents_from_preflight_corpus",
         lambda _corpus: [],
     )
+    # Construction-only lease wiring: retain token3, not a resumed preview.
+    identity = runs_module._resolve_run_contract_identity(
+        mode="FULL",
+        pipeline_contract_version=None,
+        pipeline_contract_hash=None,
+        pipeline_resume_state=None,
+        pipeline_resume_error_code=None,
+    )
     run_data = {
         "run_id": RUN_ID,
         "deal_id": DEAL_ID,
@@ -117,6 +125,10 @@ def test_default_run_context_factory_binds_claim_to_production_lease_callbacks(
         "source": {"type": "deal_documents", "document_ids": []},
         "lease_owner_id": SECOND_WORKER_ID,
         "lease_fencing_token": 3,
+        "pipeline_contract_version": identity[0],
+        "pipeline_contract_hash": identity[1],
+        "pipeline_resume_state": identity[2],
+        "pipeline_resume_error_code": identity[3],
     }
 
     worker_module._default_run_context_factory(
@@ -126,6 +138,12 @@ def test_default_run_context_factory_binds_claim_to_production_lease_callbacks(
         audit_sink=audit_sink,
     )
 
+    fields = ("pipeline_contract_version", "pipeline_contract_hash", "pipeline_resume_state")
+    assert tuple(captured[field] for field in fields) == identity[:3]
+    assert identity[0] == "full-v1"
+    assert identity[2:] == ("NON_RESUMABLE", "LEGACY_RUN_RESUME_UNSAFE")
+    assert captured["strict_preflight_proof_id"] is None
+    assert captured["snapshot_output_composition"] is None
     assert captured["db_conn"] is polling_connection
     assert captured["lease_owner_id"] == SECOND_WORKER_ID
     assert captured["lease_fencing_token"] == 3

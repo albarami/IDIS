@@ -452,6 +452,32 @@ class PostgresMethodologyExtractionRepository:
         self._tenant_id = str(tenant_id)
         set_tenant_local(connection, self._tenant_id)
 
+    def require_frozen_run_source(
+        self,
+        *,
+        deal_id: str,
+        run_id: str,
+        exact_document_ids: tuple[str, ...] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Reload the persisted selection before any methodology producer reads it."""
+        from idis.models.run_source import RunSource
+        from idis.persistence.repositories.documents import PostgresDocumentsRepository
+        from idis.persistence.repositories.runs import PostgresRunsRepository
+
+        run = PostgresRunsRepository(self._connection, self._tenant_id).get(run_id)
+        if run is None or run.get("deal_id") != deal_id:
+            _fail(METHODOLOGY_SOURCE_LOCATOR_REJECTED)
+        try:
+            source = RunSource.model_validate(run.get("source"))
+            selected = tuple(sorted(source.document_ids))
+            if exact_document_ids is not None and tuple(sorted(exact_document_ids)) != selected:
+                _fail(METHODOLOGY_SOURCE_LOCATOR_REJECTED)
+            return PostgresDocumentsRepository(
+                self._connection, self._tenant_id
+            ).load_frozen_documents_for_run(deal_id=deal_id, document_ids=selected)
+        except (ValueError, TypeError):
+            _fail(METHODOLOGY_SOURCE_LOCATOR_REJECTED)
+
     def load_strict_planning_source_spans(
         self,
         *,
@@ -463,6 +489,16 @@ class PostgresMethodologyExtractionRepository:
             _fail(METHODOLOGY_SOURCE_LOCATOR_REJECTED)
         expected_by_span_id: dict[str, SourceSpanReference] = {}
         expected_document_ids = sorted(source_span_references_by_document_id)
+        from idis.persistence.repositories.documents import PostgresDocumentsRepository
+
+        try:
+            PostgresDocumentsRepository(
+                self._connection, self._tenant_id
+            ).load_frozen_documents_for_run(
+                deal_id=deal_id, document_ids=tuple(expected_document_ids)
+            )
+        except ValueError:
+            _fail(METHODOLOGY_SOURCE_LOCATOR_REJECTED)
         for document_id in expected_document_ids:
             references = source_span_references_by_document_id[document_id]
             if not document_id or not references:
@@ -1048,6 +1084,8 @@ class PostgresMethodologyExtractionRepository:
         expected: Sequence[_PlannedTaskSpec] | None = None,
         expected_root_bindings: Mapping[str, str] | None = None,
     ) -> list[DurableMethodologyExtractionTaskRecord]:
+        source_documents = self.require_frozen_run_source(deal_id=deal_id, run_id=run_id)
+        selected_document_ids = {row["document_id"] for row in source_documents}
         task_rows = (
             self._connection.execute(
                 text(
@@ -1082,6 +1120,8 @@ class PostgresMethodologyExtractionRepository:
             )
         durable_tasks: list[PlannedExtractionTask] = []
         for row in task_rows:
+            if str(row["document_id"]) not in selected_document_ids:
+                _fail(METHODOLOGY_SOURCE_LOCATOR_REJECTED)
             raw_payload = _json_value(row["task_payload"])
             if not isinstance(raw_payload, Mapping):
                 _fail(METHODOLOGY_TASK_COVERAGE_INCOMPLETE)
@@ -1330,6 +1370,26 @@ class PostgresMethodologyExtractionRepository:
 
     def validate_live_source_span_identity(self, *, task_record_id: str) -> None:
         """Recheck admitted span document/content/locator identity at each boundary."""
+        task_scope = (
+            self._connection.execute(
+                text(
+                    "SELECT deal_id::text,run_id::text,document_id::text "
+                    "FROM methodology_extraction_tasks "
+                    "WHERE tenant_id=CAST(:tenant AS uuid) AND task_record_id=CAST(:task AS uuid)"
+                ),
+                {"tenant": self._tenant_id, "task": task_record_id},
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if task_scope is None:
+            _fail(METHODOLOGY_SOURCE_LOCATOR_REJECTED)
+        source_documents = self.require_frozen_run_source(
+            deal_id=task_scope["deal_id"],
+            run_id=task_scope["run_id"],
+        )
+        if task_scope["document_id"] not in {row["document_id"] for row in source_documents}:
+            _fail(METHODOLOGY_SOURCE_LOCATOR_REJECTED)
         rows = self._connection.execute(
             text(
                 """

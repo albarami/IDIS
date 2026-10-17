@@ -11,6 +11,7 @@ import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -857,6 +858,78 @@ class PostgresRunsRepository:
                 lease_expires_at=claimed["lease_expires_at"],
             )
         return rows
+
+    def claim_queued_run_for_execution(
+        self,
+        *,
+        run_id: str,
+        lease_owner_id: str,
+        lease_seconds: int,
+    ) -> dict[str, Any] | None:
+        """Claim one exact closed legacy row in the caller's transaction.
+
+        This storage transition does not admit source evidence. The inline
+        caller must qualify frozen inputs before insertion and emit its honest
+        API audit on this same transaction before execution. Strict/proof-linked
+        runs remain on their separate admission and worker-claim path.
+        """
+        if (
+            isinstance(lease_seconds, bool)
+            or not isinstance(lease_seconds, int)
+            or lease_seconds <= 0
+        ):
+            raise ValueError("lease_seconds must be a positive integer")
+        try:
+            owner = str(UUID(lease_owner_id))
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise ValueError("lease_owner_id must be a UUID") from exc
+
+        result = self._conn.execute(
+            text(
+                """
+                UPDATE runs
+                SET status = 'RUNNING',
+                    lease_owner_id = :lease_owner_id,
+                    lease_fencing_token = lease_fencing_token + 1,
+                    lease_expires_at = statement_timestamp()
+                        + make_interval(secs => :lease_seconds),
+                    last_heartbeat_at = statement_timestamp(),
+                    started_at = COALESCE(started_at, statement_timestamp())
+                WHERE tenant_id = :tenant_id
+                  AND run_id = :run_id
+                  AND status = 'QUEUED'
+                  AND cancel_requested_at IS NULL
+                  AND lease_owner_id IS NULL
+                  AND lease_expires_at IS NULL
+                  AND mode IN ('SNAPSHOT', 'FULL')
+                  AND pipeline_contract_version = CASE mode
+                      WHEN 'SNAPSHOT' THEN 'snapshot-v1'
+                      WHEN 'FULL' THEN 'full-v1'
+                  END
+                  AND pipeline_contract_hash = :legacy_contract_hash
+                  AND pipeline_resume_state = 'NON_RESUMABLE'
+                  AND pipeline_resume_error_code = :legacy_resume_error
+                  AND strict_preflight_proof_id IS NULL
+                RETURNING run_id, tenant_id, deal_id, mode, status, started_at,
+                          finished_at, source, created_at, cancel_requested_at,
+                          created_by_actor_id, created_by_actor_type,
+                          strict_preflight_proof_id, lease_owner_id,
+                          lease_fencing_token, lease_expires_at, last_heartbeat_at,
+                          pipeline_contract_version, pipeline_contract_hash,
+                          pipeline_resume_state, pipeline_resume_error_code
+                """
+            ),
+            {
+                "tenant_id": self._tenant_id,
+                "run_id": run_id,
+                "lease_owner_id": owner,
+                "lease_seconds": lease_seconds,
+                "legacy_contract_hash": _LEGACY_COMPAT_CONTRACT_HASH,
+                "legacy_resume_error": _LEGACY_RESUME_ERROR,
+            },
+        )
+        row = result.fetchone()
+        return self._row_to_dict(row) if row is not None else None
 
     def renew_worker_lease(
         self,

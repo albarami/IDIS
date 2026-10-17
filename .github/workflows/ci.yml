@@ -44,8 +44,24 @@ jobs:
     env:
       # Public reviewed bootstrap pin, not an admission token or mutable repository variable.
       IDIS_BOOTSTRAP_SHA256: ff5cba5bd92683d4d4e5b9fc101f74006899d3f9863b1ee02ffb9e0025e148e6
+      # Temporary P4 probe pin. Remove with the two canary steps and scripts/ci_canary_probe.py.
+      IDIS_CANARY_PROBE_SHA256: 74e4f2ccb0f81abcb655bcb723c6a1d7ad8571c87c60949f6d986097ff0db87f
       IDIS_WORKFLOW_SHA: ${{ github.workflow_sha }}
     services:
+      # Public registry raw linux/amd64 manifest qualified; no mutable-image fallback.
+      postgres:
+        image: pgvector/pgvector:pg16@sha256:a97d77306ff47cc1d8add4d000cec2207da2e110746318df3137ce53c337ca30
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432/tcp
       # Slice96 DEC-A: a real Redis so the cross-replica rate-limit integration test
       # (test_real_redis_enforces_one_shared_bucket_across_replicas) runs here instead of skipping.
       redis:
@@ -65,6 +81,68 @@ jobs:
           fetch-depth: 2
           persist-credentials: false
           set-safe-directory: false
+      - name: Canary admit genuine exact-run approval without seed
+        id: canary-admit
+        env:
+          IDIS_CI_READ_TOKEN: ${{ github.token }}
+        run: |
+          set +x
+          if [[ -v RUNNER_DEBUG || -v ACTIONS_STEP_DEBUG ]]; then exit 1; fi
+          for name in $(compgen -A variable GIT_TRACE); do unset "$name"; done
+          unset GIT_CURL_VERBOSE
+          umask 077
+          root="$RUNNER_TEMP/idis-canary-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -m 700 "$root"
+          env -i PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null /usr/bin/git -c core.hooksPath=/dev/null -c protocol.file.allow=never -C "$GITHUB_WORKSPACE" cat-file blob "$GITHUB_SHA:scripts/ci_private_inputs.py" > "$root/canary-bootstrap.py"
+          printf '%s  %s\n' "$IDIS_BOOTSTRAP_SHA256" "$root/canary-bootstrap.py" | sha256sum --check --status
+          env -i PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null /usr/bin/git -c core.hooksPath=/dev/null -c protocol.file.allow=never -C "$GITHUB_WORKSPACE" cat-file blob "$GITHUB_SHA:scripts/ci_canary_probe.py" > "$root/canary-probe.py"
+          printf '%s  %s\n' "$IDIS_CANARY_PROBE_SHA256" "$root/canary-probe.py" | sha256sum --check --status
+          /usr/bin/python3 -I -S "$root/canary-probe.py" canary-admit
+      - name: Canary capture synthetic failure privacy
+        id: canary-capture
+        env:
+          IDIS_CI_CANARY_SEED: ${{ secrets.IDIS_CI_CANARY_SEED }}
+        shell: /usr/bin/python3 -I -S -c "import os,sys; r=os.path.join(os.environ['RUNNER_TEMP'],'idis-canary-'+os.environ['GITHUB_RUN_ID']+'-'+os.environ['GITHUB_RUN_ATTEMPT']); p=os.path.join(r,'canary-probe.py'); print('CANARY_ROOT') or sys.exit(1) if not (os.path.isdir(r) and not os.path.islink(r) and os.path.isfile(p) and not os.path.islink(p)) else os.execv('/usr/bin/python3',['/usr/bin/python3','-I','-S',p,'canary-capture',sys.argv[1]])" "{0}"
+        run: |
+          sentinel="${CANARY_SENTINEL-}"
+          printf '%s\n' "$sentinel"
+          printf '%s\n' "$sentinel" >&2
+          printf '%s\n' 'Traceback (most recent call last):'
+          printf '%s\n' '  File "canary_child.py", line 1, in <module>'
+          printf '%s\n' 'RuntimeError: synthetic boundary'
+          printf '%s\n' '{malformed-json'
+          printf '%s\n' '<malformed'
+          printf '%s\n' "::error::${sentinel}"
+          printf '%s\n' "::warning::${sentinel}"
+          printf '%s\n' '##[group]canary-footer'
+          set +e
+          for name in GITHUB_ENV GITHUB_PATH GITHUB_OUTPUT \
+            GITHUB_STEP_SUMMARY GITHUB_STATE; do
+            target="${!name-}"
+            if [ -n "$target" ]; then
+              printf '%s\n' "$sentinel" >> "$target"
+            fi
+          done
+          while IFS= read -r name; do
+            case "$name" in
+              *[!A-Za-z0-9_]*) continue ;;
+            esac
+            target="${!name-}"
+            case "$target" in
+              *_runner_file_commands*)
+                printf '%s\n' "$sentinel" >> "$target"
+                ;;
+            esac
+          done <<EOF
+          $(compgen -v)
+          EOF
+          (exit 0)
+          printf '%s\n' "CANARY_OBSERVED_EXIT $?"
+          (exit 1)
+          printf '%s\n' "CANARY_OBSERVED_EXIT $?"
+          (exit 7)
+          printf '%s\n' "CANARY_OBSERVED_EXIT $?"
+          exit 7
       - name: Validate genuine exact-run approval without recovery secret
         id: private-admission
         env:
@@ -110,6 +188,17 @@ jobs:
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - {"name": "Enforce authorized migration ceiling before checks", "run": "python scripts/check_migration_ceiling.py"}
+      - name: Qualify exclusive required-caller database without global DB exports
+        id: required-callers-setup
+        env:
+          IDIS_PG_HOST: "127.0.0.1"
+          IDIS_PG_PORT: ${{ job.services.postgres.ports['5432'] }}
+          IDIS_CI_POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
+          PG_ADMIN_USER: postgres
+          PG_ADMIN_PASSWORD: postgres
+          IDIS_PG_APP_USER: idis_app
+          IDIS_PG_APP_PASSWORD: idis_app_pw
+        run: python scripts/pg_bootstrap_ci.py --required-preview check
       - {"name": "Provision Redis URL for the cross-replica rate-limit integration test (Slice96 DEC-A)", "run": "echo \"IDIS_TEST_REDIS_URL=redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}/15\" >> \"$GITHUB_ENV\""}
       - {"name": "Validate prompt registry governance (Slice99)", "run": "python -m idis prompts validate --prompts-root prompts --repo-root . --out prompt_governance_report.json"}
       - {"name": "Verify OpenAPI/schema/client contract lock (Slice99)", "run": "python scripts/contract_lock.py verify --repo-root ."}
@@ -138,6 +227,14 @@ jobs:
           python scripts/generate_task8_v27_contract_fixtures.py --parent-artifact contracts/full_strict_v21_reviewed_preimage_v1.json --policy-artifact contracts/fdd_formula_policy_v2.json --reviewer-map docs/plans/2026-07-25-slice100-task8-fdd-formula-policy-v2-review-map.md --staged-artifact .local_reports/slice100/task8/v27-candidate/full_strict_v27_reviewed_preimage_v1.json --staging-output .local_reports/slice100/task8/v27-candidate/full_strict_v27_contract_hash_v1.json
           python scripts/verify_full_strict_v27_fixture_independently.py --mode verify --parent contracts/full_strict_v21_reviewed_preimage_v1.json --policy contracts/fdd_formula_policy_v2.json --reviewer-map docs/plans/2026-07-25-slice100-task8-fdd-formula-policy-v2-review-map.md --artifact .local_reports/slice100/task8/v27-candidate/full_strict_v27_reviewed_preimage_v1.json --fixture .local_reports/slice100/task8/v27-candidate/full_strict_v27_contract_hash_v1.json
           printf '%s\n' '4169371675ce32c2b4b459528dcdf21914887941d952648597bce59e49a8ac06  .local_reports/slice100/task8/v27-candidate/full_strict_v27_reviewed_preimage_v1.json' '78a3aedb04260cc56e98a2a9193ce489ca73bd4b5b95fc1486f676bfbd07b0cf  .local_reports/slice100/task8/v27-candidate/full_strict_v27_contract_hash_v1.json' | sha256sum --check --status
+      - name: Fetch exact historical commit before offline checks
+        id: historical-source-fetch
+        run: |
+          set -euo pipefail
+          env -i PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null /usr/bin/git -c core.hooksPath=/dev/null -c protocol.file.allow=never -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1 origin 17c2b3b265b3c09121febd90c61a368e827a00ab
+          env -i PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null /usr/bin/git -c core.hooksPath=/dev/null -c protocol.file.allow=never -C "$GITHUB_WORKSPACE" rev-parse --verify 17c2b3b265b3c09121febd90c61a368e827a00ab^{commit}
+          test "$(env -i PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null /usr/bin/git -c core.hooksPath=/dev/null -c protocol.file.allow=never -C "$GITHUB_WORKSPACE" rev-parse 17c2b3b265b3c09121febd90c61a368e827a00ab:src/idis/persistence/db.py)" = 4f9818e15368641d252607edcad29b0a57e1832f
+          test "$(env -i PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null /usr/bin/git -c core.hooksPath=/dev/null -c protocol.file.allow=never -C "$GITHUB_WORKSPACE" rev-parse 17c2b3b265b3c09121febd90c61a368e827a00ab:src/idis/models/run_step.py)" = 286209b55f4406921fa312b451be6f8c1ca5e330
       - name: Run all checks
         shell: /usr/bin/python3 -I -S -c "import os,sys; p=os.path.join(os.environ['RUNNER_TEMP'],'idis-ci-'+os.environ['GITHUB_RUN_ID']+'-'+os.environ['GITHUB_RUN_ATTEMPT'],'capture-bootstrap.py'); os.execv('/usr/bin/python3',['/usr/bin/python3','-I','-S',p,'capture',sys.argv[1]])" "{0}"
         run: make check
@@ -187,6 +284,7 @@ jobs:
 
       - {"name": "Set up Python 3.11", "uses": "actions/setup-python@v5", "with": {"python-version": "3.11"}}
       - name: Install dependencies
+        id: pg-install
         run: |
           python -m venv .venv
           .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple "pip==26.2.1"
@@ -195,8 +293,9 @@ jobs:
           .venv/bin/python scripts/verify_dependency_resolution.py
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
-      - {"name": "Enforce authorized migration ceiling before PostgreSQL bootstrap", "run": "python scripts/check_migration_ceiling.py"}
+      - {"name": "Enforce authorized migration ceiling before PostgreSQL bootstrap", "id": "pg-ceiling", "run": "python scripts/check_migration_ceiling.py"}
       - name: Prepare exact migration 0038 roles on disposable CI
+        id: pg-roles
         env:
           IDIS_CI_ERASURE_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres
           IDIS_REQUIRE_POSTGRES: "1"
@@ -206,12 +305,20 @@ jobs:
           python scripts/prepare_ci_erasure_roles.py --disposable-ci
 
       - name: Bootstrap PostgreSQL and export env
+        id: pg-bootstrap
         run: |
           python scripts/pg_bootstrap_ci.py --export-github-env 2>&1 | tee postgres_bootstrap.log
           exit ${PIPESTATUS[0]}
 
-      - {"name": "Verify app role connectivity and security", "run": "python scripts/pg_bootstrap_ci.py --verify-only"}
+      - {"name": "Verify app role connectivity and security", "id": "pg-verify", "run": "python scripts/pg_bootstrap_ci.py --verify-only"}
+      - name: Set up independent exclusive C3 database before original tests
+        id: c3-setup
+        env:
+          IDIS_CI_POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
+        run: |
+          env -u IDIS_DATABASE_URL -u IDIS_DATABASE_ADMIN_URL -u IDIS_DATABASE_ERASURE_URL -u IDIS_ERASURE_DATABASE_URL -u IDIS_REQUIRE_POSTGRES python scripts/pg_bootstrap_ci.py --required-preview postgres
       - name: Run PostgreSQL integration tests
+        id: pg-tests
         env:
           IDIS_REQUIRE_POSTGRES: "1"
         run: |
@@ -220,9 +327,43 @@ jobs:
           pytest tests/test_postgres_rls_and_audit_immutability.py tests/test_api_deals_postgres.py tests/test_api_claims_postgres.py tests/test_postgres_break_attempts.py tests/test_api_run_observability_postgres.py tests/test_api_default_upload_ingestion_postgres.py tests/test_api_full_run_step_name_postgres.py tests/test_api_full_run_durable_evidence_postgres.py tests/test_api_selected_multidocument_full_acceptance_postgres.py tests/test_api_sanad_auto_grade_persistence_postgres.py tests/test_slice96_provider_budget_postgres.py tests/test_slice96_idempotency_ttl_postgres.py tests/test_slice97_webhook_outbox_postgres.py tests/test_slice97_webhook_dispatcher_postgres.py tests/test_slice98_abac_durable_store_postgres.py tests/test_slice98_access_admin_api_postgres.py tests/test_slice98_break_glass_workflow_postgres.py tests/test_slice98_byok_legal_hold_postgres.py tests/test_slice98_durable_residency_postgres.py tests/test_slice98_erasure_export_postgres.py tests/test_slice98_retention_janitor_postgres.py -v --junitxml=postgres_integration_pytest.xml 2>&1 | tee postgres_integration_pytest.log
           exit ${PIPESTATUS[0]}
 
+      - name: Reject skipped tests in the original PostgreSQL invocation
+        id: pg-zero-skip
+        run: |
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse("postgres_integration_pytest.xml").getroot()
+          suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+          skipped = sum(int(suite.get("skipped", 0)) for suite in suites)
+          if skipped > 0:
+              raise SystemExit("REQUIRED_PYTEST_SKIPPED")
+          PY
+
+      - name: Run required C2 and C3 PostgreSQL modules independently (REQUIRED)
+        id: c3-tests
+        if: ${{ !cancelled() && steps.pg-install.outcome == 'success' && steps.pg-ceiling.outcome == 'success' && steps.pg-roles.outcome == 'success' && steps.pg-bootstrap.outcome == 'success' && steps.pg-verify.outcome == 'success' && steps.c3-setup.outcome == 'success' }}
+        env:
+          IDIS_CI_POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
+        run: |
+          env -u IDIS_DATABASE_URL -u IDIS_DATABASE_ADMIN_URL -u IDIS_DATABASE_ERASURE_URL -u IDIS_ERASURE_DATABASE_URL -u IDIS_REQUIRE_POSTGRES python scripts/pg_bootstrap_ci.py --run-required-preview-postgres 2>&1 | tee c3_postgres_integration_pytest.log
+          exit ${PIPESTATUS[0]}
+
+      - name: Reject skipped tests in the required C2 and C3 invocation
+        id: c3-zero-skip
+        if: ${{ !cancelled() && steps.c3-tests.outcome == 'success' }}
+        run: |
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse("c3_postgres_integration_pytest.xml").getroot()
+          suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+          skipped = sum(int(suite.get("skipped", 0)) for suite in suites)
+          if skipped > 0:
+              raise SystemExit("REQUIRED_PYTEST_SKIPPED")
+          PY
+
       - {"name": "Upload bootstrap log artifact", "if": "always()", "uses": "actions/upload-artifact@v4", "with": {"name": "postgres-bootstrap-log", "path": "postgres_bootstrap.log", "retention-days": 7}}
-      - {"name": "Upload pytest log artifact", "if": "always()", "uses": "actions/upload-artifact@v4", "with": {"name": "postgres-integration-pytest-log", "path": "postgres_integration_pytest.log", "retention-days": 7}}
-      - {"name": "Upload pytest JUnit XML artifact", "if": "always()", "uses": "actions/upload-artifact@v4", "with": {"name": "postgres-integration-pytest-xml", "path": "postgres_integration_pytest.xml", "retention-days": 7}}
+      - {"name": "Upload pytest log artifact", "if": "always()", "uses": "actions/upload-artifact@v4", "with": {"name": "postgres-integration-pytest-log", "path": "postgres_integration_pytest.log\nc3_postgres_integration_pytest.log", "retention-days": 7}}
+      - {"name": "Upload pytest JUnit XML artifact", "if": "always()", "uses": "actions/upload-artifact@v4", "with": {"name": "postgres-integration-pytest-xml", "path": "postgres_integration_pytest.xml\nc3_postgres_integration_pytest.xml", "retention-days": 7}}
       - name: Write explicit pytest summary to job summary
         if: always()
         run: |
@@ -254,6 +395,19 @@ jobs:
               with open(summary_file, "a") as f:
                   f.write(f"## Postgres Integration Pytest Results\n\n")
                   f.write(f"[WARN] Could not parse JUnit XML: {e}\n\n")
+          with open(summary_file, "a") as f:
+              f.write("## Required C3 PostgreSQL Results\n\n")
+              f.write("Step outcome: ${{ steps.c3-tests.outcome }}\n\n")
+              try:
+                  root = ET.parse("c3_postgres_integration_pytest.xml").getroot()
+                  suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+                  if not suites:
+                      raise ValueError("missing suite")
+                  totals = {name: sum(int(s.get(name, 0)) for s in suites) for name in ("tests", "failures", "errors", "skipped")}
+                  passed = totals["tests"] - totals["failures"] - totals["errors"] - totals["skipped"]
+                  f.write(f"{passed} passed, {totals['failures']} failed, {totals['errors']} errors, {totals['skipped']} skipped.\n")
+              except Exception:
+                  f.write("NOT QUALIFIED: C3 XML absent or invalid; no passing result inferred.\n")
           EOF
 
       - name: Write logs summary to job summary
@@ -405,8 +559,9 @@ jobs:
             -kubernetes-version 1.29.0 \
             -strict \
             deploy/k8s/*.yaml | tee k8s_validation.json
-          
-          # Check for errors
+          exit ${PIPESTATUS[0]}
+      - name: Reject Kubernetes manifest status errors
+        run: |
           if grep -q '"status": "statusError"' k8s_validation.json || grep -q '"status": "statusInvalid"' k8s_validation.json; then
             echo "[FAIL] Kubernetes manifest validation failed"
             exit 1
@@ -444,11 +599,13 @@ jobs:
           terraform fmt -check -recursive -diff
         continue-on-error: true
       - name: Terraform Init
+        id: init
         run: |
           cd deploy/terraform
           terraform init -backend=false
 
       - name: Terraform Validate
+        id: validate
         run: |
           cd deploy/terraform
           terraform validate
@@ -459,7 +616,7 @@ jobs:
           echo "## Terraform Validation" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Format Check:** ${{ steps.fmt.outcome == 'success' && '[OK] Passed' || '[WARN] Needs formatting' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Validate:** [OK] Passed" >> $GITHUB_STEP_SUMMARY
+          echo "- **Validate:** ${{ steps.validate.outcome == 'success' && '[OK] Passed' || '[FAIL] Failed' }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Files Validated" >> $GITHUB_STEP_SUMMARY
           for f in deploy/terraform/*.tf; do
@@ -561,6 +718,7 @@ jobs:
   # dockerfile, kubernetes, terraform). Fails closed on any missing evidence.
   # ===========================================================================
   release-gate:
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     needs:
       - ui-check
@@ -572,9 +730,49 @@ jobs:
       - terraform-validate
       - backup-restore-drill
     steps:
+      - name: Fail unless every required job succeeded
+        run: |
+          set -euo pipefail
+          failed=0
+          if [ "${{ needs.ui-check.result }}" != "success" ]; then
+            echo "ui-check"
+            failed=1
+          fi
+          if [ "${{ needs.check.result }}" != "success" ]; then
+            echo "check"
+            failed=1
+          fi
+          if [ "${{ needs.postgres-integration.result }}" != "success" ]; then
+            echo "postgres-integration"
+            failed=1
+          fi
+          if [ "${{ needs.evaluation-harness.result }}" != "success" ]; then
+            echo "evaluation-harness"
+            failed=1
+          fi
+          if [ "${{ needs.container-build.result }}" != "success" ]; then
+            echo "container-build"
+            failed=1
+          fi
+          if [ "${{ needs.k8s-validate.result }}" != "success" ]; then
+            echo "k8s-validate"
+            failed=1
+          fi
+          if [ "${{ needs.terraform-validate.result }}" != "success" ]; then
+            echo "terraform-validate"
+            failed=1
+          fi
+          if [ "${{ needs.backup-restore-drill.result }}" != "success" ]; then
+            echo "backup-restore-drill"
+            failed=1
+          fi
+          if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi
       - {"name": "Checkout code", "uses": "actions/checkout@v4"}
       - {"name": "Set up Python 3.11", "uses": "actions/setup-python@v5", "with": {"python-version": "3.11"}}
       - name: Generate and completeness-check release manifest
+        id: release-manifest
         run: |
           python -m venv .venv
           .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple "pip==26.2.1"
@@ -591,6 +789,6 @@ jobs:
         run: |
           echo "## Release Promotion Gate" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **All CI gates:** [OK] green (ui-check, check, postgres-integration, evaluation-harness, container-build, k8s-validate, terraform-validate, backup-restore-drill)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Recovery evidence:** [OK] backup/restore drill green (dedicated job)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Manifest completeness:** [OK] all checksum sections real" >> $GITHUB_STEP_SUMMARY
+          echo "- **All CI gates:** ${{ needs.ui-check.result == 'success' && needs.check.result == 'success' && needs.postgres-integration.result == 'success' && needs.evaluation-harness.result == 'success' && needs.container-build.result == 'success' && needs.k8s-validate.result == 'success' && needs.terraform-validate.result == 'success' && needs.backup-restore-drill.result == 'success' && '[OK] green' || '[FAIL] required job not success' }} (ui-check, check, postgres-integration, evaluation-harness, container-build, k8s-validate, terraform-validate, backup-restore-drill)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Recovery evidence:** ${{ needs.backup-restore-drill.result == 'success' && '[OK] backup/restore drill green (dedicated job)' || '[FAIL] backup/restore drill not success' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Manifest completeness:** ${{ steps.release-manifest.outcome == 'success' && '[OK] all checksum sections real' || '[FAIL] manifest not success' }}" >> $GITHUB_STEP_SUMMARY

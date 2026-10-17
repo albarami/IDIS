@@ -8,7 +8,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from scripts.audit_full_system_wiring import collect_wiring_inventory, render_report
+
+_FROZEN_RELOAD_SYMBOLS = (
+    "_load_worker_preflight_corpus",
+    "load_document_preflight_corpus_for_deal",
+    "selected_document_ids=tuple(source.document_ids)",
+    "require_frozen=True",
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -398,6 +406,27 @@ def test_full_system_inventory_detects_slice_22_api_upload_to_selected_run_smoke
     assert smoke.metadata["layer2_execution_performed"] is False
     assert any("smoke boundary only" in gap for gap in smoke.gaps)
     assert any("folder/data-room upload remains deferred" in gap for gap in smoke.gaps)
+
+
+@pytest.mark.parametrize("absent_symbol", _FROZEN_RELOAD_SYMBOLS)
+def test_run_source_detectors_stay_deferred_without_frozen_reload_or_legacy_filter(
+    absent_symbol: str,
+) -> None:
+    """Each frozen-reload symbol is necessary; removing it alone leaves DEFERRED."""
+    from scripts.audit_full_system_wiring import (
+        _api_upload_to_selected_run_smoke,
+        _load_relevant_files,
+        _production_run_source_contract,
+    )
+
+    files = _load_relevant_files(REPO_ROOT)
+    worker_text = files["src/idis/pipeline/worker.py"]
+    assert absent_symbol in worker_text
+    assert "filter_preflight_corpus_by_run_source" not in worker_text
+    files["src/idis/pipeline/worker.py"] = worker_text.replace(absent_symbol, "SYMBOL_ABSENT")
+
+    assert _production_run_source_contract(REPO_ROOT, files).status == "DEFERRED"
+    assert _api_upload_to_selected_run_smoke(files).status == "DEFERRED"
 
 
 def test_full_system_inventory_detects_slice_24_to_28_upload_full_run_wiring() -> None:

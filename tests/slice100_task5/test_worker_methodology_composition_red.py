@@ -136,6 +136,8 @@ def test_strict_worker_composition_injects_durable_init_and_rehydrate_callbacks(
 
     monkeypatch.setattr("idis.services.runs.steps.build_run_context", capture_context)
 
+    from idis.pipeline.contract_registry import FULL_STRICT_V21_CONTRACT_HASH
+
     worker_module._default_run_context_factory(
         db_conn=object(),
         tenant_id=TENANT_ID,
@@ -144,6 +146,9 @@ def test_strict_worker_composition_injects_durable_init_and_rehydrate_callbacks(
             "deal_id": DEAL_ID,
             "mode": "FULL",
             "status": "RUNNING",
+            "pipeline_contract_version": "full-strict-v21",
+            "pipeline_contract_hash": FULL_STRICT_V21_CONTRACT_HASH,
+            "pipeline_resume_state": "RESUMABLE",
             "lease_owner_id": LEASE_OWNER_ID,
             "lease_fencing_token": LEASE_FENCING_TOKEN,
         },

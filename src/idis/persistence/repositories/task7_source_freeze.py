@@ -899,8 +899,6 @@ def _validated_span_locator(
                     and math.isfinite(normalized_confidence)
                     and 0.0 <= normalized_confidence <= 1.0
                 )
-                if valid:
-                    value["confidence"] = normalized_confidence
     elif span_type == "PAGE_TEXT":
         extension = {"PDF": "pdf", "IMAGE": "png"}.get(document_type)
         if extension is None:
@@ -910,17 +908,19 @@ def _validated_span_locator(
                 _validated_raw_ocr_locator,
             )
 
-            normalized, _is_ocr = _validated_raw_ocr_locator(
+            _validated_raw_ocr_locator(
                 value,
                 extension=extension,
                 span_type=span_type,
             )
         except Exception:
             _fail(TASK7_SOURCE_TERMINAL_STATE_INVALID)
-        value = normalized
         valid = True
     if not valid:
         _fail(TASK7_SOURCE_TERMINAL_STATE_INVALID)
+    # Validation must not replace the persisted locator with reconciliation's
+    # derived representation or coerce its JSON numeric types. Installed0038
+    # rederives this identity from the exact validated persisted mapping.
     _canonical_json_bytes(value)
     return value
 

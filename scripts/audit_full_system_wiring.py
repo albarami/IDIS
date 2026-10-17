@@ -2559,6 +2559,23 @@ def _data_room_ingestion_handoff_run_integration(
     )
 
 
+def _worker_narrows_frozen_run_source(worker_text: str) -> bool:
+    """True when the worker narrows by the legacy filter or the frozen reload.
+
+    The live mechanism is ``_load_worker_preflight_corpus`` calling
+    ``load_document_preflight_corpus_for_deal`` with
+    ``selected_document_ids=tuple(source.document_ids)`` and ``require_frozen=True``.
+    """
+    legacy_filter = "filter_preflight_corpus_by_run_source" in worker_text
+    frozen_reload = (
+        "_load_worker_preflight_corpus" in worker_text
+        and "load_document_preflight_corpus_for_deal" in worker_text
+        and "selected_document_ids=tuple(source.document_ids)" in worker_text
+        and "require_frozen=True" in worker_text
+    )
+    return legacy_filter or frozen_reload
+
+
 def _production_run_source_contract(root: Path, files: dict[str, str]) -> WiringItem:
     runs_text = files.get("src/idis/api/routes/runs.py", "")
     source_text = files.get("src/idis/models/run_source.py", "")
@@ -2576,7 +2593,7 @@ def _production_run_source_contract(root: Path, files: dict[str, str]) -> Wiring
         and "PATH_LIKE_RUN_FIELDS" in runs_text
         and "INVALID_RUN_SOURCE" in runs_text
         and "source:" in repo_text
-        and "filter_preflight_corpus_by_run_source" in worker_text
+        and _worker_narrows_frozen_run_source(worker_text)
         and "deal_metadata" in worker_text
         and "ADD COLUMN IF NOT EXISTS source JSONB" in migration_text
     )
@@ -2591,7 +2608,8 @@ def _production_run_source_contract(root: Path, files: dict[str, str]) -> Wiring
         evidence=[
             "Public runs API accepts strict mode plus deal_documents source only.",
             "Run source is persisted so worker and API hydrate the same selected corpus.",
-            "Worker applies persisted source filtering and loads deal metadata.",
+            "Worker reloads the frozen corpus through load_document_preflight_corpus_for_deal "
+            "using selected_document_ids from the persisted run source and loads deal metadata.",
             "Local folder paths remain harness-only and are rejected by run creation.",
         ],
         gaps=[
@@ -2753,7 +2771,7 @@ def _api_upload_to_selected_run_smoke(files: dict[str, str]) -> WiringItem:
         '"/v1/deals/{deal_id}/documents/upload"' in documents_text
         and '"document_ids"' in run_source_text
         and "filter_preflight_corpus_by_run_source" in runs_text
-        and "filter_preflight_corpus_by_run_source" in worker_text
+        and _worker_narrows_frozen_run_source(worker_text)
         and "test_api_upload_list_get_selected_run_smoke_consumes_only_selected_document"
         in smoke_test_text
         and "test_api_selected_run_rejects_cross_deal_document_without_creating_run"
@@ -2762,9 +2780,8 @@ def _api_upload_to_selected_run_smoke(files: dict[str, str]) -> WiringItem:
         in smoke_test_text
         and "test_worker_context_factory_applies_persisted_run_source_filter" in worker_test_text
     )
-    worker_filters_persisted_source = (
-        "filter_preflight_corpus_by_run_source" in worker_text
-        and 'run_data.get("source")' in worker_text
+    worker_filters_persisted_source = _worker_narrows_frozen_run_source(worker_text) and (
+        'run_data.get("source")' in worker_text
     )
     return WiringItem(
         key="api_upload_to_selected_run_smoke",
@@ -2779,7 +2796,8 @@ def _api_upload_to_selected_run_smoke(files: dict[str, str]) -> WiringItem:
             "Smoke test uploads two supported documents through the existing upload endpoint.",
             "Smoke test verifies durable list/get summaries before run creation.",
             "Selected run uses existing RunSource source.document_ids filtering.",
-            "Worker parity test proves persisted runs.source filters queued context.",
+            "Worker reloads the frozen corpus by persisted source.document_ids "
+            "through _load_worker_preflight_corpus.",
         ],
         gaps=[
             "smoke boundary only; no new endpoint or production behavior is added.",

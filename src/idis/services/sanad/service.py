@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import BaseModel, Field
 
@@ -114,6 +114,22 @@ class UpdateSanadInput(BaseModel):
     request_id: str | None = Field(default=None, description="Request correlation ID")
 
 
+class SanadCreateWriter(Protocol):
+    """The single validated Sanad create operation, not a CRUD replacement."""
+
+    def create(
+        self,
+        *,
+        sanad_id: str,
+        claim_id: str,
+        deal_id: str,
+        primary_evidence_id: str,
+        corroborating_evidence_ids: list[str] | None = None,
+        transmission_chain: list[dict[str, Any]] | None = None,
+        computed: dict[str, Any] | None = None,
+    ) -> dict[str, Any]: ...
+
+
 class SanadService:
     """Service layer for sanad operations with coverage enforcement.
 
@@ -131,6 +147,7 @@ class SanadService:
         tenant_id: str,
         db_conn: Connection | None = None,
         audit_sink: AuditSink | None = None,
+        create_writer: SanadCreateWriter | None = None,
     ) -> None:
         """Initialize SanadService with tenant context.
 
@@ -142,6 +159,7 @@ class SanadService:
         self._tenant_id = tenant_id
         self._db_conn = db_conn
         self._audit_sink = audit_sink or InMemoryAuditSink()
+        self._create_writer = create_writer
 
         if db_conn is not None:
             self._sanads_repo: SanadsRepository | InMemorySanadsRepository = SanadsRepository(
@@ -344,7 +362,8 @@ class SanadService:
             )
             raise SanadIntegrityError(sanad_id, error_messages)
 
-        sanad_data = self._sanads_repo.create(
+        writer = self._create_writer if self._create_writer is not None else self._sanads_repo
+        sanad_data = writer.create(
             sanad_id=sanad_id,
             claim_id=input_data.claim_id,
             deal_id=input_data.deal_id,

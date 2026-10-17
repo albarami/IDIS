@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -21,6 +22,7 @@ from idis.api.auth import IDIS_API_KEYS_ENV
 from idis.api.main import create_app
 from idis.audit.sink import InMemoryAuditSink
 from idis.persistence.repositories.run_steps import InMemoryRunStepsRepository
+from idis.pipeline.contract_registry import FULL_STRICT_V21_CONTRACT_HASH
 from idis.pipeline.worker import (
     InvalidRunSourceSelectionError,
     PipelineWorker,
@@ -29,6 +31,10 @@ from idis.pipeline.worker import (
     _default_run_context_factory,
 )
 from idis.services.runs.execution import RunExecutionResult
+from tests._cir04c3_required_frozen_preview import (
+    CapturingRequiredPostgresAuditSink,
+    required_frozen_preview,
+)
 from tests.abac_seed import seed_deal_access
 
 API_KEY = "slice75a-red-key"
@@ -37,6 +43,14 @@ TENANT_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 LEASE_CONFIG = WorkerLeaseConfig(lease_seconds=60, heartbeat_seconds=20)
 COMMERCIAL_DD_VERSION_RECORD_ID = "10000000-0000-4000-8000-000000000075"
 FINANCIAL_DD_VERSION_RECORD_ID = "20000000-0000-4000-8000-000000000075"
+
+
+def _full_strict_v21_seed() -> dict[str, str]:
+    return {
+        "pipeline_contract_version": "full-strict-v21",
+        "pipeline_contract_hash": FULL_STRICT_V21_CONTRACT_HASH,
+        "pipeline_resume_state": "RESUMABLE",
+    }
 
 
 def _full_run_request(**values: Any) -> dict[str, Any]:
@@ -196,6 +210,7 @@ def test_worker_full_strict_gate_blocks_before_run_execution_service_execute(
     runs_repo = _RunsRepoStub(
         queued=[
             {
+                **_full_strict_v21_seed(),
                 "run_id": "run-full-1",
                 "tenant_id": TENANT_A,
                 "deal_id": "deal-1",
@@ -296,6 +311,7 @@ def test_api_and_worker_share_strict_readiness_helper_inputs(
     runs_repo = _RunsRepoStub(
         queued=[
             {
+                **_full_strict_v21_seed(),
                 "run_id": "run-full-2",
                 "tenant_id": TENANT_A,
                 "deal_id": deal_id,
@@ -367,6 +383,7 @@ def test_worker_strict_block_metadata_is_leakage_safe(
     runs_repo = _RunsRepoStub(
         queued=[
             {
+                **_full_strict_v21_seed(),
                 "run_id": "run-full-3",
                 "tenant_id": TENANT_A,
                 "deal_id": "deal-3",
@@ -436,6 +453,7 @@ def test_worker_missing_selected_document_fails_closed_with_invalid_run_source_r
     runs_repo = _RunsRepoStub(
         queued=[
             {
+                **_full_strict_v21_seed(),
                 "run_id": "run-full-missing-source",
                 "tenant_id": TENANT_A,
                 "deal_id": "deal-missing-source",
@@ -534,6 +552,7 @@ def test_api_and_worker_full_paths_produce_same_strict_block_ledger(
     runs_repo = _RunsRepoStub(
         queued=[
             {
+                **_full_strict_v21_seed(),
                 "run_id": "run-full-4",
                 "tenant_id": TENANT_A,
                 "deal_id": deal_id,
@@ -634,36 +653,48 @@ def test_worker_respects_tenant_scope_and_does_not_claim_other_tenant() -> None:
 
 def test_api_queue_race_returns_deterministic_run_already_claimed(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """API contract: synchronous claim owner returns RUN_ALREADY_CLAIMED on race loss."""
-    monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(_api_keys()))
-    app = create_app(audit_sink=InMemoryAuditSink(), service_region="me-south-1")
-    app.state.deal_documents = {}
-    client = TestClient(app)
+    tenant_id = str(uuid4())
+    api_keys = _api_keys()
+    api_keys[API_KEY]["tenant_id"] = tenant_id
+    with required_frozen_preview(monkeypatch) as preview_db:
+        preview_db.add_tenant(tenant_id, "me-south-1")
+        monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys))
+        monkeypatch.setenv("IDIS_REQUIRE_FULL_LIVE", "0")
+        app = create_app(
+            audit_sink=CapturingRequiredPostgresAuditSink(InMemoryAuditSink()),
+            service_region="me-south-1",
+        )
+        client = TestClient(app)
 
-    create_resp = client.post(
-        "/v1/deals",
-        json={"name": "Slice75A Race", "company_name": "RaceCo"},
-        headers={"X-IDIS-API-Key": API_KEY},
-    )
-    assert create_resp.status_code == 201
-    deal_id = create_resp.json()["deal_id"]
-    seed_deal_access(TENANT_A, deal_id, "actor-a")
-    app.state.deal_documents[deal_id] = [_preflight_doc(deal_id=deal_id)]
-
-    with patch(
-        "idis.services.runs.execution.RunExecutionService.execute",
-        return_value=RunExecutionResult(claimed=False, status="NOT_CLAIMED"),
-    ):
-        run_resp = client.post(
-            f"/v1/deals/{deal_id}/runs",
-            json=_full_run_request(),
+        create_resp = client.post(
+            "/v1/deals",
+            json={"name": "Slice75A Race", "company_name": "RaceCo"},
             headers={"X-IDIS-API-Key": API_KEY},
         )
+        assert create_resp.status_code == 201
+        deal_id = create_resp.json()["deal_id"]
+        seed_deal_access(tenant_id, deal_id, "actor-a")
+        package_id = preview_db.prepare_pdf(tenant_id, deal_id, tmp_path / "race-pkg")
+        document_id = str(preview_db.package_rows(tenant_id, deal_id, package_id)[0]["document_id"])
 
-    assert run_resp.status_code == 409
-    body = run_resp.json()
-    assert body["code"] == "RUN_ALREADY_CLAIMED"
+        with patch(
+            "idis.services.runs.execution.RunExecutionService.execute",
+            return_value=RunExecutionResult(claimed=False, status="NOT_CLAIMED"),
+        ):
+            run_resp = client.post(
+                f"/v1/deals/{deal_id}/runs",
+                json=_full_run_request(
+                    source={"type": "deal_documents", "document_ids": [document_id]}
+                ),
+                headers={"X-IDIS-API-Key": API_KEY},
+            )
+
+        assert run_resp.status_code == 409
+        body = run_resp.json()
+        assert body["code"] == "RUN_ALREADY_CLAIMED"
 
 
 def test_worker_uses_durable_audit_sink_when_db_configured_or_explicit_blocker() -> None:
@@ -690,13 +721,26 @@ def test_worker_default_audit_setup_fails_closed_when_durable_sink_unavailable()
         )
 
 
+def _frozen_corpus_or_missing_source(**kwargs: Any) -> list[dict[str, Any]]:
+    """Return the corpus, refusing only when a selected id is absent."""
+    corpus = [_preflight_doc(deal_id="deal-context")]
+    selected = [str(document_id) for document_id in (kwargs.get("selected_document_ids") or ())]
+    present = {str(document["document_id"]) for document in corpus}
+    if any(document_id not in present for document_id in selected):
+        raise ValueError("FROZEN_SOURCE_REQUIRED")
+    if not selected:
+        return list(corpus)
+    selected_ids = set(selected)
+    return [document for document in corpus if str(document["document_id"]) in selected_ids]
+
+
 def test_worker_default_run_context_factory_uses_validated_preflight_source_path() -> None:
     """Worker context build must reuse selected-source fail-closed validation."""
     build_run_context = MagicMock(return_value=MagicMock())
     with (
         patch(
             "idis.services.runs.steps.load_document_preflight_corpus_for_deal",
-            return_value=[_preflight_doc(deal_id="deal-context")],
+            side_effect=_frozen_corpus_or_missing_source,
         ),
         patch("idis.services.runs.steps.build_run_context", build_run_context),
         pytest.raises(InvalidRunSourceSelectionError),
@@ -708,12 +752,58 @@ def test_worker_default_run_context_factory_uses_validated_preflight_source_path
                 "run_id": "run-context-missing-source",
                 "deal_id": "deal-context",
                 "mode": "FULL",
+                "pipeline_contract_version": "full-v1",
+                "pipeline_contract_hash": (
+                    "6365adbfe07f1818fe9e8e634587feb59a6bda5238b625481940d9ea9efce723"
+                ),
+                "pipeline_resume_state": "NON_RESUMABLE",
                 "source": {"type": "deal_documents", "document_ids": ["missing-doc"]},
             },
             audit_sink=MagicMock(),
         )
 
     assert build_run_context.call_count == 0
+
+
+def test_worker_default_run_context_factory_builds_context_when_selected_id_is_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A selected id that is present in the corpus must build a run context."""
+    build_run_context = MagicMock(return_value=MagicMock(name="present-source-context"))
+    monkeypatch.setenv("IDIS_REQUIRE_FULL_LIVE", "0")
+    monkeypatch.delenv("IDIS_STRICT_DOTENV_PATH", raising=False)
+    with (
+        patch(
+            "idis.services.runs.steps.load_document_preflight_corpus_for_deal",
+            side_effect=_frozen_corpus_or_missing_source,
+        ),
+        patch("idis.services.runs.steps.build_run_context", build_run_context),
+        patch(
+            "idis.pipeline.worker._load_worker_deal_metadata",
+            return_value={"company_name": "Synthetic"},
+        ),
+    ):
+        context = _default_run_context_factory(
+            db_conn=MagicMock(),
+            tenant_id=TENANT_A,
+            run_data={
+                "run_id": "run-context-present-source",
+                "deal_id": "deal-context",
+                "mode": "FULL",
+                "pipeline_contract_version": "full-v1",
+                "pipeline_contract_hash": (
+                    "6365adbfe07f1818fe9e8e634587feb59a6bda5238b625481940d9ea9efce723"
+                ),
+                "pipeline_resume_state": "NON_RESUMABLE",
+                "source": {"type": "deal_documents", "document_ids": ["doc-strict"]},
+            },
+            audit_sink=MagicMock(),
+        )
+
+    assert context is build_run_context.return_value
+    assert build_run_context.call_count == 1
+    documents = build_run_context.call_args.kwargs["documents"]
+    assert [document["document_id"] for document in documents] == ["doc-strict"]
 
 
 def test_pipeline_executor_is_not_public_production_execution_path() -> None:

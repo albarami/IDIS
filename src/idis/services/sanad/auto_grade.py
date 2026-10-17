@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from idis.audit.canonical import build_canonical_audit_event
 from idis.audit.sink import AuditSink, AuditSinkError
@@ -139,6 +139,20 @@ def _emit_audit(
         raise AuditSinkError(f"Sanad grading audit emission failed for {event_type}") from exc
 
 
+class ClaimsGradingRepository(Protocol):
+    """Only the claim read and grade-link update needed by auto-grading."""
+
+    def get(self, claim_id: str) -> dict[str, Any] | None: ...
+
+    def update_grade(
+        self,
+        claim_id: str,
+        *,
+        claim_grade: str | None = None,
+        sanad_id: str | None = None,
+    ) -> None: ...
+
+
 def auto_grade_claims_for_run(
     *,
     run_id: str,
@@ -151,6 +165,7 @@ def auto_grade_claims_for_run(
     audit_sink: AuditSink,
     prebuilt_sanads: dict[str, dict[str, Any]] | None = None,
     db_conn: Connection | None = None,
+    claims_repo: ClaimsGradingRepository | None = None,
 ) -> AutoGradeRunResult:
     """Auto-grade all extracted claims for a SNAPSHOT run.
 
@@ -198,11 +213,11 @@ def auto_grade_claims_for_run(
     result = AutoGradeRunResult(run_id=run_id, tenant_id=tenant_id, deal_id=deal_id)
 
     prebuilt = prebuilt_sanads or {}
-    claims_repo: ClaimsRepository | InMemoryClaimsRepository
-    if db_conn is not None:
-        claims_repo = ClaimsRepository(db_conn, tenant_id)
-    else:
-        claims_repo = InMemoryClaimsRepository(tenant_id)
+    if claims_repo is None:
+        if db_conn is not None:
+            claims_repo = ClaimsRepository(db_conn, tenant_id)
+        else:
+            claims_repo = InMemoryClaimsRepository(tenant_id)
 
     for claim_id in created_claim_ids:
         claim_prebuilt = prebuilt.get(claim_id)
@@ -499,7 +514,7 @@ def _grade_single_claim_prebuilt(
 
 
 def _update_claim_grade(
-    claims_repo: ClaimsRepository | InMemoryClaimsRepository,
+    claims_repo: ClaimsGradingRepository,
     claim_id: str,
     grade: str | None,
     sanad_id: str | None,

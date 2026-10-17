@@ -5,7 +5,10 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import partial
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from idis.services.runs.snapshot_postgres_output_staging import SnapshotOutputCompositionPort
 
 from idis.audit.sink import AuditSink
 from idis.methodology.models import MethodologyRegistry
@@ -252,9 +255,13 @@ def build_postgres_native_output_stager_registry() -> dict[StepName, NativeOutpu
     return registry
 
 
-def build_postgres_native_output_stager() -> Callable[..., tuple[StagedNativeOutputWrite, ...]]:
+def build_postgres_native_output_stager(
+    *,
+    registry: dict[StepName, NativeOutputContract] | None = None,
+) -> Callable[..., tuple[StagedNativeOutputWrite, ...]]:
     """Build the provider-side staging function; it never writes before COMPLETE."""
-    registry = build_postgres_native_output_stager_registry()
+    if registry is None:
+        registry = build_postgres_native_output_stager_registry()
 
     def stage(
         *,
@@ -311,6 +318,7 @@ def build_run_context(
     execute_with_lease_heartbeat_fn: Callable[..., Any] | None = None,
     stage_native_output_writes_fn: Callable[..., tuple[Any, ...]] | None = None,
     provider_output_guard_fn: Callable[..., None] | None = None,
+    snapshot_output_composition: SnapshotOutputCompositionPort | None = None,
 ) -> RunContext:
     """Build a RunContext with the canonical step callables.
 
@@ -359,6 +367,7 @@ def build_run_context(
         execute_with_lease_heartbeat_fn=execute_with_lease_heartbeat_fn,
         stage_native_output_writes_fn=stage_native_output_writes_fn,
         provider_output_guard_fn=provider_output_guard_fn,
+        snapshot_output_composition=snapshot_output_composition,
         strict_resume_validation_required=strict_live_extraction_required,
         deal_metadata=deal_metadata,
         data_room_root_path=data_room_root_path,
@@ -474,6 +483,8 @@ def load_document_preflight_corpus_for_deal(
     db_conn: Any,
     deal_id: str,
     tenant_id: str,
+    selected_document_ids: tuple[str, ...] | None = None,
+    require_frozen: bool = False,
 ) -> list[dict[str, Any]]:
     """Load the full persisted corpus for document preflight.
 
@@ -481,11 +492,21 @@ def load_document_preflight_corpus_for_deal(
     so parser triage can reconstruct blockers from safe metadata.
     """
     if db_conn is None:
+        if require_frozen:
+            raise ValueError("FROZEN_SOURCE_REQUIRED")
         return []
 
     repo = PostgresDocumentsRepository(db_conn, tenant_id)
     corpus: list[dict[str, Any]] = []
-    for document in repo.list_documents_by_deal(deal_id, parsed_only=False):
+    if require_frozen:
+        documents = repo.load_frozen_documents_for_run(
+            deal_id=deal_id, document_ids=selected_document_ids or ()
+        )
+    else:
+        documents = repo.list_documents_by_deal(deal_id, parsed_only=False)
+        if selected_document_ids is not None:
+            documents = [doc for doc in documents if doc["document_id"] in selected_document_ids]
+    for document in documents:
         spans = repo.list_spans_by_document(
             deal_id=deal_id,
             document_id=document["document_id"],

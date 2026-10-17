@@ -88,6 +88,11 @@ def test_real_vep_row_is_staged_until_the_completion_boundary(
             "run_id": RUN_ID,
             "deal_id": DEAL_ID,
             "mode": "SNAPSHOT",
+            "pipeline_contract_version": "snapshot-v1",
+            "pipeline_contract_hash": (
+                "6365adbfe07f1818fe9e8e634587feb59a6bda5238b625481940d9ea9efce723"
+            ),
+            "pipeline_resume_state": "NON_RESUMABLE",
             "source": {"type": "deal_documents", "document_ids": []},
             "lease_owner_id": SECOND_WORKER_ID,
             "lease_fencing_token": 3,

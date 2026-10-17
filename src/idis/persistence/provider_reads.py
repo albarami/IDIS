@@ -16,8 +16,9 @@ from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy import text
+from sqlalchemy.sql.elements import TextClause
 
-from idis.persistence.db import set_tenant_local
+from idis.persistence.db import DatabaseConfigError, _validate_tenant_id, set_tenant_local
 
 
 class UnstagedProviderPersistenceError(RuntimeError):
@@ -85,6 +86,8 @@ class ProviderReadConnection:
         connection_factory: Callable[[], Any],
         tenant_id: str,
     ) -> None:
+        if not _validate_tenant_id(tenant_id):
+            raise DatabaseConfigError("Invalid tenant_id format")
         self._connection_factory = connection_factory
         self._tenant_id = tenant_id
         self._write_attempted = threading.Event()
@@ -104,6 +107,16 @@ class ProviderReadConnection:
         **kwargs: Any,
     ) -> Any:
         """Run one read-only statement and detach all rows before returning."""
+        if (
+            type(statement) is TextClause
+            and statement.text == f"SET LOCAL idis.tenant_id = '{self._tenant_id}'"
+            and parameters is None
+            and not args
+            and not kwargs
+        ):
+            # A repository reasserts the facade's already validated scope. No
+            # SQL or connection is needed until the next real read transaction.
+            return None
         self._guard_statement(statement)
         with self._connection_factory() as connection:
             # Database enforcement complements the SQL allow-list and prevents a

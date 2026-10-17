@@ -464,6 +464,51 @@ def test_inmemory_add_file_duplicate_returns_existing_persisted_row() -> None:
     assert duplicate.sequence == original.sequence == 1
 
 
+def test_inmemory_new_file_stages_null_ids_without_mutating_upload_model() -> None:
+    from idis.persistence.repositories.data_room_packages import InMemoryDataRoomPackagesRepository
+
+    repo = InMemoryDataRoomPackagesRepository(str(TENANT))
+    repo.create_package(_package())
+    supplied = _file()
+    before = supplied.model_dump(mode="json")
+    persisted = repo.add_file(supplied)
+
+    assert supplied.model_dump(mode="json") == before
+    assert supplied.doc_id == DOC and supplied.document_id == DOCUMENT
+    assert persisted.doc_id is None and persisted.document_id is None
+    assert repo.list_files_by_package(str(PACKAGE), str(DEAL)) == [persisted]
+    assert persisted.model_dump(exclude={"doc_id", "document_id"}) == supplied.model_dump(
+        exclude={"doc_id", "document_id"}
+    )
+
+
+def test_inmemory_sealed_package_preserves_duplicate_but_rejects_new_file() -> None:
+    from idis.persistence.repositories.data_room_packages import (
+        InMemoryDataRoomPackagesRepository,
+        _data_room_package_files_store,
+        _data_room_packages_store,
+    )
+
+    repo = InMemoryDataRoomPackagesRepository(str(TENANT))
+    repo.create_package(_package())
+    repo.add_file(_file())
+    # Historical in-memory fixture state only: exercise an already-frozen row's
+    # idempotent reread, not manufacture source roots or runtime freeze evidence.
+    _data_room_packages_store[str(PACKAGE)]["status"] = "SEALED"
+    _data_room_package_files_store[str(FILE_ENTRY)].update(
+        doc_id=str(DOC), document_id=str(DOCUMENT)
+    )
+    before = repo.list_files_by_package(str(PACKAGE), str(DEAL))
+    duplicate = repo.add_file(_file(sequence=99, doc_id=None, document_id=None))
+    assert duplicate == before[0]
+    assert duplicate.doc_id == DOC and duplicate.document_id == DOCUMENT
+    with pytest.raises(ValueError, match="Package/deal mismatch"):
+        repo.add_file(
+            _file(file_entry_id=UUID("77777777-7777-7777-7777-777777777777"), path_hash="c" * 64)
+        )
+    assert repo.list_files_by_package(str(PACKAGE), str(DEAL)) == before
+
+
 def test_postgres_add_file_duplicate_returns_persisted_existing_row() -> None:
     from idis.persistence.repositories.data_room_packages import (
         PostgresDataRoomPackagesRepository,
@@ -627,16 +672,15 @@ def test_supported_deferred_blocked_documents_map_to_deterministic_status() -> N
         ),
     ]
     summary = _create(repo, [DOC1, DOC2, DOC3], corpus)
-    by_doc = {
-        str(f.document_id): f for f in repo.list_files_by_package(summary["package_id"], str(DEAL))
-    }
-
-    assert by_doc[DOC1].file_status.value == "supported"
-    assert by_doc[DOC1].reason_codes == ["docx_text_parser_available"]
-    assert by_doc[DOC2].file_status.value == "deferred"
-    assert by_doc[DOC2].reason_codes == ["ocr_required"]
-    assert by_doc[DOC3].file_status.value == "blocked"
-    assert by_doc[DOC3].reason_codes == ["unsupported_format"]
+    files = repo.list_files_by_package(summary["package_id"], str(DEAL))
+    assert [file.sequence for file in files] == [0, 1, 2]
+    assert all(file.doc_id is None and file.document_id is None for file in files)
+    assert files[0].file_status.value == "supported"
+    assert files[0].reason_codes == ["docx_text_parser_available"]
+    assert files[1].file_status.value == "deferred"
+    assert files[1].reason_codes == ["ocr_required"]
+    assert files[2].file_status.value == "blocked"
+    assert files[2].reason_codes == ["unsupported_format"]
     assert summary["counts_by_status"] == {"supported": 1, "deferred": 1, "blocked": 1}
 
 

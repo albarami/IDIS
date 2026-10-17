@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -137,6 +137,23 @@ class CureDefectInput(BaseModel):
     request_id: str | None = Field(default=None, description="Request correlation ID")
 
 
+class DefectCreateWriter(Protocol):
+    """Only new OPEN defects; waiver/cure/read behavior is not injectable."""
+
+    def create(
+        self,
+        *,
+        defect_id: str,
+        claim_id: str | None,
+        deal_id: str | None,
+        defect_type: str,
+        severity: str,
+        description: str,
+        cure_protocol: str,
+        status: str = "OPEN",
+    ) -> dict[str, Any]: ...
+
+
 class DefectService:
     """Service layer for defect operations with waiver/cure workflow.
 
@@ -154,6 +171,7 @@ class DefectService:
         tenant_id: str,
         db_conn: Connection | None = None,
         audit_sink: AuditSink | None = None,
+        create_writer: DefectCreateWriter | None = None,
     ) -> None:
         """Initialize DefectService with tenant context.
 
@@ -165,6 +183,7 @@ class DefectService:
         self._tenant_id = tenant_id
         self._db_conn = db_conn
         self._audit_sink = audit_sink or InMemoryAuditSink()
+        self._create_writer = create_writer
 
         if db_conn is not None:
             self._defects_repo: DefectsRepository | InMemoryDefectsRepository = DefectsRepository(
@@ -234,7 +253,8 @@ class DefectService:
         defect_id = str(uuid.uuid4())
         severity = input_data.severity or get_severity_for_type(input_data.defect_type)
 
-        defect_data = self._defects_repo.create(
+        writer = self._create_writer if self._create_writer is not None else self._defects_repo
+        defect_data = writer.create(
             defect_id=defect_id,
             claim_id=input_data.claim_id,
             deal_id=input_data.deal_id,

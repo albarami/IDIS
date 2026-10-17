@@ -169,6 +169,13 @@ class PostgresMethodologyExecutionBoundary:
         with self._connection_factory() as connection:
             set_tenant_local(connection, tenant_id)
             extraction_repository = PostgresMethodologyExtractionRepository(connection, tenant_id)
+            extraction_repository.require_frozen_run_source(
+                deal_id=deal_id,
+                run_id=run_id,
+                exact_document_ids=tuple(
+                    str(document.get("document_id", "")) for document in documents
+                ),
+            )
             methodology_repository = get_methodologies_repository(connection, tenant_id)
             document_repository = PostgresDocumentsRepository(connection, tenant_id)
             selection = methodology_repository.load_run_selection(

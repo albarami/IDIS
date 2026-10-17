@@ -14,7 +14,10 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from idis.services.runs.snapshot_postgres_output_staging import SnapshotOutputComposition
 
 from pydantic import ValidationError
 from sqlalchemy import text
@@ -1633,10 +1636,7 @@ def build_postgres_claimed_run_runtime(
     )
     from idis.services.runs.execution import build_postgres_step_boundary_uow
     from idis.services.runs.orchestrator import RunStepBlockedError
-    from idis.services.runs.steps import (
-        build_postgres_native_output_stager,
-        build_postgres_native_output_stager_registry,
-    )
+    from idis.services.runs.snapshot_postgres_output_staging import SnapshotOutputComposition
 
     owner_id = run_data.get("lease_owner_id")
     token = run_data.get("lease_fencing_token")
@@ -1701,8 +1701,17 @@ def build_postgres_claimed_run_runtime(
     def run_steps_repository_factory(conn: Any) -> Any:
         return get_run_steps_repository(conn, tenant_id)
 
-    contracts = build_postgres_native_output_stager_registry()
-    stager = build_postgres_native_output_stager()
+    provider_reads = ProviderReadConnection(
+        connection_factory=connection_factory,
+        tenant_id=tenant_id,
+    )
+    snapshot_composition = SnapshotOutputComposition(
+        provider_db_conn=provider_reads,
+        audit_sink=audit_sink,
+    )
+    snapshot_composition.configure_base_factories(tenant_id)
+    contracts = snapshot_composition.contracts
+    stager = snapshot_composition.stage
     boundary_uow = build_postgres_step_boundary_uow(
         audit_sink=audit_sink,
         connection_factory=connection_factory,
@@ -1895,11 +1904,6 @@ def build_postgres_claimed_run_runtime(
     if provider_context_factory is not None:
         context = provider_context_factory(**components)
     else:
-        provider_reads = ProviderReadConnection(
-            connection_factory=connection_factory,
-            tenant_id=tenant_id,
-        )
-
         provider_output_guard = _build_provider_output_guard(
             provider_reads=provider_reads,
             contracts=contracts,
@@ -1917,29 +1921,17 @@ def build_postgres_claimed_run_runtime(
                 lease_config=lease_config,
                 connection_factory=connection_factory,
                 strict_profile=strict_profile,
+                snapshot_output_composition=snapshot_composition,
             )
     context.strict_resume_validation_required = True
+    context.snapshot_output_composition_required = True
+    context.snapshot_output_composition = snapshot_composition
+    context.stage_native_output_writes_fn = stager
     context.completed_step_resume_validator = completed_step_resume_validator
     if task7_completion_service is not None:
         context.task7_step_completion_fn = task7_step_completion_fn
 
-    native_repository_factories: dict[
-        StepName,
-        dict[type[Any], Callable[[Any], Any]],
-    ] = {}
-    for step_name, contract in contracts.items():
-        factories: dict[type[Any], Callable[[Any], Any]] = {}
-        for binding in contract.write_bindings:
-            repository_type = binding.repository_type
-
-            def build_repository(
-                conn: Any,
-                repository_type: type[Any] = repository_type,
-            ) -> Any:
-                return repository_type(conn, tenant_id)
-
-            factories[repository_type] = build_repository
-        native_repository_factories[step_name] = factories
+    native_repository_factories = snapshot_composition.repository_factories
 
     service = RunExecutionService(
         audit_sink=audit_sink,
@@ -2010,28 +2002,30 @@ def _load_worker_preflight_corpus(
     run_data: dict[str, Any],
 ) -> list[dict[str, Any]]:
     from idis.services.runs.steps import (
-        filter_preflight_corpus_by_run_source,
         load_document_preflight_corpus_for_deal,
-        missing_document_ids_for_run_source,
     )
 
     deal_id = str(run_data["deal_id"])
-    preflight_corpus = load_document_preflight_corpus_for_deal(
-        db_conn=db_conn,
-        deal_id=deal_id,
-        tenant_id=tenant_id,
-    )
     source: dict[str, Any] | RunSource | None = run_data.get("source")
     if source is not None and not isinstance(source, RunSource):
         try:
             source = RunSource.model_validate(source)
         except ValidationError as exc:
             raise InvalidRunSourceMetadataError("invalid run source metadata") from exc
-    if isinstance(source, RunSource):
-        missing = missing_document_ids_for_run_source(preflight_corpus, source)
-        if missing:
-            raise InvalidRunSourceSelectionError("run source selected missing documents")
-    return filter_preflight_corpus_by_run_source(preflight_corpus, source)
+    if not isinstance(source, RunSource):
+        raise InvalidRunSourceMetadataError("run source must pin an exact document set")
+    try:
+        return load_document_preflight_corpus_for_deal(
+            db_conn=db_conn,
+            deal_id=deal_id,
+            tenant_id=tenant_id,
+            selected_document_ids=tuple(source.document_ids),
+            require_frozen=True,
+        )
+    except ValueError as exc:
+        raise InvalidRunSourceSelectionError(
+            "run source selected unfrozen or missing documents"
+        ) from exc
 
 
 def _verify_worker_strict_preflight_proof(
@@ -2080,6 +2074,7 @@ def _default_run_context_factory(
     lease_config: WorkerLeaseConfig | None = None,
     connection_factory: Callable[[], Any] | None = None,
     strict_profile: StrictRuntimeProfile | None = None,
+    snapshot_output_composition: SnapshotOutputComposition | None = None,
 ) -> RunContext:
     """Build a worker run context using shared run step wiring."""
     from idis.services.runs.steps import (
@@ -2088,6 +2083,15 @@ def _default_run_context_factory(
         extraction_ready_documents_from_preflight_corpus,
     )
 
+    if any(
+        not isinstance(run_data.get(field), str) or not run_data[field]
+        for field in (
+            "pipeline_contract_version",
+            "pipeline_contract_hash",
+            "pipeline_resume_state",
+        )
+    ):
+        raise RuntimeError("PIPELINE_CONTRACT_UNAVAILABLE")
     deal_id = str(run_data["deal_id"])
     preflight_corpus = _load_worker_preflight_corpus(
         db_conn=db_conn,
@@ -2203,7 +2207,11 @@ def _default_run_context_factory(
             "step_boundary_uow_fn": boundary_uow,
             "after_step_boundary_commit_fn": lambda **_kwargs: None,
             "execute_with_lease_heartbeat_fn": execute_with_lease_heartbeat,
-            "stage_native_output_writes_fn": build_postgres_native_output_stager(),
+            "stage_native_output_writes_fn": (
+                snapshot_output_composition.stage
+                if snapshot_output_composition is not None
+                else build_postgres_native_output_stager()
+            ),
         }
 
     provider_connection = provider_db_conn if provider_db_conn is not None else db_conn
@@ -2223,26 +2231,15 @@ def _default_run_context_factory(
         created_by_actor_id=run_data.get("created_by_actor_id"),
         created_by_actor_type=run_data.get("created_by_actor_type"),
         strict_preflight_proof_id=run_data.get("strict_preflight_proof_id"),
-        pipeline_contract_version=(
-            run_data.get("pipeline_contract_version")
-            if run_data.get("pipeline_contract_version") == "full-strict-v21"
-            else None
-        ),
-        pipeline_contract_hash=(
-            run_data.get("pipeline_contract_hash")
-            if run_data.get("pipeline_contract_version") == "full-strict-v21"
-            else None
-        ),
-        pipeline_resume_state=(
-            run_data.get("pipeline_resume_state")
-            if run_data.get("pipeline_contract_version") == "full-strict-v21"
-            else None
-        ),
+        pipeline_contract_version=run_data["pipeline_contract_version"],
+        pipeline_contract_hash=run_data["pipeline_contract_hash"],
+        pipeline_resume_state=run_data["pipeline_resume_state"],
         no_substantive_content_receipt_verifier=(no_substantive_content_receipt_verifier),
         audit_sink=audit_sink,
         strict_live_extraction_required=strict_live_extraction_required,
         strict_live_debate_backend_required=strict_live_extraction_required,
         provider_output_guard_fn=provider_output_guard_fn,
+        snapshot_output_composition=snapshot_output_composition,
         methodology_coverage_init_fn=methodology_coverage_init_fn,
         methodology_coverage_rehydrate_fn=methodology_coverage_rehydrate_fn,
         methodology_extraction_task_planning_fn=methodology_extraction_callbacks.get(

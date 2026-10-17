@@ -23,7 +23,6 @@ import re
 import uuid
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 import pytest
 from sqlalchemy import text
@@ -50,11 +49,18 @@ from idis.compliance.retention import (
     lift_hold,
     reset_legal_hold_registry,
 )
-from idis.persistence.repositories.runs import RunAlreadyActiveError
+from idis.models.run_step import RunStep, StepName
+from idis.persistence.repositories.runs import RunAlreadyActiveError, _resolve_run_contract_identity
 from idis.persistence.repositories.strict_preflight_proofs import (
     PostgresStrictPreflightProofsRepository,
     StrictPreflightBinding,
     StrictPreflightProofError,
+)
+from tests._cir04c2_admission_helpers import (
+    admission_repository,
+    admit_synthetic_proof,
+    insert_synthetic_proof,
+    seed_synthetic_frozen_source,
 )
 
 ADMIN_URL_ENV = "IDIS_DATABASE_ADMIN_URL"
@@ -218,10 +224,12 @@ def _ctx(tenant_id: str = _TENANT_A) -> object:
     )
 
 
-def _admin_exec(sql: str, params: dict | None = None) -> None:
-    from idis.persistence.db import get_admin_engine
+def _admin_exec(sql: str, params: dict | None = None, *, tenant_id: str | None = None) -> None:
+    from idis.persistence.db import get_admin_engine, set_tenant_local
 
     with get_admin_engine().begin() as conn:
+        if tenant_id is not None:
+            set_tenant_local(conn, tenant_id)
         conn.execute(text(sql), params or {})
 
 
@@ -238,31 +246,6 @@ def _seed_bare_deal(tenant_id: str) -> str:
         {"d": deal_id, "t": tenant_id, "now": _NOW},
     )
     return deal_id
-
-
-def _consume_bound_proof(
-    tenant_id: str,
-    deal_id: str,
-    proof_id: str,
-    run_id: str,
-) -> dict[str, Any]:
-    from idis.persistence.db import begin_app_conn
-
-    with begin_app_conn() as conn:
-        repo = PostgresStrictPreflightProofsRepository(conn, tenant_id)
-        run = repo.consume_and_create_run(
-            proof_id=proof_id,
-            expected_binding=_strict_binding(tenant_id, deal_id),
-            run_id=run_id,
-            deal_id=deal_id,
-            mode="FULL",
-            idempotency_key=f"proof-{proof_id}",
-            source={"type": "deal_documents", "document_ids": []},
-            created_by_actor_id="task1-pg-test",
-            created_by_actor_type="SERVICE",
-        )
-        repo.require_consumed_for_run(proof_id=proof_id, run_id=run_id, deal_id=deal_id)
-        return run
 
 
 def _admin_proof_state(proof_id: str) -> tuple[datetime | None, str | None]:
@@ -380,13 +363,16 @@ def _seed_deal_graph(tenant_id: str) -> str:
     )
     _admin_exec(
         "INSERT INTO document_artifacts (doc_id, tenant_id, deal_id, doc_type, title, "
-        "source_system, version_id, uri) VALUES (CAST(:doc AS uuid), CAST(:t AS uuid), "
-        "CAST(:d AS uuid), 'PITCH_DECK', 'Deck', 'upload', 'v1', :uri)",
+        "source_system, version_id, uri, source_binding_state, source_lineage_object_id, "
+        "source_corpus_receipt_id) VALUES (CAST(:doc AS uuid), CAST(:t AS uuid), "
+        "CAST(:d AS uuid), 'PITCH_DECK', 'Deck', 'upload', 'v1', :uri, 'UNBOUND', NULL, NULL)",
         {"doc": doc_id, "t": tenant_id, "d": deal_id, "uri": f"idis://erasure/{deal_id}.pdf"},
     )
     _admin_exec(
-        "INSERT INTO documents (document_id, tenant_id, deal_id, doc_id, doc_type) VALUES "
-        "(CAST(:did AS uuid), CAST(:t AS uuid), CAST(:d AS uuid), CAST(:doc AS uuid), 'PDF')",
+        "INSERT INTO documents (document_id, tenant_id, deal_id, doc_id, doc_type, "
+        "source_binding_state, source_lineage_object_id, source_corpus_receipt_id) VALUES "
+        "(CAST(:did AS uuid), CAST(:t AS uuid), CAST(:d AS uuid), CAST(:doc AS uuid), "
+        "'PDF', 'UNBOUND', NULL, NULL)",
         {"did": document_id, "t": tenant_id, "d": deal_id, "doc": doc_id},
     )
     _admin_exec(
@@ -395,10 +381,29 @@ def _seed_deal_graph(tenant_id: str) -> str:
         {"c": claim_id, "t": tenant_id, "d": deal_id, "now": _NOW},
     )
     _admin_exec(_PROOF_INSERT_SQL, _proof_insert_params(tenant_id, deal_id, proof_id))
+    # Historical backfill partition only: never a new strict/native admission or worker seed.
+    contract_version, contract_hash, resume_state, resume_error = _resolve_run_contract_identity(
+        mode="FULL",
+        pipeline_contract_version=None,
+        pipeline_contract_hash=None,
+        pipeline_resume_state=None,
+        pipeline_resume_error_code=None,
+    )
     _admin_exec(
-        "INSERT INTO runs (run_id, tenant_id, deal_id, mode, strict_preflight_proof_id) VALUES "
-        "(CAST(:r AS uuid), CAST(:t AS uuid), CAST(:d AS uuid), 'FULL', CAST(:p AS uuid))",
-        {"r": run_id, "t": tenant_id, "d": deal_id, "p": proof_id},
+        "INSERT INTO runs (run_id, tenant_id, deal_id, mode, strict_preflight_proof_id, "
+        "pipeline_contract_version, pipeline_contract_hash, pipeline_resume_state, "
+        "pipeline_resume_error_code) VALUES (CAST(:r AS uuid), CAST(:t AS uuid), "
+        "CAST(:d AS uuid), 'FULL', CAST(:p AS uuid), :cv, :ch, :rs, :re)",
+        {
+            "r": run_id,
+            "t": tenant_id,
+            "d": deal_id,
+            "p": proof_id,
+            "cv": contract_version,
+            "ch": contract_hash,
+            "rs": resume_state,
+            "re": resume_error,
+        },
     )
     _admin_exec(
         "UPDATE strict_preflight_proofs SET consumed_at = :now, "
@@ -406,10 +411,28 @@ def _seed_deal_graph(tenant_id: str) -> str:
         "AND proof_id = CAST(:p AS uuid)",
         {"now": _NOW, "r": run_id, "t": tenant_id, "p": proof_id},
     )
+    step = RunStep(
+        step_id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        run_id=run_id,
+        step_name=StepName.EXTRACT,
+        step_order=1,
+    )
     _admin_exec(
-        "INSERT INTO run_steps (step_id, tenant_id, run_id, step_name, step_order) "
-        "VALUES (CAST(:s AS uuid), CAST(:t AS uuid), CAST(:r AS uuid), 'EXTRACT', 1)",
-        {"s": str(uuid.uuid4()), "t": tenant_id, "r": run_id},
+        "INSERT INTO run_steps (step_id, tenant_id, run_id, step_name, step_order, "
+        "pipeline_contract_version, pipeline_contract_hash, semantic_rule_version, "
+        "semantic_rule_hash) VALUES (CAST(:s AS uuid), CAST(:t AS uuid), "
+        "CAST(:r AS uuid), 'EXTRACT', 1, :cv, :ch, :sv, :sh)",
+        {
+            "s": step.step_id,
+            "t": tenant_id,
+            "r": run_id,
+            "cv": step.pipeline_contract_version,
+            "ch": step.pipeline_contract_hash,
+            "sv": step.semantic_rule_version,
+            "sh": step.semantic_rule_hash,
+        },
+        tenant_id=tenant_id,
     )
     _admin_exec(
         "INSERT INTO human_gates (gate_id, tenant_id, deal_id, gate_type) VALUES "
@@ -632,14 +655,17 @@ def test_public_app_credential_erasure_is_unreachable_with_zero_mutation(
 
 
 def test_app_role_proof_consumption_is_atomic_durable_and_one_use(pg_clean: None) -> None:
-    from idis.persistence.db import begin_app_conn
+    from idis.persistence.db import begin_app_conn, get_app_engine
 
-    deal_id = _seed_bare_deal(_TENANT_A)
-    proof_id = str(uuid.uuid4())
+    # Synthetic mechanics only: real app-role staging, freeze and admission.
+    source = seed_synthetic_frozen_source(get_app_engine(), label="durable-one-use")
+    tenant_id, deal_id = source.tenant_id, source.deal_id
+    proof = insert_synthetic_proof(get_app_engine(), source)
+    proof_id = proof.proof_id
     run_id = str(uuid.uuid4())
-    _admin_exec(_PROOF_INSERT_SQL, _proof_insert_params(_TENANT_A, deal_id, proof_id))
 
-    run = _consume_bound_proof(_TENANT_A, deal_id, proof_id, run_id)
+    with begin_app_conn() as conn:
+        run = admit_synthetic_proof(admission_repository(conn, tenant_id), proof, run_id)
     assert run["run_id"] == run_id
     assert run["strict_preflight_proof_id"] == proof_id
     consumed_at, consumed_by = _admin_proof_state(proof_id)
@@ -647,25 +673,15 @@ def test_app_role_proof_consumption_is_atomic_durable_and_one_use(pg_clean: None
 
     # A fresh application-role transaction proves the reciprocal link survived commit.
     with begin_app_conn() as conn:
-        repo = PostgresStrictPreflightProofsRepository(conn, _TENANT_A)
+        repo = admission_repository(conn, tenant_id)
         repo.require_consumed_for_run(proof_id=proof_id, run_id=run_id, deal_id=deal_id)
 
     with begin_app_conn() as conn:
-        repo = PostgresStrictPreflightProofsRepository(conn, _TENANT_A)
+        repo = admission_repository(conn, tenant_id)
         with pytest.raises(StrictPreflightProofError) as exc_info:
-            repo.consume_and_create_run(
-                proof_id=proof_id,
-                expected_binding=_strict_binding(_TENANT_A, deal_id),
-                run_id=str(uuid.uuid4()),
-                deal_id=deal_id,
-                mode="FULL",
-                idempotency_key="proof-reuse",
-                source={"type": "deal_documents", "document_ids": []},
-                created_by_actor_id="task1-pg-test",
-                created_by_actor_type="SERVICE",
-            )
+            admit_synthetic_proof(repo, proof, str(uuid.uuid4()))
     assert exc_info.value.code == "STRICT_PREFLIGHT_PROOF_ALREADY_CONSUMED"
-    assert _admin_count("runs", _TENANT_A, deal_id) == 1
+    assert _admin_count("runs", tenant_id, deal_id) == 1
 
 
 def test_app_role_cross_tenant_proof_is_invisible(pg_clean: None) -> None:
@@ -697,32 +713,22 @@ def test_app_role_cross_tenant_proof_is_invisible(pg_clean: None) -> None:
 
 
 def test_active_run_conflict_leaves_second_proof_unconsumed(pg_clean: None) -> None:
-    from idis.persistence.db import begin_app_conn
+    from idis.persistence.db import begin_app_conn, get_app_engine
 
-    deal_id = _seed_bare_deal(_TENANT_A)
-    first_proof = str(uuid.uuid4())
-    second_proof = str(uuid.uuid4())
-    _admin_exec(_PROOF_INSERT_SQL, _proof_insert_params(_TENANT_A, deal_id, first_proof))
-    _admin_exec(_PROOF_INSERT_SQL, _proof_insert_params(_TENANT_A, deal_id, second_proof))
-    _consume_bound_proof(_TENANT_A, deal_id, first_proof, str(uuid.uuid4()))
+    source = seed_synthetic_frozen_source(get_app_engine(), label="active-conflict")
+    tenant_id, deal_id = source.tenant_id, source.deal_id
+    first_proof = insert_synthetic_proof(get_app_engine(), source)
+    second_proof = insert_synthetic_proof(get_app_engine(), source)
+    with begin_app_conn() as conn:
+        admit_synthetic_proof(admission_repository(conn, tenant_id), first_proof, str(uuid.uuid4()))
 
     with begin_app_conn() as conn:
-        repo = PostgresStrictPreflightProofsRepository(conn, _TENANT_A)
+        repo = admission_repository(conn, tenant_id)
         with pytest.raises(RunAlreadyActiveError):
-            repo.consume_and_create_run(
-                proof_id=second_proof,
-                expected_binding=_strict_binding(_TENANT_A, deal_id),
-                run_id=str(uuid.uuid4()),
-                deal_id=deal_id,
-                mode="FULL",
-                idempotency_key="second-active-run",
-                source={"type": "deal_documents", "document_ids": []},
-                created_by_actor_id="task1-pg-test",
-                created_by_actor_type="SERVICE",
-            )
+            admit_synthetic_proof(repo, second_proof, str(uuid.uuid4()))
 
-    assert _admin_proof_state(second_proof) == (None, None)
-    assert _admin_count("runs", _TENANT_A, deal_id) == 1
+    assert _admin_proof_state(second_proof.proof_id) == (None, None)
+    assert _admin_count("runs", tenant_id, deal_id) == 1
 
 
 def test_live_deal_proof_delete_is_rejected_without_partial_deletion(pg_clean: None) -> None:
@@ -843,14 +849,88 @@ def test_direct_legacy_app_executor_is_fenced_with_zero_database_mutation(
 
     original = caught.value.orig
     sqlstate = getattr(original, "sqlstate", None) or getattr(original, "pgcode", None)
-    assert sqlstate == "23514"
-    assert "STEP_REHYDRATION_FAILED" in str(original)
+    # The documents BEFORE DELETE source-freeze fence pre-empts the later
+    # deterministic_calculations output-bound DELETE fence; test it separately.
+    assert sqlstate == "40001"
+    assert "TASK7_SOURCE_FREEZE_FENCED" in str(original)
     assert _app_graph_snapshot(_TENANT_A, deal_a) == before
 
 
+def test_direct_app_calc_delete_is_output_bound_fenced_without_mutation(pg_clean: None) -> None:
+    """Isolate the installed0038 output fence pre-empted in whole-deal deletion."""
+    from idis.persistence.db import begin_app_conn, set_tenant_local
+
+    deal_id = _seed_deal_graph(_TENANT_A)
+
+    def full_seeded_rows() -> dict[str, tuple[str, ...]]:
+        with begin_app_conn() as connection:
+            set_tenant_local(connection, _TENANT_A)
+            return {
+                table: tuple(
+                    connection.execute(
+                        text(
+                            f"SELECT to_jsonb(r)::text FROM public.{table} r "
+                            "ORDER BY to_jsonb(r)::text"
+                        )
+                    ).scalars()
+                )
+                for table in _CLEAN_TABLES
+            }
+
+    before_rows = full_seeded_rows()
+    before_counts = _app_graph_snapshot(_TENANT_A, deal_id)
+    with begin_app_conn() as connection:
+        set_tenant_local(connection, _TENANT_A)
+        posture = connection.execute(
+            text("SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname=current_user")
+        ).one()
+        assert tuple(posture) == (False, False)
+        assert (
+            connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            == "0038"
+        )
+        assert (
+            connection.execute(
+                text(
+                    "SELECT count(*) FROM pg_trigger "
+                    "WHERE tgname='trg_task7_deterministic_calculations_output_bound' "
+                    "AND tgrelid='public.deterministic_calculations'::regclass "
+                    "AND tgfoid='public.idis_task7_current_output_bound_v1()'::regprocedure "
+                    "AND NOT tgisinternal"
+                )
+            ).scalar_one()
+            == 1
+        )
+        calc_ids = (
+            connection.execute(
+                text(
+                    "SELECT calc_id::text FROM deterministic_calculations "
+                    "WHERE tenant_id=CAST(:tenant_id AS uuid) AND deal_id=CAST(:deal_id AS uuid)"
+                ),
+                {"tenant_id": _TENANT_A, "deal_id": deal_id},
+            )
+            .scalars()
+            .all()
+        )
+        assert len(calc_ids) == 1
+        with pytest.raises(DBAPIError) as caught, connection.begin_nested():
+            connection.execute(
+                text("DELETE FROM deterministic_calculations WHERE calc_id=CAST(:calc_id AS uuid)"),
+                {"calc_id": calc_ids[0]},
+            )
+        original = caught.value.orig
+        assert (getattr(original, "sqlstate", None) or getattr(original, "pgcode", None)) == "23514"
+        assert original.diag.message_primary == "STEP_REHYDRATION_FAILED"
+        assert "idis_task7_current_output_bound_v1()" in original.diag.context
+    assert full_seeded_rows() == before_rows
+    assert _app_graph_snapshot(_TENANT_A, deal_id) == before_counts
+
+
 def test_legacy_hold_scan_observes_hold_and_lift_without_erasure(pg_clean: None) -> None:
+    from idis.audit.postgres_sink import PostgresAuditSink
+
     deal_a = _seed_deal_graph(_TENANT_A)
-    sink = InMemoryAuditSink()
+    sink = PostgresAuditSink()
     hold = apply_hold(_ctx(), HoldTarget.DEAL, deal_a, _REASON, sink, PostgresLegalHoldRegistry())
     before = _app_graph_snapshot(_TENANT_A, deal_a)
     executor = PostgresErasureExecutor()

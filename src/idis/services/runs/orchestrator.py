@@ -23,9 +23,12 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from idis.services.runs.snapshot_postgres_output_staging import SnapshotOutputCompositionPort
 
 from idis.audit.sink import AuditSink, AuditSinkError
 from idis.methodology.models import MethodologyRegistry
@@ -133,6 +136,7 @@ from idis.models.validated_evidence_package_materialization import (
 from idis.observability.runtime_signals import RUN_CANCELLED as RUN_CANCELLED_EVENT
 from idis.observability.runtime_signals import emit_run_signal
 from idis.persistence.repositories.run_steps import RunStepsRepo
+from idis.persistence.repositories.runs import _resolve_run_contract_identity
 from idis.pipeline.contract_registry import (
     PIPELINE_CONTRACTS,
     PipelineContractError,
@@ -416,6 +420,9 @@ class RunContext:
     deliverables_fn: Callable[..., dict[str, Any]] | None = None
     is_cancellation_requested_fn: Callable[[str, str], bool] | None = None
     strict_resume_validation_required: bool = False
+    fresh_snapshot_initial_execution: bool = False
+    snapshot_output_composition_required: bool = False
+    snapshot_output_composition: SnapshotOutputCompositionPort | None = None
     completed_step_resume_validator: Callable[[RunContext, RunStep], bool] | None = None
     lease_owner_id: str | None = None
     lease_fencing_token: int | None = None
@@ -659,6 +666,7 @@ class RunOrchestrator:
 
     def _resolve_pipeline_step_sequence(self, ctx: RunContext) -> tuple[StepName, ...]:
         """Resolve a claimed run's immutable contract-local step ordering."""
+        ctx.fresh_snapshot_initial_execution = False
         if (
             ctx.pipeline_contract_version is None
             and ctx.pipeline_contract_hash is None
@@ -675,6 +683,61 @@ class RunOrchestrator:
                 "PIPELINE_CONTRACT_UNAVAILABLE",
                 "Claimed run has an incomplete pipeline contract identity",
             )
+        if ctx.pipeline_contract_version in {"snapshot-v1", "full-v1"}:
+            expected = _resolve_run_contract_identity(
+                mode=ctx.mode,
+                pipeline_contract_version=None,
+                pipeline_contract_hash=None,
+                pipeline_resume_state=None,
+                pipeline_resume_error_code=None,
+            )
+            get_run = getattr(self._runs_repo, "get", None)
+            persisted = get_run(ctx.run_id) if callable(get_run) else None
+            if (
+                ctx.mode not in {"SNAPSHOT", "FULL"}
+                or (
+                    ctx.pipeline_contract_version,
+                    ctx.pipeline_contract_hash,
+                    ctx.pipeline_resume_state,
+                )
+                != expected[:3]
+                or ctx.strict_preflight_proof_id is not None
+                or ctx.lease_owner_id is None
+                or ctx.lease_fencing_token != 1
+                or persisted is None
+                or persisted.get("tenant_id") != ctx.tenant_id
+                or persisted.get("deal_id") != ctx.deal_id
+                or persisted.get("mode") != ctx.mode
+                or persisted.get("status") != "RUNNING"
+                or persisted.get("strict_preflight_proof_id") is not None
+                or persisted.get("lease_owner_id") != ctx.lease_owner_id
+                or persisted.get("lease_fencing_token") != ctx.lease_fencing_token
+                or tuple(
+                    persisted.get(field)
+                    for field in (
+                        "pipeline_contract_version",
+                        "pipeline_contract_hash",
+                        "pipeline_resume_state",
+                        "pipeline_resume_error_code",
+                    )
+                )
+                != expected
+                or self._steps_repo.get_by_run_id(ctx.run_id)
+            ):
+                raise RunStepBlockedError(
+                    "STEP_REHYDRATION_FAILED",
+                    "Legacy compatibility permits only fresh exact initial execution",
+                )
+            if ctx.mode == "SNAPSHOT":
+                ctx.fresh_snapshot_initial_execution = True
+                if ctx.snapshot_output_composition_required:
+                    if ctx.snapshot_output_composition is None:
+                        raise RunStepBlockedError(
+                            "PIPELINE_CONTRACT_UNAVAILABLE",
+                            "Claimed worker SNAPSHOT requires its output composition",
+                        )
+                    ctx.snapshot_output_composition.activate(ctx=ctx)
+            return tuple(FULL_STEPS if ctx.mode == "FULL" else SNAPSHOT_STEPS)
         if ctx.pipeline_resume_state != "RESUMABLE":
             raise RunStepBlockedError(
                 "STEP_REHYDRATION_FAILED",
@@ -728,6 +791,9 @@ class RunOrchestrator:
 
     def _cancelled_result(self, ctx: RunContext) -> OrchestratorResult:
         """Return a safe cancellation result without overwriting terminal state."""
+        composition = self._snapshot_composition(ctx)
+        if composition is not None:
+            composition.discard_all(ctx=ctx)
         all_steps = self._steps_repo.get_by_run_id(ctx.run_id)
         emit_run_signal(
             self._audit,
@@ -787,7 +853,26 @@ class RunOrchestrator:
         dispatched = self._dispatch_step(step_name, ctx, accumulated)
         if ctx.provider_output_guard_fn is not None:
             ctx.provider_output_guard_fn(step_name=step_name, phase="after")
+        composition = self._snapshot_composition(ctx, step_name)
+        if composition is not None:
+            composition.seal_success(ctx=ctx, step_name=step_name, result_summary=dispatched)
         return dispatched
+
+    @staticmethod
+    def _snapshot_composition(
+        ctx: RunContext,
+        step_name: StepName | None = None,
+    ) -> SnapshotOutputCompositionPort | None:
+        composition = ctx.snapshot_output_composition
+        if (
+            not ctx.fresh_snapshot_initial_execution
+            or composition is None
+            or not composition.active
+            or step_name is not None
+            and step_name not in {StepName.EXTRACT, StepName.GRADE, StepName.CALC}
+        ):
+            return None
+        return composition
 
     def _dispatch_step(
         self,
@@ -1007,7 +1092,7 @@ class RunOrchestrator:
                 run_id=ctx.run_id,
                 registry=ctx.methodology_registry,
             )
-        elif ctx.strict_resume_validation_required:
+        elif ctx.strict_resume_validation_required and not ctx.fresh_snapshot_initial_execution:
             raise RunStepBlockedError(
                 "METHODOLOGY_COVERAGE_INCOMPLETE",
                 "Durable methodology coverage initialization is unavailable",
@@ -2868,6 +2953,9 @@ class RunOrchestrator:
             lease_fencing_token: int | None = ctx.lease_fencing_token,
             **_kwargs: Any,
         ) -> None:
+            composition = self._snapshot_composition(ctx, step.step_name)
+            if composition is not None:
+                composition.before_complete_step(ctx=ctx, step_name=step.step_name)
             self._complete_step(
                 step,
                 result,
@@ -2876,16 +2964,24 @@ class RunOrchestrator:
                 lease_fencing_token=lease_fencing_token,
             )
 
-        ctx.step_boundary_uow_fn(
-            run_id=ctx.run_id,
-            tenant_id=ctx.tenant_id,
-            step_name=step.step_name,
-            boundary="COMPLETE",
-            lease_owner_id=ctx.lease_owner_id,
-            lease_fencing_token=ctx.lease_fencing_token,
-            mutation=mutation,
-            native_output_writes=staged,
-        )
+        composition = self._snapshot_composition(ctx, step.step_name)
+        try:
+            ctx.step_boundary_uow_fn(
+                run_id=ctx.run_id,
+                tenant_id=ctx.tenant_id,
+                step_name=step.step_name,
+                boundary="COMPLETE",
+                lease_owner_id=ctx.lease_owner_id,
+                lease_fencing_token=ctx.lease_fencing_token,
+                mutation=mutation,
+                native_output_writes=staged,
+            )
+        except Exception:
+            if composition is not None:
+                composition.boundary_failed(ctx=ctx, step_name=step.step_name)
+            raise
+        if composition is not None:
+            composition.complete_committed(ctx=ctx, step_name=step.step_name)
         ctx.methodology_pending_native_output_writes.pop(step.step_name, None)
         if ctx.after_step_boundary_commit_fn is not None:
             ctx.after_step_boundary_commit_fn(step_name=step.step_name, boundary="COMPLETE")
@@ -2913,17 +3009,25 @@ class RunOrchestrator:
         result_summary = getattr(exc, "result_summary", None) or {
             "error_code": getattr(exc, "code", type(exc).__name__.upper())
         }
-        staged = (
-            tuple(
-                ctx.stage_native_output_writes_fn(
-                    ctx=ctx,
-                    step_name=step.step_name,
-                    result_summary=result_summary,
-                )
+        composition = self._snapshot_composition(ctx, step.step_name)
+        if composition is not None:
+            ctx.methodology_pending_native_output_writes.pop(step.step_name, None)
+            staged = composition.abort_step_and_stage_failure_audits(
+                ctx=ctx,
+                step_name=step.step_name,
             )
-            if ctx.stage_native_output_writes_fn is not None
-            else ()
-        )
+        else:
+            staged = (
+                tuple(
+                    ctx.stage_native_output_writes_fn(
+                        ctx=ctx,
+                        step_name=step.step_name,
+                        result_summary=result_summary,
+                    )
+                )
+                if ctx.stage_native_output_writes_fn is not None
+                else ()
+            )
 
         def mutation(
             *,
@@ -2932,6 +3036,8 @@ class RunOrchestrator:
             lease_fencing_token: int | None = ctx.lease_fencing_token,
             **_kwargs: Any,
         ) -> None:
+            if composition is not None:
+                composition.before_failed_step(ctx=ctx, step_name=step.step_name)
             self._fail_step(
                 step,
                 exc,
@@ -2940,16 +3046,20 @@ class RunOrchestrator:
                 lease_fencing_token=lease_fencing_token,
             )
 
-        ctx.step_boundary_uow_fn(
-            run_id=ctx.run_id,
-            tenant_id=ctx.tenant_id,
-            step_name=step.step_name,
-            boundary="COMPLETE",
-            lease_owner_id=ctx.lease_owner_id,
-            lease_fencing_token=ctx.lease_fencing_token,
-            mutation=mutation,
-            native_output_writes=staged,
-        )
+        try:
+            ctx.step_boundary_uow_fn(
+                run_id=ctx.run_id,
+                tenant_id=ctx.tenant_id,
+                step_name=step.step_name,
+                boundary="COMPLETE",
+                lease_owner_id=ctx.lease_owner_id,
+                lease_fencing_token=ctx.lease_fencing_token,
+                mutation=mutation,
+                native_output_writes=staged,
+            )
+        finally:
+            if composition is not None:
+                composition.boundary_failed(ctx=ctx, step_name=step.step_name)
         if ctx.after_step_boundary_commit_fn is not None:
             ctx.after_step_boundary_commit_fn(step_name=step.step_name, boundary="COMPLETE")
 

@@ -7,12 +7,10 @@ unless ``IDIS_REQUIRE_POSTGRES=1`` makes the integration gate mandatory.
 
 from __future__ import annotations
 
-import json
 import os
 import uuid
 from collections.abc import Generator
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -21,11 +19,13 @@ from sqlalchemy import text
 from idis.audit.postgres_sink import PostgresAuditSink
 from idis.audit.sink import AuditSinkError
 from idis.persistence.repositories.runs import PostgresRunsRepository
-from idis.persistence.repositories.strict_preflight_proofs import (
-    PostgresStrictPreflightProofsRepository,
-    StrictPreflightBinding,
-)
 from idis.pipeline.worker import _lease_transition_audit_emitter
+from tests._cir04c2_admission_helpers import (
+    admission_repository,
+    admit_synthetic_proof,
+    insert_synthetic_proof,
+    seed_synthetic_frozen_source,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy import Engine
@@ -73,108 +73,27 @@ def _pg_schema() -> Generator[None, None, None]:
     reset_engines()
 
 
-def _binding(tenant_id: str, deal_id: str) -> StrictPreflightBinding:
-    return StrictPreflightBinding(
-        tenant_id=tenant_id,
-        deal_id=deal_id,
-        corpus_hash="1" * 64,
-        strict_profile_generation="acceptance-v1",
-        strict_profile_hmac="2" * 64,
-        pipeline_contract_version="full-strict-v2",
-        pipeline_contract_hash="3" * 64,
-        expected_consumer_edge_rule_hash="4" * 64,
-        static_decision_set_hash="5" * 64,
-        methodology_version_hashes=("6" * 64,),
-        promoted_pointer_hash="7" * 64,
-        provider_receipt_set_hash="8" * 64,
-        dependency_receipt_set_hash="9" * 64,
-    )
-
-
 def _seed_consumed_strict_run() -> _SeededStrictRun:
-    from idis.persistence.db import begin_app_conn, get_admin_engine
+    from idis.persistence.db import begin_app_conn, get_app_engine
 
+    # Synthetic freeze/admission mechanics, not product ingestion/FULL evidence.
+    source = seed_synthetic_frozen_source(get_app_engine(), label="worker-claim")
+    proof = insert_synthetic_proof(get_app_engine(), source)
     seeded = _SeededStrictRun(
-        tenant_id=str(uuid.uuid4()),
-        deal_id=str(uuid.uuid4()),
-        proof_id=str(uuid.uuid4()),
+        tenant_id=source.tenant_id,
+        deal_id=source.deal_id,
+        proof_id=proof.proof_id,
         run_id=str(uuid.uuid4()),
     )
-    binding = _binding(seeded.tenant_id, seeded.deal_id)
-    now = datetime.now(UTC)
-
-    with get_admin_engine().begin() as conn:
-        conn.execute(
-            text(
-                "INSERT INTO tenants (tenant_id, name) "
-                "VALUES (CAST(:tenant_id AS uuid), 'Slice100 Task1')"
-            ),
-            {"tenant_id": seeded.tenant_id},
-        )
-        conn.execute(
-            text(
-                "INSERT INTO deals (deal_id, tenant_id, name, created_at) VALUES "
-                "(CAST(:deal_id AS uuid), CAST(:tenant_id AS uuid), "
-                "'Task1 Worker Claim', :now)"
-            ),
-            {"deal_id": seeded.deal_id, "tenant_id": seeded.tenant_id, "now": now},
-        )
-        conn.execute(
-            text(
-                """
-                INSERT INTO strict_preflight_proofs (
-                    proof_id, tenant_id, deal_id, corpus_hash,
-                    strict_profile_generation, strict_profile_hmac,
-                    pipeline_contract_version, pipeline_contract_hash,
-                    expected_consumer_edge_rule_hash, static_decision_set_hash,
-                    methodology_version_hashes, promoted_pointer_hash,
-                    provider_receipt_set_hash, dependency_receipt_set_hash,
-                    binding_hash, created_at, expires_at
-                ) VALUES (
-                    CAST(:proof_id AS uuid), CAST(:tenant_id AS uuid),
-                    CAST(:deal_id AS uuid), :corpus_hash,
-                    :strict_profile_generation, :strict_profile_hmac,
-                    :pipeline_contract_version, :pipeline_contract_hash,
-                    :expected_consumer_edge_rule_hash, :static_decision_set_hash,
-                    CAST(:methodology_version_hashes AS jsonb), :promoted_pointer_hash,
-                    :provider_receipt_set_hash, :dependency_receipt_set_hash,
-                    :binding_hash, :created_at, :expires_at
-                )
-                """
-            ),
-            {
-                "proof_id": seeded.proof_id,
-                "tenant_id": seeded.tenant_id,
-                "deal_id": seeded.deal_id,
-                "corpus_hash": binding.corpus_hash,
-                "strict_profile_generation": binding.strict_profile_generation,
-                "strict_profile_hmac": binding.strict_profile_hmac,
-                "pipeline_contract_version": binding.pipeline_contract_version,
-                "pipeline_contract_hash": binding.pipeline_contract_hash,
-                "expected_consumer_edge_rule_hash": binding.expected_consumer_edge_rule_hash,
-                "static_decision_set_hash": binding.static_decision_set_hash,
-                "methodology_version_hashes": json.dumps(binding.methodology_version_hashes),
-                "promoted_pointer_hash": binding.promoted_pointer_hash,
-                "provider_receipt_set_hash": binding.provider_receipt_set_hash,
-                "dependency_receipt_set_hash": binding.dependency_receipt_set_hash,
-                "binding_hash": binding.digest(),
-                "created_at": now,
-                "expires_at": now + timedelta(hours=1),
-            },
-        )
 
     with begin_app_conn() as conn:
-        repository = PostgresStrictPreflightProofsRepository(conn, seeded.tenant_id)
-        repository.consume_and_create_run(
-            proof_id=seeded.proof_id,
-            expected_binding=binding,
-            run_id=seeded.run_id,
-            deal_id=seeded.deal_id,
-            mode="FULL",
-            idempotency_key=f"task1-{seeded.proof_id}",
-            source={"type": "deal_documents", "document_ids": []},
-            created_by_actor_id="originating-human",
-            created_by_actor_type="HUMAN",
+        repository = admission_repository(conn, seeded.tenant_id)
+        admit_synthetic_proof(
+            repository,
+            proof,
+            seeded.run_id,
+            actor_id="originating-human",
+            actor_type="HUMAN",
         )
         repository.require_consumed_for_run(
             proof_id=seeded.proof_id,

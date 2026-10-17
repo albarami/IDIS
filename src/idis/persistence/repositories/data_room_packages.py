@@ -113,6 +113,8 @@ class InMemoryDataRoomPackagesRepository:
     def create_package(self, package: DataRoomPackage) -> DataRoomPackage:
         if str(package.tenant_id) != self._tenant_id:
             raise ValueError("Tenant mismatch in data-room package creation")
+        if package.status.value != "OPEN":
+            raise ValueError("A new package must start OPEN before source freeze")
         _data_room_packages_store[str(package.package_id)] = package.model_dump(mode="json")
         return _package_from_data(_data_room_packages_store[str(package.package_id)])
 
@@ -148,7 +150,10 @@ class InMemoryDataRoomPackagesRepository:
                 and data["path_hash"] == file.path_hash
             ):
                 return _file_from_data(data)
-        _data_room_package_files_store[str(file.file_entry_id)] = file.model_dump(mode="json")
+        if package["status"] != "OPEN":
+            raise ValueError("Package/deal mismatch in data-room package file creation")
+        staged = file.model_copy(update={"doc_id": None, "document_id": None})
+        _data_room_package_files_store[str(file.file_entry_id)] = staged.model_dump(mode="json")
         return _file_from_data(_data_room_package_files_store[str(file.file_entry_id)])
 
     def list_files_by_package(self, package_id: str, deal_id: str) -> list[DataRoomPackageFile]:
@@ -177,11 +182,13 @@ class PostgresDataRoomPackagesRepository:
         self._conn.execute(
             text(
                 f"""
-                INSERT INTO data_room_packages ({_PACKAGE_COLUMNS})
+                INSERT INTO data_room_packages (
+                    {_PACKAGE_COLUMNS}, source_binding_state, source_lineage_object_id
+                )
                 VALUES
                     (:package_id, :tenant_id, :deal_id, :status, :created_by_actor_id,
                      :created_by_actor_type, :manifest_uri, CAST(:metadata AS JSONB),
-                     :created_at, :updated_at)
+                     :created_at, :updated_at, 'UNBOUND', NULL)
                 """
             ),
             {
@@ -248,17 +255,21 @@ class PostgresDataRoomPackagesRepository:
         insert_result = self._conn.execute(
             text(
                 f"""
-                INSERT INTO data_room_package_files ({_FILE_COLUMNS})
+                INSERT INTO data_room_package_files (
+                    {_FILE_COLUMNS}, source_binding_state, source_lineage_object_id
+                )
                 SELECT
                     :file_entry_id, :tenant_id, :package_id, :deal_id, :sequence,
                     :path_hash, :extension, :sha256, :file_status, :support_status,
                     :triage_status, :parse_status, CAST(:reason_codes AS JSONB),
-                    CAST(:error_codes AS JSONB), :doc_id, :document_id, :storage_uri,
-                    :created_at
+                    CAST(:error_codes AS JSONB), NULL, NULL, :storage_uri,
+                    :created_at, 'UNBOUND', NULL
                 FROM data_room_packages
                 WHERE package_id = :package_id
                   AND tenant_id = :tenant_id
                   AND deal_id = :deal_id
+                  AND status = 'OPEN'
+                  AND source_binding_state = 'UNBOUND'
                 ON CONFLICT (tenant_id, package_id, path_hash) DO NOTHING
                 """
             ),
@@ -277,8 +288,6 @@ class PostgresDataRoomPackagesRepository:
                 "parse_status": file.parse_status.value,
                 "reason_codes": json.dumps(list(file.reason_codes)),
                 "error_codes": json.dumps(list(file.error_codes)),
-                "doc_id": _opt_str(file.doc_id),
-                "document_id": _opt_str(file.document_id),
                 "storage_uri": file.storage_uri,
                 "created_at": file.created_at,
             },

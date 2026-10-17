@@ -22,7 +22,7 @@ from fastapi.responses import EventSourceResponse, JSONResponse, StreamingRespon
 from fastapi.routing import APIRoute, iter_route_contexts
 from fastapi.security import APIKeyHeader
 from fastapi.testclient import TestClient
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 from starlette.routing import Route
 
 from idis.api import main as api_main
@@ -354,8 +354,13 @@ def test_nested_include_context_dispatch_schema_security_and_custom_route_are_co
     request: dict[str, Any] = {"content": b'{"value":"body"}', "headers": {"X-Scope-Key": "local"}}
     with TestClient(app) as client:
         original_response = client.post("/v1/deals", **request)
-    original_events = events.copy()
-    events.clear()
+        original_events = events.copy()
+        assert original_events == ["app", "outer", "inner", "leaf"]
+        events.clear()
+        original_unauthorized = client.post("/v1/deals", json={"value": "missing-security"})
+        original_unauthorized_events = events.copy()
+        assert original_unauthorized_events == ["app", "outer", "inner", "leaf"]
+        events.clear()
 
     api_main._restrict_task4_ingestion_routes(app)
 
@@ -373,12 +378,316 @@ def test_nested_include_context_dispatch_schema_security_and_custom_route_are_co
     assert after["components"] == before["components"]
     with TestClient(app) as client:
         response = client.post("/v1/deals", **request)
-        assert client.post("/v1/deals", json={"value": "missing-security"}).status_code == 401
+        assert events == original_events == ["app", "outer", "inner", "leaf"], (
+            f"TASK4_DEPENDENCY_EVENT_COUNT_DRIFT:observed={events!r}"
+        )
+        events.clear()
+        unauthorized = client.post("/v1/deals", json={"value": "missing-security"})
+        assert unauthorized.status_code == original_unauthorized.status_code == 401
+        assert events == original_unauthorized_events == ["app", "outer", "inner", "leaf"]
     assert response.status_code == original_response.status_code == 201
     assert response.json() == original_response.json() == {"value": "body:local"}
     assert response.headers["X-Route-Wrapper"] == "preserved"
     assert response.headers["X-Response-Context"] == "preserved"
-    assert events[:4] == original_events == ["app", "outer", "inner", "leaf"]
+    assert events == original_unauthorized_events
+
+
+def test_factory_precondition_excludes_public_frontend_registration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fresh factory precondition, not generic rejection of preconfigured apps."""
+    documentation = api_main._restrict_task4_ingestion_routes.__doc__ or ""
+    assert "fresh IDIS factory" in documentation
+    assert "frontend" in documentation
+    assert "post-construction" in documentation
+
+    def reject_frontend(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("TASK4_FACTORY_FRONTEND_REGISTRATION_FORBIDDEN")
+
+    monkeypatch.setattr(FastAPI, "frontend", reject_frontend)
+    monkeypatch.setattr(APIRouter, "frontend", reject_frontend)
+    app = _task4_bootstrap_app(monkeypatch)
+    assert _http_route_inventory(app) == _EXPECTED_TASK4_HTTP_ROUTES
+
+    original_factory = FastAPI
+
+    def contaminated_factory(**kwargs: Any) -> FastAPI:
+        contaminated = original_factory(**kwargs)
+        contaminated.frontend("/", directory="never-read")
+        return contaminated
+
+    monkeypatch.setattr(api_main, "FastAPI", contaminated_factory)
+    with pytest.raises(AssertionError, match="^TASK4_FACTORY_FRONTEND_REGISTRATION_FORBIDDEN$"):
+        _task4_bootstrap_app(monkeypatch)
+
+
+def test_exact_dependency_events_detect_a_trailing_duplicate_after_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_add = APIRouter.add_api_route
+    target_constructions = 0
+
+    def duplicate_on_rebuild(
+        router: APIRouter, path: str, endpoint: Callable[..., Any], **kwargs: Any
+    ) -> None:
+        nonlocal target_constructions
+        if kwargs.get("operation_id") == "nestedCreateDeal":
+            target_constructions += 1
+            if target_constructions == 2:
+                dependencies = list(kwargs["dependencies"])
+                original_dependency = dependencies[0].dependency
+
+                def trailing_duplicate() -> None:
+                    assert original_dependency is not None
+                    original_dependency()
+
+                kwargs["dependencies"] = [
+                    *dependencies,
+                    Depends(trailing_duplicate),
+                ]
+        original_add(router, path, endpoint, **kwargs)
+
+    monkeypatch.setattr(APIRouter, "add_api_route", duplicate_on_rebuild)
+    with pytest.raises(AssertionError, match="TASK4_DEPENDENCY_EVENT_COUNT_DRIFT") as caught:
+        test_nested_include_context_dispatch_schema_security_and_custom_route_are_conserved()
+    assert "observed=['app', 'outer', 'inner', 'leaf', 'app']" in str(caught.value)
+    assert target_constructions == 2
+
+
+@pytest.mark.parametrize("phase", ["iteration", "context-property"])
+def test_scan_failures_are_sanitized_before_app_mutation(
+    monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    app = _fixture_scope_app([])
+    routes = app.router.routes
+    original = tuple(routes)
+    schema = app.openapi()
+    contexts = list(iter_route_contexts(routes))
+
+    class FaultyContext:
+        @property
+        def path(self) -> str:
+            raise AttributeError("RAW_CONTEXT_FAILURE_SENTINEL")
+
+    def failing_contexts(_routes: Any) -> Any:
+        if phase == "context-property":
+            yield FaultyContext()
+        else:
+            yield next(context for context in contexts if context.path == "/health")
+            raise AttributeError("RAW_ITERATION_FAILURE_SENTINEL")
+
+    monkeypatch.setattr(api_main, "iter_route_contexts", failing_contexts)
+    with pytest.raises(RuntimeError, match="^STRICT_FULL_LIVE_BLOCKED$") as caught:
+        api_main._restrict_task4_ingestion_routes(app)
+    assert caught.value.__cause__ is None
+    assert caught.value.__suppress_context__ is True
+    assert app.router.routes is routes
+    assert tuple(routes) == original
+    assert app.openapi_schema is schema
+
+
+def _field_signature(field: Any) -> Any:
+    if field is None:
+        return None
+    return (
+        field.name,
+        field.alias,
+        field.field_info.is_required(),
+        field.field_info.default,
+        field.field_info.default_factory,
+        field.mode,
+        TypeAdapter(field.field_info.annotation).json_schema(mode=field.mode),
+        field.field_info.metadata,
+        field.field_info.validation_alias,
+        field.field_info.serialization_alias,
+        field.field_info.discriminator,
+    )
+
+
+def _dependant_signature(dependant: Any) -> Any:
+    if dependant is None:
+        return None
+    return {
+        "identity": tuple(
+            getattr(dependant, name)
+            for name in (
+                "call",
+                "name",
+                "path",
+                "use_cache",
+                "scope",
+                "own_oauth_scopes",
+                "parent_oauth_scopes",
+                "security_scopes_param_name",
+                "request_param_name",
+                "websocket_param_name",
+                "http_connection_param_name",
+                "response_param_name",
+                "background_tasks_param_name",
+            )
+        ),
+        "parameters": {
+            name: tuple(_field_signature(field) for field in getattr(dependant, name))
+            for name in (
+                "path_params",
+                "query_params",
+                "header_params",
+                "cookie_params",
+                "body_params",
+            )
+        },
+        "dependencies": tuple(_dependant_signature(child) for child in dependant.dependencies),
+    }
+
+
+def _production_context_snapshot(app: FastAPI) -> dict[tuple[str, str], Any]:
+    result: dict[tuple[str, str], Any] = {}
+    for context in iter_route_contexts(app.routes):
+        path = context.path
+        if not isinstance(path, str):
+            continue
+        for method in context.methods or ():
+            pair = (method, path)
+            if pair not in _EXPECTED_TASK4_HTTP_ROUTES:
+                continue
+            assert pair not in result
+            assert context.dependency_overrides_provider is app
+            result[pair] = {
+                "response_model": TypeAdapter(context.response_model).json_schema(
+                    mode="serialization"
+                ),
+                "metadata": tuple(
+                    getattr(context, name)
+                    for name in (
+                        "endpoint",
+                        "status_code",
+                        "response_class",
+                        "tags",
+                        "summary",
+                        "description",
+                        "response_description",
+                        "responses",
+                        "deprecated",
+                        "operation_id",
+                        "unique_id",
+                        "response_model_include",
+                        "response_model_exclude",
+                        "response_model_by_alias",
+                        "response_model_exclude_unset",
+                        "response_model_exclude_defaults",
+                        "response_model_exclude_none",
+                        "include_in_schema",
+                        "openapi_extra",
+                        "strict_content_type",
+                        "name",
+                        "generate_unique_id_function",
+                        "stream_item_type",
+                        "is_json_stream",
+                        "is_sse_stream",
+                    )
+                ),
+                "dependencies": tuple(
+                    (
+                        dependency.dependency,
+                        dependency.use_cache,
+                        dependency.scope,
+                        tuple(getattr(dependency, "scopes", ())),
+                    )
+                    for dependency in context.dependencies
+                ),
+                "callbacks": tuple(
+                    (callback.path, frozenset(callback.methods), callback.endpoint)
+                    for callback in context.callbacks or ()
+                ),
+                "body_field": _field_signature(context.body_field),
+                "response_field": _field_signature(context.response_field),
+                "response_fields": {
+                    key: _field_signature(field) for key, field in context.response_fields.items()
+                },
+                "dependant": _dependant_signature(context.dependant),
+            }
+    assert frozenset(result) == _EXPECTED_TASK4_HTTP_ROUTES
+    return result
+
+
+def _admitted_schema_snapshot(app: FastAPI) -> dict[str, Any]:
+    schema = app.openapi()
+    operations = {
+        (method, path): schema["paths"][path][method.lower()]
+        for method, path in _EXPECTED_TASK4_HTTP_ROUTES
+    }
+    components: dict[str, Any] = {}
+
+    def visit(value: Any) -> None:
+        if isinstance(value, list):
+            for item in value:
+                visit(item)
+        elif isinstance(value, dict):
+            reference = value.get("$ref")
+            if reference is not None:
+                assert reference.startswith("#/components/")
+                if reference not in components:
+                    section, name = reference.removeprefix("#/components/").split("/", 1)
+                    component = schema["components"][section][name]
+                    components[reference] = component
+                    visit(component)
+            for name, item in value.items():
+                if name == "security":
+                    for requirement in item:
+                        for scheme in requirement:
+                            reference = f"#/components/securitySchemes/{scheme}"
+                            components[reference] = schema["components"]["securitySchemes"][scheme]
+                else:
+                    visit(item)
+
+    for operation in operations.values():
+        visit(operation)
+    visit({"security": schema.get("security", [])})
+    return {"operations": operations, "referenced_components": components}
+
+
+def _unrestricted_production_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
+    with monkeypatch.context() as composition:
+        composition.setattr(api_main, "_restrict_task4_ingestion_routes", lambda _app: None)
+        app = _task4_bootstrap_app(composition)
+        assert isinstance(app, FastAPI)
+        return app
+
+
+def test_all_thirteen_real_production_contexts_and_schema_are_conserved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = _unrestricted_production_app(monkeypatch)
+    before_contexts = _production_context_snapshot(app)
+    before_schema = _admitted_schema_snapshot(app)
+    api_main._restrict_task4_ingestion_routes(app)
+    assert _http_route_inventory(app) == _EXPECTED_TASK4_HTTP_ROUTES
+    assert _production_context_snapshot(app) == before_contexts
+    assert _admitted_schema_snapshot(app) == before_schema
+
+
+@pytest.mark.parametrize("drift", ["dependency", "schema"])
+def test_real_production_conservation_check_detects_admitted_route_drift(
+    monkeypatch: pytest.MonkeyPatch, drift: str
+) -> None:
+    app = _unrestricted_production_app(monkeypatch)
+    before_contexts = _production_context_snapshot(app)
+    before_schema = _admitted_schema_snapshot(app)
+    api_main._restrict_task4_ingestion_routes(app)
+    route = next(
+        route
+        for route in app.routes
+        if isinstance(route, APIRoute) and route.path == "/v1/deals/{deal_id}/documents/upload"
+    )
+    if drift == "dependency":
+        route.dependencies.append(Depends(lambda: None, use_cache=False))
+        with pytest.raises(AssertionError):
+            assert _production_context_snapshot(app) == before_contexts
+    else:
+        route.openapi_extra = {"x-review-sensitivity": "must-be-detected"}
+        app.openapi_schema = None
+        with pytest.raises(AssertionError):
+            assert _admitted_schema_snapshot(app) == before_schema
 
 
 @pytest.mark.parametrize("construction_order", ["control-first", "bootstrap-first"])

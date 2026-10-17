@@ -10,6 +10,8 @@ from types import ModuleType
 from typing import Any
 
 import yaml
+from packaging.requirements import Requirement
+from packaging.version import Version
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "verify_dependency_resolution.py"
@@ -127,6 +129,26 @@ class DependencyResolutionTests(unittest.TestCase):
 
 
 class DependencyWiringTests(unittest.TestCase):
+    def test_declared_fastapi_floor_covers_the_qualified_public_routing_api(self) -> None:
+        project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        declared = [
+            requirement
+            for value in project["project"]["dependencies"]
+            if (requirement := Requirement(value)).name == "fastapi"
+        ]
+        self.assertEqual(len(declared), 1)
+        self.assertEqual(str(declared[0].specifier), ">=0.143.3")
+        for unsupported in ("0.109.0", "0.137.2", "0.143.2"):
+            with self.subTest(unsupported=unsupported):
+                self.assertNotIn(Version(unsupported), declared[0].specifier)
+        constraints = (REPO_ROOT / "requirements/constraints-py311.txt").read_text(encoding="utf-8")
+        pinned = [
+            Requirement(line) for line in constraints.splitlines() if line.startswith("fastapi==")
+        ]
+        self.assertEqual(len(pinned), 1)
+        self.assertEqual(str(pinned[0].specifier), "==0.143.3")
+        self.assertIn(Version("0.143.3"), declared[0].specifier)
+
     def test_resolution_target_and_pip_configuration_are_explicit(self) -> None:
         project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         self.assertEqual(

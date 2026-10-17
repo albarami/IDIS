@@ -7,7 +7,7 @@ requires-python = ">=3.11"
 license = { text = "Proprietary" }
 authors = [{ name = "Salim Al-Barami" }]
 dependencies = [
-    "fastapi>=0.109.0",
+    "fastapi>=0.143.3",
     "uvicorn[standard]>=0.27.0",
     "pydantic==2.12.5",
     "jsonschema>=4.21.0",

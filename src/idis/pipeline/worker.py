@@ -678,12 +678,28 @@ class PipelineWorker:
             return
         if self._strict_profile is None:
             raise RuntimeError("STRICT_PROFILE_LOAD_FAILED")
+        from idis.pipeline.contract_registry import FULL_STRICT_V21_CONTRACT_HASH
+
+        if run_data.get("pipeline_contract_version") != "full-strict-v21":
+            raise RuntimeError("PIPELINE_CONTRACT_UNAVAILABLE")
+        if (
+            run_data.get("pipeline_contract_hash") != FULL_STRICT_V21_CONTRACT_HASH
+            or run_data.get("pipeline_resume_state") != "RESUMABLE"
+        ):
+            raise RuntimeError("PIPELINE_CONTRACT_HASH_MISMATCH")
         try:
             _verify_worker_strict_preflight_proof(
                 db_conn=conn,
                 tenant_id=tenant_id,
                 run_data=run_data,
                 strict_profile=self._strict_profile,
+            )
+            get_strict_preflight_proofs_repository(
+                conn,
+                tenant_id,
+            ).require_task7_admission_graph_for_run(
+                deal_id=str(run_data["deal_id"]),
+                run_id=str(run_data["run_id"]),
             )
             preflight_corpus = _load_worker_preflight_corpus(
                 db_conn=conn,
@@ -1657,6 +1673,8 @@ def build_postgres_claimed_run_runtime(
             require_runtime_profile(strict_profile, command="worker")
         except StrictProfileError as exc:
             raise RuntimeError(exc.code) from exc
+        if not is_full_strict_v21:
+            raise RuntimeError("PIPELINE_CONTRACT_UNAVAILABLE")
         # The API's consume-and-create transaction is not trusted as worker admission.
         # Re-read the reciprocal durable link after claim commit, under fresh tenant RLS,
         # and release that transaction before any provider context is composed.

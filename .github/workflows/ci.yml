@@ -1,4 +1,6 @@
 name: CI
+permissions:
+  contents: read
 on:
   push:
     branches: [main]
@@ -30,11 +32,24 @@ jobs:
         run: npm run build
   check:
     runs-on: ubuntu-latest
+    environment: cir04-private-inputs
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    timeout-minutes: 360
+    concurrency:
+      group: cir04-private-check-${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: false
+    env:
+      # Public reviewed bootstrap pin, not an admission token or mutable repository variable.
+      IDIS_BOOTSTRAP_SHA256: 79afe77481b3d6a22b590d380d89d79363746054e428eb4cca6effec641f069d
+      IDIS_WORKFLOW_SHA: ${{ github.workflow_sha }}
     services:
       # Slice96 DEC-A: a real Redis so the cross-replica rate-limit integration test
       # (test_real_redis_enforces_one_shared_bucket_across_replicas) runs here instead of skipping.
       redis:
-        image: redis:7-alpine
+        image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s
@@ -43,8 +58,43 @@ jobs:
         ports:
           - 6379/tcp
     steps:
-      - {"name": "Checkout code", "uses": "actions/checkout@v4"}
-      - {"name": "Set up Python 3.11", "uses": "actions/setup-python@v5", "with": {"python-version": "3.11"}}
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # reviewed v4 main + post
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+          set-safe-directory: false
+      - name: Validate genuine exact-run approval without recovery secret
+        id: private-admission
+        env:
+          IDIS_CI_READ_TOKEN: ${{ github.token }}
+        run: |
+          set +x
+          if [[ -v RUNNER_DEBUG || -v ACTIONS_STEP_DEBUG ]]; then exit 1; fi
+          for name in $(compgen -A variable GIT_TRACE); do unset "$name"; done
+          unset GIT_CURL_VERBOSE
+          umask 077
+          root="$RUNNER_TEMP/idis-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -m 700 "$root"
+          env -i PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null /usr/bin/git -c core.hooksPath=/dev/null -c protocol.file.allow=never -C "$GITHUB_WORKSPACE" cat-file blob "$GITHUB_SHA:scripts/ci_private_inputs.py" > "$root/bootstrap.py"
+          printf '%s  %s\n' "$IDIS_BOOTSTRAP_SHA256" "$root/bootstrap.py" | sha256sum --check --status
+          /usr/bin/python3 -I -S "$root/bootstrap.py" admit
+      - name: Fetch exact recovery raw blobs into private staging
+        id: private-fetch
+        env:
+          IDIS_RECOVERY_READ_KEY: ${{ secrets.IDIS_RECOVERY_READ_KEY }}
+        run: |
+          set +x
+          if [[ -v RUNNER_DEBUG || -v ACTIONS_STEP_DEBUG ]]; then exit 1; fi
+          for name in $(compgen -A variable GIT_TRACE); do unset "$name"; done
+          unset GIT_CURL_VERBOSE
+          umask 077
+          root="$RUNNER_TEMP/idis-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          env -i PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null /usr/bin/git -c core.hooksPath=/dev/null -c protocol.file.allow=never -C "$GITHUB_WORKSPACE" cat-file blob "$GITHUB_SHA:scripts/ci_private_inputs.py" > "$root/fetch-bootstrap.py"
+          printf '%s  %s\n' "$IDIS_BOOTSTRAP_SHA256" "$root/fetch-bootstrap.py" | sha256sum --check --status
+          /usr/bin/python3 -I -S "$root/fetch-bootstrap.py" fetch
+      - {"name": "Set up Python 3.11", "uses": "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065", "with": {"python-version": "3.11"}}
       - name: Install OCR and media system dependencies
         run: |
           sudo apt-get update
@@ -63,8 +113,44 @@ jobs:
       - {"name": "Provision Redis URL for the cross-replica rate-limit integration test (Slice96 DEC-A)", "run": "echo \"IDIS_TEST_REDIS_URL=redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}/15\" >> \"$GITHUB_ENV\""}
       - {"name": "Validate prompt registry governance (Slice99)", "run": "python -m idis prompts validate --prompts-root prompts --repo-root . --out prompt_governance_report.json"}
       - {"name": "Verify OpenAPI/schema/client contract lock (Slice99)", "run": "python scripts/contract_lock.py verify --repo-root ."}
-      - {"name": "Upload prompt governance report", "if": "always()", "uses": "actions/upload-artifact@v4", "with": {"name": "prompt-governance-report", "path": "prompt_governance_report.json", "retention-days": 30}}
-      - {"name": "Run all checks", "run": "make check"}
+      - {"name": "Upload prompt governance report", "if": "always()", "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02", "with": {"name": "prompt-governance-report", "path": "prompt_governance_report.json", "retention-days": 30}}
+      - name: Revalidate admission and overlay exact private bytes no-clobber
+        id: private-overlay
+        env:
+          IDIS_CI_READ_TOKEN: ${{ github.token }}
+        run: |
+          set +x
+          if [[ -v RUNNER_DEBUG || -v ACTIONS_STEP_DEBUG ]]; then exit 1; fi
+          for name in $(compgen -A variable GIT_TRACE); do unset "$name"; done
+          unset GIT_CURL_VERBOSE
+          umask 077
+          root="$RUNNER_TEMP/idis-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          env -i PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null /usr/bin/git -c core.hooksPath=/dev/null -c protocol.file.allow=never -C "$GITHUB_WORKSPACE" cat-file blob "$GITHUB_SHA:scripts/ci_private_inputs.py" > "$root/overlay-bootstrap.py"
+          printf '%s  %s\n' "$IDIS_BOOTSTRAP_SHA256" "$root/overlay-bootstrap.py" | sha256sum --check --status
+          /usr/bin/python3 -I -S "$root/overlay-bootstrap.py" overlay
+          env -i PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null /usr/bin/git -c core.hooksPath=/dev/null -c protocol.file.allow=never -C "$GITHUB_WORKSPACE" cat-file blob "$GITHUB_SHA:scripts/ci_private_inputs.py" > "$root/capture-bootstrap.py"
+          printf '%s  %s\n' "$IDIS_BOOTSTRAP_SHA256" "$root/capture-bootstrap.py" | sha256sum --check --status
+      - name: Derive labelled v27 staging bytes with existing tools
+        shell: /usr/bin/python3 -I -S "${{ runner.temp }}/idis-ci-${{ github.run_id }}-${{ github.run_attempt }}/capture-bootstrap.py" prepare {0}
+        run: |
+          mkdir -p .local_reports/slice100/task8/v27-candidate
+          python scripts/materialize_full_strict_v27_preimage.py --staging-output .local_reports/slice100/task8/v27-candidate/full_strict_v27_reviewed_preimage_v1.json
+          python scripts/generate_task8_v27_contract_fixtures.py --parent-artifact contracts/full_strict_v21_reviewed_preimage_v1.json --policy-artifact contracts/fdd_formula_policy_v2.json --reviewer-map docs/plans/2026-07-25-slice100-task8-fdd-formula-policy-v2-review-map.md --staged-artifact .local_reports/slice100/task8/v27-candidate/full_strict_v27_reviewed_preimage_v1.json --staging-output .local_reports/slice100/task8/v27-candidate/full_strict_v27_contract_hash_v1.json
+          python scripts/verify_full_strict_v27_fixture_independently.py --mode verify --parent contracts/full_strict_v21_reviewed_preimage_v1.json --policy contracts/fdd_formula_policy_v2.json --reviewer-map docs/plans/2026-07-25-slice100-task8-fdd-formula-policy-v2-review-map.md --artifact .local_reports/slice100/task8/v27-candidate/full_strict_v27_reviewed_preimage_v1.json --fixture .local_reports/slice100/task8/v27-candidate/full_strict_v27_contract_hash_v1.json
+          printf '%s\n' '4169371675ce32c2b4b459528dcdf21914887941d952648597bce59e49a8ac06  .local_reports/slice100/task8/v27-candidate/full_strict_v27_reviewed_preimage_v1.json' '78a3aedb04260cc56e98a2a9193ce489ca73bd4b5b95fc1486f676bfbd07b0cf  .local_reports/slice100/task8/v27-candidate/full_strict_v27_contract_hash_v1.json' | sha256sum --check --status
+      - name: Run all checks
+        shell: /usr/bin/python3 -I -S "${{ runner.temp }}/idis-ci-${{ github.run_id }}-${{ github.run_attempt }}/capture-bootstrap.py" capture {0}
+        run: make check
+      - name: Remove only validated invocation-owned overlay files
+        if: always()
+        run: |
+          set +x
+          if [[ -v RUNNER_DEBUG || -v ACTIONS_STEP_DEBUG ]]; then exit 1; fi
+          root="$RUNNER_TEMP/idis-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          if [[ ! -d "$root" ]]; then exit 0; fi
+          env -i PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null /usr/bin/git -c core.hooksPath=/dev/null -c protocol.file.allow=never -C "$GITHUB_WORKSPACE" cat-file blob "$GITHUB_SHA:scripts/ci_private_inputs.py" > "$root/cleanup-bootstrap.py"
+          printf '%s  %s\n' "$IDIS_BOOTSTRAP_SHA256" "$root/cleanup-bootstrap.py" | sha256sum --check --status
+          /usr/bin/python3 -I -S "$root/cleanup-bootstrap.py" cleanup
   postgres-integration:
     runs-on: ubuntu-latest
     services:

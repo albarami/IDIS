@@ -7,6 +7,8 @@ Current refinement: **AUTH-SEQUENCE-20261017**. Astra xhigh in Codex orchestrate
 
 **AUTH-FROZEN-PREVIEWS-20261017:** the owner selected freeze-required for every producer, including legacy/SNAPSHOT previews. Upload-first UNBOUND storage remains permitted; it is never preview/answer evidence. Reuse the existing production package-freeze/admission mechanisms, keep upload-to-preview straightforward, and explain unmet prerequisites. Preserve meaningful preview/security assertions; no fabricated frozen evidence or test waiver.
 
+**AUTH-CI-HEALTH-20261017:** owner authorizes an explicitly selected, isolated CIR-04 synthetic test profile only. Keep canonical workbook/signature/authorization requirements and all validators unchanged; enforce zero calls/spend and blocked external access, real seven checks, literal13routes/default command. Eventual result is only **"container health with synthetic fixtures"**, not canonical/financial/production acceptance. Full scope and evidence requirements are in RUN_STATE; actual Opus review and exact-head green CI remain mandatory.
+
 ## Current CIR-04 substeps
 
 - [x] Reconcile clean local/remote69f79be and prior writer releases; reserve isolated CIR-04E worktree for Sol.

@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -76,6 +77,84 @@ def _prepare(module: ModuleType, tmp_path: Path, model_path: Path) -> _Prepared:
     )
     assert isinstance(prepared, _Prepared)
     return prepared
+
+
+@pytest.mark.parametrize("autocrlf", ["false", "true"])
+def test_pinned_workbook_factory_checkout_retains_exact_lf_bytes(
+    tmp_path: Path,
+    autocrlf: str,
+) -> None:
+    git_executable = shutil.which("git")
+    if git_executable is None:
+        pytest.fail("PINNED_FACTORY_GIT_REQUIRED: install Git in the test runtime")
+    source = "tests/slice100_task5/_workbook_factory.py"
+    canonical = (ROOT / source).read_bytes()
+    expected_sha256 = "812ba3043931b40dfda534ac813ce5f7f4eeac2f8e996f49d17630817f439abf"
+    assert hashlib.sha256(canonical).hexdigest() == expected_sha256
+    attributes = (ROOT / ".gitattributes").read_bytes()
+    repository = tmp_path / "owned-repository"
+    repository.mkdir()
+    owned_index = tmp_path / "owned.index"
+    environment = {
+        name: os.environ[name]
+        for name in ("SYSTEMROOT", "WINDIR", "TEMP", "TMP")
+        if name in os.environ
+    }
+    environment.update(
+        GIT_CONFIG_GLOBAL=os.devnull,
+        GIT_CONFIG_SYSTEM=os.devnull,
+        GIT_CONFIG_NOSYSTEM="1",
+        GIT_ATTR_NOSYSTEM="1",
+        GIT_INDEX_FILE=str(owned_index),
+    )
+
+    def git(*arguments: str, data: bytes | None = None) -> bytes:
+        result = subprocess.run(
+            [
+                git_executable,
+                "-c",
+                "core.fsmonitor=false",
+                "-c",
+                "core.untrackedCache=false",
+                "-c",
+                "core.splitIndex=false",
+                *arguments,
+            ],
+            input=data,
+            cwd=repository,
+            env=environment,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 0, "PINNED_FACTORY_GIT_OPERATION_FAILED"
+        return result.stdout
+
+    # Only fresh owned Git objects/index are touched; no commit, remote or config edit.
+    git("init", "--quiet", "--template=", ".")
+    blob = git("hash-object", "-w", "--stdin", data=canonical).decode().strip()
+    assert blob == "78c03b4b69642afc789ae495524bd6efcd8f9f88"
+    assert git("cat-file", "blob", blob) == canonical
+    attribute_blob = git("hash-object", "-w", "--stdin", data=attributes).decode().strip()
+    git("update-index", "--add", "--cacheinfo", f"100644,{blob},{source}")
+    git("update-index", "--add", "--cacheinfo", f"100644,{attribute_blob},.gitattributes")
+    before_index = owned_index.read_bytes()
+    destination = tmp_path / "owned-checkout"
+    destination.mkdir()
+    git(
+        "-c",
+        f"core.autocrlf={autocrlf}",
+        "checkout-index",
+        f"--prefix={destination.as_posix()}/",
+        "--",
+        source,
+    )
+    checked_out = (destination / source).read_bytes()
+    assert owned_index.read_bytes() == before_index
+    assert (ROOT / source).read_bytes() == canonical
+    assert (ROOT / ".gitattributes").read_bytes() == attributes
+    assert checked_out == canonical, "PINNED_FACTORY_CHECKOUT_BYTES_CHANGED"
+    assert hashlib.sha256(checked_out).hexdigest() == expected_sha256
+    assert b"\r\n" not in checked_out
 
 
 @pytest.mark.parametrize("selected,authority", [(False, AUTHORITY), (True, "wrong"), (False, "")])

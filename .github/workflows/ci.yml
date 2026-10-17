@@ -44,8 +44,6 @@ jobs:
     env:
       # Public reviewed bootstrap pin, not an admission token or mutable repository variable.
       IDIS_BOOTSTRAP_SHA256: ff5cba5bd92683d4d4e5b9fc101f74006899d3f9863b1ee02ffb9e0025e148e6
-      # Temporary P4 probe pin. Remove with the two canary steps and scripts/ci_canary_probe.py.
-      IDIS_CANARY_PROBE_SHA256: f1cba5dc0848220ca376766570b62a8da0ce885946c2c1a7d8529bf5229e1b03
       IDIS_WORKFLOW_SHA: ${{ github.workflow_sha }}
     services:
       # Public registry raw linux/amd64 manifest qualified; no mutable-image fallback.
@@ -81,69 +79,6 @@ jobs:
           fetch-depth: 2
           persist-credentials: false
           set-safe-directory: false
-      - name: Canary admit genuine exact-run approval without seed
-        id: canary-admit
-        env:
-          IDIS_CI_READ_TOKEN: ${{ github.token }}
-        run: |
-          set +x
-          if [[ -v RUNNER_DEBUG || -v ACTIONS_STEP_DEBUG ]]; then exit 1; fi
-          for name in $(compgen -A variable GIT_TRACE); do unset "$name"; done
-          unset GIT_CURL_VERBOSE
-          umask 077
-          root="$RUNNER_TEMP/idis-canary-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          mkdir -m 700 "$root"
-          env -i PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null /usr/bin/git -c core.hooksPath=/dev/null -c protocol.file.allow=never -C "$GITHUB_WORKSPACE" cat-file blob "$GITHUB_SHA:scripts/ci_private_inputs.py" > "$root/canary-bootstrap.py"
-          printf '%s  %s\n' "$IDIS_BOOTSTRAP_SHA256" "$root/canary-bootstrap.py" | sha256sum --check --status
-          env -i PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null /usr/bin/git -c core.hooksPath=/dev/null -c protocol.file.allow=never -C "$GITHUB_WORKSPACE" cat-file blob "$GITHUB_SHA:scripts/ci_canary_probe.py" > "$root/canary-probe.py"
-          printf '%s  %s\n' "$IDIS_CANARY_PROBE_SHA256" "$root/canary-probe.py" | sha256sum --check --status
-          /usr/bin/python3 -I -S "$root/canary-probe.py" canary-admit
-      - name: Canary capture synthetic failure privacy
-        id: canary-capture
-        timeout-minutes: 1
-        env:
-          IDIS_CI_CANARY_SEED: ${{ secrets.IDIS_CI_CANARY_SEED }}
-        shell: /usr/bin/python3 -I -S -c "import os,sys; r=os.path.join(os.environ['RUNNER_TEMP'],'idis-canary-'+os.environ['GITHUB_RUN_ID']+'-'+os.environ['GITHUB_RUN_ATTEMPT']); p=os.path.join(r,'canary-probe.py'); print('CANARY_ROOT') or sys.exit(1) if not (os.path.isdir(r) and not os.path.islink(r) and os.path.isfile(p) and not os.path.islink(p)) else os.execv('/usr/bin/python3',['/usr/bin/python3','-I','-S',p,'canary-capture',sys.argv[1]])" "{0}"
-        run: |
-          sentinel="${CANARY_SENTINEL-}"
-          printf '%s\n' "$sentinel"
-          printf '%s\n' "$sentinel" >&2
-          printf '%s\n' 'Traceback (most recent call last):'
-          printf '%s\n' '  File "canary_child.py", line 1, in <module>'
-          printf '%s\n' 'RuntimeError: synthetic boundary'
-          printf '%s\n' '{malformed-json'
-          printf '%s\n' '<malformed'
-          printf '%s\n' "::error::${sentinel}"
-          printf '%s\n' "::warning::${sentinel}"
-          printf '%s\n' '##[group]canary-footer'
-          set +e
-          for name in GITHUB_ENV GITHUB_PATH GITHUB_OUTPUT \
-            GITHUB_STEP_SUMMARY GITHUB_STATE; do
-            target="${!name-}"
-            if [ -n "$target" ]; then
-              printf '%s\n' "$sentinel" >> "$target"
-            fi
-          done
-          while IFS= read -r name; do
-            case "$name" in
-              *[!A-Za-z0-9_]*) continue ;;
-            esac
-            target="${!name-}"
-            case "$target" in
-              *_runner_file_commands*)
-                printf '%s\n' "$sentinel" >> "$target"
-                ;;
-            esac
-          done <<EOF
-          $(compgen -v)
-          EOF
-          (exit 0)
-          printf '%s\n' "CANARY_OBSERVED_EXIT $?"
-          (exit 1)
-          printf '%s\n' "CANARY_OBSERVED_EXIT $?"
-          (exit 7)
-          printf '%s\n' "CANARY_OBSERVED_EXIT $?"
-          sleep 600; exit 7
       - name: Validate genuine exact-run approval without recovery secret
         id: private-admission
         env:

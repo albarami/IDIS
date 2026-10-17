@@ -12,14 +12,6 @@ from idis.compliance.residency import IDIS_SERVICE_REGION_ENV
 TEST_SERVICE_REGION = "me-south-1"
 
 
-def pytest_configure(config: pytest.Config) -> None:
-    """Register the temporary CIR-04 canary marker until that wiring is removed."""
-    config.addinivalue_line(
-        "markers",
-        "temporary_canary_wiring: temporary CIR-04 P4 canary steps, pin, and probe",
-    )
-
-
 @pytest.fixture(autouse=True)
 def set_test_service_region(monkeypatch: pytest.MonkeyPatch) -> None:
     """Set default service region for all tests.

@@ -39,7 +39,7 @@ _FILE_COMMANDS = (
     "GITHUB_STATE",
 )
 # V2/V3 are not wired. V2 replaces this line, the capture run body, and the probe pin.
-_CHILD_EXIT = "exit 7"
+_CHILD_EXIT = "sleep 600; exit 7"
 # A re-read after start does not certify the bytes the interpreter already loaded.
 _INITIAL_BYTES_CERTIFIED = False
 

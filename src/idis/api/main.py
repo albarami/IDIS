@@ -5,11 +5,13 @@ This module provides the create_app() factory for bootstrapping the IDIS API.
 
 import os
 from collections.abc import Mapping
+from copy import deepcopy
 from typing import Any
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
+from fastapi.routing import APIRoute, RouteContext, iter_route_contexts
 
 from idis.api.auth import validate_api_key_registry_config
 from idis.api.errors import (
@@ -93,26 +95,93 @@ def _restrict_task4_ingestion_routes(app: FastAPI) -> None:
 
     from idis.runtime.task4_ingestion_scope import TASK4_SERVER_ROUTE_INVENTORY
 
-    retained: list[Any] = []
+    retained: list[RouteContext] = []
     observed: list[tuple[str, str]] = []
-    for route in app.router.routes:
-        path = getattr(route, "path", None)
-        methods = getattr(route, "methods", None)
+    for context in iter_route_contexts(app.router.routes):
+        path = context.path
+        methods = context.methods
         if not isinstance(path, str) or not methods:
             continue
         keys = tuple((str(method).upper(), path) for method in methods)
         admitted = tuple(key for key in keys if key in TASK4_SERVER_ROUTE_INVENTORY)
         if admitted:
-            if len(admitted) != len(keys):
+            if (
+                len(admitted) != len(keys)
+                or not isinstance(context.original_route, APIRoute)
+                or not callable(context.endpoint)
+                or context.stream_item_type is not None
+                or context.is_json_stream
+                or context.is_sse_stream
+            ):
                 raise RuntimeError("STRICT_FULL_LIVE_BLOCKED")
-            retained.append(route)
+            retained.append(context)
             observed.extend(admitted)
     if (
         len(observed) != len(TASK4_SERVER_ROUTE_INVENTORY)
         or frozenset(observed) != TASK4_SERVER_ROUTE_INVENTORY
     ):
         raise RuntimeError("STRICT_FULL_LIVE_BLOCKED")
-    app.router.routes[:] = retained
+    # Contexts are read facades, not ASGI routes. Rebuild through the public API
+    # so nested include metadata and this app's override provider are compiled
+    # together, without changing shared source routers or the app's lifecycle.
+    builder = APIRouter(dependency_overrides_provider=app)
+    try:
+        for context in retained:
+            original = context.original_route
+            path = context.path
+            endpoint = context.endpoint
+            if not isinstance(original, APIRoute) or path is None or endpoint is None:
+                raise RuntimeError("STRICT_FULL_LIVE_BLOCKED")
+            builder.add_api_route(
+                path,
+                endpoint,
+                response_model=context.response_model,
+                status_code=context.status_code,
+                tags=list(context.tags),
+                dependencies=list(context.dependencies),
+                summary=context.summary,
+                description=context.description,
+                response_description=context.response_description,
+                responses=deepcopy(context.responses),
+                deprecated=context.deprecated,
+                methods=list(context.methods or ()),
+                operation_id=context.operation_id,
+                response_model_include=deepcopy(context.response_model_include),
+                response_model_exclude=deepcopy(context.response_model_exclude),
+                response_model_by_alias=context.response_model_by_alias,
+                response_model_exclude_unset=context.response_model_exclude_unset,
+                response_model_exclude_defaults=context.response_model_exclude_defaults,
+                response_model_exclude_none=context.response_model_exclude_none,
+                include_in_schema=context.include_in_schema,
+                response_class=context.response_class,
+                name=context.name,
+                route_class_override=type(original),
+                callbacks=list(context.callbacks) if context.callbacks is not None else None,
+                openapi_extra=deepcopy(context.openapi_extra),
+                generate_unique_id_function=context.generate_unique_id_function,
+                strict_content_type=context.strict_content_type,
+            )
+    except Exception:
+        raise RuntimeError("STRICT_FULL_LIVE_BLOCKED") from None
+    rebuilt = [
+        (method, route.path)
+        for route in builder.routes
+        if isinstance(route, APIRoute)
+        for method in route.methods or ()
+    ]
+    if (
+        len(rebuilt) != len(TASK4_SERVER_ROUTE_INVENTORY)
+        or frozenset(rebuilt) != TASK4_SERVER_ROUTE_INVENTORY
+        or any(not isinstance(route, APIRoute) for route in builder.routes)
+        or any(
+            (route.operation_id, route.unique_id) != (context.operation_id, context.unique_id)
+            for route, context in zip(builder.routes, retained, strict=True)
+            if isinstance(route, APIRoute)
+        )
+    ):
+        raise RuntimeError("STRICT_FULL_LIVE_BLOCKED")
+    app.router.routes[:] = builder.routes
+    app.openapi_schema = None
 
 
 def create_app(

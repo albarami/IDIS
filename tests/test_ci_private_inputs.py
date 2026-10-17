@@ -3647,7 +3647,7 @@ def test_temporary_canary_steps_follow_checkout_and_preserve_j03_steps() -> None
     assert capture["name"] == _CANARY_CAPTURE_NAME
     assert "uses" not in admit and "uses" not in capture
     assert set(admit) == {"name", "id", "env", "run"}
-    assert set(capture) == {"name", "id", "shell", "run", "env"}
+    assert set(capture) == {"name", "id", "shell", "run", "env", "timeout-minutes"}
     assert admit["env"] == {"IDIS_CI_READ_TOKEN": "${{ github.token }}"}
     assert capture["env"] == {"IDIS_CI_CANARY_SEED": "${{ secrets.IDIS_CI_CANARY_SEED }}"}
     assert admit["run"] == _canary_shell("canary-admit")
@@ -3658,7 +3658,7 @@ def test_temporary_canary_steps_follow_checkout_and_preserve_j03_steps() -> None
     )
     assert capture["run"] == probe_module.child_source()
     assert "continue-on-error" not in admit and "continue-on-error" not in capture
-    assert "timeout-minutes" not in capture
+    assert capture["timeout-minutes"] == 1
     assert "if" not in admit and "if" not in capture
     probe_bytes = (ROOT / "scripts" / "ci_canary_probe.py").read_bytes()
     digest = hashlib.sha256(probe_bytes).hexdigest()

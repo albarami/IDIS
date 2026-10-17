@@ -100,6 +100,7 @@ jobs:
           /usr/bin/python3 -I -S "$root/canary-probe.py" canary-admit
       - name: Canary capture synthetic failure privacy
         id: canary-capture
+        timeout-minutes: 1
         env:
           IDIS_CI_CANARY_SEED: ${{ secrets.IDIS_CI_CANARY_SEED }}
         shell: /usr/bin/python3 -I -S -c "import os,sys; r=os.path.join(os.environ['RUNNER_TEMP'],'idis-canary-'+os.environ['GITHUB_RUN_ID']+'-'+os.environ['GITHUB_RUN_ATTEMPT']); p=os.path.join(r,'canary-probe.py'); print('CANARY_ROOT') or sys.exit(1) if not (os.path.isdir(r) and not os.path.islink(r) and os.path.isfile(p) and not os.path.islink(p)) else os.execv('/usr/bin/python3',['/usr/bin/python3','-I','-S',p,'canary-capture',sys.argv[1]])" "{0}"

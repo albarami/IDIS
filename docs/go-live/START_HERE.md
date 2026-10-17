@@ -18,7 +18,7 @@ Complete the existing Institutional Deal Intelligence System (VC Edition) so a f
 6. [AGENT_EXECUTION.md](AGENT_EXECUTION.md): choose Mode A (one agent/application), B (two cooperating CLIs) or C (overnight CLI); use its startup/resume prompt.
 7. [DOCUMENTATION_REVIEW.md](DOCUMENTATION_REVIEW.md): documentation checks and independent review findings; not product test evidence.
 
-No prior chat is required to understand the plan. The sanitized implementation is recoverable through PR #119 plus the separately controlled four-artifact recovery. Original private inputs, operator credentials/profiles, stores and historical private reports remain separately required; neither repository is a portable live environment.
+No prior chat is required to understand the plan. The sanitized implementation is preserved through PR #119 plus separately controlled private recovery: the original four policy/map artifacts and six AUTH-RECOVERY-20261017 historical verification additions. BASELINE_MANIFEST records exact commits, hashes and restoration status; RUN_STATE distinguishes publication from verified recovery and current acceptance. Original fund inputs, operator credentials/profiles, stores and other private reports remain separately required; neither repository is a portable live environment.
 
 ## Repository identity and safe entry
 

@@ -6,6 +6,7 @@ import ast
 import hashlib
 import importlib.util
 import inspect
+import io
 import json
 import os
 import re
@@ -443,6 +444,128 @@ def test_real_git_merge_tuple_and_offline_metadata_observation(bridge, observed_
     assert observed["run_id"] == 41 and observed["run_attempt"] == 2
     assert observed["job_id"] == 57 and observed["check_run_id"] == 59
     assert observed["recovery_commit"] == bridge.RECOVERY_COMMIT
+
+
+@pytest.fixture
+def versioned_github_metadata(bridge, observed_fixture, monkeypatch):
+    """Public API-shape mechanics, NOT hosted-token or canonical admission evidence."""
+    repo, environment, responses, _ = observed_fixture
+    expected = bridge.observe(repo, environment, responses.__getitem__)
+    responses["/actions/runs/41/approvals"] = [_record(bridge, expected)]
+    environment["IDIS_CI_READ_TOKEN"] = "synthetic-read-token"
+    requests, reads, statuses = [], [], {}
+
+    class Response(io.BytesIO):
+        def read(self, size=-1):
+            reads.append(size)
+            return super().read(size)
+
+    class Opener:
+        def open(self, request, timeout):
+            requests.append((request, timeout))
+            prefix = "https://api.github.com/repos/albarami/IDIS"
+            assert request.full_url.startswith(prefix + "/")
+            path = request.full_url.removeprefix(prefix)
+            headers = {key.lower(): value for key, value in request.header_items()}
+            version = headers["x-github-api-version"]
+            if path in statuses or version not in {"2022-11-28", "2026-03-10"}:
+                raise bridge.urllib.error.HTTPError(
+                    request.full_url, statuses.get(path, 410), "Synthetic API rejection", None, None
+                )
+            row = json.loads(json.dumps(responses[path]))
+            if path == "/pulls/119" and version == "2026-03-10":
+                # GitHub's documented 2026 removal, independently observed on actual PR119.
+                row.pop("merge_commit_sha", None)
+            return Response(json.dumps(row).encode())
+
+    def build_opener(*handlers):
+        assert len(handlers) == 2
+        assert isinstance(handlers[0], bridge.urllib.request.ProxyHandler)
+        assert handlers[0].proxies == {}
+        assert isinstance(handlers[1], bridge.NoRedirect)
+        return Opener()
+
+    monkeypatch.setattr(bridge.urllib.request, "build_opener", build_opener)
+    return repo, environment, responses, expected, requests, reads, statuses
+
+
+def test_supported_api_schema_reaches_exact_checked_observation(bridge, versioned_github_metadata):
+    repo, environment, responses, expected, requests, reads, _ = versioned_github_metadata
+    assert bridge.checked_observation(repo, environment) == expected
+    assert [
+        request.full_url.removeprefix("https://api.github.com/repos/albarami/IDIS")
+        for request, _ in requests
+    ] == list(responses)
+    assert reads == [4_000_001] * 6
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/pulls/119",
+        "/actions/runs/41",
+        "/actions/runs/41/attempts/2",
+        "/actions/runs/41/attempts/2/jobs?per_page=100",
+        "/environments/cir04-private-inputs",
+        "/actions/runs/41/approvals",
+    ],
+)
+def test_github_reader_explicit_supported_version_on_every_endpoint(
+    bridge, versioned_github_metadata, path
+):
+    _, _, responses, _, requests, reads, _ = versioned_github_metadata
+    assert bridge.github_reader("synthetic-read-token")(path) == responses[path]
+    assert len(requests) == 1
+    request, timeout = requests[0]
+    assert isinstance(request, bridge.urllib.request.Request)
+    assert request.full_url == "https://api.github.com/repos/albarami/IDIS" + path
+    assert request.get_method() == "GET" and request.data is None
+    assert {key.lower(): value for key, value in request.header_items()} == {
+        "authorization": "Bearer synthetic-read-token",
+        "accept": "application/vnd.github+json",
+        "x-github-api-version": "2022-11-28",
+    }
+    assert timeout == 30 and reads == [4_000_001]
+
+
+@pytest.mark.parametrize("merge", ["absent", None, "f" * 40])
+def test_supported_api_still_refuses_unproven_merge_before_later_reads(
+    bridge, versioned_github_metadata, merge
+):
+    repo, environment, responses, _, requests, reads, _ = versioned_github_metadata
+    if merge == "absent":
+        del responses["/pulls/119"]["merge_commit_sha"]
+    else:
+        responses["/pulls/119"]["merge_commit_sha"] = merge
+    with pytest.raises(bridge.Rejected, match="^PR_CHANGED_OR_FORK$"):
+        bridge.checked_observation(repo, environment)
+    assert [request.full_url for request, _ in requests] == [
+        "https://api.github.com/repos/albarami/IDIS/pulls/119"
+    ]
+    assert reads == [4_000_001]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/pulls/119",
+        "/actions/runs/41",
+        "/actions/runs/41/attempts/2",
+        "/actions/runs/41/attempts/2/jobs?per_page=100",
+        "/environments/cir04-private-inputs",
+        "/actions/runs/41/approvals",
+    ],
+)
+def test_github_reader_unsupported_api_response_never_falls_back_or_retries(
+    bridge, versioned_github_metadata, path
+):
+    _, _, _, _, requests, reads, statuses = versioned_github_metadata
+    statuses[path] = 410
+    with pytest.raises(bridge.Rejected, match="^API_READ$") as failure:
+        bridge.github_reader("synthetic-read-token")(path)
+    assert isinstance(failure.value.__cause__, bridge.urllib.error.HTTPError)
+    assert failure.value.__cause__.code == 410
+    assert len(requests) == 1 and reads == []
 
 
 @pytest.mark.parametrize(

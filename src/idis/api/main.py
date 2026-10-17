@@ -91,31 +91,39 @@ IDIS_VERSION = "6.3"
 
 
 def _restrict_task4_ingestion_routes(app: FastAPI) -> None:
-    """Reduce a bootstrap API to the literal, plan-reviewed Task-4 surface."""
+    """Restrict a fresh IDIS factory app to the reviewed Task-4 surface.
+
+    Precondition: no public frontend registration or custom APIRoute
+    post-construction state. This is not a general-purpose app filter;
+    effective HTTP route enumeration does not cover frontend fallbacks.
+    """
 
     from idis.runtime.task4_ingestion_scope import TASK4_SERVER_ROUTE_INVENTORY
 
     retained: list[RouteContext] = []
     observed: list[tuple[str, str]] = []
-    for context in iter_route_contexts(app.router.routes):
-        path = context.path
-        methods = context.methods
-        if not isinstance(path, str) or not methods:
-            continue
-        keys = tuple((str(method).upper(), path) for method in methods)
-        admitted = tuple(key for key in keys if key in TASK4_SERVER_ROUTE_INVENTORY)
-        if admitted:
-            if (
-                len(admitted) != len(keys)
-                or not isinstance(context.original_route, APIRoute)
-                or not callable(context.endpoint)
-                or context.stream_item_type is not None
-                or context.is_json_stream
-                or context.is_sse_stream
-            ):
-                raise RuntimeError("STRICT_FULL_LIVE_BLOCKED")
-            retained.append(context)
-            observed.extend(admitted)
+    try:
+        for context in iter_route_contexts(app.router.routes):
+            path = context.path
+            methods = context.methods
+            if not isinstance(path, str) or not methods:
+                continue
+            keys = tuple((str(method).upper(), path) for method in methods)
+            admitted = tuple(key for key in keys if key in TASK4_SERVER_ROUTE_INVENTORY)
+            if admitted:
+                if (
+                    len(admitted) != len(keys)
+                    or not isinstance(context.original_route, APIRoute)
+                    or not callable(context.endpoint)
+                    or context.stream_item_type is not None
+                    or context.is_json_stream
+                    or context.is_sse_stream
+                ):
+                    raise RuntimeError("STRICT_FULL_LIVE_BLOCKED")
+                retained.append(context)
+                observed.extend(admitted)
+    except Exception:
+        raise RuntimeError("STRICT_FULL_LIVE_BLOCKED") from None
     if (
         len(observed) != len(TASK4_SERVER_ROUTE_INVENTORY)
         or frozenset(observed) != TASK4_SERVER_ROUTE_INVENTORY

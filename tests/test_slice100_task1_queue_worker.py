@@ -27,6 +27,7 @@ from idis.audit.sink import AuditSinkError, InMemoryAuditSink
 from idis.models.run_step import RunStep, StepName, StepStatus
 from idis.persistence.repositories.run_steps import InMemoryRunStepsRepository
 from idis.persistence.repositories.runs import get_runs_repository
+from idis.pipeline.contract_registry import FULL_STRICT_V21_CONTRACT_HASH
 from idis.pipeline.worker import PipelineWorker
 from idis.services.runs.execution import RunExecutionService
 from idis.services.runs.orchestrator import OrchestratorResult, RunContext, RunOrchestrator
@@ -517,6 +518,10 @@ def test_strict_worker_missing_proof_fails_before_readiness_or_service(
             "mode": "FULL",
             "source": {"type": "deal_documents", "document_ids": ["document-1"]},
             "strict_preflight_proof_id": None,
+            # Hermetic current-contract mechanics, not canonical FULL admission evidence.
+            "pipeline_contract_version": "full-strict-v21",
+            "pipeline_contract_hash": FULL_STRICT_V21_CONTRACT_HASH,
+            "pipeline_resume_state": "RESUMABLE",
         }
     )
     steps_repo = InMemoryRunStepsRepository(TENANT_ID)
@@ -584,6 +589,10 @@ def test_strict_worker_proof_mismatch_fails_before_readiness_or_service(
             "mode": "FULL",
             "source": {"type": "deal_documents", "document_ids": ["document-1"]},
             "strict_preflight_proof_id": "00000000-0000-4000-8000-000000000121",
+            # Hermetic current-contract mechanics, not canonical FULL admission evidence.
+            "pipeline_contract_version": "full-strict-v21",
+            "pipeline_contract_hash": FULL_STRICT_V21_CONTRACT_HASH,
+            "pipeline_resume_state": "RESUMABLE",
         }
     )
     steps_repo = InMemoryRunStepsRepository(TENANT_ID)

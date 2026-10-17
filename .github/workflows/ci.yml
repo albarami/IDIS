@@ -43,7 +43,7 @@ jobs:
       cancel-in-progress: false
     env:
       # Public reviewed bootstrap pin, not an admission token or mutable repository variable.
-      IDIS_BOOTSTRAP_SHA256: 79afe77481b3d6a22b590d380d89d79363746054e428eb4cca6effec641f069d
+      IDIS_BOOTSTRAP_SHA256: ff5cba5bd92683d4d4e5b9fc101f74006899d3f9863b1ee02ffb9e0025e148e6
       IDIS_WORKFLOW_SHA: ${{ github.workflow_sha }}
     services:
       # Slice96 DEC-A: a real Redis so the cross-replica rate-limit integration test

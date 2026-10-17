@@ -131,7 +131,7 @@ jobs:
           env -i PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null /usr/bin/git -c core.hooksPath=/dev/null -c protocol.file.allow=never -C "$GITHUB_WORKSPACE" cat-file blob "$GITHUB_SHA:scripts/ci_private_inputs.py" > "$root/capture-bootstrap.py"
           printf '%s  %s\n' "$IDIS_BOOTSTRAP_SHA256" "$root/capture-bootstrap.py" | sha256sum --check --status
       - name: Derive labelled v27 staging bytes with existing tools
-        shell: /usr/bin/python3 -I -S "${{ runner.temp }}/idis-ci-${{ github.run_id }}-${{ github.run_attempt }}/capture-bootstrap.py" prepare {0}
+        shell: /usr/bin/python3 -I -S -c "import os,sys; p=os.path.join(os.environ['RUNNER_TEMP'],'idis-ci-'+os.environ['GITHUB_RUN_ID']+'-'+os.environ['GITHUB_RUN_ATTEMPT'],'capture-bootstrap.py'); os.execv('/usr/bin/python3',['/usr/bin/python3','-I','-S',p,'prepare',sys.argv[1]])" "{0}"
         run: |
           mkdir -p .local_reports/slice100/task8/v27-candidate
           python scripts/materialize_full_strict_v27_preimage.py --staging-output .local_reports/slice100/task8/v27-candidate/full_strict_v27_reviewed_preimage_v1.json
@@ -139,7 +139,7 @@ jobs:
           python scripts/verify_full_strict_v27_fixture_independently.py --mode verify --parent contracts/full_strict_v21_reviewed_preimage_v1.json --policy contracts/fdd_formula_policy_v2.json --reviewer-map docs/plans/2026-07-25-slice100-task8-fdd-formula-policy-v2-review-map.md --artifact .local_reports/slice100/task8/v27-candidate/full_strict_v27_reviewed_preimage_v1.json --fixture .local_reports/slice100/task8/v27-candidate/full_strict_v27_contract_hash_v1.json
           printf '%s\n' '4169371675ce32c2b4b459528dcdf21914887941d952648597bce59e49a8ac06  .local_reports/slice100/task8/v27-candidate/full_strict_v27_reviewed_preimage_v1.json' '78a3aedb04260cc56e98a2a9193ce489ca73bd4b5b95fc1486f676bfbd07b0cf  .local_reports/slice100/task8/v27-candidate/full_strict_v27_contract_hash_v1.json' | sha256sum --check --status
       - name: Run all checks
-        shell: /usr/bin/python3 -I -S "${{ runner.temp }}/idis-ci-${{ github.run_id }}-${{ github.run_attempt }}/capture-bootstrap.py" capture {0}
+        shell: /usr/bin/python3 -I -S -c "import os,sys; p=os.path.join(os.environ['RUNNER_TEMP'],'idis-ci-'+os.environ['GITHUB_RUN_ID']+'-'+os.environ['GITHUB_RUN_ATTEMPT'],'capture-bootstrap.py'); os.execv('/usr/bin/python3',['/usr/bin/python3','-I','-S',p,'capture',sys.argv[1]])" "{0}"
         run: make check
       - name: Remove only validated invocation-owned overlay files
         if: always()

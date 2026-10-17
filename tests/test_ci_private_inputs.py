@@ -8,6 +8,7 @@ import importlib.util
 import inspect
 import json
 import os
+import re
 import select
 import shlex
 import signal
@@ -2691,3 +2692,275 @@ def test_manifest_read_checkpoint_stops_second_read_and_payload_work(
     finally:
         peer.terminate()
         peer.wait(timeout=5)
+
+
+def _literal_runner_shell_argv(mode, script):
+    """Qualify this finite grammar, NOT emulate/claim GitHub server validation.
+
+    actions/runner9abfe11 ScriptHandler splits once, formats {0}, and launches
+    ProcessStartInfo.Arguments without a shell. .NET Unix uses double quotes,
+    not POSIX single quotes. Restrict this fixture to our literal -c grammar.
+    """
+    name = (
+        "Run all checks"
+        if mode == "capture"
+        else "Derive labelled v27 staging bytes with existing tools"
+    )
+    step = next(s for s in _check()["steps"] if s.get("name") == name)
+    command, arguments = step["shell"].split(" ", 1)
+    assert "${{" not in arguments, "steps.shell cannot use unavailable expression contexts"
+    assert command == "/usr/bin/python3"
+    assert arguments.count("{0}") == 1
+    formatted = arguments.format(str(script).replace('"', '\\"'))
+    parsed = re.fullmatch(r'-I -S -c "([^"\\]*)" "((?:\\"|[^"])*)"', formatted)
+    assert parsed is not None, "Only the reviewed double-quoted literal runner grammar is allowed"
+    code, script_argument = parsed.groups()
+    return [command, "-I", "-S", "-c", code, script_argument.replace('\\"', '"')]
+
+
+@pytest.mark.parametrize("mode", ["prepare", "capture"])
+def test_custom_shell_is_literal_and_preserves_runner_script_argument(mode):
+    script = Path('/tmp/runner space/step "quoted" script')
+    argv = _literal_runner_shell_argv(mode, script)
+    assert argv[-1] == str(script)
+    assert argv[:4] == ["/usr/bin/python3", "-I", "-S", "-c"]
+    code = ast.parse(argv[4])
+    assert {node.id for node in ast.walk(code) if isinstance(node, ast.Name)} <= {"os", "sys", "p"}
+    assert "os.execv('/usr/bin/python3'" in argv[4]
+    assert "'capture-bootstrap.py'" in argv[4] and repr(mode) in argv[4]
+    assert "RUNNER_TEMP" in argv[4] and "GITHUB_RUN_ID" in argv[4]
+    assert "GITHUB_RUN_ATTEMPT" in argv[4]
+
+
+def test_custom_shell_predecessor_verifies_same_owned_bootstrap_before_either_mode():
+    steps = _check()["steps"]
+    overlay = next(i for i, step in enumerate(steps) if step.get("id") == "private-overlay")
+    raw = steps[overlay]["run"]
+    assert raw.index('"$root/overlay-bootstrap.py" overlay') < raw.index(
+        '> "$root/capture-bootstrap.py"'
+    )
+    assert raw.index('> "$root/capture-bootstrap.py"') < raw.index(
+        '"$root/capture-bootstrap.py" | sha256sum --check --status'
+    )
+    assert 'root="$RUNNER_TEMP/idis-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"' in raw
+    assert 'cat-file blob "$GITHUB_SHA:scripts/ci_private_inputs.py"' in raw
+    for mode in ("prepare", "capture"):
+        argv = _literal_runner_shell_argv(mode, Path("/tmp/actual runner script"))
+        name = (
+            "Run all checks"
+            if mode == "capture"
+            else "Derive labelled v27 staging bytes with existing tools"
+        )
+        assert next(i for i, step in enumerate(steps) if step.get("name") == name) > overlay
+        assert "os.environ['RUNNER_TEMP']" in argv[4]
+    assert (
+        _check()["env"]["IDIS_BOOTSTRAP_SHA256"]
+        == hashlib.sha256((ROOT / "scripts/ci_private_inputs.py").read_bytes()).hexdigest()
+    )
+
+
+@pytest.fixture
+def literal_shell_invocation(bridge, observed_fixture, monkeypatch, tmp_path):
+    """Actual helper/Git/interpreter; synthetic metadata admission, NEVER platform approval."""
+    workspace, environment, responses, git = observed_fixture
+    raw = (ROOT / "scripts/ci_private_inputs.py").read_bytes()
+    (workspace / "scripts/ci_private_inputs.py").write_bytes(raw)
+    git("add", "scripts/ci_private_inputs.py")
+    tree = git("write-tree")
+    base, head = git("rev-parse", "HEAD^1"), git("rev-parse", "HEAD^2")
+    merge = git(
+        "commit-tree", tree, "-p", base, "-p", head, input=b"Literal shell mechanics only\n"
+    )
+    git("update-ref", "HEAD", merge)
+    environment.update(
+        GITHUB_SHA=merge,
+        IDIS_WORKFLOW_SHA=merge,
+        IDIS_BOOTSTRAP_SHA256=hashlib.sha256(raw).hexdigest(),
+        GITHUB_WORKSPACE=str(workspace),
+        RUNNER_TEMP=str(tmp_path / "runner temp with spaces"),
+        IDIS_CI_READ_TOKEN="SYNTHETIC-READ",
+    )
+    responses["/pulls/119"]["merge_commit_sha"] = merge
+    root = Path(environment["RUNNER_TEMP"]) / "idis-ci-41-2"
+    root.mkdir(parents=True, mode=0o700)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    for name in ("RUNNER_DEBUG", "ACTIONS_STEP_DEBUG"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(
+        bridge, "require_runtime", lambda: bridge.file_identity(Path("/usr/bin/python3"))
+    )
+    monkeypatch.setattr(bridge, "github_reader", lambda _token: responses.__getitem__)
+    observed = bridge.observe(workspace, environment, responses.__getitem__)
+    responses["/actions/runs/41/approvals"] = [_record(bridge, observed)]
+    assert bridge.execute("admit") == 0
+    extracted = subprocess.check_output(
+        ["git", "-C", str(workspace), "cat-file", "blob", merge + ":scripts/ci_private_inputs.py"]
+    )
+    assert hashlib.sha256(extracted).hexdigest() == _check()["env"]["IDIS_BOOTSTRAP_SHA256"]
+    bridge.exclusive_write(root / "capture-bootstrap.py", extracted)
+    return root, workspace
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Literal Actions /usr/bin/python3 -I -S exec")
+@pytest.mark.parametrize("mode", ["prepare", "capture"])
+def test_literal_custom_shell_runs_real_helper_spaced_paths_and_private_nonzero(
+    literal_shell_invocation, monkeypatch, tmp_path, mode
+):
+    root, workspace = literal_shell_invocation
+    binaries = tmp_path / "synthetic-bin"
+    binaries.mkdir()
+    make = binaries / "make"
+    make.write_text("#!/bin/sh\nprintf 'PRIVATE_LITERAL_SENTINEL\\n=== 1 passed ===\\n'\nexit 7\n")
+    make.chmod(0o755)
+    monkeypatch.setenv("PATH", str(binaries) + os.pathsep + os.environ["PATH"])
+    script = tmp_path / 'runner step with spaces and "quotes"'
+    script.write_bytes(b"make check\n" if mode == "capture" else b"make labelled-preparation\n")
+    result = subprocess.run(
+        _literal_runner_shell_argv(mode, script), cwd=workspace, capture_output=True, timeout=10
+    )
+    assert result.returncode == 7 and result.stderr == b""
+    summary = json.loads(result.stdout)
+    assert summary["command"] == ("check" if mode == "capture" else "prepare")
+    assert summary["exit_code"] == 7 and summary["counts"] == {"passed": 1}
+    assert b"PRIVATE_LITERAL_SENTINEL" not in result.stdout
+    assert b"PRIVATE_LITERAL_SENTINEL" in (root / (summary["command"] + ".log")).read_bytes()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Literal shell exec PID and isolated startup")
+@pytest.mark.parametrize("mode", ["prepare", "capture"])
+def test_literal_custom_shell_exec_replaces_same_pid_without_ambient_startup(tmp_path, mode):
+    runner = tmp_path / "runner temp with spaces"
+    root = runner / "idis-ci-41-2"
+    root.mkdir(parents=True)
+    output, marker = tmp_path / "identity.json", tmp_path / "ambient-ran"
+    # A separate labelled launcher-only probe; real helper execution is tested above.
+    (root / "capture-bootstrap.py").write_text(
+        "import json,os,pathlib,sys\n"
+        f"pathlib.Path({str(output)!r}).write_text(json.dumps([os.getpid(),sys.argv,sys.flags.isolated,sys.flags.no_site]))\n"
+    )
+    (tmp_path / "sitecustomize.py").write_text(f"open({str(marker)!r},'w').close()\n")
+    environment = os.environ.copy()
+    environment.update(
+        RUNNER_TEMP=str(runner),
+        GITHUB_RUN_ID="41",
+        GITHUB_RUN_ATTEMPT="2",
+        PYTHONPATH=str(tmp_path),
+    )
+    script = tmp_path / "runner script with spaces"
+    child = subprocess.Popen(
+        _literal_runner_shell_argv(mode, script),
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = child.communicate(timeout=10)
+        assert child.returncode == 0 and stdout == stderr == b""
+        identity = json.loads(output.read_text())
+        assert identity == [
+            child.pid,
+            [str(root / "capture-bootstrap.py"), mode, str(script)],
+            1,
+            1,
+        ]
+        assert not marker.exists()
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.wait(timeout=5)
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux", reason="Literal shell real signals/FIFO/pidfd peer custody"
+)
+@pytest.mark.parametrize("mode", ["prepare", "capture"])
+@pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM])
+def test_literal_custom_shell_signals_are_closed_and_retire_only_owned_process(
+    literal_shell_invocation, monkeypatch, tmp_path, mode, signum
+):
+    root, workspace = literal_shell_invocation
+    fifo, identities = tmp_path / "writer-fifo", tmp_path / "live-identity.json"
+    os.mkfifo(fifo)
+    reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+    code = (
+        "import json,os,pathlib,signal,time\n"
+        "print('PRIVATE_LITERAL_SIGNAL',flush=True)\n"
+        f"pathlib.Path({str(identities)!r}).write_text(json.dumps([os.getpid(),"
+        "[int(s) for s in (signal.SIGINT,signal.SIGTERM) if signal.getsignal(s)==signal.SIG_IGN],"
+        "[int(s) for s in signal.pthread_sigmask(signal.SIG_BLOCK,[])]]))\n"
+        f"fd=os.open({str(fifo)!r},os.O_WRONLY)\nos.write(fd,b'READY')\n"
+        "while True: time.sleep(.05)\n"
+    )
+    binaries = tmp_path / "signal-bin"
+    binaries.mkdir()
+    make = binaries / "make"
+    make.write_text("#!/bin/sh\nexec /usr/bin/python3 -I -S -c " + shlex.quote(code) + "\n")
+    make.chmod(0o755)
+    monkeypatch.setenv("PATH", str(binaries) + os.pathsep + os.environ["PATH"])
+    script = tmp_path / "runner signal script with spaces"
+    script.write_bytes(b"make check\n" if mode == "capture" else b"make labelled-preparation\n")
+    peer = subprocess.Popen(
+        [sys.executable, "-I", "-S", "-c", "import time;time.sleep(40)"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    child = None
+    held = None
+    try:
+        child = subprocess.Popen(
+            _literal_runner_shell_argv(mode, script),
+            cwd=workspace,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        deadline = time.monotonic() + 8
+        ready = b""
+        while ready != b"READY" and time.monotonic() < deadline:
+            if select.select([reader], [], [], 0.05)[0]:
+                ready += os.read(reader, 5)
+            if child.poll() is not None:
+                break
+        assert ready == b"READY", "Real captured child did not reach live FIFO readiness"
+        identity, ignored, blocked = json.loads(identities.read_text())
+        held = os.pidfd_open(
+            identity
+        )  # Metadata published BEFORE live FIFO readiness, never after reap.
+        assert ignored == blocked == []
+        child.send_signal(signum)
+        stdout, stderr = child.communicate(timeout=8)
+        expected = 128 + signum
+        assert child.returncode == expected and stderr == b""
+        assert json.loads(stdout) == {
+            "schema": "idis-ci-safe-summary-v1",
+            "command": "check" if mode == "capture" else "prepare",
+            "exit_code": expected,
+        }
+        assert b"PRIVATE_LITERAL_SIGNAL" not in stdout
+        assert select.select([held], [], [], 2)[0] == [held]
+        assert select.select([reader], [], [], 2)[0] == [reader] and os.read(reader, 1) == b""
+        assert peer.poll() is None
+        log = root / ("check.log" if mode == "capture" else "prepare.log")
+        assert b"PRIVATE_LITERAL_SIGNAL" in log.read_bytes()
+    finally:
+        try:
+            if child is not None:
+                if child.poll() is None:
+                    child.terminate()
+                try:
+                    child.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    child.wait(timeout=5)
+        finally:
+            try:
+                if held is not None:
+                    with suppress(ProcessLookupError):
+                        signal.pidfd_send_signal(held, signal.SIGKILL)
+                    os.close(held)
+            finally:
+                os.close(reader)
+                peer.terminate()
+                peer.wait(timeout=5)

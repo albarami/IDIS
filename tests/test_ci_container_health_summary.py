@@ -46,6 +46,7 @@ CONTAINER_STEP_NAMES = (
     "Qualify startup env and start the API",
     HEALTH_STEP_NAME,
     "Record launch audit, topology, and maintenance absence",
+    "Record admission codes when the API is blocked",
     "Cleanup",
     "Set up Python 3.11 for release manifest",
     "Generate release manifest",
@@ -117,6 +118,7 @@ _STEP_IF = {
     "start-api": "success()",
     "container_health": "success()",
     "launch-proof": "always() && steps.start-api.outcome != 'skipped'",
+    "admission-codes": "always() && steps.start-api.outcome != 'skipped'",
     "cleanup": "always()",
 }
 _REDIS_START_LITERAL = (
@@ -555,12 +557,31 @@ _SECRET_MARKERS = (
     "POPPLER_RUNTIME_UNAVAILABLE_EXTRA",
     "token_urlsafe_Ab9SECRET",
 )
+_ADMISSION_STEP_NAME = "Record admission codes when the API is blocked"
+_ADMISSION_DSN = "postgresql://idis_app:s3cret-token@127.0.0.1:5432/idis_ci_health"
+_ADMISSION_DOCKER = r"""
+import json
+import os
+import sys
+from pathlib import Path
+
+state = Path(os.environ["DOCKER_FAKE_STATE"])
+args = sys.argv[1:]
+(state / "argv.json").write_text(json.dumps(args), encoding="utf-8")
+stdout = (state / "stdout.txt").read_text(encoding="utf-8")
+stderr = (state / "stderr.txt").read_text(encoding="utf-8")
+code = int((state / "code.txt").read_text(encoding="utf-8"))
+sys.stdout.write(stdout)
+sys.stderr.write(stderr)
+raise SystemExit(code)
+"""
 
 
 _OPT_LITERAL = "/opt/idis-ci-health"
 _VAR_LITERAL = "/var/lib/idis-ci-health"
 _PARSED_ROOT_REPLACEMENTS = {
     "container_health": {_OPT_LITERAL: 3, _VAR_LITERAL: 0},
+    "admission-codes": {_OPT_LITERAL: 1, _VAR_LITERAL: 0},
     "cleanup": {_OPT_LITERAL: 1, _VAR_LITERAL: 2},
 }
 _EXECUTABLE_MODE = 0o755
@@ -713,6 +734,170 @@ def test_health_step_fails_closed_and_extracts_only_allowlisted_codes(tmp_path: 
     assert receipt["code"] == "POPPLER_RUNTIME_UNAVAILABLE"
     assert receipt["exit"] == 7
     assert all(marker not in json.dumps(receipt) for marker in _SECRET_MARKERS)
+
+
+def _admission_public_line() -> str:
+    return json.dumps(
+        {
+            "checks": [
+                ["postgres", "DATABASE_UNAVAILABLE"],
+                ["audit", "UNLISTED"],
+                ["idempotency", "UNLISTED"],
+            ],
+            "phase": "admission",
+        },
+        sort_keys=True,
+    )
+
+
+def _prepare_admission_case(
+    tmp_path: Path,
+    *,
+    stdout: str,
+    stderr: str,
+    code: int,
+    exit_code: str,
+) -> tuple[Path, Path]:
+    run_id = f"h1bladm{os.getpid()}"
+    run_root = _owned_run(_sandbox_roots(tmp_path)[_OPT_LITERAL], run_id)
+    state = _docker_state(tmp_path)
+    _install_fake_toolchain(tmp_path)
+    _write_executable(tmp_path / "docker_fake.py", _ADMISSION_DOCKER)
+    (state / "stdout.txt").write_text(stdout, encoding="utf-8", newline="\n")
+    (state / "stderr.txt").write_text(stderr, encoding="utf-8", newline="\n")
+    (state / "code.txt").write_text(f"{code}\n", encoding="utf-8", newline="\n")
+    run_root.mkdir(parents=True)
+    (run_root / "maintenance").mkdir()
+    (run_root / "api-exit.json").write_text(
+        json.dumps({"code": exit_code, "exit": 1}, sort_keys=True),
+        encoding="utf-8",
+        newline="\n",
+    )
+    (run_root / "object-path").write_text(
+        f"/var/lib/idis-ci-health/{run_id}/objects\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    return run_root, state
+
+
+def _run_admission_case(
+    tmp_path: Path,
+    run_root: Path,
+    state: Path,
+) -> subprocess.CompletedProcess[str]:
+    return _run_parsed_step(
+        tmp_path,
+        "admission-codes",
+        {
+            "GITHUB_RUN_ID": run_root.name,
+            "GITHUB_SHA": "d" * 40,
+            "GITHUB_WORKSPACE": str(tmp_path),
+            "DOCKER_FAKE_STATE": str(state),
+        },
+    )
+
+
+def test_admission_codes_snippet_filters_unlisted_codes_and_hides_dsn(tmp_path: Path) -> None:
+    steps = _container_steps()
+    assert len(steps) == len(CONTAINER_STEP_NAMES) == 27
+    assert tuple(step["name"] for step in steps) == CONTAINER_STEP_NAMES
+    step = _by_id("admission-codes")
+    assert step["name"] == _ADMISSION_STEP_NAME
+    assert step["if"] == _STEP_IF["admission-codes"]
+    assert "continue-on-error" not in step
+    run = step["run"]
+    assert "STRICT_FULL_LIVE_BLOCKED" in run
+    assert 'load_profile_then_import_runtime(command="api")' in run
+    assert "_default_admission_runner(" in run
+    assert "task4_ingestion_scope=True" in run
+    assert '"--rm"' in run
+    assert '"--user", "1000"' in run
+    assert '"--read-only"' in run
+    assert '"--tmpfs", "/tmp:rw,nosuid,size=2147483648"' in run
+    assert '"-e", "IDIS_STRICT_DOTENV_PATH"' in run
+    assert "container:" in run
+    assert "DIAGNOSTIC_UNAVAILABLE" in run
+    assert "admission-diagnostic.log" in run
+    assert "UNLISTED" in run
+    assert "alembic_version" in run
+    assert "rolsuper" in run
+    assert "rolbypassrls" in run
+    assert "relforcerowsecurity" in run
+    jobs = _workflow()["jobs"]
+    assert _canonical_digest(jobs["check"]) == _F99595EF_JOB_DIGESTS["check"]
+
+    raw = json.dumps(
+        {
+            "phase": "admission",
+            "checks": [
+                ["postgres", "DATABASE_UNAVAILABLE"],
+                ["audit", _ADMISSION_DSN],
+                ["idempotency", "NOT_A_REAL_CODE"],
+            ],
+        }
+    )
+    run_root, state = _prepare_admission_case(
+        tmp_path,
+        stdout=raw + "\n",
+        stderr=_ADMISSION_DSN + "\n",
+        code=0,
+        exit_code="STRICT_FULL_LIVE_BLOCKED",
+    )
+    completed = _run_admission_case(tmp_path, run_root, state)
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, output
+    assert completed.stdout.strip() == _admission_public_line()
+    assert completed.stdout.strip().count("\n") == 0
+    assert _ADMISSION_DSN not in output
+    assert "NOT_A_REAL_CODE" not in output
+    assert "UNLISTED" in completed.stdout
+    private_log = run_root / "maintenance" / "admission-diagnostic.log"
+    assert _ADMISSION_DSN in private_log.read_text(encoding="utf-8")
+    args = json.loads((state / "argv.json").read_text(encoding="utf-8"))
+    assert args[0] == "run"
+    assert "--rm" in args
+    assert args[args.index("--user") + 1] == "1000"
+    assert args[args.index("--network") + 1] == f"container:idis-h1b-netns-{run_root.name}"
+    assert "--read-only" in args
+    assert args[args.index("--tmpfs") + 1] == "/tmp:rw,nosuid,size=2147483648"
+    assert args[args.index("-e") + 1] == "IDIS_STRICT_DOTENV_PATH"
+    assert "-d" not in args
+    assert "--name" not in args
+    script = args[args.index("-c") + 1]
+    assert 'load_profile_then_import_runtime(command="api")' in script
+    assert "task4_ingestion_scope=True" in script
+    image = "idis:ci-" + ("d" * 40)
+    assert image in args
+    inputs = (run_root / "inputs").as_posix()
+    model = "/opt/idis-models/0d3d19a32d3338f10357c0889762bd8d64bbdeba"
+    objects = f"/var/lib/idis-ci-health/{run_root.name}/objects"
+    volumes = [args[index + 1] for index, token in enumerate(args) if token == "-v"]
+    assert volumes == [
+        f"{inputs}:{inputs}:ro",
+        f"{model}:{model}:ro",
+        f"{objects}:{objects}",
+    ]
+
+
+def test_admission_codes_docker_failure_stays_closed(tmp_path: Path) -> None:
+    run_root, state = _prepare_admission_case(
+        tmp_path,
+        stdout=_ADMISSION_DSN + "\n",
+        stderr=_ADMISSION_DSN + "\n",
+        code=1,
+        exit_code="STRICT_FULL_LIVE_BLOCKED",
+    )
+    completed = _run_admission_case(tmp_path, run_root, state)
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, output
+    assert completed.stdout.strip() == json.dumps(
+        {"code": "DIAGNOSTIC_UNAVAILABLE", "phase": "admission"},
+        sort_keys=True,
+    )
+    assert _ADMISSION_DSN not in output
+    private_log = run_root / "maintenance" / "admission-diagnostic.log"
+    assert _ADMISSION_DSN in private_log.read_text(encoding="utf-8")
 
 
 def test_cleanup_checks_existence_and_fails_when_a_resource_remains(tmp_path: Path) -> None:
@@ -1030,8 +1215,8 @@ def test_start_api_qualify_h1b_py_imports_helper_then_stops_at_defaults_file(
     assert "image-defaults.json" in output, output
 
 
-_H1B_PY_HEREDOC_COUNT = 11
-_NESTED_RAW_SCRIPT_COUNT = 5
+_H1B_PY_HEREDOC_COUNT = 12
+_NESTED_RAW_SCRIPT_COUNT = 6
 _CHECK_CALL_NAMES = frozenset({"call", "check_call", "check_output"})
 _CHECK_CALL_REJECTED_KEYWORDS = frozenset({"capture_output", "check", "input"})
 _RECEIPT_ASSIGNMENTS = frozenset(

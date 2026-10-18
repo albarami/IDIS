@@ -672,3 +672,239 @@ def test_inspected_image_env_names_are_accepted_and_unlisted_name_is_rejected(
             startup_env=rejected_startup,
             image_defaults=rejected_defaults,
         )
+
+
+def _stand_in_poppler_runtime(root: Path) -> object:
+    """Absolute stand-in so the factory can reach the route gate without a host pin."""
+    from idis.parsers.poppler_runtime import (
+        PINNED_POPPLER_VERSION,
+        PinnedPopplerRuntime,
+        _runtime_identity_sha256,
+    )
+
+    digest = "ab" * 32
+    identity = _runtime_identity_sha256(
+        version=PINNED_POPPLER_VERSION,
+        pdftoppm_sha256=digest,
+        poppler_dll_sha256=digest,
+    )
+    return PinnedPopplerRuntime(
+        version=PINNED_POPPLER_VERSION,
+        pdftoppm_sha256=digest,
+        poppler_dll_sha256=digest,
+        runtime_identity_sha256=identity,
+        _pdftoppm_path=(root / "pdftoppm").resolve(),
+        _pdfinfo_path=(root / "pdfinfo").resolve(),
+        _poppler_library_path=(root / "library").resolve(),
+        _platform_name="composition-test",
+    )
+
+
+def _admitted_route_observation(app: object) -> tuple[tuple[tuple[str, str], ...], tuple[str, ...]]:
+    """Return admitted method/path keys and gate anomaly tokens. No paths from disk."""
+    from fastapi.routing import APIRoute, iter_route_contexts
+
+    from idis.runtime.task4_ingestion_scope import TASK4_SERVER_ROUTE_INVENTORY
+
+    observed: list[tuple[str, str]] = []
+    anomalies: list[str] = []
+    routes = app.router.routes  # type: ignore[attr-defined]
+    for context in iter_route_contexts(routes):
+        path = context.path
+        methods = context.methods
+        if not isinstance(path, str) or not methods:
+            continue
+        keys = tuple((str(method).upper(), path) for method in methods)
+        admitted = tuple(key for key in keys if key in TASK4_SERVER_ROUTE_INVENTORY)
+        if not admitted:
+            continue
+        if len(admitted) != len(keys):
+            anomalies.append("MIXED_METHODS")
+        if not isinstance(context.original_route, APIRoute):
+            anomalies.append("NON_APIROUTE")
+        if not callable(context.endpoint):
+            anomalies.append("UNCALLABLE")
+        if context.stream_item_type is not None:
+            anomalies.append("STREAM_ITEM")
+        if context.is_json_stream:
+            anomalies.append("JSON_STREAM")
+        if context.is_sse_stream:
+            anomalies.append("SSE_STREAM")
+        observed.extend(admitted)
+    return tuple(observed), tuple(anomalies)
+
+
+def _raising_admission_probe() -> object:
+    """Fail closed without a socket, a DSN, or a filesystem write."""
+    raise RuntimeError("stubbed admission probe")
+
+
+def _stub_admission_adapters(*_args: object, **_kwargs: object) -> object:
+    """Replace production adapters before any real dependency probe runs."""
+    from idis.runtime.dependency_probes import DurableDependencyProbeAdapters
+
+    return DurableDependencyProbeAdapters(
+        postgres=_raising_admission_probe,
+        audit=_raising_admission_probe,
+        idempotency=_raising_admission_probe,
+        redis=_raising_admission_probe,
+        object_store=_raising_admission_probe,
+        ingestion=_raising_admission_probe,
+        worker=_raising_admission_probe,
+        budgets=_raising_admission_probe,
+        erasure_executor=_raising_admission_probe,
+    )
+
+
+def _outside_tmp(path: Path, tmp_path: Path) -> Path | None:
+    resolved = path.resolve(strict=False)
+    try:
+        resolved.relative_to(tmp_path.resolve())
+    except ValueError:
+        return resolved
+    return None
+
+
+def _path_inventory(path: Path | None) -> tuple[str, ...]:
+    if path is None or not path.exists():
+        return ()
+    if path.is_file():
+        return (path.name,)
+    return tuple(sorted(str(item.relative_to(path)) for item in path.rglob("*")))
+
+
+def test_composition_api_closed_code_is_admission_before_the_route_inventory(
+    tmp_path: Path,
+    model_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The composition launcher raises before create_app; the route gate admits 13 keys.
+
+    The synthetic profile is the real helper file loaded by ``load_strict_runtime_profile``.
+    Product gate and inventory are not modified.
+    """
+    import argparse
+
+    from idis.api import main as api_main
+    from idis.runtime import strict_launcher as launcher
+    from idis.runtime.task4_ingestion_scope import TASK4_SERVER_ROUTE_INVENTORY
+    from idis.services.ingestion import defaults as ingestion_defaults
+
+    module = _helper()
+    prepared = _prepare(module, tmp_path, model_path)
+    startup = {"IDIS_STRICT_DOTENV_PATH": str(prepared.profile_path)}
+    profile = profile_module.load_strict_runtime_profile(command="api", process_env=dict(startup))
+    assert profile.generation == "bootstrap-v1"
+    assert profile.command == "api"
+    assert profile.values["IDIS_REQUIRE_FULL_LIVE"] == "1"
+    base = Path(profile.values["IDIS_OBJECT_STORE_BASE_DIR"])
+    outside_store = _outside_tmp(base, tmp_path)
+    store_before = _path_inventory(outside_store)
+
+    factory_code = "CREATE_APP_OK"
+    try:
+        api_main.create_app(strict_profile=profile)
+    except Exception as exc:
+        factory_code = str(getattr(exc, "code", "") or exc)
+    assert factory_code != "STRICT_FULL_LIVE_BLOCKED"
+    assert "STRICT_FULL_LIVE_BLOCKED" not in factory_code
+
+    observed: list[tuple[str, str]] = []
+    anomalies: list[str] = []
+    gate_calls: list[str] = []
+    original = api_main._restrict_task4_ingestion_routes
+
+    def probe(app: object) -> None:
+        gate_calls.append("gate")
+        found, flags = _admitted_route_observation(app)
+        observed.extend(found)
+        anomalies.extend(flags)
+        original(app)
+
+    monkeypatch.setattr(api_main, "_restrict_task4_ingestion_routes", probe)
+    monkeypatch.setattr(
+        ingestion_defaults,
+        "resolve_pinned_poppler_runtime",
+        lambda: _stand_in_poppler_runtime(tmp_path / "poppler-stand-in"),
+    )
+    api_main.create_app(strict_profile=profile)
+    assert gate_calls == ["gate"]
+    assert anomalies == []
+    assert len(observed) == len(TASK4_SERVER_ROUTE_INVENTORY)
+    assert frozenset(observed) == TASK4_SERVER_ROUTE_INVENTORY
+
+    launch_gate: list[str] = []
+
+    def launch_probe(app: object) -> None:
+        launch_gate.append("gate")
+        original(app)
+
+    monkeypatch.setattr(api_main, "_restrict_task4_ingestion_routes", launch_probe)
+    from idis.runtime import dependency_probes
+
+    monkeypatch.setattr(
+        dependency_probes,
+        "build_default_dependency_probe_adapters",
+        _stub_admission_adapters,
+    )
+    seen: dict[str, object] = {}
+    real_builder = launcher._default_admission_runner
+
+    def builder(
+        command: str,
+        admitted_profile: object,
+        *,
+        task4_ingestion_scope: bool = False,
+    ) -> object:
+        inner = real_builder(
+            command,
+            admitted_profile,  # type: ignore[arg-type]
+            task4_ingestion_scope=task4_ingestion_scope,
+        )
+
+        def run() -> object:
+            report = inner()
+            seen["may"] = report.may_proceed
+            seen["codes"] = tuple(report.blocker_codes)
+            seen["scope"] = report.admission_scope
+            seen["checks"] = tuple((check.component, check.code) for check in report.checks)
+            return report
+
+        return run
+
+    monkeypatch.setattr(launcher, "_default_admission_runner", builder)
+    args = argparse.Namespace(host="0.0.0.0", port=8000, pid_file=str(tmp_path / "api.pid"))
+    with pytest.raises(launcher.StrictLauncherError) as caught:
+        launcher._run_api(api_main, args, profile)
+    assert caught.value.code == "STRICT_FULL_LIVE_BLOCKED"
+    assert str(caught.value) == "STRICT_FULL_LIVE_BLOCKED"
+    assert launch_gate == []
+    assert seen["may"] is False
+    assert seen["scope"] == "task4-ingestion-v1"
+    codes = seen["codes"]
+    assert isinstance(codes, tuple)
+    assert "STRICT_FULL_LIVE_BLOCKED" not in codes
+    # A raised idempotency probe is not IdempotencyProbeFacts, so readiness
+    # selects IDEMPOTENCY_NON_DURABLE_BLOCKED (dependency_readiness.py:1050-1052).
+    assert codes == (
+        "DATABASE_UNAVAILABLE",
+        "AUDIT_FAILURE",
+        "IDEMPOTENCY_NON_DURABLE_BLOCKED",
+        "RATE_LIMIT_STORE_UNAVAILABLE",
+        "OBJECT_STORE_HEALTH_BLOCKED",
+        "MEDIA_LARGE_UPLOAD_UNSUPPORTED",
+    )
+    checks = seen["checks"]
+    assert isinstance(checks, tuple)
+    assert [component for component, _code in checks] == [
+        "postgres",
+        "audit",
+        "idempotency",
+        "redis",
+        "object_store",
+        "ingestion",
+        "auth",
+    ]
+    assert dict(checks)["auth"] is None
+    assert [code for _component, code in checks] == [*codes, None]
+    assert _path_inventory(outside_store) == store_before

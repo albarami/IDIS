@@ -1523,6 +1523,257 @@ jobs:
           ):
               raise SystemExit(1)
           H1B_PY
+      - name: Record admission codes when the API is blocked
+        id: admission-codes
+        if: always() && steps.start-api.outcome != 'skipped'
+        run: |
+          set -euo pipefail
+          sudo -n GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_SHA="$GITHUB_SHA" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" .venv/bin/python - <<'H1B_PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          run = os.environ["GITHUB_RUN_ID"]
+          image = "idis:ci-" + os.environ["GITHUB_SHA"]
+          holder = "idis-h1b-netns-" + run
+          root = Path("/opt/idis-ci-health/" + run)
+          maintenance = root / "maintenance"
+          inputs = root / "inputs"
+          model = "/opt/idis-models/0d3d19a32d3338f10357c0889762bd8d64bbdeba"
+          _ADMISSION_CODES = frozenset({
+              "AUDIT_EMIT_FAILED",
+              "AUDIT_FAILURE",
+              "AUTH_CONFIG_BLOCKED",
+              "DATABASE_SCHEMA_NOT_READY",
+              "DATABASE_UNAVAILABLE",
+              "DOCUMENT_NO_SUBSTANTIVE_CONTENT_ATTESTATION_MANIFEST_INVALID",
+              "ERASURE_EXECUTOR_CONFIG_BLOCKED",
+              "ERASURE_EXECUTOR_DATABASE_MISMATCH",
+              "ERASURE_EXECUTOR_POSTURE_BLOCKED",
+              "ERASURE_EXECUTOR_UNAUTHORIZED",
+              "IDEMPOTENCY_NON_DURABLE_BLOCKED",
+              "IDEMPOTENCY_STORE_FAILED",
+              "MEDIA_LARGE_UPLOAD_UNSUPPORTED",
+              "OBJECT_STORE_HEALTH_BLOCKED",
+              "PROVIDER_BUDGET_CONFIG_BLOCKED",
+              "PROVIDER_BUDGET_PROVIDER_UNCONFIGURED",
+              "RATE_LIMIT_STORE_UNAVAILABLE",
+              "RLS_HEALTH_BLOCKED",
+              "STRICT_FULL_LIVE_BLOCKED",
+              "STRICT_PROCESS_ROLE_INVALID",
+              "WATERMARK_BATCH_ATTESTATION_MISMATCH",
+              "WORKER_CLAIM_NOT_PROVEN",
+              "WORKER_LEASE_CONFIG_INVALID",
+              "WORKER_TENANT_SCOPE_MISSING",
+          })
+          _ADMISSION_COMPONENTS = frozenset({
+              "audit",
+              "auth",
+              "budgets",
+              "erasure_executor",
+              "idempotency",
+              "ingestion",
+              "object_store",
+              "postgres",
+              "redis",
+              "worker",
+          })
+          _POSTGRES_KEYS = frozenset({
+              "alembic_version",
+              "relforcerowsecurity",
+              "rolbypassrls",
+              "rolsuper",
+              "schema_at_head",
+          })
+
+          def _revision_id(value):
+              if not isinstance(value, str) or not value or len(value) > 64:
+                  return None
+              for character in value:
+                  if character.isalnum() or character == "_":
+                      continue
+                  return None
+              return value
+
+          def _public_code(value):
+              if value is None:
+                  return None
+              if isinstance(value, str) and value in _ADMISSION_CODES:
+                  return value
+              return "UNLISTED"
+
+          def _public_checks(payload):
+              checks = payload.get("checks")
+              if not isinstance(checks, list):
+                  return None
+              public = []
+              for item in checks:
+                  if not isinstance(item, (list, tuple)) or len(item) != 2:
+                      return None
+                  component, code = item
+                  if not isinstance(component, str) or component not in _ADMISSION_COMPONENTS:
+                      return None
+                  if code is not None and not isinstance(code, str):
+                      return None
+                  public.append([component, _public_code(code)])
+              return public
+
+          def _public_postgres(raw):
+              if not isinstance(raw, dict) or not set(raw).issubset(_POSTGRES_KEYS):
+                  return None
+              public = {}
+              for name in ("relforcerowsecurity", "rolbypassrls", "rolsuper", "schema_at_head"):
+                  if name not in raw:
+                      continue
+                  if type(raw[name]) is not bool:
+                      return None
+                  public[name] = raw[name]
+              if "alembic_version" in raw:
+                  revision = _revision_id(raw["alembic_version"])
+                  if revision is None:
+                      return None
+                  public["alembic_version"] = revision
+              return public
+
+          def _unavailable():
+              print(json.dumps({"code": "DIAGNOSTIC_UNAVAILABLE", "phase": "admission"}, sort_keys=True))
+              raise SystemExit(0)
+
+          try:
+              exit_info = json.loads((root / "api-exit.json").read_text(encoding="utf-8"))
+          except (OSError, UnicodeError, json.JSONDecodeError):
+              raise SystemExit(0)
+          if not isinstance(exit_info, dict) or exit_info.get("code") != "STRICT_FULL_LIVE_BLOCKED":
+              raise SystemExit(0)
+          try:
+              objects = (root / "object-path").read_text(encoding="utf-8").strip()
+              if not objects or "\n" in objects or "\r" in objects:
+                  _unavailable()
+              dotenv = str(inputs / "api" / "synthetic-bootstrap.env")
+              child_env = os.environ.copy()
+              child_env["IDIS_STRICT_DOTENV_PATH"] = dotenv
+              script = r"""
+          import json
+
+          from idis.persistence import db
+          from idis.runtime.dependency_probes import TENANT_RLS_TABLES, _expected_alembic_head
+          from idis.runtime.strict_launcher import (
+              _default_admission_runner,
+              load_profile_then_import_runtime,
+          )
+          from sqlalchemy import text
+
+          profile, _runtime = load_profile_then_import_runtime(command="api")
+          report = _default_admission_runner("api", profile, task4_ingestion_scope=True)()
+          checks = [[item.component, item.code] for item in report.checks]
+          payload = {"checks": checks, "phase": "admission"}
+
+          def _revision_id(value):
+              if not isinstance(value, str) or not value or len(value) > 64:
+                  return None
+              for character in value:
+                  if character.isalnum() or character == "_":
+                      continue
+                  return None
+              return value
+
+          try:
+              head = _expected_alembic_head()
+              with db.begin_app_conn() as connection:
+                  revision_row = connection.execute(
+                      text("SELECT version_num FROM alembic_version")
+                  ).first()
+                  role_row = connection.execute(
+                      text(
+                          "SELECT rolsuper, rolbypassrls FROM pg_roles "
+                          "WHERE rolname = 'idis_app'"
+                      )
+                  ).first()
+                  table_rows = connection.execute(
+                      text(
+                          "SELECT c.relname, c.relforcerowsecurity "
+                          "FROM pg_catalog.pg_class AS c "
+                          "JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace "
+                          "WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')"
+                      )
+                  ).all()
+              revision = None
+              if revision_row is not None:
+                  revision = _revision_id(str(revision_row[0]))
+              forced = {}
+              for row in table_rows:
+                  forced[str(row[0])] = bool(row[1])
+              covered = True
+              for name in TENANT_RLS_TABLES:
+                  if forced.get(name) is not True:
+                      covered = False
+              postgres = {
+                  "relforcerowsecurity": covered,
+                  "schema_at_head": revision is not None and revision == head,
+              }
+              if role_row is not None:
+                  postgres["rolsuper"] = bool(role_row[0])
+                  postgres["rolbypassrls"] = bool(role_row[1])
+              if revision is not None:
+                  postgres["alembic_version"] = revision
+              payload["postgres"] = postgres
+          except Exception:
+              pass
+          print(json.dumps(payload, sort_keys=True))
+          """
+              completed = subprocess.run(
+                  [
+                      "docker",
+                      "run",
+                      "--rm",
+                      "--user", "1000",
+                      "--network", "container:" + holder,
+                      "--read-only",
+                      "--tmpfs", "/tmp:rw,nosuid,size=2147483648",
+                      "-v", inputs.as_posix() + ":" + inputs.as_posix() + ":ro",
+                      "-v", model + ":" + model + ":ro",
+                      "-v", objects + ":" + objects,
+                      "-e", "IDIS_STRICT_DOTENV_PATH",
+                      "--entrypoint", "/opt/venv/bin/python",
+                      image,
+                      "-c",
+                      script,
+                  ],
+                  env=child_env,
+                  capture_output=True,
+                  check=False,
+                  text=True,
+                  encoding="utf-8",
+                  errors="replace",
+              )
+              maintenance.mkdir(parents=True, exist_ok=True)
+              (maintenance / "admission-diagnostic.log").write_text(completed.stderr, encoding="utf-8")
+              if completed.returncode != 0:
+                  _unavailable()
+              text_out = completed.stdout.strip()
+              if not text_out or "\n" in text_out or "\r" in text_out:
+                  _unavailable()
+              payload = json.loads(text_out)
+              if not isinstance(payload, dict) or payload.get("phase") != "admission":
+                  _unavailable()
+              if not set(payload).issubset({"checks", "phase", "postgres"}):
+                  _unavailable()
+              checks = _public_checks(payload)
+              if checks is None:
+                  _unavailable()
+              public = {"checks": checks, "phase": "admission"}
+              if "postgres" in payload:
+                  postgres = _public_postgres(payload["postgres"])
+                  if postgres is None:
+                      _unavailable()
+                  public["postgres"] = postgres
+              print(json.dumps(public, sort_keys=True))
+          except SystemExit:
+              raise
+          except Exception:
+              _unavailable()
+          H1B_PY
       - name: Cleanup
         id: cleanup
         if: always()

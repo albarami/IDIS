@@ -43,7 +43,7 @@ jobs:
       cancel-in-progress: false
     env:
       # Public reviewed bootstrap pin, not an admission token or mutable repository variable.
-      IDIS_BOOTSTRAP_SHA256: ff5cba5bd92683d4d4e5b9fc101f74006899d3f9863b1ee02ffb9e0025e148e6
+      IDIS_BOOTSTRAP_SHA256: 27789fd1966e1cf2ba1b0df847e8586af405ce46e99dfd067bb0fd4d9aaf78f0
       IDIS_WORKFLOW_SHA: ${{ github.workflow_sha }}
     services:
       # Public registry raw linux/amd64 manifest qualified; no mutable-image fallback.

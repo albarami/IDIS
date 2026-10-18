@@ -263,18 +263,30 @@ def safe_summary(command: str, exit_code: int) -> dict[str, object]:
 
 
 def numeric_counts(raw: bytes) -> dict[str, int]:
-    """Extract numbers from pytest footer only; never emit a source substring."""
-    result: dict[str, int] = {}
-    for line in raw.decode("utf-8", errors="replace").splitlines():
-        if not line.startswith("===") or not line.endswith("==="):
+    """Extract numbers from the last pytest footer in the tail; never emit a source substring."""
+    captured_log_tail_bytes = 65_536
+    # Pytest's footer is its final line. Merging every footer-shaped line lets a
+    # test's own printed summary mix into the counts.
+    footer_line = re.compile(
+        r"^=+ (.+) in [0-9]+(?:\.[0-9]+)?s(?: \([0-9]+:[0-9]{2}:[0-9]{2}\))? =+$"
+    )
+    closed_label = re.compile(
+        r"\b([0-9]{1,7}) "
+        r"(passed|failed|skipped|errors?|warnings?|xfailed|xpassed|deselected)\b"
+    )
+    label_names = {"error": "errors", "warning": "warnings"}
+    matched: list[tuple[str, str]] = []
+    tail = raw[-captured_log_tail_bytes:]
+    for line in tail.decode("utf-8", errors="replace").splitlines():
+        if footer_line.fullmatch(line) is None:
             continue
-        for number, label in re.findall(
-            r"\b([0-9]{1,7}) "
-            r"(passed|failed|skipped|errors?|warnings?|xfailed|xpassed|deselected)\b",
-            line,
-        ):
-            label = {"error": "errors", "warning": "warnings"}.get(label, label)
-            result[label] = int(number)
+        pairs = closed_label.findall(line)
+        if not pairs:
+            continue
+        matched = pairs
+    result: dict[str, int] = {}
+    for number, label in matched:
+        result[label_names.get(label, label)] = int(number)
     return result
 
 

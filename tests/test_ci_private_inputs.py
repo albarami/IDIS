@@ -823,6 +823,131 @@ def test_numeric_footer_preserves_all_reported_outcomes_without_payload(bridge, 
 
 
 @pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (
+            b"= 123 failed, 11837 passed, 1137 skipped, 2241 warnings, "
+            b"6 errors, 42 subtests passed in 4027.85s (1:07:07) =",
+            {
+                "failed": 123,
+                "passed": 11837,
+                "skipped": 1137,
+                "warnings": 2241,
+                "errors": 6,
+            },
+        ),
+        (b"= 5 passed in 70.00s (0:01:10) =", {"passed": 5}),
+        (b"====== 3 failed, 10 passed in 1.23s ======", {"failed": 3, "passed": 10}),
+        (b"=== 5 passed, 1 warning in 0.50s ===", {"passed": 5, "warnings": 1}),
+        (b"= something else =", {}),
+        (
+            b"FAILED tests/test_ci_private_inputs.py::test_row - 3 failed, 10 passed in 1.23s",
+            {},
+        ),
+    ],
+    ids=[
+        "long-footer",
+        "duration-hms",
+        "short-wide-pad",
+        "short-warning",
+        "not-a-footer",
+        "failed-row",
+    ],
+)
+def test_numeric_counts_reads_pytest_footer_whatever_equals_padding(bridge, raw, expected):
+    assert bridge.numeric_counts(raw) == expected
+
+
+def test_numeric_counts_ignores_framed_lines_in_64kb_tail(bridge):
+    """Only the session footer inside the captured tail contributes counts."""
+    footer = (
+        b"= 123 failed, 11837 passed, 1137 skipped, 2241 warnings, "
+        b"6 errors, 42 subtests passed in 4027.85s (1:07:07) =\n"
+    )
+    framed = (
+        b"=== short test summary info ===\n=== 4 xfailed, 9 deselected ===\n= something else =\n"
+    )
+    captured_log_tail_bytes = 65_536
+    assert len(framed) + len(footer) < captured_log_tail_bytes
+    raw = (b"x" * (captured_log_tail_bytes - len(framed) - len(footer))) + framed + footer
+    assert len(raw) == captured_log_tail_bytes
+    assert bridge.numeric_counts(raw) == {
+        "failed": 123,
+        "passed": 11837,
+        "skipped": 1137,
+        "warnings": 2241,
+        "errors": 6,
+    }
+
+
+def test_numeric_counts_last_matching_footer_does_not_merge_earlier_lines(bridge):
+    """Pytest's footer is the last matching line; an earlier forged footer does not merge."""
+    raw = (
+        b"====== 7 xfailed, 8 deselected, 99 passed in 0.10s ======\n"
+        b"printed by the test: 3 passed\n"
+        b"====== 3 failed, 10 passed in 1.23s ======\n"
+    )
+    assert bridge.numeric_counts(raw) == {"failed": 3, "passed": 10}
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        pytest.param(b"=== 7 passed ===", id="durationless"),
+        pytest.param(b"=== short test summary info ===", id="header"),
+        pytest.param(
+            b"FAILED tests/test_ci_private_inputs.py::test_row - 3 passed",
+            id="failed-row",
+        ),
+        pytest.param(b"printed by the test: 3 passed", id="payload"),
+    ],
+)
+def test_numeric_counts_ignores_durationless_header_and_payload(bridge, raw):
+    assert bridge.numeric_counts(raw) == {}
+
+
+def test_numeric_counts_no_tests_ran_has_no_closed_label(bridge):
+    assert bridge.numeric_counts(b"= no tests ran in 0.01s =") == {}
+
+
+def test_capture_summary_missing_when_rc_zero_and_footer_has_no_passed(
+    bridge, monkeypatch, tmp_path, capsys
+):
+    """rc == 0 and a duration footer with no passed count is SUMMARY_MISSING."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    root = tmp_path / "runner/idis-ci-41-2"
+    root.mkdir(parents=True, mode=0o700)
+    for name, value in {
+        "RUNNER_TEMP": str(root.parent),
+        "GITHUB_RUN_ID": "41",
+        "GITHUB_RUN_ATTEMPT": "2",
+        "GITHUB_WORKSPACE": str(workspace),
+    }.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(bridge, "execute", lambda *_args: 0)
+    monkeypatch.setattr(bridge, "git_text", lambda _repo, *_args: "a" * 40)
+
+    def invoke(payload: bytes) -> tuple[int, dict[str, object]]:
+        (root / "check.log").write_bytes(payload)
+        code = bridge.main(["capture", "synthetic-script.sh"])
+        captured = capsys.readouterr()
+        assert captured.err == ""
+        return code, json.loads(captured.out)
+
+    missing_code, missing = invoke(b"= no tests ran in 0.01s =\n")
+    assert missing_code == 1
+    assert missing == bridge.safe_summary("check", 1)
+
+    ok_code, ok = invoke(b"====== 1 passed in 0.42s ======\n")
+    assert ok_code == 0
+    assert ok["counts"] == {"passed": 1}
+    assert ok["exit_code"] == 0
+    assert ok["command"] == "check"
+    assert "passed" in ok["counts"]
+
+
+@pytest.mark.parametrize(
     "field",
     [
         "workflow_blob_sha256",
@@ -1033,7 +1158,11 @@ def execute_chain(bridge, observed_fixture, monkeypatch, tmp_path):
     binaries = tmp_path / "fixture-bin"
     binaries.mkdir()
     make = binaries / "make"
-    make.write_text("#!/bin/sh\nprintf 'HERMETIC_CAPTURE_SENTINEL\\n=== 1 passed ===\\n'\nexit 7\n")
+    make.write_text(
+        "#!/bin/sh\n"
+        "printf 'HERMETIC_CAPTURE_SENTINEL\\n====== 1 passed in 0.42s ======\\n'\n"
+        "exit 7\n"
+    )
     make.chmod(0o755)
     monkeypatch.setenv("PATH", str(binaries) + os.pathsep + os.environ["PATH"])
     capture = bridge.capture_script
@@ -1379,7 +1508,7 @@ def test_keyboard_interrupt_closes_output_with_exit_130(
     else:
         root = tmp_path / "runner/idis-ci-41-2"
         root.mkdir(parents=True, mode=0o700)
-        (root / "check.log").write_bytes(b"=== 1 passed ===\n")
+        (root / "check.log").write_bytes(b"====== 1 passed in 0.42s ======\n")
         for name, value in {
             "RUNNER_TEMP": str(root.parent),
             "GITHUB_RUN_ID": "41",
@@ -1537,7 +1666,7 @@ def test_real_signals_close_output_stop_owned_group_and_preserve_peer(tmp_path, 
     private_log = tmp_path / "private.log"
     runner = tmp_path / "runner/idis-ci-41-2"
     runner.mkdir(parents=True, mode=0o700)
-    (runner / "check.log").write_bytes(b"=== 1 passed ===\n")
+    (runner / "check.log").write_bytes(b"====== 1 passed in 0.42s ======\n")
     program = tmp_path / "signal-boundary.py"
     child_code = (
         "import os,pathlib,signal,subprocess,sys,time\n"
@@ -2987,7 +3116,11 @@ def test_literal_custom_shell_runs_real_helper_spaced_paths_and_private_nonzero(
     binaries = tmp_path / "synthetic-bin"
     binaries.mkdir()
     make = binaries / "make"
-    make.write_text("#!/bin/sh\nprintf 'PRIVATE_LITERAL_SENTINEL\\n=== 1 passed ===\\n'\nexit 7\n")
+    make.write_text(
+        "#!/bin/sh\n"
+        "printf 'PRIVATE_LITERAL_SENTINEL\\n====== 1 passed in 0.42s ======\\n'\n"
+        "exit 7\n"
+    )
     make.chmod(0o755)
     monkeypatch.setenv("PATH", str(binaries) + os.pathsep + os.environ["PATH"])
     script = tmp_path / 'runner step with spaces and "quotes"'
@@ -3304,7 +3437,7 @@ _CANARY_TOKENS = (
     "idis-canary-",
     "CANARY_SENTINEL",
 )
-_REVIEWED_BOOTSTRAP_SHA256 = "ff5cba5bd92683d4d4e5b9fc101f74006899d3f9863b1ee02ffb9e0025e148e6"
+_REVIEWED_BOOTSTRAP_SHA256 = "27789fd1966e1cf2ba1b0df847e8586af405ce46e99dfd067bb0fd4d9aaf78f0"
 _CHECK_JOB_STEPS: tuple[tuple[str, str], ...] = (
     ("Checkout code", "81ca817f61e7e77651fa289b36db997ae4451008e5d1325139508e178731af09"),
     ("private-admission", "2b4458698a79aa875840db03d3897a4a6d48e130b0eb297ce055f94e5137fb4b"),

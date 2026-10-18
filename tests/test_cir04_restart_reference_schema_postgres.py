@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import json
+import os
 import re
 import sys
 import uuid
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -17,15 +20,58 @@ from scripts.run_cir04_restart_reference_dev_migration import (
     DEV0039_VERSIONS_DIR,
     upgrade_disposable_to_dev_0039,
 )
-from sqlalchemy import Connection, text
+from sqlalchemy import Connection, create_engine, text
+from sqlalchemy.engine import make_url
 
+from idis.audit.postgres_sink import PostgresAuditSink
+from idis.models.run_step import RunStep
+from idis.persistence.repositories.task7_completion import (
+    PostgresTask7CompletionPort,
+    Task7PostgresPortError,
+)
+from idis.persistence.repositories.task7_run_graph import (
+    PostgresTask7RunGraphRepository,
+    RunOutputObjectRecord,
+    RunStepOutputRecord,
+)
+from idis.pipeline.contract_registry import FULL_STRICT_V21_CONTRACT_HASH
+from idis.pipeline.task7_completion import (
+    STEP_OUTPUT_MISSING,
+    Task7CompletionError,
+    Task7CompletionFinalizationService,
+    Task7LeaseScope,
+)
+from idis.pipeline.task7_edges import ProducerSelectorSpec
+from idis.pipeline.task7_semantics import STEP_SEMANTIC_REGISTRY, SemanticValidationResult
+from idis.pipeline.task7_source_receipt_builders import (
+    _FrozenBinding,
+    _FrozenManifest,
+    _FrozenRoot,
+    _FrozenSourceGraph,
+    _handoff_payload,
+    _inventory_payload,
+    _OutputProducer,
+    prepare_frozen_source_command,
+)
+from idis.pipeline.task7_usage import USAGE_ROUTE_REGISTRY
 from idis.runtime.dependency_probes import (
     _REVISION_0037_TENANT_RLS_TABLES,
     _TASK7_TENANT_RLS_TABLES,
     TENANT_RLS_TABLES,
 )
-from tests.slice100_task2b._support import DisposablePostgres, disposable_postgres, migrate
+from idis.runtime.dependency_readiness import TASK7_V21_FUTURE_ERASURE_RELATIONS
+from tests.slice100_task2b._support import (
+    DisposablePostgres,
+    disposable_postgres,
+    grant_application_access,
+    migrate,
+)
 from tests.slice100_task7._postgres_support import provision_exact_erasure_principals
+from tests.slice100_task7.test_task7_restart_rehydration_red import (
+    _claim,
+    _seed_durable_restart_run,
+    _task7_graph_digest,
+)
 from tests.test_cir04_restart_reference_dev_admission import _dev0039_migration
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -461,3 +507,543 @@ def test_downgrade_check_uses_truncated_trigger_name(monkeypatch: pytest.MonkeyP
         and '{"trigger":_TRIGGER_CATALOG,"policy":_POLICY}' in source
         and catalog_constant == stored
     ), f"text_hit={text_hit} stored={stored} full_len={len(full_name)} constant={catalog_constant}"
+
+
+class _InjectedReferenceRollbackPort(PostgresTask7CompletionPort):
+    """Lets the row-14 insert run, then aborts the completion transaction."""
+
+    def persist_step_receipt_input_references(
+        self,
+        *,
+        scope: object,
+        step: RunStep,
+        semantic_result: SemanticValidationResult,
+    ) -> None:
+        super().persist_step_receipt_input_references(
+            scope=scope,
+            step=step,
+            semantic_result=semantic_result,
+        )
+        raise RuntimeError("INJECTED_REFERENCE_ROLLBACK")
+
+
+def test_absent_generic_extraction_relation_is_fail_closed_on_0039(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Characterisation: route 10's relation is absent, so the loader fails closed."""
+    for name in _FORBIDDEN:
+        monkeypatch.delenv(name, raising=False)
+    with disposable_postgres() as database:
+        _install(database)
+        with database.admin_engine.connect() as connection:
+            port = PostgresTask7CompletionPort(
+                connection,
+                "11111111-1111-4111-8111-111111111111",
+                PostgresAuditSink(),
+                120,
+            )
+            with pytest.raises(Task7PostgresPortError) as error:
+                port._require_relation("generic_extraction_input_references")
+    assert error.value.code == "PIPELINE_CONTRACT_UNAVAILABLE"
+
+
+_DERIVE_TENANT = "11111111-1111-4111-8111-111111111111"
+_OUTSIDE_FUTURE_SET = "not_a_reviewed_relation"
+
+
+def _derive_scope() -> Task7LeaseScope:
+    return Task7LeaseScope(
+        tenant_id=_DERIVE_TENANT,
+        deal_id="22222222-2222-4222-8222-222222222222",
+        run_id="33333333-3333-4333-8333-333333333333",
+        pipeline_contract_version="full-strict-v21",
+        pipeline_contract_hash=FULL_STRICT_V21_CONTRACT_HASH,
+        pipeline_resume_state="RESUMABLE",
+        lease_owner_id="44444444-4444-4444-8444-444444444444",
+        lease_fencing_token=1,
+    )
+
+
+def _derive_port(connection: Connection) -> PostgresTask7CompletionPort:
+    return PostgresTask7CompletionPort(connection, _DERIVE_TENANT, PostgresAuditSink(), 120)
+
+
+def _migrate_0038(database: DisposablePostgres) -> None:
+    with database.admin_engine.begin() as connection:
+        provision_exact_erasure_principals(connection)
+        _ensure_guard_owner(connection)
+    migrate(database.admin_engine, "0038")
+
+
+def _catalog_versions(connection: Connection) -> list[str]:
+    return [
+        str(value)
+        for value in connection.execute(
+            text("SELECT version_num FROM alembic_version ORDER BY version_num")
+        ).scalars()
+    ]
+
+
+def _single_relation_spec(relation: str) -> ProducerSelectorSpec:
+    return ProducerSelectorSpec(
+        rule_ordinal=0,
+        rule_id="C6_R1",
+        rule_version="v1",
+        selector_ordinal=0,
+        parameter_tuple=(),
+        selector_ast=(),
+        selector_sha256="a" * 64,
+        base_selector_id="c6-r1",
+        relations=(relation,),
+        joins=(),
+        projection=(
+            "INPUT_BINDING",
+            "binding_id",
+            "selected_identity_sha256",
+            "binding_sha256",
+        ),
+        predicate_ast=(),
+        order_by=(),
+        producer_condition="",
+    )
+
+
+def test_derive_edges_absent_future_relation_fails_closed_on_0038(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On 0038 an absent future relation still raises PIPELINE_CONTRACT_UNAVAILABLE."""
+    for name in _FORBIDDEN:
+        monkeypatch.delenv(name, raising=False)
+    with disposable_postgres() as database:
+        _migrate_0038(database)
+        with database.admin_engine.connect() as connection:
+            assert _catalog_versions(connection) == ["0038"]
+            port = _derive_port(connection)
+            with pytest.raises(Task7PostgresPortError) as error:
+                port._derive_edges(_derive_scope())
+    assert error.value.code == "PIPELINE_CONTRACT_UNAVAILABLE"
+
+
+def test_derive_edges_absent_core_relation_fails_closed_on_0039(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A core 0038 relation reported absent on 0039 fails closed."""
+    for name in _FORBIDDEN:
+        monkeypatch.delenv(name, raising=False)
+    with disposable_postgres() as database:
+        _install(database)
+        with database.admin_engine.connect() as connection:
+            assert _catalog_versions(connection) == ["0039"]
+            port = _derive_port(connection)
+            real = port._relation_exists
+
+            def forced(relation: str) -> bool:
+                if relation == "run_input_bindings":
+                    return False
+                return bool(real(relation))
+
+            monkeypatch.setattr(port, "_relation_exists", forced)
+            with pytest.raises(Task7PostgresPortError) as error:
+                port._derive_edges(_derive_scope())
+    assert error.value.code == "PIPELINE_CONTRACT_UNAVAILABLE"
+
+
+def test_tolerated_absent_relations_equal_reviewed_future_set_on_0039(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On 0039 the relations whose absence is tolerated are the reviewed future set."""
+    for name in _FORBIDDEN:
+        monkeypatch.delenv(name, raising=False)
+    _row, _function_sql, census = _preimage()
+    reviewed = set(census)
+    assert reviewed == set(TASK7_V21_FUTURE_ERASURE_RELATIONS)
+    assert len(reviewed) == 38
+    assert len(TENANT_RLS_TABLES) == 64
+    candidates = reviewed | set(TENANT_RLS_TABLES) | {_OUTSIDE_FUTURE_SET}
+    with disposable_postgres() as database:
+        _install(database)
+        with database.admin_engine.connect() as connection:
+            assert _catalog_versions(connection) == ["0039"]
+            port = _derive_port(connection)
+            real = port._relation_exists
+            tolerated: set[str] = set()
+            for relation in sorted(candidates):
+
+                def forced(name: str, *, target: str = relation) -> bool:
+                    if name == target:
+                        return False
+                    return bool(real(name))
+
+                monkeypatch.setattr(port, "_relation_exists", forced)
+                try:
+                    rows = port._selector_rows(_single_relation_spec(relation))
+                except Task7PostgresPortError as exc:
+                    assert exc.code == "PIPELINE_CONTRACT_UNAVAILABLE"
+                else:
+                    assert rows == ()
+                    tolerated.add(relation)
+    assert tolerated == reviewed
+
+
+def _binding(
+    *,
+    binding_id: str,
+    kind: str,
+    identity: str,
+    content: str,
+    package_id: str,
+) -> _FrozenBinding:
+    return _FrozenBinding(
+        binding_id=binding_id,
+        source_object_kind=kind,
+        selected_identity_sha256=identity,
+        selected_content_sha256=content,
+        binding_sha256="55" * 32,
+        corpus_receipt_id=package_id,
+    )
+
+
+def _root(
+    *,
+    object_id: str,
+    kind: str,
+    disposition: str,
+    identity: str,
+    content: str,
+) -> _FrozenRoot:
+    return _FrozenRoot(
+        source_lineage_object_id=object_id,
+        object_kind=kind,
+        source_disposition=disposition,
+        object_identity_sha256=identity,
+        content_sha256=content,
+    )
+
+
+def _inventory_graph(disposition: str) -> _FrozenSourceGraph:
+    package_id = "11111111-1111-4111-8111-111111111111"
+    return _FrozenSourceGraph(
+        roots=(
+            _root(
+                object_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                kind="PACKAGE",
+                disposition="CORPUS",
+                identity="11" * 32,
+                content="44" * 32,
+            ),
+            _root(
+                object_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                kind="PACKAGE_FILE",
+                disposition=disposition,
+                identity="22" * 32,
+                content="33" * 32,
+            ),
+        ),
+        bindings=(
+            _binding(
+                binding_id="cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+                kind="PACKAGE",
+                identity="11" * 32,
+                content="44" * 32,
+                package_id=package_id,
+            ),
+            _binding(
+                binding_id="dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                kind="PACKAGE_FILE",
+                identity="22" * 32,
+                content="33" * 32,
+                package_id=package_id,
+            ),
+        ),
+        manifest=_FrozenManifest(file_count=1, total_bytes=1),
+        inventory_receipt=None,
+    )
+
+
+def _handoff_graph(
+    *,
+    disposition: str = "EVIDENCE_BEARING",
+    content: str = "77" * 32,
+    selected: str = "77" * 32,
+) -> _FrozenSourceGraph:
+    return _FrozenSourceGraph(
+        roots=(
+            _root(
+                object_id="eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+                kind="ARTIFACT",
+                disposition=disposition,
+                identity="88" * 32,
+                content=content,
+            ),
+        ),
+        bindings=(
+            _binding(
+                binding_id="ffffffff-ffff-4fff-8fff-ffffffffffff",
+                kind="ARTIFACT",
+                identity="88" * 32,
+                content=selected,
+                package_id="12121212-1212-4121-8121-121212121212",
+            ),
+        ),
+        manifest=_FrozenManifest(file_count=1, total_bytes=1),
+        inventory_receipt=_OutputProducer(
+            output_object_id="13131313-1313-4131-8131-131313131313",
+            native_identity_sha256="ab" * 32,
+            native_output_sha256="cd" * 32,
+        ),
+    )
+
+
+def test_builder_counts_content_mismatch_and_refuses_unknown_disposition() -> None:
+    """Mismatch is counted; a disposition outside the freeze pair is refused."""
+    mismatched = _handoff_payload(_handoff_graph(content="aa" * 32, selected="bb" * 32))
+    assert mismatched["object_hash_mismatch_count"] == 1
+    assert _handoff_payload(_handoff_graph())["object_hash_mismatch_count"] == 0
+    with pytest.raises(Task7CompletionError) as deferred:
+        _inventory_payload(_inventory_graph("DEFERRED"))
+    assert deferred.value.code == STEP_OUTPUT_MISSING
+    with pytest.raises(Task7CompletionError) as unresolved:
+        _handoff_payload(_handoff_graph(disposition="UNRESOLVED"))
+    assert unresolved.value.code == STEP_OUTPUT_MISSING
+
+
+def test_step_receipt_reference_loader_rejects_sibling_consumer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A row-14 row for consumer A must not satisfy a load for consumer B."""
+    for name in _FORBIDDEN:
+        monkeypatch.delenv(name, raising=False)
+    with disposable_postgres() as database:
+        _install(database)
+        grant_application_access(database)
+        seeded = _seed_durable_restart_run(database, label="sibling-consumer")
+        owner_id = str(uuid.uuid4())
+        claimed = _claim(database, scope=seeded, owner_id=owner_id)
+        scope = replace(
+            seeded,
+            lease_owner_id=owner_id,
+            lease_fencing_token=int(claimed["lease_fencing_token"]),
+        )
+        with database.app_engine.connect() as connection:
+            port = PostgresTask7CompletionPort(
+                connection, scope.tenant_id, PostgresAuditSink(), 120
+            )
+            port.establish_tenant_rls(scope=scope)
+            edge = next(row for row in port._derive_edges(scope) if row.route_ordinal == 0)
+            step = next(
+                row for row in port.list_canonical_steps(scope=scope) if row.step_order == 0
+            )
+            spec = STEP_SEMANTIC_REGISTRY[step.step_name.value]
+            identity_sha256 = "ab" * 32
+            value_sha256 = "cd" * 32
+            output_object_id = str(
+                port._derive_output_id(
+                    scope=scope,
+                    output_class="STEP_RECEIPT",
+                    output_kind=spec.aggregate_receipt_kind,
+                    identity_sha256=identity_sha256,
+                    value_sha256=value_sha256,
+                )
+            )
+            step_output_id = str(
+                port._derive_step_output_id(
+                    scope=scope,
+                    step=step,
+                    subrole="__step__",
+                    output_kind=spec.aggregate_receipt_kind,
+                    ordinal=0,
+                    output_object_id=output_object_id,
+                )
+            )
+            summary_sha256 = hashlib.sha256(b"sibling-consumer-fixture").hexdigest()
+            graph = PostgresTask7RunGraphRepository(connection, scope.tenant_id)
+            graph.insert_run_output_object(
+                RunOutputObjectRecord(
+                    output_object_id=output_object_id,
+                    tenant_id=scope.tenant_id,
+                    deal_id=scope.deal_id,
+                    run_id=scope.run_id,
+                    output_class="STEP_RECEIPT",
+                    output_kind=spec.aggregate_receipt_kind,
+                    output_schema_version=spec.semantic_rule_version,
+                    native_identity_sha256=identity_sha256,
+                    native_output_sha256=value_sha256,
+                    pipeline_contract_version=scope.pipeline_contract_version,
+                    pipeline_contract_hash=scope.pipeline_contract_hash,
+                    write_origin="RUNTIME",
+                    lease_owner_id=scope.lease_owner_id,
+                    lease_fencing_token=scope.lease_fencing_token,
+                )
+            )
+            graph.insert_run_step_output(
+                RunStepOutputRecord(
+                    step_output_id=step_output_id,
+                    tenant_id=scope.tenant_id,
+                    deal_id=scope.deal_id,
+                    run_id=scope.run_id,
+                    step_id=step.step_id,
+                    output_object_id=output_object_id,
+                    step_name=step.step_name.value,
+                    subrole="__step__",
+                    output_kind=spec.aggregate_receipt_kind,
+                    output_ordinal=0,
+                    semantic_rule_version=spec.semantic_rule_version,
+                    semantic_rule_hash=spec.semantic_rule_hash,
+                    summary_sha256=summary_sha256,
+                    lease_owner_id=scope.lease_owner_id,
+                    lease_fencing_token=scope.lease_fencing_token,
+                )
+            )
+            route = USAGE_ROUTE_REGISTRY[edge.route_ordinal]
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO step_receipt_input_references (
+                        receipt_reference_id, tenant_id, deal_id, run_id,
+                        step_output_id, consumer_output_object_id, producer_type,
+                        producer_input_binding_id, producer_output_object_id,
+                        producer_identity_sha256, producer_value_sha256,
+                        reference_kind, reference_ordinal, lease_owner_id,
+                        lease_fencing_token
+                    ) VALUES (
+                        CAST(:receipt_reference_id AS uuid),
+                        CAST(:tenant_id AS uuid), CAST(:deal_id AS uuid),
+                        CAST(:run_id AS uuid), CAST(:step_output_id AS uuid),
+                        CAST(:consumer_output_object_id AS uuid), :producer_type,
+                        CAST(:producer_input_binding_id AS uuid), NULL,
+                        :producer_identity_sha256, :producer_value_sha256,
+                        :reference_kind, :reference_ordinal,
+                        CAST(:lease_owner_id AS uuid), :lease_fencing_token
+                    )
+                    """
+                ),
+                {
+                    "receipt_reference_id": str(uuid.uuid4()),
+                    "tenant_id": scope.tenant_id,
+                    "deal_id": scope.deal_id,
+                    "run_id": scope.run_id,
+                    "step_output_id": step_output_id,
+                    "consumer_output_object_id": output_object_id,
+                    "producer_type": edge.producer.producer_type,
+                    "producer_input_binding_id": str(edge.producer.producer_id),
+                    "producer_identity_sha256": edge.producer.producer_identity_sha256,
+                    "producer_value_sha256": edge.producer.producer_value_sha256,
+                    "reference_kind": route.reference_kind,
+                    "reference_ordinal": 0,
+                    "lease_owner_id": scope.lease_owner_id,
+                    "lease_fencing_token": scope.lease_fencing_token,
+                },
+            )
+            same = port._load_usage_occurrences(
+                scope=scope,
+                edge=edge,
+                consumer_output_object_id=output_object_id,
+                consumer_identity_sha256=identity_sha256,
+                route_ordinal=edge.route_ordinal,
+                consumer_step_output_id=step_output_id,
+            )
+            sibling = port._load_usage_occurrences(
+                scope=scope,
+                edge=edge,
+                consumer_output_object_id=str(uuid.uuid4()),
+                consumer_identity_sha256=identity_sha256,
+                route_ordinal=edge.route_ordinal,
+                consumer_step_output_id=step_output_id,
+            )
+            sibling_output = port._load_usage_occurrences(
+                scope=scope,
+                edge=edge,
+                consumer_output_object_id=output_object_id,
+                consumer_identity_sha256=identity_sha256,
+                route_ordinal=edge.route_ordinal,
+                consumer_step_output_id=str(uuid.uuid4()),
+            )
+    assert len(same) == 1
+    assert sibling == ()
+    assert sibling_output == ()
+
+
+def test_dev_0039_reference_write_failure_rolls_back_graph_step_and_audit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reference-write failure leaves the pre-call graph and step unchanged."""
+    for name in _FORBIDDEN:
+        monkeypatch.delenv(name, raising=False)
+    with disposable_postgres() as database:
+        maintenance_before = _maintenance_alembic_versions()
+        _install(database)
+        grant_application_access(database)
+        seeded = _seed_durable_restart_run(database, label="reference-rollback")
+        owner_id = str(uuid.uuid4())
+        claimed = _claim(database, scope=seeded, owner_id=owner_id)
+        scope = replace(
+            seeded,
+            lease_owner_id=owner_id,
+            lease_fencing_token=int(claimed["lease_fencing_token"]),
+        )
+        command = prepare_frozen_source_command(
+            engine=database.app_engine, scope=scope, step_order=0
+        )
+        digest_before = _task7_graph_digest(database, scope)
+        outputs_before = _relation_count(database, "run_output_objects", scope.run_id)
+        service = Task7CompletionFinalizationService(
+            connection_factory=database.app_engine.begin,
+            port_factory=lambda connection, tenant_id: _InjectedReferenceRollbackPort(
+                connection,
+                tenant_id,
+                PostgresAuditSink(),
+                120,
+            ),
+        )
+        with pytest.raises(Task7CompletionError) as caught:
+            service.complete_step(command)
+        cause = caught.value.__cause__
+        assert isinstance(cause, RuntimeError)
+        assert str(cause) == "INJECTED_REFERENCE_ROLLBACK"
+        assert _step_status(database, scope.run_id, 0) == "RUNNING"
+        assert _relation_count(database, "step_receipt_input_references", scope.run_id) == 0
+        assert _relation_count(database, "run_output_objects", scope.run_id) == outputs_before
+        assert _task7_graph_digest(database, scope) == digest_before
+    assert _maintenance_alembic_versions() == maintenance_before
+
+
+def _relation_count(database: DisposablePostgres, relation: str, run_id: str) -> int:
+    with database.admin_engine.connect() as connection:
+        return int(
+            connection.execute(
+                text(f"SELECT count(*) FROM {relation} WHERE run_id = CAST(:run_id AS uuid)"),
+                {"run_id": run_id},
+            ).scalar_one()
+        )
+
+
+def _step_status(database: DisposablePostgres, run_id: str, step_order: int) -> str:
+    with database.admin_engine.connect() as connection:
+        return str(
+            connection.execute(
+                text(
+                    "SELECT status FROM run_steps "
+                    "WHERE run_id = CAST(:run_id AS uuid) AND step_order = :step_order"
+                ),
+                {"run_id": run_id, "step_order": step_order},
+            ).scalar_one()
+        )
+
+
+def _maintenance_alembic_versions() -> list[str]:
+    engine = create_engine(make_url(os.environ["IDIS_DATABASE_ADMIN_URL"]))
+    try:
+        with engine.connect() as connection:
+            present = connection.execute(
+                text("SELECT to_regclass('public.alembic_version')")
+            ).scalar()
+            if present is None:
+                return []
+            return [
+                str(row[0])
+                for row in connection.execute(
+                    text("SELECT version_num FROM alembic_version ORDER BY version_num")
+                )
+            ]
+    finally:
+        engine.dispose()

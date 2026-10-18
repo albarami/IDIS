@@ -57,6 +57,7 @@ from idis.pipeline.task7_lifecycle import (
     rehydrate_strict_run,
 )
 from idis.pipeline.task7_semantics import STEP_SEMANTIC_REGISTRY
+from idis.pipeline.task7_source_receipt_builders import complete_frozen_source_step
 from idis.pipeline.worker import _lease_transition_audit_emitter
 
 TENANT_ID = "11111111-1111-4111-8111-111111111111"
@@ -492,6 +493,24 @@ def _complete_hermetic_step(
         )
 
 
+def _complete_cut_step(
+    database: DisposablePostgres,
+    *,
+    scope: Task7LeaseScope,
+    step_order: int,
+) -> None:
+    """Complete steps 0 and 1 through the real receipt writer."""
+
+    if step_order in {0, 1}:
+        complete_frozen_source_step(
+            engine=database.app_engine,
+            scope=scope,
+            step_order=step_order,
+        )
+        return
+    _complete_hermetic_step(database, scope=scope, step_order=step_order)
+
+
 def _step_semantics(database: DisposablePostgres, scope: Task7LeaseScope) -> tuple[Any, ...]:
     with database.admin_engine.connect() as connection:
         return tuple(
@@ -574,7 +593,7 @@ def test_real_postgres_all_27_restart_cuts_reclaim_and_fence_without_repair() ->
                 lease_fencing_token=1,
             )
             for step_order in range(cut):
-                _complete_hermetic_step(
+                _complete_cut_step(
                     database,
                     scope=worker_a,
                     step_order=step_order,
@@ -674,8 +693,8 @@ def test_real_postgres_all_27_restart_cuts_reclaim_and_fence_without_repair() ->
                     pipeline_contract_hash=worker_b.pipeline_contract_hash,
                     pipeline_resume_state=worker_b.pipeline_resume_state,
                     steps=rows,
-                    validate_completed=lambda completed: (
-                        completed.result_summary.get("producer_kind") == "TASK7_RESTART_PROOF"
+                    validate_completed=lambda completed, _port=port, _scope=worker_b: (
+                        _port.validate_completed_step_graph(scope=_scope, step=completed)
                     ),
                 )
                 assert plan.completed_count == cut
@@ -705,7 +724,7 @@ def test_real_postgres_all_27_restart_cuts_reclaim_and_fence_without_repair() ->
             assert pending_after == pending_before
 
             for step_order in range(cut, 28):
-                _complete_hermetic_step(
+                _complete_cut_step(
                     database,
                     scope=worker_b,
                     step_order=step_order,
@@ -724,7 +743,7 @@ def test_real_postgres_all_27_restart_cuts_reclaim_and_fence_without_repair() ->
                 lease_fencing_token=oracle_claim["lease_fencing_token"],
             )
             for step_order in range(28):
-                _complete_hermetic_step(
+                _complete_cut_step(
                     database,
                     scope=oracle,
                     step_order=step_order,

@@ -188,6 +188,14 @@ class _Task7DurablePort(Protocol):
 
     def persist_new_outgoing_edges(self, **kwargs: object) -> None: ...
 
+    def persist_step_receipt_input_references(
+        self,
+        *,
+        scope: object,
+        step: RunStep,
+        semantic_result: SemanticValidationResult,
+    ) -> None: ...
+
     def derive_and_persist_usage_receipts(self, **kwargs: object) -> None: ...
 
     def prove_incoming_receipt_equality(self, **kwargs: object) -> bool: ...
@@ -310,6 +318,11 @@ class Task7CompletionFinalizationService:
                     semantic_result=semantic_result,
                 )
                 port.persist_new_outgoing_edges(
+                    scope=scope,
+                    step=locked_step,
+                    semantic_result=semantic_result,
+                )
+                port.persist_step_receipt_input_references(
                     scope=scope,
                     step=locked_step,
                     semantic_result=semantic_result,

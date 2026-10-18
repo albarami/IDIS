@@ -2,8 +2,11 @@
 
 This port never owns a transaction and never reads ambient configuration.  It
 executes only generated selector authority and code-owned SQL against the
-caller-supplied connection.  Missing future-native or usage-reference
-relations are an explicit contract-unavailable boundary, not an empty result.
+caller-supplied connection.  An absent selector relation is an empty producer
+set only when it is in the reviewed future-relation census, the catalog is
+dev 0039, and every present relation of that selector is in the 0038 profile.
+Every other absence, including a usage-reference relation, raises
+PIPELINE_CONTRACT_UNAVAILABLE.
 """
 
 from __future__ import annotations
@@ -58,11 +61,14 @@ from idis.pipeline.task7_usage import (
     CONSUMER_RECEIPT_INCOMPLETE,
     USAGE_ROUTE_REGISTRY,
     ConsumerReceiptRootV1,
+    ProducerRefV1,
     ReferenceOccurrenceV1,
     UsageExtractionRequest,
     extract_usage_evidence,
 )
 from idis.pipeline.task7_uuid import Task7UuidError, derive_task7_uuid
+from idis.runtime.dependency_probes import TENANT_RLS_TABLES
+from idis.runtime.dependency_readiness import TASK7_V21_FUTURE_ERASURE_RELATIONS
 
 WORKER_LEASE_FENCED: Final = "WORKER_LEASE_FENCED"
 STEP_REHYDRATION_FAILED: Final = "STEP_REHYDRATION_FAILED"
@@ -75,6 +81,15 @@ _IDENTIFIER_RE: Final = re.compile(r"^[a-z][a-z0-9_]*$")
 _HASH_RE: Final = re.compile(r"^[0-9a-f]{64}$")
 _LEASE_SECONDS_MIN: Final = 1
 _LEASE_SECONDS_MAX: Final = 86_400
+# The 38-name preimage census, bound to dependency_readiness
+# TASK7_V21_FUTURE_ERASURE_RELATIONS (equal to
+# contracts/full_strict_v21_reviewed_preimage_v1.json
+# erasure_execution_registry.rows[0].future_activation_census_tuple).
+_REVIEWED_FUTURE_RELATIONS: Final = frozenset(TASK7_V21_FUTURE_ERASURE_RELATIONS)
+# The 64 tables of the installed 0038 profile.
+_CATALOG_0038_PROFILE_TABLES: Final = TENANT_RLS_TABLES
+_DEV_0039_REVISION: Final = "0039"
+_ROW_14_RELATION: Final = "step_receipt_input_references"
 _STEP5_EVIDENCE_SCHEMA: Final = (
     "step5-applicability-evidence",
     "task7-step5-applicability-evidence-v1",
@@ -172,6 +187,25 @@ class Task7PostgresPortError(RuntimeError):
 
 def _fail(code: str) -> Never:
     raise Task7PostgresPortError(code)
+
+
+def _census_reference_ordinal(refs: object, producer: ProducerRefV1) -> int:
+    """Return the producer's index in the canonical census input_refs array."""
+
+    if isinstance(refs, (str, bytes)) or not isinstance(refs, Sequence):
+        _fail(CONSUMER_RECEIPT_INCOMPLETE)
+    matches = [
+        index
+        for index, item in enumerate(refs)
+        if isinstance(item, Mapping)
+        and item.get("producer_type") == producer.producer_type
+        and str(item.get("producer_id")) == str(producer.producer_id)
+        and item.get("producer_identity_sha256") == producer.producer_identity_sha256
+        and item.get("producer_value_sha256") == producer.producer_value_sha256
+    ]
+    if len(matches) != 1:
+        _fail(CONSUMER_RECEIPT_INCOMPLETE)
+    return matches[0]
 
 
 def required_usage_reference_relations() -> frozenset[str]:
@@ -752,6 +786,156 @@ class PostgresTask7CompletionPort:
                 _fail(CONSUMER_RECEIPT_INCOMPLETE)
             self._graph.insert_run_expected_consumer_edge(self._edge_record(edge, params))
 
+    def persist_step_receipt_input_references(
+        self,
+        *,
+        scope: object,
+        step: RunStep,
+        semantic_result: SemanticValidationResult,
+    ) -> None:
+        """Write one row-14 reference for each incoming STEP_RECEIPT edge.
+
+        Incoming edges come from ``_derive_edges(scope)``, limited to this
+        step's ``__step__`` consumer and ``step_receipt_input_references``.
+        ``reference_ordinal`` is the producer's index in the canonical census
+        ``input_refs`` array. The live lease is copied from the scope. Returns
+        None.
+        """
+
+        if not isinstance(step, RunStep) or not isinstance(
+            semantic_result, SemanticValidationResult
+        ):
+            _fail(STEP_OUTPUT_MISSING)
+        params = _scope_params(scope)
+        incoming = tuple(
+            edge
+            for edge in self._derive_edges(scope)
+            if edge.consumer_step_name == step.step_name.value
+            and edge.consumer_subrole == "__step__"
+            and USAGE_ROUTE_REGISTRY[edge.route_ordinal].native_reference_relation
+            == "step_receipt_input_references"
+        )
+        if not incoming:
+            return
+        output_roots = {
+            row.output_object_id: row
+            for row in self._graph.list_run_output_objects(
+                deal_id=cast(str, params["deal_id"]),
+                run_id=cast(str, params["run_id"]),
+            )
+        }
+        consumers = tuple(
+            row
+            for row in self._graph.list_run_step_outputs(
+                deal_id=cast(str, params["deal_id"]),
+                run_id=cast(str, params["run_id"]),
+            )
+            if row.step_name == step.step_name.value
+            and row.subrole == "__step__"
+            and row.output_object_id in output_roots
+            and output_roots[row.output_object_id].output_class == "STEP_RECEIPT"
+        )
+        if len(consumers) != 1:
+            _fail(STEP_OUTPUT_MISSING)
+        consumer = consumers[0]
+        root = output_roots[consumer.output_object_id]
+        planned = tuple(
+            (
+                edge,
+                _census_reference_ordinal(
+                    semantic_result.census.payload.get("input_refs"), edge.producer
+                ),
+            )
+            for edge in incoming
+        )
+        if len({ordinal for _edge, ordinal in planned}) != len(planned):
+            _fail(CONSUMER_RECEIPT_INCOMPLETE)
+        for edge, ordinal in planned:
+            self._insert_step_receipt_reference(
+                params=params,
+                edge=edge,
+                ordinal=ordinal,
+                step_output_id=consumer.step_output_id,
+                consumer_output_object_id=root.output_object_id,
+            )
+
+    def _insert_step_receipt_reference(
+        self,
+        *,
+        params: Mapping[str, object],
+        edge: ExpectedConsumerEdge,
+        ordinal: int,
+        step_output_id: str,
+        consumer_output_object_id: str,
+    ) -> None:
+        route = USAGE_ROUTE_REGISTRY[edge.route_ordinal]
+        producer = edge.producer
+        if producer.producer_type == "INPUT_BINDING":
+            binding_id: str | None = str(producer.producer_id)
+            output_id: str | None = None
+        elif producer.producer_type == "OUTPUT_OBJECT":
+            binding_id = None
+            output_id = str(producer.producer_id)
+        else:
+            _fail(CONSUMER_RECEIPT_INCOMPLETE)
+        try:
+            reference_id = derive_task7_uuid(
+                id_kind="future_input_reference_id",
+                values={
+                    "tenant_id": params["tenant_id"],
+                    "deal_id": params["deal_id"],
+                    "run_id": params["run_id"],
+                    "reference_table": "step_receipt_input_references",
+                    "consumer_id": step_output_id,
+                    "consumer_output_object_id": consumer_output_object_id,
+                    "producer_type": producer.producer_type,
+                    "producer_id": str(producer.producer_id),
+                    "reference_kind": route.reference_kind,
+                    "reference_ordinal": ordinal,
+                    "producer_identity_sha256": producer.producer_identity_sha256,
+                    "producer_value_sha256": producer.producer_value_sha256,
+                },
+            ).value
+        except Task7UuidError as exc:
+            raise Task7PostgresPortError(PIPELINE_CONTRACT_UNAVAILABLE) from exc
+        self._execute(
+            text(
+                """
+                INSERT INTO step_receipt_input_references (
+                    receipt_reference_id, tenant_id, deal_id, run_id,
+                    step_output_id, consumer_output_object_id, producer_type,
+                    producer_input_binding_id, producer_output_object_id,
+                    producer_identity_sha256, producer_value_sha256,
+                    reference_kind, reference_ordinal, lease_owner_id,
+                    lease_fencing_token
+                ) VALUES (
+                    CAST(:receipt_reference_id AS uuid),
+                    CAST(:tenant_id AS uuid), CAST(:deal_id AS uuid),
+                    CAST(:run_id AS uuid), CAST(:step_output_id AS uuid),
+                    CAST(:consumer_output_object_id AS uuid), :producer_type,
+                    CAST(:producer_input_binding_id AS uuid),
+                    CAST(:producer_output_object_id AS uuid),
+                    :producer_identity_sha256, :producer_value_sha256,
+                    :reference_kind, :reference_ordinal,
+                    CAST(:lease_owner_id AS uuid), :lease_fencing_token
+                )
+                """
+            ),
+            {
+                **params,
+                "receipt_reference_id": str(reference_id),
+                "step_output_id": step_output_id,
+                "consumer_output_object_id": consumer_output_object_id,
+                "producer_type": producer.producer_type,
+                "producer_input_binding_id": binding_id,
+                "producer_output_object_id": output_id,
+                "producer_identity_sha256": producer.producer_identity_sha256,
+                "producer_value_sha256": producer.producer_value_sha256,
+                "reference_kind": route.reference_kind,
+                "reference_ordinal": ordinal,
+            },
+        )
+
     def derive_and_persist_usage_receipts(self, **kwargs: object) -> None:
         scope = kwargs.get("scope")
         step = kwargs.get("step")
@@ -797,6 +981,7 @@ class PostgresTask7CompletionPort:
                 consumer_output_object_id=root.output_object_id,
                 consumer_identity_sha256=root.native_identity_sha256,
                 route_ordinal=edge.route_ordinal,
+                consumer_step_output_id=consumer.step_output_id,
             )
             evidence = extract_usage_evidence(
                 UsageExtractionRequest(
@@ -1240,6 +1425,7 @@ class PostgresTask7CompletionPort:
                 consumer_output_object_id=root.output_object_id,
                 consumer_identity_sha256=root.native_identity_sha256,
                 route_ordinal=edge.route_ordinal,
+                consumer_step_output_id=consumer.step_output_id,
             )
             evidence = extract_usage_evidence(
                 UsageExtractionRequest(
@@ -1777,9 +1963,53 @@ class PostgresTask7CompletionPort:
         spec: ProducerSelectorSpec,
         **scope: object,
     ) -> Sequence[Mapping[str, object]]:
+        absent = tuple(
+            relation for relation in spec.relations if not self._relation_exists(relation)
+        )
+        if absent:
+            if not self._tolerates_absent_future_relations(spec, absent):
+                self._require_relation(absent[0])
+            return ()
         sql, params = self._compile_selector(spec, scope)
         rows = self._execute(text(sql), params).fetchall()
         return tuple(_mapping(row, code=STEP_OUTPUT_MISSING) for row in rows)
+
+    def _tolerates_absent_future_relations(
+        self,
+        spec: ProducerSelectorSpec,
+        absent: tuple[str, ...],
+    ) -> bool:
+        """Tolerate absence only for the reviewed future set on dev 0039.
+
+        All three must hold: every absent relation is in
+        ``_REVIEWED_FUTURE_RELATIONS``; ``alembic_version`` is exactly
+        ``['0039']`` and row 14 ``step_receipt_input_references`` is present;
+        every relation of this selector that is present is one of the 64
+        tables in ``_CATALOG_0038_PROFILE_TABLES``.
+        """
+
+        if not self._is_dev_0039_catalog():
+            return False
+        if any(relation not in _REVIEWED_FUTURE_RELATIONS for relation in absent):
+            return False
+        present = tuple(relation for relation in spec.relations if relation not in absent)
+        return all(relation in _CATALOG_0038_PROFILE_TABLES for relation in present)
+
+    def _is_dev_0039_catalog(self) -> bool:
+        versions = [
+            str(value)
+            for value in self._execute(
+                text("SELECT version_num FROM alembic_version ORDER BY version_num"),
+                {},
+            ).scalars()
+        ]
+        if versions != [_DEV_0039_REVISION]:
+            return False
+        row_14 = self._execute(
+            text("SELECT to_regclass(:relation)"),
+            {"relation": f"public.{_ROW_14_RELATION}"},
+        ).scalar_one_or_none()
+        return row_14 is not None
 
     def _compile_selector(
         self,
@@ -1857,7 +2087,11 @@ class PostgresTask7CompletionPort:
                 return f"{resolve(cast(str, node[1]))} IN ({', '.join(names)})"
             _fail(PIPELINE_CONTRACT_HASH_MISMATCH)
 
-        projection = ", ".join(f"{resolve(column)} AS {column}" for column in spec.projection)
+        # projection[0] is the producer-type literal, not a table column.
+        projected_columns = spec.projection[1:]
+        if not projected_columns:
+            _fail(PIPELINE_CONTRACT_HASH_MISMATCH)
+        projection = ", ".join(f"{resolve(column)} AS {column}" for column in projected_columns)
         order = ", ".join(f"{resolve(column)} ASC" for column in spec.order_by)
         sql = (
             f"SELECT {projection} FROM {from_sql} "
@@ -1914,12 +2148,17 @@ class PostgresTask7CompletionPort:
             _fail(PIPELINE_CONTRACT_HASH_MISMATCH)
         return columns
 
-    def _require_relation(self, relation: str) -> None:
+    def _relation_exists(self, relation: str) -> bool:
+        if _IDENTIFIER_RE.fullmatch(relation) is None:
+            _fail(PIPELINE_CONTRACT_HASH_MISMATCH)
         exists = self._execute(
             text("SELECT to_regclass(:relation)"),
             {"relation": f"public.{relation}"},
         ).scalar_one_or_none()
-        if exists is None:
+        return exists is not None
+
+    def _require_relation(self, relation: str) -> None:
+        if not self._relation_exists(relation):
             _fail(PIPELINE_CONTRACT_UNAVAILABLE)
 
     def _applicability_decisions(
@@ -2153,6 +2392,7 @@ class PostgresTask7CompletionPort:
         consumer_output_object_id: str,
         consumer_identity_sha256: str,
         route_ordinal: int,
+        consumer_step_output_id: str | None = None,
     ) -> tuple[ReferenceOccurrenceV1, ...]:
         params = _scope_params(scope)
         route = USAGE_ROUTE_REGISTRY[route_ordinal]
@@ -2179,6 +2419,22 @@ class PostgresTask7CompletionPort:
             if edge.producer.producer_type == "INPUT_BINDING"
             else "producer_output_object_id"
         )
+        query_params = {
+            **params,
+            "producer_id": str(edge.producer.producer_id),
+            "reference_kind": route.reference_kind,
+        }
+        consumer_predicate = ""
+        if relation == "step_receipt_input_references":
+            if consumer_step_output_id is None:
+                _fail(CONSUMER_RECEIPT_INCOMPLETE)
+            consumer_predicate = """
+                  AND consumer_output_object_id =
+                      CAST(:consumer_output_object_id AS uuid)
+                  AND step_output_id = CAST(:consumer_step_output_id AS uuid)
+            """
+            query_params["consumer_output_object_id"] = consumer_output_object_id
+            query_params["consumer_step_output_id"] = consumer_step_output_id
         rows = self._execute(
             text(
                 f"""
@@ -2193,16 +2449,13 @@ class PostgresTask7CompletionPort:
                   AND {producer_column} =
                       CAST(:producer_id AS uuid)
                   AND reference_kind = :reference_kind
+                  {consumer_predicate}
                 ORDER BY reference_ordinal,
                          producer_identity_sha256,
                          producer_value_sha256
                 """
             ),
-            {
-                **params,
-                "producer_id": str(edge.producer.producer_id),
-                "reference_kind": route.reference_kind,
-            },
+            query_params,
         ).fetchall()
         try:
             schema = CENSUS_SCHEMA_REGISTRY[route.census_schema_id]

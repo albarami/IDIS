@@ -51,6 +51,7 @@ from idis.persistence.repositories.task7_source_freeze import (
 from idis.pipeline import contract_registry
 from idis.pipeline.task7_completion import Task7LeaseScope
 from idis.pipeline.task7_lifecycle import rehydrate_strict_run
+from idis.pipeline.task7_source_receipt_builders import complete_frozen_source_step
 from idis.pipeline.worker import _lease_transition_audit_emitter
 from idis.runtime.dependency_probes import collect_worker_claim_facts
 from idis.services.data_room.package_service import create_data_room_package
@@ -67,7 +68,6 @@ from tests._cir04c2_admission_helpers import (
 )
 from tests.abac_seed import seed_deal_access
 from tests.slice100_task3._support import build_source_fixture, contract_kwargs
-from tests.slice100_task7.test_task7_restart_rehydration_red import _complete_hermetic_step
 from tests.slice100_task7.test_task7_source_freeze_repository_red import _locator_identity_cases
 from tests.test_cir04c3_ingestion_provenance import _scope, _upload
 from tests.test_docx_parser import create_test_docx
@@ -306,6 +306,45 @@ def _real_open_native_package(
         )
     package_id = package["package_id"]
     return tenant, deal, result, package_id
+
+
+def _assert_step0_committed_counts(connection: Connection, run_id: str) -> None:
+    """Assert the committed step-0 reference and receipt counts directly."""
+
+    params = {"run_id": run_id}
+    references = [
+        str(value)
+        for value in connection.execute(
+            text(
+                "SELECT reference_kind FROM step_receipt_input_references "
+                "WHERE run_id = CAST(:run_id AS uuid)"
+            ),
+            params,
+        ).scalars()
+    ]
+    receipts = int(
+        connection.execute(
+            text("SELECT count(*) FROM run_consumer_receipts WHERE run_id = CAST(:run_id AS uuid)"),
+            params,
+        ).scalar_one()
+    )
+    outputs = int(
+        connection.execute(
+            text("SELECT count(*) FROM run_output_objects WHERE run_id = CAST(:run_id AS uuid)"),
+            params,
+        ).scalar_one()
+    )
+    step_outputs = int(
+        connection.execute(
+            text("SELECT count(*) FROM run_step_outputs WHERE run_id = CAST(:run_id AS uuid)"),
+            params,
+        ).scalar_one()
+    )
+    assert len(references) == 2
+    assert set(references) == {"SOURCE_INVENTORY"}
+    assert receipts == 2
+    assert outputs == 1
+    assert step_outputs == 1
 
 
 def _source_rows(engine: Engine, tenant: str) -> dict[str, list[str]]:
@@ -2495,7 +2534,7 @@ def test_real_native_pdf_source_survives_hermetic_admission_and_restart_cut(
             run_id=run_id,
         )
     if completed_prefix:
-        _complete_hermetic_step(SimpleNamespace(app_engine=app_engine), scope=scope, step_order=0)
+        complete_frozen_source_step(engine=app_engine, scope=scope, step_order=0)
     # A separate app connection models process restart and invokes the actual
     # worker source/admission graph rederivation, not cached ingestion objects.
     with app_engine.begin() as conn:
@@ -2515,12 +2554,23 @@ def test_real_native_pdf_source_survives_hermetic_admission_and_restart_cut(
             pipeline_contract_hash=scope.pipeline_contract_hash,
             pipeline_resume_state=scope.pipeline_resume_state,
             steps=steps,
-            validate_completed=lambda step: (
-                step.result_summary.get("producer_kind") == "TASK7_RESTART_PROOF"
+            validate_completed=(
+                (
+                    lambda step: port.validate_completed_step_graph(
+                        scope=scope,
+                        step=step,
+                    )
+                )
+                if completed_prefix
+                else (
+                    lambda step: step.result_summary.get("producer_kind") == "TASK7_RESTART_PROOF"
+                )
             ),
         )
         assert restarted.completed_count == restarted.next_step_order == completed_prefix
         assert port.validate_step_predecessors(scope=scope, step=steps[completed_prefix])
+        if completed_prefix == 1:
+            _assert_step0_committed_counts(conn, run_id)
     source_after = _source_rows(app_engine, tenant)
     source_after.pop("audit_events")
     assert source_after == source_before

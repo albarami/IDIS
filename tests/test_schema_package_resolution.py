@@ -251,6 +251,9 @@ def test_schema_wheel_bytes_match_checkout_or_record_not_executed(
         if _force_include_line(schema.name) not in project
     ]
     assert missing == []
+    if importlib.util.find_spec("hatchling") is None:
+        _record_wheel_not_executed(record_property, "hatchling not importable")
+        return
     wheel_dir = tmp_path / "wheels"
     wheel_dir.mkdir()
     command = [
@@ -275,22 +278,9 @@ def test_schema_wheel_bytes_match_checkout_or_record_not_executed(
             timeout=_WHEEL_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
-        _record_wheel_not_executed(
-            record_property,
-            "offline wheel build unavailable: timed out",
-        )
-        return
+        pytest.fail("pip wheel timed out")
     if completed.returncode != 0:
-        detail = (
-            "Cannot import hatchling.build"
-            if "hatchling.build" in completed.stderr
-            else "pip wheel failed"
-        )
-        _record_wheel_not_executed(
-            record_property,
-            f"offline wheel build unavailable: {detail}",
-        )
-        return
+        pytest.fail("pip wheel failed")
     wheels = sorted(wheel_dir.glob("*.whl"))
     assert len(wheels) == 1, [path.name for path in wheels]
     checkout = sorted((ROOT / "schemas").glob("*.schema.json"))
@@ -303,3 +293,81 @@ def test_schema_wheel_bytes_match_checkout_or_record_not_executed(
         assert [Path(name).name for name in packaged_names] == [path.name for path in checkout]
         for path in checkout:
             assert archive.read(f"idis/_schemas/{path.name}") == path.read_bytes()
+
+
+def _find_spec_returning(hatchling: object) -> Callable[..., object]:
+    original = importlib.util.find_spec
+
+    def find_spec(name: str, package: str | None = None) -> object:
+        if name == "hatchling":
+            return hatchling
+        return original(name, package)
+
+    return find_spec
+
+
+def test_schema_wheel_does_not_build_when_hatchling_is_absent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    record_property: Callable[[str, object], None],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Inapplicability is decided before pip wheel runs."""
+    monkeypatch.delenv(_REQUIRE_SCHEMA_WHEEL, raising=False)
+    recorded: list[tuple[str, object]] = []
+
+    def capture(name: str, value: object) -> None:
+        recorded.append((name, value))
+        record_property(name, value)
+
+    monkeypatch.setattr(importlib.util, "find_spec", _find_spec_returning(None))
+
+    def run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise AssertionError("pip wheel ran")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    test_schema_wheel_bytes_match_checkout_or_record_not_executed(tmp_path, capture)
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "SCHEMA_WHEEL NOT_EXECUTED: hatchling not importable"
+    assert recorded == [("schema_wheel", "NOT_EXECUTED: hatchling not importable")]
+
+
+def test_schema_wheel_failure_fails_when_hatchling_is_importable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    record_property: Callable[[str, object], None],
+) -> None:
+    """Once hatchling imports, a non-zero pip wheel exit fails the test."""
+    monkeypatch.delenv(_REQUIRE_SCHEMA_WHEEL, raising=False)
+    recorded: list[tuple[str, object]] = []
+    spec = importlib.util.spec_from_loader("hatchling", loader=None)
+    assert spec is not None
+    monkeypatch.setattr(importlib.util, "find_spec", _find_spec_returning(spec))
+
+    def run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess([], 1, "", "pip wheel failed")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    with pytest.raises(pytest.fail.Exception, match="pip wheel failed"):
+        test_schema_wheel_bytes_match_checkout_or_record_not_executed(
+            tmp_path,
+            lambda name, value: recorded.append((name, value)),
+        )
+    assert recorded == []
+
+
+def test_schema_wheel_required_mode_fails_closed_without_hatchling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    record_property: Callable[[str, object], None],
+) -> None:
+    """IDIS_REQUIRE_SCHEMA_WHEEL=1 still fails when hatchling is not importable."""
+    monkeypatch.setenv(_REQUIRE_SCHEMA_WHEEL, "1")
+    monkeypatch.setattr(importlib.util, "find_spec", _find_spec_returning(None))
+
+    def run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise AssertionError("pip wheel ran")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    with pytest.raises(pytest.fail.Exception, match="hatchling not importable"):
+        test_schema_wheel_bytes_match_checkout_or_record_not_executed(tmp_path, record_property)

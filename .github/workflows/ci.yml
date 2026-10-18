@@ -1526,6 +1526,7 @@ jobs:
       - name: Record admission codes when the API is blocked
         id: admission-codes
         if: always() && steps.start-api.outcome != 'skipped'
+        timeout-minutes: 10
         run: |
           set -euo pipefail
           sudo -n GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_SHA="$GITHUB_SHA" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" .venv/bin/python - <<'H1B_PY'
@@ -1544,6 +1545,8 @@ jobs:
           _ADMISSION_CODES = frozenset({
               "AUDIT_EMIT_FAILED",
               "AUDIT_FAILURE",
+              "AUTH_ACCEPTANCE_KEY_MISMATCH",
+              "AUTH_CANARY_KEY_MISMATCH",
               "AUTH_CONFIG_BLOCKED",
               "DATABASE_SCHEMA_NOT_READY",
               "DATABASE_UNAVAILABLE",
@@ -1552,6 +1555,7 @@ jobs:
               "ERASURE_EXECUTOR_DATABASE_MISMATCH",
               "ERASURE_EXECUTOR_POSTURE_BLOCKED",
               "ERASURE_EXECUTOR_UNAUTHORIZED",
+              "GOVERNANCE_ADMIN_UNAUTHORIZED",
               "IDEMPOTENCY_NON_DURABLE_BLOCKED",
               "IDEMPOTENCY_STORE_FAILED",
               "MEDIA_LARGE_UPLOAD_UNSUPPORTED",
@@ -1559,6 +1563,7 @@ jobs:
               "PROVIDER_BUDGET_CONFIG_BLOCKED",
               "PROVIDER_BUDGET_PROVIDER_UNCONFIGURED",
               "RATE_LIMIT_STORE_UNAVAILABLE",
+              "RESIDENCY_SERVICE_REGION_UNSET",
               "RLS_HEALTH_BLOCKED",
               "STRICT_FULL_LIVE_BLOCKED",
               "STRICT_PROCESS_ROLE_INVALID",
@@ -1588,13 +1593,9 @@ jobs:
           })
 
           def _revision_id(value):
-              if not isinstance(value, str) or not value or len(value) > 64:
-                  return None
-              for character in value:
-                  if character.isalnum() or character == "_":
-                      continue
-                  return None
-              return value
+              if isinstance(value, str) and value.isascii() and 0 < len(value) <= 64 and all(c.isalnum() or c == "_" for c in value):
+                  return value
+              return None
 
           def _public_code(value):
               if value is None:
@@ -1631,9 +1632,8 @@ jobs:
                   public[name] = raw[name]
               if "alembic_version" in raw:
                   revision = _revision_id(raw["alembic_version"])
-                  if revision is None:
-                      return None
-                  public["alembic_version"] = revision
+                  if revision is not None:
+                      public["alembic_version"] = revision
               return public
 
           def _unavailable():
@@ -1670,13 +1670,9 @@ jobs:
           payload = {"checks": checks, "phase": "admission"}
 
           def _revision_id(value):
-              if not isinstance(value, str) or not value or len(value) > 64:
-                  return None
-              for character in value:
-                  if character.isalnum() or character == "_":
-                      continue
-                  return None
-              return value
+              if isinstance(value, str) and value.isascii() and 0 < len(value) <= 64 and all(c.isalnum() or c == "_" for c in value):
+                  return value
+              return None
 
           try:
               head = _expected_alembic_head()
@@ -1727,6 +1723,7 @@ jobs:
                       "docker",
                       "run",
                       "--rm",
+                      "--name", "idis-ci-admission-codes",
                       "--user", "1000",
                       "--network", "container:" + holder,
                       "--read-only",
@@ -1746,6 +1743,7 @@ jobs:
                   text=True,
                   encoding="utf-8",
                   errors="replace",
+                  timeout=480,
               )
               maintenance.mkdir(parents=True, exist_ok=True)
               (maintenance / "admission-diagnostic.log").write_text(completed.stderr, encoding="utf-8")
@@ -1800,8 +1798,7 @@ jobs:
 
           unlink_file(secret_root / "datastore.env", "datastore.env remains")
           unlink_file(secret_root / "redis.conf", "redis.conf remains")
-          for name in ("api", "pg", "redis", "netns"):
-              container = f"idis-h1b-{name}-{run}"
+          for container in (*(f"idis-h1b-{name}-{run}" for name in ("api", "pg", "redis", "netns")), "idis-ci-admission-codes"):
               inspect = subprocess.run(
                   ["docker", "container", "inspect", container],
                   stdout=subprocess.DEVNULL,

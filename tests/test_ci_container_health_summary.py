@@ -151,11 +151,28 @@ def _required_bash() -> str:
     return executable
 
 
+def _write_step_script(directory: Path, name: str, script: str) -> Path:
+    """Write the executed step text as LF UTF-8 bytes in the case tmp directory."""
+    payload = script.encode("utf-8")
+    if b"\r" in payload:
+        raise AssertionError("step script contains CR")
+    path = directory / name
+    path.write_bytes(payload)
+    if path.read_bytes() != payload:
+        raise AssertionError("step script bytes changed on write")
+    return path
+
+
+def _bash_file_args(bash: str, script_path: Path) -> list[str]:
+    return [bash, "--noprofile", "--norc", "-euo", "pipefail", script_path.as_posix()]
+
+
 def _render_summary(tmp_path: Path, outcome: str | None, *, manifest: bool = False) -> str:
     bash = _required_bash()
     summary_path = tmp_path / "summary.md"
     script = _step(SUMMARY_STEP_NAME)["run"].replace("${{ github.sha }}", "a" * 40)
     assert "${{" not in script, "Only the fixed image identity may be rendered into shell code"
+    script_path = _write_step_script(tmp_path, "h1b-summary-step.sh", script)
     bash_path = Path(bash)
     search_path = [str(bash_path.parent), str(bash_path.parent.parent / "usr/bin"), os.defpath]
     env = {"PATH": os.pathsep.join(search_path), "GITHUB_STEP_SUMMARY": summary_path.as_posix()}
@@ -168,7 +185,7 @@ def _render_summary(tmp_path: Path, outcome: str | None, *, manifest: bool = Fal
             '{"version":"ci-fixture"}\n', encoding="utf-8"
         )
     completed = subprocess.run(  # noqa: S603 - fixed local Bash and checked-in workflow script
-        [bash, "--noprofile", "--norc", "-euo", "pipefail", "-c", script],
+        _bash_file_args(bash, script_path),
         cwd=tmp_path,
         env=env,
         capture_output=True,
@@ -194,9 +211,25 @@ def _render_summary(tmp_path: Path, outcome: str | None, *, manifest: bool = Fal
     ids=("success", "failure", "cancelled", "skipped", "empty", "missing", "unknown"),
 )
 def test_rendered_health_summary_matches_actual_outcome(
-    tmp_path: Path, outcome: str | None, expected: str
+    tmp_path: Path,
+    outcome: str | None,
+    expected: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    recorded: list[list[str]] = []
+    real_run = subprocess.run
+
+    def spy(args, *positional, **kwargs):
+        recorded.append([os.fspath(item) for item in args])
+        return real_run(args, *positional, **kwargs)
+
+    if outcome == "success":
+        monkeypatch.setattr(subprocess, "run", spy)
     summary = _render_summary(tmp_path, outcome)
+    if outcome == "success":
+        rendered = _step(SUMMARY_STEP_NAME)["run"].replace("${{ github.sha }}", "a" * 40)
+        script_path = _assert_script_file_argv(recorded[0], rendered)
+        assert script_path.parent == tmp_path
 
     health_lines = [line for line in summary.splitlines() if line.startswith("- **Health Check:**")]
     assert health_lines == [f"- **Health Check:** {expected}"]
@@ -657,9 +690,10 @@ def _docker_state(tmp_path: Path) -> Path:
 
 def _run_parsed_step(
     tmp_path: Path, step_id: str, env: dict[str, str]
-) -> subprocess.CompletedProcess[str]:
+) -> tuple[subprocess.CompletedProcess[str], Path]:
     script = _rewrite_parsed_roots(_by_id(step_id)["run"], step_id, tmp_path)
     assert "${{" not in script
+    script_path = _write_step_script(tmp_path, f"h1b-{step_id}.sh", script)
     bash = Path(_required_bash())
     path = os.pathsep.join(
         [str(tmp_path / "bin"), str(bash.parent), str(bash.parent.parent / "usr" / "bin")]
@@ -678,8 +712,8 @@ def _run_parsed_step(
         full_env["PATHEXT"] = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD")
         full_env["H1B_SHIM"] = (tmp_path / "shim").as_posix()
     full_env.update(env)
-    return subprocess.run(
-        [str(bash), "--noprofile", "--norc", "-c", script],
+    completed = subprocess.run(
+        _bash_file_args(str(bash), script_path),
         cwd=tmp_path,
         env=full_env,
         capture_output=True,
@@ -687,6 +721,7 @@ def _run_parsed_step(
         timeout=150,
         check=False,
     )
+    return completed, script_path
 
 
 def _owned_run(root: Path, run_id: str) -> Path:
@@ -713,7 +748,7 @@ def test_health_step_fails_closed_and_extracts_only_allowlisted_codes(tmp_path: 
         _HEALTH_LOG, encoding="utf-8", newline="\n"
     )
     try:
-        completed = _run_parsed_step(
+        completed, _script_path = _run_parsed_step(
             tmp_path,
             "container_health",
             {
@@ -785,7 +820,7 @@ def _run_admission_case(
     tmp_path: Path,
     run_root: Path,
     state: Path,
-) -> subprocess.CompletedProcess[str]:
+) -> tuple[subprocess.CompletedProcess[str], Path]:
     return _run_parsed_step(
         tmp_path,
         "admission-codes",
@@ -798,7 +833,23 @@ def _run_admission_case(
     )
 
 
-def test_admission_codes_snippet_filters_unlisted_codes_and_hides_dsn(tmp_path: Path) -> None:
+def _assert_script_file_argv(args: list[str], script: str) -> Path:
+    """The executed step text is a tmp file, never a bash -c argument."""
+    payload = script.encode("utf-8")
+    lengths = ",".join(str(len(arg)) for arg in args)
+    if b"\r" in payload or "-c" in args or any(script in arg for arg in args):
+        raise AssertionError(f"step script traveled in argv; arg lengths {lengths}")
+    matches = [
+        Path(arg) for arg in args if Path(arg).is_file() and Path(arg).read_bytes() == payload
+    ]
+    if len(matches) != 1:
+        raise AssertionError(f"expected one script file in argv, found {len(matches)}; {lengths}")
+    return matches[0]
+
+
+def test_admission_codes_snippet_filters_unlisted_codes_and_hides_dsn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     steps = _container_steps()
     assert len(steps) == len(CONTAINER_STEP_NAMES) == 27
     assert tuple(step["name"] for step in steps) == CONTAINER_STEP_NAMES
@@ -844,7 +895,21 @@ def test_admission_codes_snippet_filters_unlisted_codes_and_hides_dsn(tmp_path: 
         code=0,
         exit_code="STRICT_FULL_LIVE_BLOCKED",
     )
-    completed = _run_admission_case(tmp_path, run_root, state)
+    recorded: list[list[str]] = []
+    real_run = subprocess.run
+
+    def spy(args, *positional, **kwargs):
+        recorded.append([os.fspath(item) for item in args])
+        return real_run(args, *positional, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", spy)
+    completed, returned_path = _run_admission_case(tmp_path, run_root, state)
+    executed = _rewrite_parsed_roots(_by_id("admission-codes")["run"], "admission-codes", tmp_path)
+    assert returned_path.parent == tmp_path
+    assert returned_path.read_bytes() == executed.encode("utf-8")
+    script_path = _assert_script_file_argv(recorded[0], executed)
+    assert script_path == returned_path
+    script = returned_path.read_text(encoding="utf-8")
     output = completed.stdout + completed.stderr
     assert completed.returncode == 0, output
     assert completed.stdout.strip() == _admission_public_line()
@@ -863,8 +928,7 @@ def test_admission_codes_snippet_filters_unlisted_codes_and_hides_dsn(tmp_path: 
     assert args[args.index("--tmpfs") + 1] == "/tmp:rw,nosuid,size=2147483648"
     assert args[args.index("-e") + 1] == "IDIS_STRICT_DOTENV_PATH"
     assert "-d" not in args
-    assert "--name" not in args
-    script = args[args.index("-c") + 1]
+    assert args[args.index("--name") + 1] == "idis-ci-admission-codes"
     assert 'load_profile_then_import_runtime(command="api")' in script
     assert "task4_ingestion_scope=True" in script
     image = "idis:ci-" + ("d" * 40)
@@ -888,7 +952,7 @@ def test_admission_codes_docker_failure_stays_closed(tmp_path: Path) -> None:
         code=1,
         exit_code="STRICT_FULL_LIVE_BLOCKED",
     )
-    completed = _run_admission_case(tmp_path, run_root, state)
+    completed, _script_path = _run_admission_case(tmp_path, run_root, state)
     output = completed.stdout + completed.stderr
     assert completed.returncode == 0, output
     assert completed.stdout.strip() == json.dumps(
@@ -928,7 +992,7 @@ def test_cleanup_checks_existence_and_fails_when_a_resource_remains(tmp_path: Pa
     (state / "stuck" / api).write_text("stuck", encoding="utf-8")
     (state / "rm-codes" / api).write_text("1", encoding="utf-8")
     try:
-        completed = _run_parsed_step(
+        completed, _script_path = _run_parsed_step(
             tmp_path,
             "cleanup",
             {

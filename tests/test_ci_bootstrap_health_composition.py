@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import base64
 import hashlib
 import importlib.util
@@ -24,6 +25,11 @@ from idis.methodology.importers.fdd_excel import import_fdd_workbook
 from idis.runtime import profile as profile_module
 from idis.runtime.governance_envelopes import GovernanceEnvelopeError, verify_envelope
 from idis.runtime.strict_auth import validate_strict_auth_binding
+from tests.test_ci_container_health_summary import (
+    _by_id,
+    _prepare_admission_case,
+    _run_admission_case,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 HELPER_PATH = ROOT / ".github/scripts/prepare_bootstrap_health.py"
@@ -768,12 +774,73 @@ def _outside_tmp(path: Path, tmp_path: Path) -> Path | None:
     return None
 
 
+_CI_HEALTH_ROOT = Path("/var/lib/idis-ci-health")
+_ADMISSION_CONTAINER_NAME = "idis-ci-admission-codes"
+_ADMISSION_DOCKER_TIMEOUT_SECONDS = 480
+_ADMISSION_CODES = frozenset(
+    {
+        "AUDIT_EMIT_FAILED",
+        "AUDIT_FAILURE",
+        "AUTH_ACCEPTANCE_KEY_MISMATCH",
+        "AUTH_CANARY_KEY_MISMATCH",
+        "AUTH_CONFIG_BLOCKED",
+        "DATABASE_SCHEMA_NOT_READY",
+        "DATABASE_UNAVAILABLE",
+        "DOCUMENT_NO_SUBSTANTIVE_CONTENT_ATTESTATION_MANIFEST_INVALID",
+        "ERASURE_EXECUTOR_CONFIG_BLOCKED",
+        "ERASURE_EXECUTOR_DATABASE_MISMATCH",
+        "ERASURE_EXECUTOR_POSTURE_BLOCKED",
+        "ERASURE_EXECUTOR_UNAUTHORIZED",
+        "GOVERNANCE_ADMIN_UNAUTHORIZED",
+        "IDEMPOTENCY_NON_DURABLE_BLOCKED",
+        "IDEMPOTENCY_STORE_FAILED",
+        "MEDIA_LARGE_UPLOAD_UNSUPPORTED",
+        "OBJECT_STORE_HEALTH_BLOCKED",
+        "PROVIDER_BUDGET_CONFIG_BLOCKED",
+        "PROVIDER_BUDGET_PROVIDER_UNCONFIGURED",
+        "RATE_LIMIT_STORE_UNAVAILABLE",
+        "RESIDENCY_SERVICE_REGION_UNSET",
+        "RLS_HEALTH_BLOCKED",
+        "STRICT_FULL_LIVE_BLOCKED",
+        "STRICT_PROCESS_ROLE_INVALID",
+        "WATERMARK_BATCH_ATTESTATION_MISMATCH",
+        "WORKER_CLAIM_NOT_PROVEN",
+        "WORKER_LEASE_CONFIG_INVALID",
+        "WORKER_TENANT_SCOPE_MISSING",
+    }
+)
+_DIAGNOSTIC_UNAVAILABLE = json.dumps(
+    {"code": "DIAGNOSTIC_UNAVAILABLE", "phase": "admission"},
+    sort_keys=True,
+)
+_INJECTED_REVISION = "postgresql://idis_app:s3cret-token@127.0.0.1/idis"
+
+
 def _path_inventory(path: Path | None) -> tuple[str, ...]:
     if path is None or not path.exists():
         return ()
     if path.is_file():
         return (path.name,)
-    return tuple(sorted(str(item.relative_to(path)) for item in path.rglob("*")))
+    entries = tuple(sorted(str(item.relative_to(path)) for item in path.rglob("*")))
+    if entries:
+        return entries
+    if path.is_dir():
+        return (".",)
+    return ()
+
+
+def _outside_inventory_root(path: Path, tmp_path: Path) -> Path | None:
+    """First ancestor outside tmp. Paths under the CI health root inventory that root."""
+    outside = _outside_tmp(path, tmp_path)
+    if outside is None:
+        return None
+    health = _CI_HEALTH_ROOT.resolve(strict=False)
+    resolved = outside.resolve(strict=False)
+    try:
+        resolved.relative_to(health)
+    except ValueError:
+        return outside
+    return health
 
 
 def test_composition_api_closed_code_is_admission_before_the_route_inventory(
@@ -801,7 +868,7 @@ def test_composition_api_closed_code_is_admission_before_the_route_inventory(
     assert profile.command == "api"
     assert profile.values["IDIS_REQUIRE_FULL_LIVE"] == "1"
     base = Path(profile.values["IDIS_OBJECT_STORE_BASE_DIR"])
-    outside_store = _outside_tmp(base, tmp_path)
+    outside_store = _outside_inventory_root(base, tmp_path)
     store_before = _path_inventory(outside_store)
 
     factory_code = "CREATE_APP_OK"
@@ -1042,3 +1109,577 @@ def test_composition_audit_sink_insert_records_not_executed_without_a_qualified_
     if missing:
         pytest.fail("qualified database unavailable")
     _assert_composition_audit_insert(monkeypatch)
+
+
+def _literal_blocked_codes(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    codes: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+            continue
+        if node.func.id != "_blocked" or len(node.args) < 2:
+            continue
+        code = node.args[1]
+        if isinstance(code, ast.Constant) and isinstance(code.value, str):
+            codes.add(code.value)
+    return codes
+
+
+def _public_token_constants(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    found: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Constant):
+            continue
+        value = node.value.value
+        if not isinstance(value, str):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id == value:
+                found.add(value)
+    return found
+
+
+def _assigned_frozenset(source: str, name: str) -> frozenset[str]:
+    tree = ast.parse(source)
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name) or target.id != name:
+            continue
+        call = node.value
+        if (
+            not isinstance(call, ast.Call)
+            or not isinstance(call.func, ast.Name)
+            or call.func.id != "frozenset"
+            or len(call.args) != 1
+            or not isinstance(call.args[0], ast.Set)
+        ):
+            raise AssertionError(f"{name} is not a frozenset of literals")
+        values: set[str] = set()
+        for element in call.args[0].elts:
+            if not isinstance(element, ast.Constant) or not isinstance(element.value, str):
+                raise AssertionError(f"{name} contains a non-literal")
+            values.add(element.value)
+        return frozenset(values)
+    raise AssertionError(f"{name} is missing")
+
+
+def _h1b_body(run: str) -> str:
+    lines = run.splitlines()
+    start = next(index for index, line in enumerate(lines) if "<<'H1B_PY'" in line)
+    body: list[str] = []
+    for line in lines[start + 1 :]:
+        if line == "H1B_PY":
+            return "\n".join(body) + "\n"
+        body.append(line)
+    raise AssertionError("H1B_PY heredoc is unterminated")
+
+
+def _admission_host() -> str:
+    run = _by_id("admission-codes")["run"]
+    assert isinstance(run, str)
+    return _h1b_body(run)
+
+
+def _inner_admission_script(host: str) -> str:
+    marker = 'script = r"""'
+    start = host.find(marker)
+    if start < 0:
+        raise AssertionError("admission step has no inner script")
+    rest = host[start + len(marker) :]
+    end = rest.find('"""')
+    if end < 0:
+        raise AssertionError("inner script is unterminated")
+    return rest[:end]
+
+
+def _workflow_admission_codes() -> frozenset[str]:
+    return _assigned_frozenset(_admission_host(), "_ADMISSION_CODES")
+
+
+def test_admission_allowlist_covers_blocked_sites_and_strict_auth() -> None:
+    """The 28 public codes cover every readiness _blocked literal and strict_auth token."""
+    codes = _workflow_admission_codes()
+    blocked = _literal_blocked_codes(ROOT / "src/idis/runtime/dependency_readiness.py")
+    blocked |= _literal_blocked_codes(ROOT / "src/idis/runtime/strict_launcher.py")
+    auth = _public_token_constants(ROOT / "src/idis/runtime/strict_auth.py")
+    assert auth == {
+        "AUTH_ACCEPTANCE_KEY_MISMATCH",
+        "AUTH_CANARY_KEY_MISMATCH",
+        "AUTH_CONFIG_BLOCKED",
+        "GOVERNANCE_ADMIN_UNAUTHORIZED",
+        "RESIDENCY_SERVICE_REGION_UNSET",
+    }
+    assert sorted((blocked | auth) - codes) == []
+    assert codes == _ADMISSION_CODES
+    assert len(codes) == 28
+
+
+def _execute_admission(
+    tmp_path: Path,
+    *,
+    payload: dict[str, object] | None = None,
+    exit_code: str = "STRICT_FULL_LIVE_BLOCKED",
+    exit_document: dict[str, object] | None = None,
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    stdout = "{}\n" if payload is None else json.dumps(payload, sort_keys=True) + "\n"
+    run_root, state = _prepare_admission_case(
+        tmp_path,
+        stdout=stdout,
+        stderr="",
+        code=0,
+        exit_code=exit_code,
+    )
+    if exit_document is not None:
+        (run_root / "api-exit.json").write_text(
+            json.dumps(exit_document, sort_keys=True) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+    completed, _script_path = _run_admission_case(tmp_path, run_root, state)
+    return completed, state
+
+
+def test_admission_auth_reason_codes_stay_public(tmp_path: Path) -> None:
+    """The four strict_auth tokens are printed, not collapsed to UNLISTED."""
+    payload = {
+        "phase": "admission",
+        "checks": [
+            ["auth", "AUTH_ACCEPTANCE_KEY_MISMATCH"],
+            ["auth", "AUTH_CANARY_KEY_MISMATCH"],
+            ["auth", "GOVERNANCE_ADMIN_UNAUTHORIZED"],
+            ["auth", "RESIDENCY_SERVICE_REGION_UNSET"],
+            ["postgres", "DATABASE_UNAVAILABLE"],
+        ],
+    }
+    completed, _state = _execute_admission(tmp_path, payload=payload)
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, output
+    assert completed.stdout.strip() == json.dumps(payload, sort_keys=True)
+    assert "UNLISTED" not in output
+
+
+def _postgres_payload(version: object) -> dict[str, object]:
+    return {
+        "phase": "admission",
+        "checks": [["postgres", "DATABASE_UNAVAILABLE"]],
+        "postgres": {
+            "alembic_version": version,
+            "relforcerowsecurity": True,
+            "schema_at_head": True,
+        },
+    }
+
+
+def _postgres_public(*, version: str | None) -> dict[str, object]:
+    postgres: dict[str, object] = {
+        "relforcerowsecurity": True,
+        "schema_at_head": True,
+    }
+    if version is not None:
+        postgres["alembic_version"] = version
+    return {
+        "checks": [["postgres", "DATABASE_UNAVAILABLE"]],
+        "phase": "admission",
+        "postgres": postgres,
+    }
+
+
+@pytest.mark.parametrize(
+    ("version", "kept"),
+    [
+        ("0038_head", "0038_head"),
+        ("rev\u00e9", None),
+        ("a" * 65, None),
+        (_INJECTED_REVISION, None),
+    ],
+    ids=("ascii", "non_ascii", "overlong", "injected"),
+)
+def test_admission_revision_id_drops_non_ascii_and_overlong(
+    tmp_path: Path,
+    version: str,
+    kept: str | None,
+) -> None:
+    """A revision outside [A-Za-z0-9_]{1,64} is omitted and never echoed."""
+    completed, _state = _execute_admission(tmp_path, payload=_postgres_payload(version))
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, output
+    assert completed.stdout.strip() == json.dumps(_postgres_public(version=kept), sort_keys=True)
+    if kept is None:
+        assert version not in output
+
+
+def test_admission_postgres_non_bool_is_closed(tmp_path: Path) -> None:
+    """A non-bool Postgres fact closes the line and is not echoed."""
+    payload = {
+        "phase": "admission",
+        "checks": [["postgres", "DATABASE_UNAVAILABLE"]],
+        "postgres": {"relforcerowsecurity": "not-a-bool", "schema_at_head": True},
+    }
+    completed, _state = _execute_admission(tmp_path, payload=payload)
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, output
+    assert completed.stdout.strip() == _DIAGNOSTIC_UNAVAILABLE
+    assert "not-a-bool" not in output
+
+
+def test_admission_postgres_extra_key_is_closed(tmp_path: Path) -> None:
+    """An extra Postgres key closes the line and the value is not echoed."""
+    payload = {
+        "phase": "admission",
+        "checks": [["postgres", "DATABASE_UNAVAILABLE"]],
+        "postgres": {"connection": _INJECTED_REVISION, "schema_at_head": True},
+    }
+    completed, _state = _execute_admission(tmp_path, payload=payload)
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, output
+    assert completed.stdout.strip() == _DIAGNOSTIC_UNAVAILABLE
+    assert _INJECTED_REVISION not in output
+
+
+@pytest.mark.parametrize(
+    "exit_document",
+    [
+        {"code": "POPPLER_RUNTIME_UNAVAILABLE", "exit": 1},
+        {"exit": 0},
+    ],
+    ids=("other_code", "api_started"),
+)
+def test_admission_step_is_a_noop_for_other_exit_codes(
+    tmp_path: Path,
+    exit_document: dict[str, object],
+) -> None:
+    """Step 23 prints nothing and does not start docker unless admission blocked."""
+    completed, state = _execute_admission(
+        tmp_path,
+        payload={"phase": "admission", "checks": [["auth", "AUTH_ACCEPTANCE_KEY_MISMATCH"]]},
+        exit_document=exit_document,
+    )
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, output
+    assert completed.stdout == ""
+    assert "AUTH_ACCEPTANCE_KEY_MISMATCH" not in output
+    assert not (state / "argv.json").exists()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "phase": "admission",
+            "checks": [["not_a_component", "DATABASE_UNAVAILABLE"]],
+        },
+        {
+            "phase": "admission",
+            "checks": [["postgres", "DATABASE_UNAVAILABLE", _INJECTED_REVISION]],
+        },
+    ],
+    ids=("unknown_component", "extra_check_field"),
+)
+def test_admission_unknown_component_or_extra_check_key_is_closed(
+    tmp_path: Path,
+    payload: dict[str, object],
+) -> None:
+    """An unknown component or a wider check row closes to DIAGNOSTIC_UNAVAILABLE."""
+    completed, _state = _execute_admission(tmp_path, payload=payload)
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, output
+    assert completed.stdout.strip() == _DIAGNOSTIC_UNAVAILABLE
+    assert "not_a_component" not in output
+    assert _INJECTED_REVISION not in output
+
+
+def test_admission_step_names_the_container_and_times_out(tmp_path: Path) -> None:
+    """Step 23 is bounded, named, and Cleanup removes that fixed container name."""
+    step = _by_id("admission-codes")
+    assert step.get("timeout-minutes") == 10
+    host = _admission_host()
+    assert f"timeout={_ADMISSION_DOCKER_TIMEOUT_SECONDS}" in host
+    assert f'"--name", "{_ADMISSION_CONTAINER_NAME}"' in host
+    cleanup = _h1b_body(_by_id("cleanup")["run"])
+    assert f'"{_ADMISSION_CONTAINER_NAME}"' in cleanup
+    assert '"rm", "-f"' in cleanup
+    completed, state = _execute_admission(
+        tmp_path,
+        payload={
+            "phase": "admission",
+            "checks": [["postgres", "DATABASE_UNAVAILABLE"]],
+        },
+    )
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, output
+    args = json.loads((state / "argv.json").read_text(encoding="utf-8"))
+    assert args[0] == "run"
+    assert "--name" in args
+    assert args[args.index("--name") + 1] == _ADMISSION_CONTAINER_NAME
+
+
+_INNER_PRELUDE = r"""
+import os
+import sys
+from types import ModuleType
+
+
+def _mod(name, **attrs):
+    module = ModuleType(name)
+    for key, value in attrs.items():
+        setattr(module, key, value)
+    sys.modules[name] = module
+    if "." in name:
+        parent_name, child = name.rsplit(".", 1)
+        parent = sys.modules[parent_name]
+        setattr(parent, child, module)
+    return module
+
+
+class _Check:
+    def __init__(self, component, code):
+        self.component = component
+        self.code = code
+
+
+class _Report:
+    checks = (
+        _Check("auth", "AUTH_ACCEPTANCE_KEY_MISMATCH"),
+        _Check("postgres", "DATABASE_UNAVAILABLE"),
+    )
+
+
+class _Rows:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def first(self):
+        if not self._rows:
+            return None
+        return self._rows[0]
+
+    def all(self):
+        return list(self._rows)
+
+
+class _Conn:
+    def execute(self, statement):
+        sql = str(statement)
+        if "alembic_version" in sql:
+            return _Rows([(os.environ["H1B_FAKE_REVISION"],)])
+        if "pg_roles" in sql:
+            return _Rows([(False, False)])
+        if "pg_class" in sql:
+            return _Rows([("tenant_table", True)])
+        raise RuntimeError("unexpected sql")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+
+def _begin():
+    if os.environ.get("H1B_FAKE_QUERY_FAIL") == "1":
+        raise RuntimeError("postgresql://idis_app:s3cret-token@127.0.0.1/idis")
+    return _Conn()
+
+
+def _load(command="api"):
+    if command != "api":
+        raise RuntimeError("unexpected command")
+    return ({}, None)
+
+
+def _runner(command, profile, task4_ingestion_scope=False):
+    if command != "api" or task4_ingestion_scope is not True:
+        raise RuntimeError("unexpected admission call")
+    return lambda: _Report()
+
+
+def _head():
+    return "0038_head"
+
+
+_mod("idis")
+_mod("idis.persistence")
+_mod("idis.persistence.db", begin_app_conn=_begin)
+_mod("idis.runtime")
+_mod(
+    "idis.runtime.dependency_probes",
+    TENANT_RLS_TABLES=("tenant_table",),
+    _expected_alembic_head=_head,
+)
+_mod(
+    "idis.runtime.strict_launcher",
+    _default_admission_runner=_runner,
+    load_profile_then_import_runtime=_load,
+)
+_mod("sqlalchemy", text=lambda sql: sql)
+"""
+
+
+def _inner_env(revision: str, *, fail_query: bool = False) -> dict[str, str]:
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONIOENCODING": "utf-8",
+        "H1B_FAKE_REVISION": revision,
+    }
+    if sys.platform == "win32":
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+        env["WINDIR"] = os.environ.get("WINDIR", os.environ["SYSTEMROOT"])
+        env["PATHEXT"] = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+    if fail_query:
+        env["H1B_FAKE_QUERY_FAIL"] = "1"
+    return env
+
+
+def _run_inner_admission(
+    tmp_path: Path,
+    *,
+    revision: str,
+    fail_query: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    host = _admission_host()
+    script = tmp_path / "inner_admission.py"
+    script.write_text(
+        _INNER_PRELUDE + "\n" + _inner_admission_script(host),
+        encoding="utf-8",
+        newline="\n",
+    )
+    return subprocess.run(
+        [sys.executable, os.fspath(script)],
+        cwd=tmp_path,
+        env=_inner_env(revision, fail_query=fail_query),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
+        check=False,
+    )
+
+
+def _inner_public(*, version: str | None, schema_at_head: bool) -> str:
+    postgres: dict[str, object] = {
+        "relforcerowsecurity": True,
+        "rolbypassrls": False,
+        "rolsuper": False,
+        "schema_at_head": schema_at_head,
+    }
+    if version is not None:
+        postgres["alembic_version"] = version
+    payload = {
+        "checks": [
+            ["auth", "AUTH_ACCEPTANCE_KEY_MISMATCH"],
+            ["postgres", "DATABASE_UNAVAILABLE"],
+        ],
+        "phase": "admission",
+        "postgres": postgres,
+    }
+    return json.dumps(payload, sort_keys=True)
+
+
+@pytest.mark.parametrize(
+    ("revision", "kept", "at_head"),
+    [
+        ("0038_head", "0038_head", True),
+        ("rev\u00e9", None, False),
+        ("a" * 65, None, False),
+    ],
+    ids=("ascii", "non_ascii", "overlong"),
+)
+def test_admission_inner_script_prints_exact_public_line(
+    tmp_path: Path,
+    revision: str,
+    kept: str | None,
+    at_head: bool,
+) -> None:
+    """The inner Python prints one filtered admission line for the canned facts."""
+    completed = _run_inner_admission(tmp_path, revision=revision)
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, output
+    assert completed.stdout.strip() == _inner_public(version=kept, schema_at_head=at_head)
+    if kept is None:
+        assert revision not in output
+
+
+def test_admission_inner_script_omits_postgres_when_the_query_fails(tmp_path: Path) -> None:
+    """A probe exception drops the facts and does not echo the exception text."""
+    completed = _run_inner_admission(tmp_path, revision="0038_head", fail_query=True)
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, output
+    assert completed.stdout.strip() == json.dumps(
+        {
+            "checks": [
+                ["auth", "AUTH_ACCEPTANCE_KEY_MISMATCH"],
+                ["postgres", "DATABASE_UNAVAILABLE"],
+            ],
+            "phase": "admission",
+        },
+        sort_keys=True,
+    )
+    assert "s3cret-token" not in output
+    assert "postgresql://" not in output
+
+
+def _mkdir_missing(path: Path) -> list[Path]:
+    missing: list[Path] = []
+    current = path
+    while not current.exists():
+        missing.append(current)
+        if current.parent == current:
+            break
+        current = current.parent
+    for directory in reversed(missing):
+        directory.mkdir()
+    return missing
+
+
+def _remove_created(created: list[Path]) -> None:
+    for directory in created:
+        if directory.is_dir() and not any(directory.iterdir()):
+            directory.rmdir()
+
+
+def test_path_inventory_distinguishes_absent_from_empty_directory(tmp_path: Path) -> None:
+    """An empty directory outside tmp is visible; a missing path stays empty."""
+    parent = tmp_path.parent / f"h1bo-outside-{os.getpid()}"
+    created = _mkdir_missing(parent)
+    empty = parent / "empty"
+    empty.mkdir()
+    created.insert(0, empty)
+    absent = parent / "absent"
+    try:
+        assert _outside_tmp(empty, tmp_path) is not None
+        assert _path_inventory(absent) == ()
+        assert _path_inventory(empty) == (".",)
+    finally:
+        _remove_created(created)
+
+
+def test_empty_directory_under_the_health_root_is_inventoried(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing object leaf does not hide an empty directory on the health root."""
+    real_health = _CI_HEALTH_ROOT
+    health = tmp_path / "health-root"
+    health.mkdir()
+    boundary = tmp_path / "inventory-boundary"
+    boundary.mkdir()
+    monkeypatch.setattr(sys.modules[__name__], "_CI_HEALTH_ROOT", health)
+    name = f"h1bo{os.getpid()}"
+    empty = health / name
+    created = _mkdir_missing(empty)
+    leaf = empty / "objects"
+    try:
+        outside = [path for path in created if _outside_tmp(path, tmp_path) is not None]
+        assert outside == [], outside
+        assert _path_inventory(leaf) == ()
+        found = _path_inventory(_outside_inventory_root(leaf, boundary))
+        assert any(item.replace("\\", "/").split("/")[0] == name for item in found)
+    finally:
+        _remove_created(created)
+    assert real_health.exists() is False

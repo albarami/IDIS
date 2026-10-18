@@ -33,9 +33,16 @@ from idis.persistence.repositories.run_steps import (
     clear_run_steps_store,
 )
 from idis.persistence.repositories.runs import (
+    _LEGACY_COMPAT_CONTRACT_HASH,
     _in_memory_runs_store,
+    _resolve_run_contract_identity,
     clear_in_memory_runs_store,
 )
+from idis.pipeline.contract_registry import FULL_STRICT_V21_CONTRACT_HASH
+
+_FULL_STRICT_V21_VERSION = "full-strict-v21"
+_LEGACY_FULL_CONTRACT_VERSION = "full-v1"
+_LEGACY_RESUME_ERROR_CODE = "LEGACY_RUN_RESUME_UNSAFE"
 
 
 def _make_api_keys_json(
@@ -106,14 +113,48 @@ def _reset_run_lifecycle_rbac_state() -> None:
     set_deal_assignment_store(InMemoryDealAssignmentStore())
 
 
+def _rbac_resume_identity(resume_state: str | None) -> dict[str, str | None]:
+    """Return a complete FULL contract tuple, or nothing when identity is omitted."""
+    if resume_state is None:
+        return {}
+    if resume_state == "RESUMABLE":
+        version = _FULL_STRICT_V21_VERSION
+        contract_hash = FULL_STRICT_V21_CONTRACT_HASH
+        error_code = None
+    elif resume_state == "NON_RESUMABLE":
+        version = _LEGACY_FULL_CONTRACT_VERSION
+        contract_hash = _LEGACY_COMPAT_CONTRACT_HASH
+        error_code = _LEGACY_RESUME_ERROR_CODE
+    elif resume_state == "HISTORICAL_TERMINAL":
+        version = _LEGACY_FULL_CONTRACT_VERSION
+        contract_hash = _LEGACY_COMPAT_CONTRACT_HASH
+        error_code = None
+    else:
+        raise ValueError("pipeline_resume_state is not recognized")
+    resolved = _resolve_run_contract_identity(
+        mode="FULL",
+        pipeline_contract_version=version,
+        pipeline_contract_hash=contract_hash,
+        pipeline_resume_state=resume_state,
+        pipeline_resume_error_code=error_code,
+    )
+    return {
+        "pipeline_contract_version": resolved[0],
+        "pipeline_contract_hash": resolved[1],
+        "pipeline_resume_state": resolved[2],
+        "pipeline_resume_error_code": resolved[3],
+    }
+
+
 def _seed_run_row(
     *,
     run_id: str,
     tenant_id: str,
     deal_id: str,
     status: str,
+    resume_state: str | None = "RESUMABLE",
 ) -> None:
-    _in_memory_runs_store[run_id] = {
+    run = {
         "run_id": run_id,
         "tenant_id": tenant_id,
         "deal_id": deal_id,
@@ -125,6 +166,8 @@ def _seed_run_row(
         "created_at": "2026-05-27T00:00:00Z",
         "cancel_requested_at": None,
     }
+    run.update(_rbac_resume_identity(resume_state))
+    _in_memory_runs_store[run_id] = run
 
 
 class TestAuditorCannotMutate:

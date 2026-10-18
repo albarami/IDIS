@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import ast
 import functools
 import hashlib
 import importlib.util
+import inspect
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -1012,3 +1016,569 @@ def test_start_api_qualify_h1b_py_imports_helper_then_stops_at_defaults_file(
     assert "FileNotFoundError" in output, output
     assert run_id in output, output
     assert "image-defaults.json" in output, output
+
+
+_H1B_PY_HEREDOC_COUNT = 11
+_NESTED_RAW_SCRIPT_COUNT = 5
+_CHECK_CALL_NAMES = frozenset({"call", "check_call", "check_output"})
+_CHECK_CALL_REJECTED_KEYWORDS = frozenset({"capture_output", "check", "input"})
+_RECEIPT_ASSIGNMENTS = frozenset(
+    {
+        "expected",
+        "linux_pin",
+        "manifest_sha256",
+        "revision",
+        "windows_receipt",
+    }
+)
+_RECEIPT_RUN_LINE = 'run = os.environ["GITHUB_RUN_ID"]'
+_OPT_MODELS = "/opt/idis-models"
+_OPT_HEALTH = "/opt/idis-ci-health"
+_MODEL_STEP_TIMEOUT_SECONDS = 300
+_MODEL_SUDO_SCRIPT = b'#!/bin/sh\nexec "$H1B_PY" "$H1B_SUDO_PY" "$@"\n'
+_WINDOWS_SUDO_SHIM = r"""
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+_Popen = subprocess.Popen
+
+
+class _SudoPopen(_Popen):
+    def __init__(self, args, *pos, **kwargs):
+        if isinstance(args, (list, tuple)) and args:
+            command = Path(str(args[0])).name.lower()
+            if command in {"sudo", "sudo.exe"}:
+                args = [sys.executable, os.environ["H1B_SUDO_PY"], *list(args)[1:]]
+        super().__init__(args, *pos, **kwargs)
+
+
+subprocess.Popen = _SudoPopen
+"""
+_MODEL_SUDO_PY = r'''
+"""Execute sudo arguments without privilege and record each argv line."""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import sys
+from pathlib import Path
+
+_OPT_PREFIXES = (
+    ("/opt/idis-models", "H1B_SUDO_MODELS"),
+    ("/opt/idis-ci-health", "H1B_SUDO_HEALTH"),
+)
+
+
+def _mapped(argument: str) -> str:
+    normalized = argument.replace("\\", "/")
+    for prefix, env_name in _OPT_PREFIXES:
+        root = os.environ.get(env_name)
+        if not root:
+            continue
+        if normalized == prefix or normalized.startswith(prefix + "/"):
+            suffix = normalized[len(prefix) :].lstrip("/")
+            destination = Path(root) / suffix if suffix else Path(root)
+            return str(destination)
+    return argument
+
+
+def _install(args: list[str]) -> None:
+    mode: int | None = None
+    directory = False
+    operands: list[str] = []
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == "-d":
+            directory = True
+            index += 1
+            continue
+        if arg == "-m" and index + 1 < len(args):
+            mode = int(args[index + 1], 8)
+            index += 2
+            continue
+        if arg in {"-o", "-g"} and index + 1 < len(args):
+            index += 2
+            continue
+        if arg.startswith("-"):
+            sys.stderr.write(f"unexpected install flag {arg}\n")
+            raise SystemExit(97)
+        operands.append(_mapped(arg))
+        index += 1
+    if directory:
+        if len(operands) != 1:
+            raise SystemExit(97)
+        path = Path(operands[0])
+        path.mkdir(parents=True, exist_ok=True)
+        if mode is not None:
+            os.chmod(path, mode)
+        return
+    if len(operands) != 2:
+        raise SystemExit(97)
+    source = Path(operands[0])
+    destination = Path(operands[1])
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, destination)
+    if mode is not None:
+        os.chmod(destination, mode)
+
+
+def _tee(args: list[str]) -> None:
+    if len(args) != 1:
+        raise SystemExit(97)
+    target = Path(_mapped(args[0]))
+    payload = sys.stdin.buffer.read()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(payload)
+    sys.stdout.buffer.write(payload)
+
+
+def _chmod(args: list[str]) -> None:
+    if len(args) != 2:
+        raise SystemExit(97)
+    os.chmod(Path(_mapped(args[1])), int(args[0], 8))
+
+
+def main() -> None:
+    recorded = ["sudo", *sys.argv[1:]]
+    log_path = Path(os.environ["H1B_SUDO_LOG"])
+    with log_path.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(recorded) + "\n")
+    args = [arg for arg in sys.argv[1:] if arg != "-n"]
+    while args and "=" in args[0] and not args[0].startswith("-"):
+        key, value = args.pop(0).split("=", 1)
+        os.environ[key] = value
+    if not args:
+        raise SystemExit(97)
+    command, rest = args[0], args[1:]
+    if command == "install":
+        _install(rest)
+        return
+    if command == "tee":
+        _tee(rest)
+        return
+    if command == "chmod":
+        _chmod(rest)
+        return
+    sys.stderr.write(f"unexpected sudo command {command}\n")
+    raise SystemExit(97)
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+def _keywords_check_call_rejects() -> frozenset[str]:
+    """Name run-only keywords that Popen, and therefore check_call, reject."""
+    popen_names = set(inspect.signature(subprocess.Popen).parameters) - {"self"}
+    rejected: set[str] = set()
+    for name, param in inspect.signature(subprocess.run).parameters.items():
+        if param.kind in {
+            inspect.Parameter.VAR_KEYWORD,
+            inspect.Parameter.VAR_POSITIONAL,
+        }:
+            continue
+        if name in popen_names or name == "timeout":
+            continue
+        rejected.add(name)
+    if rejected != _CHECK_CALL_REJECTED_KEYWORDS:
+        raise AssertionError(sorted(rejected))
+    return frozenset(rejected)
+
+
+def _container_h1b_bodies() -> list[tuple[str, str]]:
+    bodies: list[tuple[str, str]] = []
+    for step in _container_steps():
+        run = step.get("run")
+        if not isinstance(run, str):
+            continue
+        step_id = str(step.get("id") or step["name"])
+        bodies.extend((step_id, body) for body in _h1b_py_bodies(run))
+    return bodies
+
+
+def _nested_raw_scripts(body: str) -> list[str]:
+    marker = 'r"""'
+    scripts: list[str] = []
+    start = 0
+    while True:
+        found = body.find(marker, start)
+        if found < 0:
+            return scripts
+        content_at = found + len(marker)
+        end = body.find('"""', content_at)
+        if end < 0:
+            raise AssertionError("raw triple-quoted script is unterminated")
+        scripts.append(body[content_at:end])
+        start = end + len('"""')
+
+
+def _parsed_snippet(label: str, source: str, *, allow_non_python: bool) -> ast.AST | None:
+    try:
+        compile(source, label, "exec")
+    except SyntaxError:
+        if allow_non_python and "subprocess." not in source:
+            return None
+        raise
+    return ast.parse(source)
+
+
+def _rejected_keyword_uses(step_id: str, source: str, rejected: frozenset[str]) -> list[str]:
+    tree = _parsed_snippet(step_id, source, allow_non_python=":nested:" in step_id)
+    if tree is None:
+        return []
+    violations: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        func = node.func
+        if not (
+            isinstance(func.value, ast.Name)
+            and func.value.id == "subprocess"
+            and func.attr in _CHECK_CALL_NAMES
+        ):
+            continue
+        for keyword in node.keywords:
+            if keyword.arg in rejected:
+                violations.append(f"{step_id}:{node.lineno}:subprocess.{func.attr}:{keyword.arg}")
+    return violations
+
+
+def _model_verify_body() -> str:
+    bodies = _h1b_py_bodies(_by_id("model-verify")["run"])
+    if len(bodies) != 1:
+        raise AssertionError(len(bodies))
+    return bodies[0]
+
+
+def _segment(source: str, node: ast.AST) -> str:
+    segment = ast.get_source_segment(source, node)
+    if segment is None:
+        raise AssertionError("snippet source segment is missing")
+    return segment
+
+
+def _receipt_prelude(snippet: str) -> str:
+    """Bind the tail's names from the snippet text, without retyping the pins."""
+    tree = ast.parse(snippet)
+    parts: list[str] = []
+    files_rhs: str | None = None
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            imported = {alias.name for alias in node.names}
+            if imported & {"json", "os", "subprocess"}:
+                parts.append(_segment(snippet, node))
+        elif isinstance(node, ast.ImportFrom) and node.module == "pathlib":
+            parts.append(_segment(snippet, node))
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if isinstance(target, ast.Name) and target.id in _RECEIPT_ASSIGNMENTS:
+                parts.append(_segment(snippet, node))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if (
+            isinstance(target, ast.Subscript)
+            and isinstance(target.value, ast.Name)
+            and target.value.id == "files"
+        ):
+            files_rhs = _segment(snippet, node.value)
+    if files_rhs is None:
+        raise AssertionError("model-verify snippet has no files assignment")
+    parts.append("files = {}")
+    parts.append("for name, (size, digest) in expected.items():")
+    parts.append(f"    files[name] = {files_rhs}")
+    return "\n".join(parts) + "\n"
+
+
+def _receipt_tail(snippet: str) -> str:
+    index = snippet.find(_RECEIPT_RUN_LINE)
+    if index < 0:
+        raise AssertionError("model-verify snippet has no GITHUB_RUN_ID assignment")
+    return snippet[index:]
+
+
+def _install_model_sudo(tmp_path: Path) -> None:
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    sudo = bindir / "sudo"
+    sudo.write_bytes(_MODEL_SUDO_SCRIPT)
+    os.chmod(sudo, _EXECUTABLE_MODE)
+    (tmp_path / "sudo_fake.py").write_text(_MODEL_SUDO_PY, encoding="utf-8", newline="\n")
+    (tmp_path / "sudo-argv.log").write_text("", encoding="utf-8", newline="\n")
+    if sys.platform == "win32":
+        shim = tmp_path / "shim"
+        shim.mkdir()
+        (shim / "sitecustomize.py").write_text(_WINDOWS_SUDO_SHIM, encoding="utf-8", newline="\n")
+
+
+def _model_child_env(tmp_path: Path, extra: dict[str, str]) -> dict[str, str]:
+    pythonpath = [str(ROOT / "src"), str(ROOT)]
+    env = {
+        "PATH": os.pathsep.join([str(tmp_path / "bin"), os.defpath]),
+        "HOME": str(tmp_path),
+        "TMP": str(tmp_path),
+        "TEMP": str(tmp_path),
+        "H1B_PY": Path(sys.executable).as_posix(),
+        "H1B_SUDO_PY": (tmp_path / "sudo_fake.py").as_posix(),
+        "H1B_SUDO_LOG": str(tmp_path / "sudo-argv.log"),
+        "H1B_SUDO_MODELS": str(tmp_path / "opt-models"),
+        "H1B_SUDO_HEALTH": str(tmp_path / "opt-health"),
+        "PYTHONPATH": os.pathsep.join(pythonpath),
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    if sys.platform == "win32":
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+        env["WINDIR"] = os.environ.get("WINDIR", os.environ["SYSTEMROOT"])
+        env["PATHEXT"] = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+        env["PYTHONPATH"] = os.pathsep.join([str(tmp_path / "shim"), *pythonpath])
+    env.update(extra)
+    env.pop("IDIS_STRICT_DOTENV_PATH", None)
+    return env
+
+
+def _run_model_text(
+    tmp_path: Path, source: str, extra: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    _install_model_sudo(tmp_path)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(exist_ok=True)
+    script = workspace / "snippet.py"
+    script.write_text(source, encoding="utf-8", newline="\n")
+    return subprocess.run(
+        [sys.executable, os.fspath(script)],
+        cwd=workspace,
+        env=_model_child_env(tmp_path, extra),
+        capture_output=True,
+        text=True,
+        timeout=_MODEL_STEP_TIMEOUT_SECONDS,
+        check=False,
+    )
+
+
+def _sudo_invocations(tmp_path: Path) -> list[list[str]]:
+    text = (tmp_path / "sudo-argv.log").read_text(encoding="utf-8")
+    if text == "":
+        return []
+    return [json.loads(line) for line in text.splitlines()]
+
+
+def _write_sized_mismatch(path: Path, size: int) -> None:
+    with path.open("wb") as handle:
+        if size <= 0:
+            return
+        handle.seek(size - 1)
+        handle.write(b"\xff")
+    if path.is_symlink() or path.stat().st_size != size:
+        raise AssertionError(path.name)
+
+
+def _mismatched_model_tree(workspace: Path) -> None:
+    root = workspace / "model-cache" / _MODEL_REVISION
+    root.mkdir(parents=True)
+    for name, size, _digest in _MODEL_FILES:
+        _write_sized_mismatch(root / name, size)
+
+
+def _expected_model_receipt() -> dict[str, Any]:
+    return {
+        "files": {name: {"bytes": size, "sha256": digest} for name, size, digest in _MODEL_FILES},
+        "manifest_sha256": _MODEL_MANIFEST_SHA256,
+        "model_tree_fingerprint_linux": _MODEL_FINGERPRINT_LINUX,
+        "model_tree_fingerprint_windows_receipt": _MODEL_FINGERPRINT_WINDOWS,
+        "revision": _MODEL_REVISION,
+    }
+
+
+def _tree_holds_pinned_files(root: Path) -> bool:
+    if not root.is_dir():
+        return False
+    names = {path.name for path in root.iterdir()}
+    if names != {name for name, _size, _digest in _MODEL_FILES}:
+        return False
+    for name, size, digest in _MODEL_FILES:
+        path = root / name
+        if path.is_symlink() or not path.is_file() or path.stat().st_size != size:
+            return False
+        if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            return False
+    return True
+
+
+def _model_step_not_executed_reason() -> str | None:
+    system = platform.system()
+    if system != "Linux":
+        return f"platform is {system}"
+    tree = os.environ.get("IDIS_TINY_EN_TREE")
+    if tree is None:
+        return "IDIS_TINY_EN_TREE is unset"
+    root = Path(tree)
+    if not root.is_dir():
+        return "IDIS_TINY_EN_TREE is absent"
+    if not _tree_holds_pinned_files(root):
+        return "IDIS_TINY_EN_TREE does not hold the five pinned files"
+    return None
+
+
+def _assert_model_install_log(calls: list[list[str]]) -> None:
+    assert calls
+    assert all(call[:2] == ["sudo", "-n"] for call in calls), calls
+    installed = [call for call in calls if call[:5] == ["sudo", "-n", "install", "-m", "0644"]]
+    assert len(installed) == len(_MODEL_FILES), calls
+    installed_names = {Path(call[-1]).name for call in installed}
+    assert installed_names == {name for name, _size, _digest in _MODEL_FILES}
+    for call in installed:
+        assert Path(call[-2]).name == Path(call[-1]).name
+    run_root_prefix = [
+        "sudo",
+        "-n",
+        "install",
+        "-d",
+        "-m",
+        "0700",
+        "-o",
+        "1000",
+        "-g",
+        "1000",
+    ]
+    run_root = [call for call in calls if call[: len(run_root_prefix)] == run_root_prefix]
+    assert len(run_root) == 1, calls
+    chmod = [call for call in calls if call[:4] == ["sudo", "-n", "chmod", "0644"]]
+    assert len(chmod) == 1, calls
+
+
+def test_embedded_h1b_py_rejects_keywords_check_call_does_not_accept() -> None:
+    bodies = _container_h1b_bodies()
+    assert len(bodies) == _H1B_PY_HEREDOC_COUNT
+    rejected = _keywords_check_call_rejects()
+    violations: list[str] = []
+    nested_count = 0
+    for step_id, body in bodies:
+        violations.extend(_rejected_keyword_uses(step_id, body, rejected))
+        for index, nested in enumerate(_nested_raw_scripts(body), start=1):
+            nested_count += 1
+            violations.extend(_rejected_keyword_uses(f"{step_id}:nested:{index}", nested, rejected))
+    assert nested_count == _NESTED_RAW_SCRIPT_COUNT
+    assert violations == []
+
+
+def test_model_verify_hash_mismatch_exits_before_sudo(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _mismatched_model_tree(workspace)
+    run_id = f"h1b1hhash{os.getpid()}"
+    completed = _run_model_text(
+        tmp_path,
+        _model_verify_body(),
+        {"MODEL_CACHE_HIT": "true", "GITHUB_RUN_ID": run_id},
+    )
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 1, output
+    assert "Traceback" not in output, output
+    assert "TypeError" not in output, output
+    assert _sudo_invocations(tmp_path) == []
+    assert not (tmp_path / "opt-models").exists()
+    assert not (tmp_path / "opt-health").exists()
+
+
+def _receipt_literal_keys(snippet: str) -> list[str]:
+    tree = ast.parse(snippet)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(
+            isinstance(target, ast.Name) and target.id == "receipt" for target in node.targets
+        ):
+            continue
+        if not isinstance(node.value, ast.Dict):
+            break
+        keys: list[str] = []
+        for key in node.value.keys:
+            if not isinstance(key, ast.Constant) or not isinstance(key.value, str):
+                raise AssertionError("receipt key is not a string")
+            keys.append(key.value)
+        return keys
+    raise AssertionError("model-verify snippet has no receipt literal")
+
+
+def _assert_receipt_text(text: str, snippet: str) -> None:
+    expected = _expected_model_receipt()
+    inserted = {key: expected[key] for key in _receipt_literal_keys(snippet)}
+    assert text == json.dumps(inserted, sort_keys=True)
+    assert text != json.dumps(inserted, sort_keys=False)
+
+
+def test_model_verify_receipt_tail_writes_sorted_json(tmp_path: Path) -> None:
+    # Route A: the tail is the real snippet suffix, starting at the run-id line.
+    # The pins and the files-object expression come from the preceding statements.
+    snippet = _model_verify_body()
+    tail = _receipt_tail(snippet)
+    assert snippet.endswith(tail)
+    source = _receipt_prelude(snippet) + tail
+    run_id = f"h1b1hrecv{os.getpid()}"
+    completed = _run_model_text(
+        tmp_path,
+        source,
+        {"GITHUB_RUN_ID": run_id, "MODEL_CACHE_HIT": "true"},
+    )
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, output
+    assert "TypeError" not in output, output
+    receipt_path = tmp_path / "opt-health" / run_id / "model-verified.json"
+    text = receipt_path.read_text(encoding="utf-8")
+    _assert_receipt_text(text, snippet)
+    calls = _sudo_invocations(tmp_path)
+    assert all(call[:2] == ["sudo", "-n"] for call in calls), calls
+    assert [call for call in calls if call[:4] == ["sudo", "-n", "chmod", "0644"]]
+
+
+def test_model_verify_pinned_linux_tree_writes_receipt(
+    tmp_path: Path, record_property: Callable[[str, object], None]
+) -> None:
+    reason = _model_step_not_executed_reason()
+    if reason is not None:
+        if os.environ.get("IDIS_REQUIRE_MODEL_STEP") == "1":
+            pytest.fail(reason)
+        record_property("model_step", f"NOT_EXECUTED: {reason}")
+        print(f"MODEL_STEP NOT_EXECUTED: {reason}")
+        return
+    tree = Path(os.environ["IDIS_TINY_EN_TREE"])
+    workspace = tmp_path / "workspace"
+    destination = workspace / "model-cache" / _MODEL_REVISION
+    destination.mkdir(parents=True)
+    for name, _size, _digest in _MODEL_FILES:
+        target = destination / name
+        shutil.copyfile(tree / name, target)
+        if target.is_symlink():
+            raise AssertionError(name)
+    run_id = f"h1b1hmodel{os.getpid()}"
+    completed = _run_model_text(
+        tmp_path,
+        _model_verify_body(),
+        {"MODEL_CACHE_HIT": "true", "GITHUB_RUN_ID": run_id},
+    )
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, output
+    assert "TypeError" not in output, output
+    payload = json.loads(completed.stdout)
+    assert payload["phase"] == "model"
+    assert payload["code"] == "PRESENT"
+    assert payload["manifest_sha256"] == _MODEL_MANIFEST_SHA256
+    assert payload["model_tree_fingerprint_linux"] == _MODEL_FINGERPRINT_LINUX
+    assert payload["model_tree_fingerprint_windows_receipt"] == _MODEL_FINGERPRINT_WINDOWS
+    calls = _sudo_invocations(tmp_path)
+    _assert_model_install_log(calls)
+    receipt_path = tmp_path / "opt-health" / run_id / "model-verified.json"
+    text = receipt_path.read_text(encoding="utf-8")
+    _assert_receipt_text(text, _model_verify_body())
+    for name, size, _digest in _MODEL_FILES:
+        installed = tmp_path / "opt-models" / _MODEL_REVISION / name
+        assert installed.is_file()
+        assert not installed.is_symlink()
+        assert installed.stat().st_size == size

@@ -693,10 +693,11 @@ jobs:
               "revision": revision,
           }
           encoded = json.dumps(receipt, sort_keys=True)
-          subprocess.check_call(
+          subprocess.run(
               ["sudo", "-n", "tee", str(run_root / "model-verified.json")],
               input=encoded.encode(),
               stdout=subprocess.DEVNULL,
+              check=True,
           )
           subprocess.check_call(["sudo", "-n", "chmod", "0644", str(run_root / "model-verified.json")])
           print(

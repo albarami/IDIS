@@ -7,13 +7,17 @@ materialization code has to meet an authority independent from itself.
 
 from __future__ import annotations
 
+import functools
 import hashlib
+import inspect
 import json
+import os
 import unicodedata
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import pytest
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
@@ -30,6 +34,11 @@ REVIEW_MAP = (
     REPO_ROOT / "docs" / "plans" / "2026-07-25-slice100-task8-fdd-formula-policy-v1-review-map.md"
 )
 OPERATOR_WORKBOOK = Path(r"C:\Projects\IDIS\IDIS\financial Due Diligence.xlsx")
+_OPERATOR_WORKBOOK_ENV = "IDIS_OPERATOR_WORKBOOK_PATH"
+_LEGACY_OPERATOR_WORKBOOK_ENV = "IDIS_FDD_METHODOLOGY_PATH"
+_REQUIRE_OPERATOR_WORKBOOK_ENV = "IDIS_REQUIRE_OPERATOR_WORKBOOK"
+_OPERATOR_WORKBOOK_ABSENT_REASON = "workbook file is absent"
+_RECORD_PROPERTY: Callable[[str, object], None] | None = None
 
 WORKBOOK_SHA256 = "a3b83addfff02815c9fd44c4a3dcb7f56ce39410fe182faff12acfb845bd4352"
 WORKBOOK_BYTE_COUNT = 24_905
@@ -465,17 +474,93 @@ def expected_canonicalization_contract() -> dict[str, Any]:
     }
 
 
+def resolve_operator_workbook_path() -> Path:
+    """Return the operator workbook path.
+
+    ``IDIS_OPERATOR_WORKBOOK_PATH`` is first. The legacy
+    ``IDIS_FDD_METHODOLOGY_PATH`` is next. Otherwise the historical absolute
+    path is used.
+    """
+
+    primary = os.environ.get(_OPERATOR_WORKBOOK_ENV, "").strip()
+    if primary:
+        return Path(primary)
+    legacy = os.environ.get(_LEGACY_OPERATOR_WORKBOOK_ENV, "").strip()
+    if legacy:
+        return Path(legacy)
+    return OPERATOR_WORKBOOK
+
+
+def _operator_workbook_absent_line() -> str:
+    return f"OPERATOR_WORKBOOK NOT_EXECUTED: {_OPERATOR_WORKBOOK_ABSENT_REASON}"
+
+
+def _record_absent_operator_workbook(
+    record_property: Callable[[str, object], None] | None = None,
+) -> None:
+    """Print and record workbook absence. Required mode fails. Never skips."""
+
+    line = _operator_workbook_absent_line()
+    print(line)
+    recorder = record_property if record_property is not None else _RECORD_PROPERTY
+    if recorder is not None:
+        recorder("OPERATOR_WORKBOOK", line)
+    if os.environ.get(_REQUIRE_OPERATOR_WORKBOOK_ENV) == "1":
+        pytest.fail(line)
+
+
+def requires_operator_workbook(test_fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Pass the node when the resolved operator workbook file is absent.
+
+    A present file runs the wrapped test unchanged, including identity checks.
+    Absence prints one ``OPERATOR_WORKBOOK NOT_EXECUTED`` line, records it, and
+    returns. ``IDIS_REQUIRE_OPERATOR_WORKBOOK=1`` fails the node. The wrapper
+    never skips.
+    """
+
+    @functools.wraps(test_fn)
+    def _run(*args: Any, **kwargs: Any) -> Any:
+        if resolve_operator_workbook_path().is_file():
+            return test_fn(*args, **kwargs)
+        supplied = kwargs.get("record_property")
+        recorder = supplied if isinstance(supplied, Callable) else None
+        _record_absent_operator_workbook(recorder)
+        return None
+
+    _run.__signature__ = inspect.signature(test_fn)  # type: ignore[attr-defined]
+    return _run
+
+
+def require_operator_workbook(
+    record_property: Callable[[str, object], None] | None = None,
+) -> Path:
+    """Return the resolved workbook path.
+
+    A present file is returned with no absence record, so later identity
+    checks still run. Absence prints ``OPERATOR_WORKBOOK NOT_EXECUTED:
+    <reason>``, stores that line with ``record_property``, and still returns
+    the path. ``IDIS_REQUIRE_OPERATOR_WORKBOOK=1`` fails. Absence does not
+    skip; test nodes that need the file use ``requires_operator_workbook``.
+    """
+
+    path = resolve_operator_workbook_path()
+    if path.is_file():
+        return path
+    _record_absent_operator_workbook(record_property)
+    return path
+
+
 def read_operator_rows() -> list[dict[str, Any]]:
     """Read the pinned workbook without using the production FDD importer."""
 
-    _safe_require(OPERATOR_WORKBOOK.is_file(), "TASK8_OPERATOR_WORKBOOK_MISSING")
-    raw = OPERATOR_WORKBOOK.read_bytes()
+    workbook_path = require_operator_workbook()
+    raw = workbook_path.read_bytes()
     _safe_require(len(raw) == WORKBOOK_BYTE_COUNT, "TASK8_OPERATOR_WORKBOOK_SIZE_DRIFT")
     _safe_require(
         sha256_bytes(raw) == WORKBOOK_SHA256,
         "TASK8_OPERATOR_WORKBOOK_HASH_DRIFT",
     )
-    workbook = load_workbook(OPERATOR_WORKBOOK, data_only=False, read_only=False)
+    workbook = load_workbook(workbook_path, data_only=False, read_only=False)
     try:
         _safe_require(tuple(workbook.sheetnames) == SHEETS, "TASK8_WORKBOOK_SHEET_DRIFT")
         rows: list[dict[str, Any]] = []

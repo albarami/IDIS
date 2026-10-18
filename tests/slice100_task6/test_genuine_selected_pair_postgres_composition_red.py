@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import uuid
 from collections import Counter
 from collections.abc import Callable, Iterator
@@ -53,6 +52,7 @@ from tests.slice100_task2b._support import (
     grant_application_access,
     migrate,
 )
+from tests.slice100_task8._artifact_oracle import requires_operator_workbook
 
 _CDD_PATH = (
     Path(__file__).resolve().parents[2]
@@ -107,39 +107,74 @@ class _BoundTransaction:
         yield
 
 
-def _operator_fdd_path() -> Path:
-    configured = os.environ.get("IDIS_FDD_METHODOLOGY_PATH")
-    if configured:
-        path = Path(configured)
-    else:
-        path = Path(__file__).resolve().parents[2].parent / "IDIS" / "financial Due Diligence.xlsx"
-    if not path.is_file():
-        if os.environ.get("IDIS_REQUIRE_POSTGRES", "0") == "1":
-            pytest.fail("required operator FDD methodology source is unavailable")
-        pytest.skip("operator FDD methodology source is unavailable")
-    return path.resolve()
+def _operator_fdd_path(
+    record_property: Callable[[str, object], None] | None = None,
+) -> Path:
+    from tests.slice100_task8._artifact_oracle import require_operator_workbook
+
+    return require_operator_workbook(record_property).resolve()
 
 
-def test_missing_optional_operator_fdd_path_skips(
+def test_missing_operator_workbook_records_not_executed(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    record_property: pytest.RecordProperty,
 ) -> None:
-    monkeypatch.setenv("IDIS_FDD_METHODOLOGY_PATH", str(tmp_path / "missing.xlsx"))
-    monkeypatch.delenv("IDIS_REQUIRE_POSTGRES", raising=False)
+    monkeypatch.setenv("IDIS_OPERATOR_WORKBOOK_PATH", str(tmp_path / "missing.xlsx"))
+    monkeypatch.delenv("IDIS_FDD_METHODOLOGY_PATH", raising=False)
+    monkeypatch.delenv("IDIS_REQUIRE_OPERATOR_WORKBOOK", raising=False)
+    recorded: list[tuple[str, object]] = []
 
-    with pytest.raises(pytest.skip.Exception, match="operator FDD methodology source"):
-        _operator_fdd_path()
+    def capture(name: str, value: object) -> None:
+        recorded.append((name, value))
+        record_property(name, value)
+
+    resolved = _operator_fdd_path(capture)
+
+    assert resolved == (tmp_path / "missing.xlsx").resolve()
+    assert not resolved.is_file()
+    assert recorded == [
+        ("OPERATOR_WORKBOOK", "OPERATOR_WORKBOOK NOT_EXECUTED: workbook file is absent")
+    ]
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "OPERATOR_WORKBOOK NOT_EXECUTED: workbook file is absent"
 
 
-def test_missing_required_operator_fdd_path_fails_explicitly(
+def test_missing_required_operator_workbook_fails(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    record_property: pytest.RecordProperty,
 ) -> None:
-    monkeypatch.setenv("IDIS_FDD_METHODOLOGY_PATH", str(tmp_path / "missing.xlsx"))
-    monkeypatch.setenv("IDIS_REQUIRE_POSTGRES", "1")
+    monkeypatch.setenv("IDIS_OPERATOR_WORKBOOK_PATH", str(tmp_path / "missing.xlsx"))
+    monkeypatch.delenv("IDIS_FDD_METHODOLOGY_PATH", raising=False)
+    monkeypatch.setenv("IDIS_REQUIRE_OPERATOR_WORKBOOK", "1")
 
-    with pytest.raises(pytest.fail.Exception, match="required operator FDD methodology source"):
-        _operator_fdd_path()
+    with pytest.raises(
+        pytest.fail.Exception,
+        match=r"^OPERATOR_WORKBOOK NOT_EXECUTED: workbook file is absent$",
+    ):
+        _operator_fdd_path(record_property)
+
+
+def test_present_operator_workbook_is_executed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    record_property: pytest.RecordProperty,
+) -> None:
+    chosen = tmp_path / "chosen.xlsx"
+    legacy = tmp_path / "legacy.xlsx"
+    chosen.write_bytes(b"present-workbook")
+    legacy.write_bytes(b"legacy-workbook")
+    monkeypatch.setenv("IDIS_OPERATOR_WORKBOOK_PATH", str(chosen))
+    monkeypatch.setenv("IDIS_FDD_METHODOLOGY_PATH", str(legacy))
+    monkeypatch.delenv("IDIS_REQUIRE_OPERATOR_WORKBOOK", raising=False)
+
+    resolved = _operator_fdd_path(record_property)
+
+    assert resolved == chosen.resolve()
+    assert "OPERATOR_WORKBOOK NOT_EXECUTED" not in capsys.readouterr().out
 
 
 def test_safe_comparison_failures_emit_only_ids_and_hashes() -> None:
@@ -714,9 +749,12 @@ def _assert_restart_fails_without_repair(
     assert _graph_digest(database, scope) == corrupt_digest
 
 
-def test_graph_digest_covers_every_restart_input_surface() -> None:
+@requires_operator_workbook
+def test_graph_digest_covers_every_restart_input_surface(
+    record_property: pytest.RecordProperty,
+) -> None:
     """A full-row mutation on any restart input must change the graph digest."""
-    fdd_path = _operator_fdd_path()
+    fdd_path = _operator_fdd_path(record_property)
     with disposable_postgres() as database:
         migrate(database.admin_engine, "0037")
         grant_application_access(database)
@@ -811,11 +849,13 @@ def test_graph_digest_covers_every_restart_input_surface() -> None:
         assert missed_surfaces == []
 
 
+@requires_operator_workbook
 def test_genuine_selected_pair_composes_112_tasks_and_restarts_from_recomputed_state(
     monkeypatch: pytest.MonkeyPatch,
+    record_property: pytest.RecordProperty,
 ) -> None:
     """Prove actual 21+79 sources and six real preflight classifications end to end."""
-    fdd_path = _operator_fdd_path()
+    fdd_path = _operator_fdd_path(record_property)
     fdd_before = _source_identity(fdd_path)
     assert fdd_before.sha256 == _FDD_SHA256
     provider_dispatches = 0

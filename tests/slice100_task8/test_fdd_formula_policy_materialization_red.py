@@ -30,6 +30,7 @@ from ._artifact_oracle import (
     recompute_component_hashes,
     recompute_policy_hash,
     require_review_map,
+    requires_operator_workbook,
     sha256_bytes,
     validate_derived_counts,
     validate_policy,
@@ -42,10 +43,12 @@ def _policy() -> dict[str, Any]:
     return policy
 
 
+@requires_operator_workbook
 def test_independent_oracle_is_self_consistent_before_materialization() -> None:
     validate_policy(expected_policy())
 
 
+@requires_operator_workbook
 def test_policy_artifact_exists_as_exact_frozen_utf8_lf_bytes() -> None:
     policy = _policy()
     raw = POLICY_ARTIFACT.read_bytes()
@@ -61,10 +64,12 @@ def test_policy_artifact_exists_as_exact_frozen_utf8_lf_bytes() -> None:
     assert policy["metadata"]["activation_status"] == "INACTIVE"
 
 
+@requires_operator_workbook
 def test_policy_matches_the_independent_complete_oracle() -> None:
     _policy()
 
 
+@requires_operator_workbook
 def test_policy_has_exact_79_row_ten_anchor_requirement_transition() -> None:
     policy = _policy()
     rows = policy["workbook_row_registry"]["rows"]
@@ -97,6 +102,7 @@ def test_policy_has_exact_79_row_ten_anchor_requirement_transition() -> None:
     assert "successor_version_id" not in transition
 
 
+@requires_operator_workbook
 def test_all_expanded_bindings_and_parent_dag_are_literal_and_complete() -> None:
     policy = _policy()
     validate_derived_counts(policy)
@@ -117,6 +123,7 @@ def test_all_expanded_bindings_and_parent_dag_are_literal_and_complete() -> None
     ]
 
 
+@requires_operator_workbook
 def test_debt_and_off_balance_scope_exclusions_are_deliberate_and_non_silent() -> None:
     policy = _policy()
     scope_rows = {row["scope_id"]: row for row in policy["debt_scope_exclusions"]["rows"]}
@@ -152,6 +159,7 @@ def test_debt_and_off_balance_scope_exclusions_are_deliberate_and_non_silent() -
     assert liabilities["manufactured_reported_total"] == "FORBIDDEN"
 
 
+@requires_operator_workbook
 def test_completeness_facts_require_cited_documentary_basis_and_natural_not_found() -> None:
     policy = _policy()
     registry = policy["completeness_request_registry"]
@@ -169,6 +177,7 @@ def test_completeness_facts_require_cited_documentary_basis_and_natural_not_foun
         assert "Never infer completeness" in request
 
 
+@requires_operator_workbook
 def test_every_direct_signed_mapping_resolves_one_pinned_convention() -> None:
     policy = _policy()
     registry = policy["direct_signed_convention_registry"]
@@ -205,6 +214,7 @@ def test_every_direct_signed_mapping_resolves_one_pinned_convention() -> None:
     )
 
 
+@requires_operator_workbook
 def test_incomplete_binding_failure_schema_enumerates_the_complete_safe_diagnostic() -> None:
     policy = _policy()
     failure = policy["incomplete_binding_failure_schema"]
@@ -237,6 +247,7 @@ def test_incomplete_binding_failure_schema_enumerates_the_complete_safe_diagnost
     assert failure["source_document_names"] == "FORBIDDEN"
 
 
+@requires_operator_workbook
 def test_formula_hash_binds_every_governed_semantic_field() -> None:
     policy = _policy()
     fields = policy["formula_registry"]["formula_hash_preimage_field_tuple"]
@@ -260,6 +271,7 @@ def test_formula_hash_binds_every_governed_semantic_field() -> None:
 
 
 @pytest.mark.parametrize("section", HASHED_COMPONENTS)
+@requires_operator_workbook
 def test_every_governed_artifact_section_changes_the_final_policy_hash(
     section: str,
 ) -> None:
@@ -273,6 +285,7 @@ def test_every_governed_artifact_section_changes_the_final_policy_hash(
         validate_policy(changed)
 
 
+@requires_operator_workbook
 def test_hash_fixture_binds_raw_artifact_policy_components_and_review_map() -> None:
     policy = _policy()
     fixture = load_fixture()
@@ -304,6 +317,7 @@ def test_hash_fixture_binds_raw_artifact_policy_components_and_review_map() -> N
     assert REVIEW_MAP.is_file()
 
 
+@requires_operator_workbook
 def test_policy_hash_is_domain_separated_while_raw_hash_is_fixture_only() -> None:
     policy = _policy()
     fixture = load_fixture()

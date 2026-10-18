@@ -445,10 +445,22 @@ def test_strict_api_composition_uses_atomic_contract_admission(
         "_validate_full_methodology_selection",
         lambda **_values: MethodologiesRepository(),
     )
+    corpus = [{"document_id": DOCUMENT_ID}]
     monkeypatch.setattr(
         runs_route,
         "_gather_preflight_corpus",
-        lambda *_args, **_kwargs: [{"document_id": DOCUMENT_ID}],
+        lambda *_args, **_kwargs: corpus,
+    )
+    # start_run reloads the frozen corpus on the request connection after the
+    # stubbed freeze. This composition test does not provide a database.
+    monkeypatch.setattr(
+        runs_route,
+        "_reload_frozen_preflight_corpus",
+        lambda **kwargs: (
+            list(corpus)
+            if kwargs.get("selected_document_ids") == (DOCUMENT_ID,)
+            else pytest.fail("wrong frozen document ids")
+        ),
     )
     monkeypatch.setattr(
         runs_route,

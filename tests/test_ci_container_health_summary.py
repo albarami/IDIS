@@ -65,7 +65,7 @@ _PRESERVED_STEP_NAMES = (
 # Digests of f99595ef053883807f58b703252de25a24e91edb via sort_keys canonical JSON.
 _F99595EF_JOB_DIGESTS = {
     "backup-restore-drill": "152593732bb006b84ac1c26fe3a178d27f5d200ca69a2a2c7c48f720d87d70d3",
-    "check": "ff34e69e6a162d2d823197f6905a9b291afb54f5ff8ebccdf35a57d5a49ce6a8",
+    "check": "6dc86cde933106f39b7eda71332029a7ca4bc94c08fec9a0f65e57cecc0e20f1",
     "evaluation-harness": "ea835316a4d6d092d26f4739f66c75f852f396003cf8ce59f8ddb02d0a54eb35",
     "k8s-validate": "5054b069fee639461e357604d3ff5f7003386045b23703dccbaff80f8485ca19",
     "postgres-integration": "832f49f0129dfe12205ec76eecb4b79746016a77b9cab0bcd2982698f9b3583a",

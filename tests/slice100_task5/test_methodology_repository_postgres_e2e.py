@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -33,6 +32,7 @@ from tests.slice100_task2b._support import (
     grant_application_access,
     migrate,
 )
+from tests.slice100_task8._artifact_oracle import requires_operator_workbook
 
 _CDD_PATH = (
     Path(__file__).resolve().parents[2]
@@ -50,26 +50,22 @@ class _BoundTransaction:
         yield
 
 
-def _operator_fdd_path() -> Path:
-    configured = os.environ.get("IDIS_FDD_METHODOLOGY_PATH")
-    if configured:
-        path = Path(configured)
-    else:
-        path = Path(__file__).resolve().parents[2].parent / "IDIS" / "financial Due Diligence.xlsx"
-    if not path.is_file():
-        if os.environ.get("IDIS_REQUIRE_POSTGRES", "0") == "1":
-            pytest.fail("required operator FDD methodology source is unavailable")
-        pytest.skip("operator FDD methodology source is unavailable")
-    return path
+def _operator_fdd_path(record_property: pytest.RecordProperty | None = None) -> Path:
+    from tests.slice100_task8._artifact_oracle import require_operator_workbook
+
+    return require_operator_workbook(record_property)
 
 
 def _contract_hash(label: str) -> str:
     return hashlib.sha256(label.encode("utf-8")).hexdigest()
 
 
-def test_real_cdd_fdd_freeze_selection_and_100_row_resume_are_durable() -> None:
+@requires_operator_workbook
+def test_real_cdd_fdd_freeze_selection_and_100_row_resume_are_durable(
+    record_property: pytest.RecordProperty,
+) -> None:
     """Exercise canonical sources through the real repository and durable service."""
-    fdd_path = _operator_fdd_path()
+    fdd_path = _operator_fdd_path(record_property)
     cdd_bytes = _CDD_PATH.read_bytes()
     fdd_bytes = fdd_path.read_bytes()
     cdd = import_cdd_template(_CDD_PATH)

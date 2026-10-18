@@ -5,8 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Final
+
+import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _V27_ARTIFACT = _REPO_ROOT / "contracts" / "full_strict_v27_reviewed_preimage_v1.json"
@@ -314,6 +317,20 @@ def should_ignore_historical_v22(
     if relative_path in _ARCHIVED_MODULE_PATHS:
         return True
     return None
+
+
+@pytest.fixture(autouse=True)
+def bind_operator_workbook_recorder(
+    record_property: pytest.RecordProperty,
+) -> Iterator[None]:
+    """Give the workbook absence gate a recorder for every Task 8 test."""
+
+    from tests.slice100_task8 import _artifact_oracle as oracle
+
+    previous = oracle._RECORD_PROPERTY
+    oracle._RECORD_PROPERTY = record_property
+    yield
+    oracle._RECORD_PROPERTY = previous
 
 
 def pytest_ignore_collect(collection_path: Path, config: Any) -> bool | None:

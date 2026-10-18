@@ -5,7 +5,6 @@ from __future__ import annotations
 from idis.methodology.importers.fdd_excel import import_fdd_workbook
 
 from ._artifact_oracle import (
-    OPERATOR_WORKBOOK,
     POLICY_ID,
     WORKBOOK_BYTE_COUNT,
     WORKBOOK_SHA256,
@@ -13,24 +12,29 @@ from ._artifact_oracle import (
     read_operator_rows,
     render_review_map,
     require_review_map,
+    requires_operator_workbook,
+    resolve_operator_workbook_path,
     sha256_bytes,
     validate_policy,
 )
 
 
+@requires_operator_workbook
 def test_pinned_operator_workbook_has_exact_safe_aggregate_shape_and_no_formulas() -> None:
     rows = read_operator_rows()
+    workbook = resolve_operator_workbook_path()
 
-    assert OPERATOR_WORKBOOK.stat().st_size == WORKBOOK_BYTE_COUNT
-    assert sha256_bytes(OPERATOR_WORKBOOK.read_bytes()) == WORKBOOK_SHA256
+    assert workbook.stat().st_size == WORKBOOK_BYTE_COUNT
+    assert sha256_bytes(workbook.read_bytes()) == WORKBOOK_SHA256
     assert len(rows) == 79
     assert sum(bool(row["required_calculations"]) for row in rows) == 10
 
 
+@requires_operator_workbook
 def test_current_sheet_wide_fallback_is_captured_only_as_the_legacy_negative_control() -> None:
     policy = load_policy()
     validate_policy(policy)
-    registry = import_fdd_workbook(OPERATOR_WORKBOOK)
+    registry = import_fdd_workbook(resolve_operator_workbook_path())
     version = registry.versions[0]
 
     observed: dict[str, tuple[str, bool, int]] = {}
@@ -69,6 +73,7 @@ def test_current_sheet_wide_fallback_is_captured_only_as_the_legacy_negative_con
     ]
 
 
+@requires_operator_workbook
 def test_all_79_artifact_rows_join_byte_exactly_to_the_pinned_workbook() -> None:
     policy = load_policy()
     validate_policy(policy)
@@ -81,6 +86,7 @@ def test_all_79_artifact_rows_join_byte_exactly_to_the_pinned_workbook() -> None
     assert len({row["source_row_sha256"] for row in actual}) == 79
 
 
+@requires_operator_workbook
 def test_review_map_is_the_exact_deterministic_projection_of_ten_anchors_and_107_bindings() -> None:
     policy = load_policy()
     validate_policy(policy)
@@ -99,6 +105,7 @@ def test_review_map_is_the_exact_deterministic_projection_of_ten_anchors_and_107
         raise AssertionError("TASK8_FDD_REVIEW_MAP_INTERNAL_PREIMAGE_LEAK")
 
 
+@requires_operator_workbook
 def test_review_map_contains_no_independent_authority_or_runtime_activation_claim() -> None:
     policy = load_policy()
     validate_policy(policy)

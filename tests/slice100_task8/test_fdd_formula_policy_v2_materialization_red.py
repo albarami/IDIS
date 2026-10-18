@@ -11,8 +11,17 @@ from types import ModuleType
 
 import pytest
 
+from tests.slice100_task8._artifact_oracle import requires_operator_workbook
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
-WORKBOOK = Path(r"C:\Projects\IDIS\IDIS\financial Due Diligence.xlsx")
+
+
+def _operator_workbook() -> Path:
+    from tests.slice100_task8._artifact_oracle import require_operator_workbook
+
+    return require_operator_workbook()
+
+
 V1_ARTIFACT = REPO_ROOT / "contracts" / "fdd_formula_policy_v1.json"
 V1_FIXTURE = (
     REPO_ROOT / "tests" / "slice100_task8" / "fixtures" / "fdd_formula_policy_v1_hash_v1.json"
@@ -93,10 +102,11 @@ def test_policy_v1_frozen_files_keep_pinned_hashes_before_v2_build() -> None:
         raise AssertionError("TASK8_POLICY_V1_ARCHIVE_MUTATED")
 
 
+@requires_operator_workbook
 def test_policy_v2_build_is_the_exact_bounded_amendment_without_v1_mutation() -> None:
     before = {path: path.read_bytes() for path in V1_HASHES}
     materializer = _load_module(V2_MATERIALIZER, "_task8_policy_v2_red")
-    v2 = materializer.build_policy(WORKBOOK)
+    v2 = materializer.build_policy(_operator_workbook())
     after = {path: path.read_bytes() for path in V1_HASHES}
     if before != after:
         raise AssertionError("TASK8_POLICY_V1_ARCHIVE_MUTATED")
@@ -186,6 +196,7 @@ def test_policy_v2_contains_no_rejected_v22_or_v1_policy_identity_reference() ->
     ("artifact", "fixture", "review_map", "materializer"),
 )
 @pytest.mark.parametrize("failure_kind", ("missing", "mutated"))
+@requires_operator_workbook
 def test_policy_v2_fails_closed_when_any_pinned_v1_input_is_missing_or_mutated(
     tmp_path: Path,
     input_name: str,
@@ -213,7 +224,7 @@ def test_policy_v2_fails_closed_when_any_pinned_v1_input_is_missing_or_mutated(
     materializer = _load_module(V2_MATERIALIZER, f"_task8_policy_v2_{input_name}_{failure_kind}")
     with pytest.raises(materializer.MaterializationError, match=rf"^{code}$"):
         materializer._build_policy_from_v1_inputs(
-            WORKBOOK,
+            _operator_workbook(),
             v1_artifact_path=copied["artifact"],
             v1_fixture_path=copied["fixture"],
             v1_review_map_path=copied["review_map"],
@@ -221,11 +232,12 @@ def test_policy_v2_fails_closed_when_any_pinned_v1_input_is_missing_or_mutated(
         )
 
 
+@requires_operator_workbook
 def test_policy_v2_artifact_fixture_and_reviewer_map_are_exact() -> None:
     policy = _load_object(V2_ARTIFACT, "TASK8_POLICY_V2_ARTIFACT_NOT_IMPLEMENTED")
     fixture = _load_object(V2_FIXTURE, "TASK8_POLICY_V2_FIXTURE_NOT_IMPLEMENTED")
     materializer = _load_module(V2_MATERIALIZER, "_task8_policy_v2_exact_red")
-    bundle = materializer.build_policy_publication_bundle(WORKBOOK)
+    bundle = materializer.build_policy_publication_bundle(_operator_workbook())
 
     if bundle["policy_artifact_raw"] != V2_ARTIFACT.read_bytes():
         raise AssertionError("TASK8_POLICY_V2_ARTIFACT_DRIFT")

@@ -19,6 +19,8 @@ from ._artifact_oracle import (
     POLICY_ARTIFACT,
     POLICY_FIXTURE,
     REVIEW_MAP,
+    require_operator_workbook,
+    requires_operator_workbook,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -115,6 +117,7 @@ def test_safe_exact_byte_comparison_never_echoes_private_payload() -> None:
         raise AssertionError("TASK8_PRIVATE_BYTES_EMITTED")
 
 
+@requires_operator_workbook
 def test_standalone_policy_publication_is_fixture_map_then_artifact_commit_point(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -129,7 +132,7 @@ def test_standalone_policy_publication_is_fixture_map_then_artifact_commit_point
         observed.append(Path(path))
 
     monkeypatch.setattr(module, "_write_exclusive", record_write)
-    result = module.materialize(OPERATOR_WORKBOOK)
+    result = module.materialize(require_operator_workbook())
 
     assert observed == [
         targets["fixture"],
@@ -145,6 +148,7 @@ def test_standalone_policy_publication_is_fixture_map_then_artifact_commit_point
     assert result["activation_status"] == "INACTIVE"
 
 
+@requires_operator_workbook
 def test_standalone_policy_publication_preflights_differing_target_before_write(
     tmp_path: Path,
 ) -> None:
@@ -156,20 +160,21 @@ def test_standalone_policy_publication_preflights_differing_target_before_write(
         module.MaterializationError,
         match="TASK8_POLICY_PUBLICATION_TARGET_MISMATCH",
     ):
-        module.materialize(OPERATOR_WORKBOOK)
+        module.materialize(require_operator_workbook())
 
     assert targets["artifact"].read_bytes() == b"different-preexisting-bytes"
     assert not targets["fixture"].exists()
     assert not targets["review_map"].exists()
 
 
+@requires_operator_workbook
 def test_standalone_policy_exact_replay_is_read_only(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = _module()
     targets = _retarget(module, tmp_path)
-    first = module.materialize(OPERATOR_WORKBOOK)
+    first = module.materialize(require_operator_workbook())
     before = {
         name: (path.stat().st_size, hashlib.sha256(path.read_bytes()).hexdigest())
         for name, path in targets.items()
@@ -179,7 +184,7 @@ def test_standalone_policy_exact_replay_is_read_only(
         raise AssertionError("TASK8_POLICY_EXACT_REPLAY_REWROTE_FROZEN_BYTES")
 
     monkeypatch.setattr(module, "_write_exclusive", must_not_write)
-    second = module.materialize(OPERATOR_WORKBOOK)
+    second = module.materialize(require_operator_workbook())
 
     assert second == first
     after = {
@@ -190,6 +195,7 @@ def test_standalone_policy_exact_replay_is_read_only(
         raise AssertionError("TASK8_POLICY_EXACT_REPLAY_OUTPUT_DRIFT")
 
 
+@requires_operator_workbook
 def test_standalone_policy_rejects_partial_or_symlink_publication_state(
     tmp_path: Path,
 ) -> None:
@@ -200,7 +206,7 @@ def test_standalone_policy_rejects_partial_or_symlink_publication_state(
         module.MaterializationError,
         match="TASK8_POLICY_PUBLICATION_TARGET_MISMATCH",
     ):
-        module.materialize(OPERATOR_WORKBOOK)
+        module.materialize(require_operator_workbook())
     assert not targets["artifact"].exists()
 
     module = _module()
@@ -215,16 +221,17 @@ def test_standalone_policy_rejects_partial_or_symlink_publication_state(
         module.MaterializationError,
         match="TASK8_POLICY_PUBLICATION_PATH_INVALID",
     ):
-        module.materialize(OPERATOR_WORKBOOK)
+        module.materialize(require_operator_workbook())
     assert external.read_bytes() == b"external"
 
 
+@requires_operator_workbook
 def test_standalone_policy_result_contains_only_safe_hashes_and_gate_metadata(
     tmp_path: Path,
 ) -> None:
     module = _module()
     _retarget(module, tmp_path)
-    result: dict[str, Any] = module.materialize(OPERATOR_WORKBOOK)
+    result: dict[str, Any] = module.materialize(require_operator_workbook())
 
     assert set(result) == {
         "artifact_sha256",
@@ -244,9 +251,10 @@ def test_standalone_policy_result_contains_only_safe_hashes_and_gate_metadata(
         assert len(result[field]) == 64
 
 
+@requires_operator_workbook
 def test_policy_builder_exposes_exact_frozen_production_publication_bundle() -> None:
     module = _module()
-    bundle = module.build_policy_publication_bundle(OPERATOR_WORKBOOK)
+    bundle = module.build_policy_publication_bundle(require_operator_workbook())
 
     assert set(bundle) == {
         "policy_artifact_raw",

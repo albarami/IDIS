@@ -57,6 +57,14 @@ class _Connection:
         self.driver_sql.append(sql)
 
 
+class _AdminUrl:
+    """Stand-in for the SQLAlchemy URL returned by the real identity helper."""
+
+    def render_as_string(self, *, hide_password: bool = True) -> str:
+        del hide_password
+        return "postgresql://admin"
+
+
 class _Engine:
     def __init__(self, connection: _Connection) -> None:
         self._connection = connection
@@ -93,7 +101,7 @@ def test_post_migration_grants_exclude_and_revoke_alembic_metadata(
     monkeypatch.setattr(
         launcher,
         "_migration_database_identity",
-        lambda _profile: ("postgresql://admin", "idis", "idis_application"),
+        lambda _profile: (_AdminUrl(), "idis", "idis_application"),
     )
 
     def exact_catalog(

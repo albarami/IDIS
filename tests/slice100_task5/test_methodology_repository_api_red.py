@@ -438,7 +438,20 @@ def test_full_run_persists_selection_after_run_creation_in_the_request_transacti
         "_validate_full_methodology_selection",
         lambda **_kwargs: methodologies,
     )
-    monkeypatch.setattr(runs_route, "_gather_preflight_corpus", lambda *_args, **_kwargs: [{}])
+    # RunSource.document_ids has min_length=1 (src/idis/models/run_source.py).
+    # The frozen reload is stubbed with the freeze seam: this test isolates
+    # admission/selection ordering and does not open a database connection.
+    preflight_corpus = [{"document_id": "44444444-4444-4444-8444-444444444444"}]
+    monkeypatch.setattr(
+        runs_route,
+        "_gather_preflight_corpus",
+        lambda *_args, **_kwargs: preflight_corpus,
+    )
+    monkeypatch.setattr(
+        runs_route,
+        "_reload_frozen_preflight_corpus",
+        lambda **_kwargs: list(preflight_corpus),
+    )
     monkeypatch.setattr(
         runs_route, "_extraction_ready_documents_from_preflight_corpus", lambda _corpus: []
     )

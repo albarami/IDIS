@@ -14,7 +14,6 @@ import hmac
 import importlib.util
 import inspect
 import json
-import os
 import uuid
 from dataclasses import asdict
 from pathlib import Path
@@ -34,6 +33,7 @@ from idis.persistence.repositories.methodologies import (
     methodology_source_trace_digest,
     methodology_version_hash,
 )
+from tests.slice100_task8._artifact_oracle import requires_operator_workbook
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CDD_TEMPLATE = REPO_ROOT / "src" / "idis" / "methodology" / "templates" / "commercial_dd_v1.json"
@@ -148,16 +148,9 @@ def _load_module(path: Path, name: str) -> ModuleType:
 
 
 def _operator_workbook() -> Path:
-    configured = os.environ.get("IDIS_FDD_METHODOLOGY_PATH", "").strip()
-    path = (
-        Path(configured)
-        if configured
-        else REPO_ROOT.parent / "IDIS" / "financial Due Diligence.xlsx"
-    )
-    if not path.is_file():
-        if os.environ.get("IDIS_REQUIRE_POSTGRES", "0") == "1":
-            pytest.fail("TASK8_FROZEN_WORKBOOK_UNAVAILABLE", pytrace=False)
-        pytest.skip("frozen Task-5 workbook is unavailable")
+    from tests.slice100_task8._artifact_oracle import require_operator_workbook
+
+    path = require_operator_workbook()
     try:
         raw = path.read_bytes()
     except OSError:
@@ -165,6 +158,24 @@ def _operator_workbook() -> Path:
     if len(raw) != 24_905 or hashlib.sha256(raw).hexdigest() != WORKBOOK_SHA256:
         pytest.fail("TASK8_FROZEN_WORKBOOK_IDENTITY_MISMATCH", pytrace=False)
     return path
+
+
+def test_present_fake_workbook_stays_an_identity_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A present file is not recorded as not-executed; identity still fails closed."""
+
+    workbook = tmp_path / "fake.xlsx"
+    workbook.write_bytes(b"not-the-pinned-workbook")
+    monkeypatch.setenv("IDIS_OPERATOR_WORKBOOK_PATH", str(workbook))
+    monkeypatch.delenv("IDIS_REQUIRE_OPERATOR_WORKBOOK", raising=False)
+
+    with pytest.raises(pytest.fail.Exception, match="^TASK8_FROZEN_WORKBOOK_IDENTITY_MISMATCH$"):
+        _operator_workbook()
+
+    assert "OPERATOR_WORKBOOK NOT_EXECUTED" not in capsys.readouterr().out
 
 
 def _policy() -> dict[str, Any]:
@@ -507,6 +518,7 @@ def test_required_calculation_shapes_are_homogeneous_and_exact_version_bound() -
         )
 
 
+@requires_operator_workbook
 def test_actual_frozen_task5_question_and_rehydration_bytes_are_unchanged() -> None:
     _assert_frozen_task5_bytes(
         import_cdd_template(CDD_TEMPLATE),
@@ -518,6 +530,7 @@ def test_actual_frozen_task5_question_and_rehydration_bytes_are_unchanged() -> N
     )
 
 
+@requires_operator_workbook
 def test_named_constructor_verifies_frozen_identities_and_exact_79_row_join() -> None:
     from idis.methodology.models import FddFormulaRequirement
 
@@ -576,6 +589,7 @@ def test_named_constructor_verifies_frozen_identities_and_exact_79_row_join() ->
     )
 
 
+@requires_operator_workbook
 def test_named_constructor_normalizes_policy_failures_before_any_downstream_work(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -651,6 +665,7 @@ def test_named_constructor_normalizes_policy_failures_before_any_downstream_work
     assert (workbook_parse_calls, question_calls) == (0, 0)
 
 
+@requires_operator_workbook
 def test_named_constructor_fails_closed_with_safe_stable_codes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -895,6 +910,7 @@ def test_operator_roundtrip_run_seed_uses_the_exact_current_0038_coordinate() ->
     assert "**run_coordinate" in proof_source
 
 
+@requires_operator_workbook
 def test_policy_v2_import_freeze_reload_preserves_four_fields_in_production_repository() -> None:
     """Operator-backed proof; setup is admin, all repository behavior is app-role."""
 

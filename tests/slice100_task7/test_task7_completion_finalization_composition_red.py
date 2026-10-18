@@ -475,6 +475,9 @@ class _Port:
     def persist_new_outgoing_edges(self, **_kwargs: object) -> None:
         self._record("write:outgoing_edges", write=True)
 
+    def persist_step_receipt_input_references(self, **_kwargs: object) -> None:
+        self._record("write:receipt_inputs", write=True)
+
     def derive_and_persist_usage_receipts(self, **_kwargs: object) -> None:
         self._record("write:usage_receipts", write=True)
 
@@ -654,6 +657,7 @@ def test_completion_is_one_fenced_atomic_uow_in_fixed_lock_and_write_order() -> 
         "write:step_outputs",
         "write:decisions",
         "write:outgoing_edges",
+        "write:receipt_inputs",
         "write:usage_receipts",
         "prove:incoming_equality",
         "write:step_completed",
@@ -666,6 +670,7 @@ def test_completion_is_one_fenced_atomic_uow_in_fixed_lock_and_write_order() -> 
         "write:step_outputs",
         "write:decisions",
         "write:outgoing_edges",
+        "write:receipt_inputs",
         "write:usage_receipts",
         "write:step_completed",
         "write:completion_audit",
@@ -687,6 +692,7 @@ def test_completion_is_one_fenced_atomic_uow_in_fixed_lock_and_write_order() -> 
         "write:step_outputs",
         "write:decisions",
         "write:outgoing_edges",
+        "write:receipt_inputs",
         "write:usage_receipts",
         "prove:incoming_equality",
         "write:step_completed",

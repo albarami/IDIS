@@ -633,3 +633,42 @@ def test_unsigned_deny_files_and_invalid_signatures_remain_canonically_rejected(
             command="worker",
             process_env={"IDIS_STRICT_DOTENV_PATH": str(prepared.profile_path)},
         )
+
+
+# Names from the runtime-stage ENV merge on the local base image
+# python:3.11-slim-bookworm@sha256:04cd27899595a99dfe77709d96f08876bf2ee99139ee2f0fe9ac948005034e5b.
+# The full Dockerfile build did not finish offline; apt does not add ENV names.
+_INSPECTED_IMAGE_ENV_NAMES = frozenset(
+    {
+        "GPG_KEY",
+        "IDIS_VERSION",
+        "LANG",
+        "PATH",
+        "PYTHONDONTWRITEBYTECODE",
+        "PYTHONUNBUFFERED",
+        "PYTHON_SHA256",
+        "PYTHON_VERSION",
+    }
+)
+_LOADER_NAMES = frozenset({"LD_AUDIT", "LD_LIBRARY_PATH", "LD_PRELOAD", "PYTHONHOME", "PYTHONPATH"})
+
+
+def test_inspected_image_env_names_are_accepted_and_unlisted_name_is_rejected(
+    tmp_path: Path,
+    model_path: Path,
+) -> None:
+    module = _helper()
+    assert _INSPECTED_IMAGE_ENV_NAMES <= module._IMAGE_CONTROL_NAMES
+    assert _LOADER_NAMES.isdisjoint(module._IMAGE_CONTROL_NAMES)
+    prepared = _prepare(module, tmp_path, model_path)
+    image_defaults = {name: f"observed-{name}" for name in sorted(_INSPECTED_IMAGE_ENV_NAMES)}
+    startup = {**image_defaults, "IDIS_STRICT_DOTENV_PATH": str(prepared.profile_path)}
+    module.qualify_inputs(prepared, startup_env=startup, image_defaults=image_defaults)
+    rejected_defaults = {**image_defaults, "UNLISTED_IMAGE_ENV": "rejected"}
+    rejected_startup = {**startup, "UNLISTED_IMAGE_ENV": "rejected"}
+    with pytest.raises(module.PreparationError, match="CI_HEALTH_STARTUP_ENV_REJECTED"):
+        module.qualify_inputs(
+            prepared,
+            startup_env=rejected_startup,
+            image_defaults=rejected_defaults,
+        )

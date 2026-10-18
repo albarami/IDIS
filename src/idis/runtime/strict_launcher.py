@@ -338,8 +338,12 @@ def _ensure_migration_database(profile: StrictRuntimeProfile) -> None:
     engine: Any | None = None
     try:
         sqlalchemy = importlib.import_module("sqlalchemy")
+        from idis.persistence.db import _ensure_psycopg_driver
+
         engine = sqlalchemy.create_engine(
-            admin_url.set(database="postgres"),
+            _ensure_psycopg_driver(
+                admin_url.set(database="postgres").render_as_string(hide_password=False)
+            ),
             isolation_level="AUTOCOMMIT",
         )
         with engine.connect() as connection:
@@ -645,7 +649,11 @@ def _grant_and_verify_migration_privileges(profile: StrictRuntimeProfile) -> Non
     engine: Any | None = None
     try:
         sqlalchemy = importlib.import_module("sqlalchemy")
-        engine = sqlalchemy.create_engine(admin_url)
+        from idis.persistence.db import _ensure_psycopg_driver
+
+        engine = sqlalchemy.create_engine(
+            _ensure_psycopg_driver(admin_url.render_as_string(hide_password=False))
+        )
         with engine.begin() as connection:
             table_names = tuple(
                 str(value)

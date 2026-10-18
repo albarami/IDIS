@@ -4214,7 +4214,7 @@ def build_default_dependency_probe_adapters(
             from sqlalchemy import create_engine
 
             erasure_engine = create_engine(
-                env.get("IDIS_ERASURE_DATABASE_URL", ""),
+                db._ensure_psycopg_driver(env.get("IDIS_ERASURE_DATABASE_URL", "")),
                 pool_size=1,
                 max_overflow=0,
                 pool_pre_ping=True,

@@ -63,6 +63,10 @@ _IMAGE_CONTROL_NAMES = frozenset(
         "PYTHON_SETUPTOOLS_VERSION",
         "PYTHONDONTWRITEBYTECODE",
         "PYTHONUNBUFFERED",
+        # Derived from the pinned base image's Config.Env plus the Dockerfile
+        # runtime-stage ENV, not inspected from a built image.
+        "GPG_KEY",
+        "IDIS_VERSION",
     }
 )
 _RUNTIME_PHASES = (
@@ -379,8 +383,10 @@ def _validate_startup_environment(
     startup_env: Mapping[str, str],
     image_defaults: Mapping[str, str],
 ) -> None:
-    # image_defaults MUST be the reviewed pinned image's exact nonsecret defaults,
-    # not a caller's ambient environment. H1b owns inspecting final Docker Config.Env.
+    # image_defaults MUST be the hosted image Config.Env, limited to
+    # _IMAGE_CONTROL_NAMES. GPG_KEY and IDIS_VERSION were derived from the
+    # pinned base image's Config.Env plus the Dockerfile runtime-stage ENV,
+    # not inspected from a built image.
     if (
         not set(image_defaults) <= _IMAGE_CONTROL_NAMES
         or set(startup_env) != set(image_defaults) | {"IDIS_STRICT_DOTENV_PATH"}

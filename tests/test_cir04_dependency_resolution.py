@@ -15,6 +15,64 @@ from packaging.version import Version
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "verify_dependency_resolution.py"
+_PIP_PIN_LINE = (
+    '.venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple "pip==26.2.1"'
+)
+_DEV_INSTALL_LINE = (
+    ".venv/bin/python -m pip --isolated install --index-url "
+    "https://pypi.org/simple -c requirements/constraints-py311.txt "
+    "--build-constraint requirements/constraints-py311.txt "
+    '-e ".[dev]" setuptools wheel'
+)
+_SHARED_INSTALL_LINES = (
+    "python -m venv .venv",
+    _PIP_PIN_LINE,
+    _DEV_INSTALL_LINE,
+    ".venv/bin/python -m pip check",
+    ".venv/bin/python scripts/verify_dependency_resolution.py",
+)
+_GITHUB_PATH_LINE = 'echo "$PWD/.venv/bin" >> "$GITHUB_PATH"'
+_INSTALL_COMPOSITION_RUN = "\n".join(("set -euo pipefail", *_SHARED_INSTALL_LINES)) + "\n"
+_MIGRATION_CEILING_RUN = "set -euo pipefail\n.venv/bin/python scripts/check_migration_ceiling.py\n"
+_HISTORICAL_CEILING_RUN = "python scripts/check_migration_ceiling.py"
+_VENV_MARKER = "python -m venv .venv"
+_COUNT_MARKERS = (
+    _VENV_MARKER,
+    "setuptools wheel",
+    _GITHUB_PATH_LINE,
+    "--build-constraint requirements/constraints-py311.txt",
+    '"pip==26.2.1"',
+    "python scripts/verify_dependency_resolution.py",
+    _HISTORICAL_CEILING_RUN,
+)
+# f99595ef per-job counts, in _COUNT_MARKERS order.
+_F99595EF_JOB_COUNTS: dict[str, tuple[int, ...]] = {
+    "ui-check": (0, 0, 0, 0, 0, 0, 0),
+    "check": (1, 1, 1, 1, 1, 1, 1),
+    "postgres-integration": (1, 1, 1, 1, 1, 1, 1),
+    "evaluation-harness": (1, 1, 1, 1, 1, 1, 0),
+    "container-build": (1, 1, 1, 1, 1, 1, 0),
+    "k8s-validate": (0, 0, 0, 0, 0, 0, 0),
+    "terraform-validate": (0, 0, 0, 0, 0, 0, 0),
+    "backup-restore-drill": (1, 1, 1, 1, 1, 1, 1),
+    "release-gate": (1, 1, 1, 1, 1, 1, 0),
+}
+_CONTAINER_BUILD_COUNTS = (2, 2, 1, 2, 2, 2, 1)
+
+
+def _run_steps(workflow: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    steps: list[tuple[str, dict[str, Any]]] = []
+    for name, job in workflow["jobs"].items():
+        for step in job.get("steps", []):
+            if isinstance(step.get("run"), str):
+                steps.append((name, step))
+    return steps
+
+
+def _job_marker_counts(job: dict[str, Any]) -> tuple[int, ...]:
+    runs = [step.get("run") for step in job.get("steps", []) if isinstance(step.get("run"), str)]
+    text = "\n".join(runs)
+    return tuple(text.count(marker) for marker in _COUNT_MARKERS)
 
 
 class DependencyResolutionTests(unittest.TestCase):
@@ -233,17 +291,17 @@ class DependencyWiringTests(unittest.TestCase):
 
     def test_every_ci_install_uses_a_fresh_environment_and_pinned_seed_tools(self) -> None:
         workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        self.assertEqual(workflow.count("python -m venv .venv"), 6)
-        self.assertEqual(workflow.count("setuptools wheel"), 6)
+        self.assertEqual(workflow.count("python -m venv .venv"), 7)
+        self.assertEqual(workflow.count("setuptools wheel"), 7)
         self.assertEqual(workflow.count('echo "$PWD/.venv/bin" >> "$GITHUB_PATH"'), 6)
 
     def test_ci_retains_checks_and_bounds_all_dependency_installations(self) -> None:
         workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        self.assertEqual(workflow.count("--build-constraint requirements/constraints-py311.txt"), 6)
-        self.assertEqual(workflow.count('"pip==26.2.1"'), 6)
-        self.assertEqual(workflow.count("python scripts/verify_dependency_resolution.py"), 6)
+        self.assertEqual(workflow.count("--build-constraint requirements/constraints-py311.txt"), 7)
+        self.assertEqual(workflow.count('"pip==26.2.1"'), 7)
+        self.assertEqual(workflow.count("python scripts/verify_dependency_resolution.py"), 7)
         self.assertIn("pytest tests/test_slice99_backup_restore_postgres.py -v", workflow)
-        self.assertEqual(workflow.count("python scripts/check_migration_ceiling.py"), 3)
+        self.assertEqual(workflow.count("python scripts/check_migration_ceiling.py"), 4)
         self._assert_required_ci_job_execution(yaml.safe_load(workflow))
 
     def _assert_required_ci_job_execution(self, workflow: dict[str, Any]) -> None:
@@ -302,6 +360,94 @@ class DependencyWiringTests(unittest.TestCase):
 
                 with self.assertRaisesRegex(AssertionError, f"{job} must check the ceiling first"):
                     self._assert_required_ci_job_execution(workflow)
+
+    def test_container_build_pins_actual_install_and_ceiling_literals(self) -> None:
+        workflow_text = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self._assert_container_build_dependency_pins(workflow_text)
+
+    def _assert_container_build_dependency_pins(self, workflow_text: str) -> None:
+        workflow: dict[str, Any] = yaml.safe_load(workflow_text)
+        self._assert_install_composition_pin(workflow)
+        self._assert_migration_ceiling_pin(workflow)
+        self._assert_f99595ef_job_counts_except_container_build(workflow, workflow_text)
+
+    def _assert_install_composition_pin(self, workflow: dict[str, Any]) -> None:
+        located = [
+            (name, step)
+            for name, step in _run_steps(workflow)
+            if step.get("id") == "install-composition"
+        ]
+        self.assertEqual(
+            [name for name, _step in located],
+            ["container-build"],
+            "install-composition must be the container-build install block",
+        )
+        composition = located[0][1]
+        self.assertEqual(composition["run"], _INSTALL_COMPOSITION_RUN)
+        check_install = next(
+            step
+            for step in workflow["jobs"]["check"]["steps"]
+            if step.get("name") == "Install dependencies"
+        )
+        shared_count = len(_SHARED_INSTALL_LINES)
+        composition_lines = composition["run"].splitlines()
+        check_lines = check_install["run"].splitlines()
+        self.assertEqual(composition_lines[1:], check_lines[:shared_count])
+        self.assertEqual(composition_lines[1:], list(_SHARED_INSTALL_LINES))
+        self.assertEqual(check_lines[shared_count:], [_GITHUB_PATH_LINE])
+        self.assertNotIn(_GITHUB_PATH_LINE, composition["run"])
+        installs = [
+            (name, step) for name, step in _run_steps(workflow) if _VENV_MARKER in step["run"]
+        ]
+        self.assertEqual(len(installs), 7)
+        self.assertEqual(
+            [step["run"] for _name, step in installs if step.get("id") == "install-composition"],
+            [_INSTALL_COMPOSITION_RUN],
+        )
+
+    def _assert_migration_ceiling_pin(self, workflow: dict[str, Any]) -> None:
+        located = [
+            (name, step)
+            for name, step in _run_steps(workflow)
+            if step.get("id") == "migration-ceiling"
+        ]
+        self.assertEqual(
+            [name for name, _step in located],
+            ["container-build"],
+            "migration-ceiling must be the container-build ceiling command",
+        )
+        self.assertEqual(located[0][1]["run"], _MIGRATION_CEILING_RUN)
+        ceilings = [
+            (name, step)
+            for name, step in _run_steps(workflow)
+            if _HISTORICAL_CEILING_RUN in step["run"]
+        ]
+        self.assertEqual(len(ceilings), 4)
+        historical = [step for _name, step in ceilings if step.get("id") != "migration-ceiling"]
+        self.assertEqual(
+            [step.get("run") for step in historical],
+            [_HISTORICAL_CEILING_RUN] * 3,
+        )
+
+    def _assert_f99595ef_job_counts_except_container_build(
+        self, workflow: dict[str, Any], workflow_text: str
+    ) -> None:
+        self.assertEqual(set(workflow["jobs"]), set(_F99595EF_JOB_COUNTS))
+        for name, expected in _F99595EF_JOB_COUNTS.items():
+            if name == "container-build":
+                continue
+            self.assertEqual(_job_marker_counts(workflow["jobs"][name]), expected, name)
+        self.assertEqual(
+            _job_marker_counts(workflow["jobs"]["container-build"]),
+            _CONTAINER_BUILD_COUNTS,
+            "container-build",
+        )
+        totals = [0] * len(_COUNT_MARKERS)
+        for job in workflow["jobs"].values():
+            for index, count in enumerate(_job_marker_counts(job)):
+                totals[index] += count
+        for marker, total in zip(_COUNT_MARKERS, totals, strict=True):
+            self.assertEqual(workflow_text.count(marker), total, marker)
 
     def test_docker_uses_the_same_runtime_and_build_constraints(self) -> None:
         dockerfile = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")

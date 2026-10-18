@@ -526,38 +526,1017 @@ jobs:
       - {"name": "Checkout code", "uses": "actions/checkout@v4"}
       - {"name": "Set up Docker Buildx", "uses": "docker/setup-buildx-action@v3"}
       - {"name": "Build Docker image", "uses": "docker/build-push-action@v5", "with": {"context": ".", "file": "./Dockerfile", "push": false, "load": true, "tags": "idis:ci-${{ github.sha }}", "cache-from": "type=gha", "cache-to": "type=gha,mode=max"}}
+      - name: Set up Python 3.11 for composition
+        id: setup-composition
+        if: success()
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install composition interpreter
+        id: install-composition
+        if: success()
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple "pip==26.2.1"
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple -c requirements/constraints-py311.txt --build-constraint requirements/constraints-py311.txt -e ".[dev]" setuptools wheel
+          .venv/bin/python -m pip check
+          .venv/bin/python scripts/verify_dependency_resolution.py
+      - name: Reject image env names outside the reviewed allowlist
+        id: inspect-image-env
+        if: success()
+        run: |
+          set -euo pipefail
+          .venv/bin/python - <<'H1B_PY'
+          import hashlib
+          import importlib.util
+          import json
+          import os
+          import subprocess
+          import sys
+
+          spec = importlib.util.spec_from_file_location(
+              "ci_bootstrap_health", ".github/scripts/prepare_bootstrap_health.py"
+          )
+          helper = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(helper)
+          raw = subprocess.check_output(
+              [
+                  "docker",
+                  "image",
+                  "inspect",
+                  "--format",
+                  "{{range .Config.Env}}{{println .}}{{end}}",
+                  "idis:ci-" + os.environ["GITHUB_SHA"],
+              ],
+              text=True,
+          )
+          names = sorted(
+              line.split("=", 1)[0] for line in raw.splitlines() if "=" in line
+          )
+          extra = sorted(set(names) - set(helper._IMAGE_CONTROL_NAMES))
+          print(
+              json.dumps(
+                  {
+                      "phase": "image-env",
+                      "extra_names": extra,
+                      "names_sha256": hashlib.sha256(
+                          ("\n".join(names) + "\n").encode()
+                      ).hexdigest(),
+                  },
+                  sort_keys=True,
+              )
+          )
+          if extra:
+              sys.exit(1)
+          H1B_PY
+      - name: Reject gate Task4 and unsigned envelopes before any container start
+        id: signature-and-gate-negatives
+        if: success()
+        run: |
+          set -euo pipefail
+          .venv/bin/python -m pytest -q --disable-socket \
+            tests/test_ci_bootstrap_health_composition.py::test_unsigned_deny_files_and_invalid_signatures_remain_canonically_rejected \
+            tests/test_ci_bootstrap_health_composition.py::test_only_unchanged_default_api_command_may_cross_consumer_boundary \
+            tests/test_ci_bootstrap_health_composition.py::test_zero_call_cap_does_not_become_full_budget_admission
+      - name: Restore pinned tiny.en model cache
+        id: model-cache
+        if: success()
+        uses: actions/cache/restore@v4
+        with:
+          path: model-cache/0d3d19a32d3338f10357c0889762bd8d64bbdeba
+          key: h1b-tiny-en-0d3d19a32d3338f10357c0889762bd8d64bbdeba-8a9f6ac2c61d339ea4f5a27d00934ea5fe83bcb0d25b67a01cd3b47b9e1adf34
+      - name: Fetch pinned tiny.en model on cache miss
+        id: model-fetch
+        if: "success() && steps.model-cache.outputs.cache-hit != 'true'"
+        run: |
+          set -euo pipefail
+          rev=0d3d19a32d3338f10357c0889762bd8d64bbdeba
+          dest="model-staging/${rev}"
+          mkdir -p "$dest"
+          base="https://huggingface.co/Systran/faster-whisper-tiny.en/resolve/${rev}"
+          curl --fail --location --silent --show-error --output "${dest}/README.md" "${base}/README.md"
+          curl --fail --location --silent --show-error --output "${dest}/config.json" "${base}/config.json"
+          curl --fail --location --silent --show-error --output "${dest}/model.bin" "${base}/model.bin"
+          curl --fail --location --silent --show-error --output "${dest}/tokenizer.json" "${base}/tokenizer.json"
+          curl --fail --location --silent --show-error --output "${dest}/vocabulary.txt" "${base}/vocabulary.txt"
+      - name: Verify pinned tiny.en hashes and install the model tree
+        id: model-verify
+        if: success()
+        run: |
+          set -euo pipefail
+          .venv/bin/python - <<'H1B_PY'
+          import hashlib
+          import json
+          import os
+          import shutil
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          from idis.parsers.media import fingerprint_local_faster_whisper_model
+
+          revision = "0d3d19a32d3338f10357c0889762bd8d64bbdeba"
+          linux_pin = "4b1662df734cdf3854f6a3de0a9fd9c3fdaadfa644d6c7471f5c63c9cb62f6e5"
+          windows_receipt = "47e043de5fce0c94a30e264cb503f65ccb69cf03b6db296fa14e937a0ab81aea"
+          manifest_sha256 = "8a9f6ac2c61d339ea4f5a27d00934ea5fe83bcb0d25b67a01cd3b47b9e1adf34"
+          expected = {
+              "README.md": (1323, "1b7816626bf0548e4b71a467f4112b4592924bc818e3117f19aefcc50ce4b6aa"),
+              "config.json": (2317, "14b1b421a90349bc551b881461426b561a874049cb9e4c4864f2ca384f6a7cc5"),
+              "model.bin": (75537502, "1a5afae06a4db91c975c9a9d78be5cc110ee4ea022ad57d55492e4550e936b2a"),
+              "tokenizer.json": (2128466, "929c5252409436dce1b38a75d1abbcb5e132d170d8e324e4e04ed915fa2d22df"),
+              "vocabulary.txt": (422309, "ff77588746d3a2595d32ab5b69ffd7b95ce2441ac57533cb66fc3eb575a115cf"),
+          }
+          cache_hit = os.environ.get("MODEL_CACHE_HIT") == "true"
+          staging = Path("model-staging") / revision
+          cached = Path("model-cache") / revision
+          source = cached if cache_hit else staging
+          if not source.is_dir():
+              sys.exit(1)
+          names = {path.name for path in source.iterdir()}
+          if names != set(expected):
+              sys.exit(1)
+          files = {}
+          for name, (size, digest) in expected.items():
+              path = source / name
+              if path.is_symlink() or not path.is_file() or path.stat().st_size != size:
+                  sys.exit(1)
+              observed = hashlib.sha256(path.read_bytes()).hexdigest()
+              if observed != digest:
+                  sys.exit(1)
+              files[name] = {"bytes": size, "sha256": digest}
+          fingerprint = fingerprint_local_faster_whisper_model(source)
+          if fingerprint != linux_pin:
+              sys.exit(1)
+          if not cache_hit:
+              cached.parent.mkdir(parents=True, exist_ok=True)
+              if cached.exists():
+                  shutil.rmtree(cached)
+              shutil.copytree(staging, cached)
+          destination = Path("/opt/idis-models") / revision
+          subprocess.check_call(["sudo", "-n", "install", "-d", "-m", "0755", str(destination)])
+          for name in expected:
+              subprocess.check_call(
+                  ["sudo", "-n", "install", "-m", "0644", str(cached / name), str(destination / name)]
+              )
+          run = os.environ["GITHUB_RUN_ID"]
+          run_root = Path("/opt/idis-ci-health") / run
+          subprocess.check_call(
+              ["sudo", "-n", "install", "-d", "-m", "0700", "-o", "1000", "-g", "1000", str(run_root)]
+          )
+          receipt = {
+              "files": files,
+              "model_tree_fingerprint_linux": linux_pin,
+              "model_tree_fingerprint_windows_receipt": windows_receipt,
+              "manifest_sha256": manifest_sha256,
+              "revision": revision,
+          }
+          encoded = json.dumps(receipt, sort_keys=True)
+          subprocess.check_call(
+              ["sudo", "-n", "tee", str(run_root / "model-verified.json")],
+              input=encoded.encode(),
+              stdout=subprocess.DEVNULL,
+          )
+          subprocess.check_call(["sudo", "-n", "chmod", "0644", str(run_root / "model-verified.json")])
+          print(
+              json.dumps(
+                  {
+                      "phase": "model",
+                      "code": "PRESENT",
+                      "manifest_sha256": manifest_sha256,
+                      "model_tree_fingerprint_linux": linux_pin,
+                      "model_tree_fingerprint_windows_receipt": windows_receipt,
+                  },
+                  sort_keys=True,
+              )
+          )
+          H1B_PY
+        env:
+          MODEL_CACHE_HIT: ${{ steps.model-cache.outputs.cache-hit }}
+      - name: Save pinned tiny.en model cache
+        id: model-cache-save
+        if: "success() && steps.model-cache.outputs.cache-hit != 'true'"
+        uses: actions/cache/save@v4
+        with:
+          path: model-cache/0d3d19a32d3338f10357c0889762bd8d64bbdeba
+          key: h1b-tiny-en-0d3d19a32d3338f10357c0889762bd8d64bbdeba-8a9f6ac2c61d339ea4f5a27d00934ea5fe83bcb0d25b67a01cd3b47b9e1adf34
+      - name: Prepare synthetic profile as root for uid 1000
+        id: prepare-inputs
+        if: success()
+        run: |
+          set -euo pipefail
+          sudo install -d -m 0700 -o 1000 -g 1000 "/opt/idis-ci-health/${GITHUB_RUN_ID}"
+          sudo -n .venv/bin/python .github/scripts/prepare_bootstrap_health.py \
+            --synthetic-ci-health \
+            --authority AUTH-CI-HEALTH-20261017 \
+            --output-root "/opt/idis-ci-health/${GITHUB_RUN_ID}/inputs" \
+            --model-path /opt/idis-models/0d3d19a32d3338f10357c0889762bd8d64bbdeba \
+            --owner-uid 1000
+      - name: Mask maintenance secrets and separate that directory
+        id: mask-maintenance
+        if: success()
+        run: |
+          set -euo pipefail
+          sudo -n GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_SHA="$GITHUB_SHA" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" .venv/bin/python - <<'H1B_PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+          from urllib.parse import unquote, urlsplit
+
+          run = os.environ["GITHUB_RUN_ID"]
+          root = Path(f"/opt/idis-ci-health/{run}/inputs")
+          held = Path(f"/opt/idis-ci-health/{run}/maintenance")
+          os.replace(root / "maintenance", held)
+          payload = json.loads((held / "bootstrap.json").read_text())
+          admin = urlsplit(payload["IDIS_DATABASE_ADMIN_URL"])
+          password = unquote(admin.password or "")
+          print(f"::add-mask::{payload['IDIS_DATABASE_ADMIN_URL']}")
+          print(f"::add-mask::{password}")
+          for name in (
+              "application_password",
+              "erasure_password",
+              "redis_password",
+              "neo4j_password",
+          ):
+              print(f"::add-mask::{payload[name]}")
+          fields = (
+              ("POSTGRES_USER", "postgres"),
+              ("POSTGRES_PASSWORD", password),
+              ("REDIS_PASSWORD", payload["redis_password"]),
+          )
+          lines = []
+          for name, value in fields:
+              if not re.fullmatch(r"[A-Za-z0-9_-]+", value):
+                  raise SystemExit(1)
+              lines.append(name + "=" + value)
+          env_path = Path(f"/opt/idis-ci-health/{run}/datastore.env")
+          flags = os.O_CREAT + os.O_EXCL + os.O_WRONLY
+          fd = os.open(env_path, flags, 0o600)
+          with os.fdopen(fd, "w") as handle:
+              handle.write("\n".join(lines) + "\n")
+          print(json.dumps({"phase": "maintenance", "moved": True}, sort_keys=True))
+          H1B_PY
+      - name: Create the network-none namespace and disposable datastores
+        id: disposable-datastores
+        if: success()
+        run: |
+          set -euo pipefail
+          sudo -n GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_SHA="$GITHUB_SHA" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" .venv/bin/python - <<'H1B_PY'
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          run = os.environ["GITHUB_RUN_ID"]
+          image = "idis:ci-" + os.environ["GITHUB_SHA"]
+          holder = f"idis-h1b-netns-{run}"
+          env_path = Path(f"/opt/idis-ci-health/{run}/datastore.env")
+          child_env = os.environ.copy()
+          for line in env_path.read_text().splitlines():
+              name, value = line.split("=", 1)
+              child_env[name] = value
+          profile = Path(f"/opt/idis-ci-health/{run}/inputs/api/synthetic-bootstrap.env")
+          values = {}
+          for line in profile.read_text().splitlines():
+              name, raw = line.split("=", 1)
+              values[name] = json.loads(raw)
+          objects = Path(values["IDIS_OBJECT_STORE_BASE_DIR"])
+          if objects.parent.parent != Path("/var/lib/idis-ci-health"):
+              raise SystemExit(1)
+          objects.parent.mkdir(parents=True, exist_ok=True)
+          objects.mkdir(mode=0o700)
+          os.chmod(objects, 0o700)
+          os.chmod(objects.parent, 0o700)
+          os.chown(objects, 1000, 1000)
+          os.chown(objects.parent, 1000, 1000)
+          pointer = Path(f"/opt/idis-ci-health/{run}/object-store-parent")
+          pointer.write_text(str(objects.parent) + "\n")
+          os.chmod(pointer, 0o600)
+          Path(f"/opt/idis-ci-health/{run}/object-path").write_text(str(objects) + "\n")
+          subprocess.check_call(
+              [
+                  "docker", "run", "-d", "--name", holder,
+                  "--network", "none",
+                  "--entrypoint", "python", image,
+                  "-c", "import time; time.sleep(10000000)",
+              ]
+          )
+          mode = subprocess.check_output(
+              ["docker", "inspect", "--format", "{{.HostConfig.NetworkMode}}", holder],
+              text=True,
+          ).strip()
+          if mode != "none":
+              raise SystemExit(1)
+          subprocess.check_call(
+              [
+                  "docker", "run", "-d", "--name", f"idis-h1b-pg-{run}",
+                  "--network", f"container:{holder}",
+                  "-e", "POSTGRES_USER",
+                  "-e", "POSTGRES_PASSWORD",
+                  "pgvector/pgvector:pg16@sha256:a97d77306ff47cc1d8add4d000cec2207da2e110746318df3137ce53c337ca30",
+              ],
+              env=child_env,
+          )
+          redis_password = child_env["REDIS_PASSWORD"]
+          if not re.fullmatch(r"[A-Za-z0-9_-]+", redis_password):
+              raise SystemExit(1)
+          child_env["REDISCLI_AUTH"] = redis_password
+          redis_start = r"""sh -c 'printf "bind 127.0.0.1\nprotected-mode yes\nrequirepass %s\n" "$REDIS_PASSWORD" | exec redis-server -'"""
+          prefix = "sh -c '"
+          if not redis_start.startswith(prefix) or not redis_start.endswith("'"):
+              raise SystemExit(1)
+          if "|" not in redis_start or "PIPESTATUS" in redis_start:
+              raise SystemExit(1)
+          subprocess.check_call(
+              [
+                  "docker", "run", "-d", "--name", f"idis-h1b-redis-{run}",
+                  "--network", f"container:{holder}",
+                  "-e", "REDIS_PASSWORD",
+                  "-e", "REDISCLI_AUTH",
+                  "redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499",
+                  "sh", "-c", redis_start[len(prefix):-1],
+              ],
+              env=child_env,
+          )
+          print(json.dumps({"phase": "datastores", "started": True}, sort_keys=True))
+          H1B_PY
+      - name: Census loopback-only topology before the API start
+        id: topology-before
+        if: success()
+        run: |
+          set -euo pipefail
+          sudo -n GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_SHA="$GITHUB_SHA" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" .venv/bin/python - <<'H1B_PY'
+          import json
+          import os
+          import subprocess
+
+          run = os.environ["GITHUB_RUN_ID"]
+          holder = f"idis-h1b-netns-{run}"
+          script = (
+              "import pathlib,sys\n"
+              "names=sorted(p.name for p in pathlib.Path('/sys/class/net').iterdir())\n"
+              "if names!=['lo']:\n"
+              "    sys.exit(1)\n"
+              "rows=pathlib.Path('/proc/net/route').read_text().splitlines()[1:]\n"
+              "for row in rows:\n"
+              "    cols=row.split()\n"
+              "    if cols and cols[0]!='lo':\n"
+              "        sys.exit(1)\n"
+              "for row in pathlib.Path('/proc/net/ipv6_route').read_text().splitlines():\n"
+              "    cols=row.split()\n"
+              "    if cols and cols[-1]!='lo':\n"
+              "        sys.exit(1)\n"
+          )
+          result = subprocess.run(
+              ["docker", "exec", holder, "python", "-c", script],
+              check=False,
+          )
+          print(json.dumps({"phase": "topology-before", "only_lo": result.returncode == 0}, sort_keys=True))
+          if result.returncode != 0:
+              raise SystemExit(result.returncode)
+          H1B_PY
+      - name: Enforce authorized migration ceiling before bootstrap
+        id: migration-ceiling
+        if: success()
+        run: |
+          set -euo pipefail
+          .venv/bin/python scripts/check_migration_ceiling.py
+      - name: Create migration 0038 erasure roles on the postgres database
+        id: erasure-roles
+        if: success()
+        run: |
+          set -euo pipefail
+          sudo -n GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_SHA="$GITHUB_SHA" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" .venv/bin/python - <<'H1B_PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          run = os.environ["GITHUB_RUN_ID"]
+          image = "idis:ci-" + os.environ["GITHUB_SHA"]
+          holder = f"idis-h1b-netns-{run}"
+          workspace = os.environ["GITHUB_WORKSPACE"]
+          maintenance = f"/opt/idis-ci-health/{run}/maintenance"
+          container_script = r"""
+          import json, os, runpy, sys, time
+          from pathlib import Path
+          from urllib.parse import unquote, urlsplit
+          from sqlalchemy import create_engine, text
+          from sqlalchemy.exc import SQLAlchemyError
+          from sqlalchemy.pool import NullPool
+          payload = json.loads(Path("/maintenance/bootstrap.json").read_text())
+          admin = urlsplit(payload["IDIS_DATABASE_ADMIN_URL"])
+          password = unquote(admin.password or "")
+          os.environ["IDIS_CI_ERASURE_ADMIN_URL"] = (
+              "postgresql+psycopg2://postgres:" + password + "@127.0.0.1:5432/postgres"
+          )
+          url = os.environ["IDIS_CI_ERASURE_ADMIN_URL"]
+          deadline = time.time() + 90
+          ready = False
+          while time.time() < deadline:
+              try:
+                  engine = create_engine(url, poolclass=NullPool, connect_args={"connect_timeout": 2})
+                  with engine.connect() as connection:
+                      connection.execute(text("SELECT 1"))
+                  engine.dispose()
+                  ready = True
+                  break
+              except SQLAlchemyError:
+                  time.sleep(2)
+          if not ready:
+              print(json.dumps({"phase": "pg-ready", "code": "CI_HEALTH_DATASTORE_TIMEOUT"}, sort_keys=True))
+              raise SystemExit(1)
+          sys.argv = ["prepare_ci_erasure_roles.py", "--disposable-ci"]
+          runpy.run_path("/src/scripts/prepare_ci_erasure_roles.py", run_name="__main__")
+          """
+          log = Path(maintenance) / "erasure-roles.log"
+          result = subprocess.run(
+              [
+                  "docker", "run", "--rm", "--user", "0",
+                  "--network", f"container:{holder}",
+                  "-v", f"{workspace}:/src:ro",
+                  "-w", "/src",
+                  "-v", f"{maintenance}:/maintenance:ro",
+                  "--entrypoint", "/opt/venv/bin/python",
+                  image, "-c", container_script,
+              ],
+              stdout=subprocess.PIPE,
+              stderr=subprocess.STDOUT,
+              check=False,
+          )
+          log.write_bytes(result.stdout)
+          print(json.dumps({"phase": "erasure-roles", "exit": result.returncode}, sort_keys=True))
+          if result.returncode != 0:
+              raise SystemExit(result.returncode)
+          H1B_PY
+      - name: Bootstrap the sealed database to the packaged Alembic head
+        id: pg-bootstrap
+        if: success()
+        env:
+          IDIS_PG_HOST: "127.0.0.1"
+          IDIS_PG_PORT: "5432"
+          IDIS_PG_DB_NAME: idis_ci_health
+          PG_ADMIN_USER: postgres
+          IDIS_PG_APP_USER: idis_app
+        run: |
+          set -euo pipefail
+          sudo -n GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_SHA="$GITHUB_SHA" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" IDIS_PG_HOST="$IDIS_PG_HOST" IDIS_PG_PORT="$IDIS_PG_PORT" IDIS_PG_DB_NAME="$IDIS_PG_DB_NAME" PG_ADMIN_USER="$PG_ADMIN_USER" IDIS_PG_APP_USER="$IDIS_PG_APP_USER" .venv/bin/python - <<'H1B_PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          run = os.environ["GITHUB_RUN_ID"]
+          image = "idis:ci-" + os.environ["GITHUB_SHA"]
+          holder = f"idis-h1b-netns-{run}"
+          workspace = os.environ["GITHUB_WORKSPACE"]
+          maintenance = f"/opt/idis-ci-health/{run}/maintenance"
+          container_script = r"""
+          import json, os, runpy, sys
+          from pathlib import Path
+          from urllib.parse import unquote, urlsplit
+          payload = json.loads(Path("/maintenance/bootstrap.json").read_text())
+          admin = urlsplit(payload["IDIS_DATABASE_ADMIN_URL"])
+          os.environ["PG_ADMIN_PASSWORD"] = unquote(admin.password or "")
+          os.environ["IDIS_PG_APP_PASSWORD"] = payload["application_password"]
+          sys.argv = ["pg_bootstrap_ci.py"]
+          runpy.run_path("/src/scripts/pg_bootstrap_ci.py", run_name="__main__")
+          """
+          log = Path(maintenance) / "bootstrap.log"
+          result = subprocess.run(
+              [
+                  "docker", "run", "--rm", "--user", "0",
+                  "--network", f"container:{holder}",
+                  "-v", f"{workspace}:/src:ro",
+                  "-w", "/src",
+                  "-v", f"{maintenance}:/maintenance:ro",
+                  "--entrypoint", "/opt/venv/bin/python",
+                  "-e", "IDIS_PG_HOST",
+                  "-e", "IDIS_PG_PORT",
+                  "-e", "IDIS_PG_DB_NAME",
+                  "-e", "PG_ADMIN_USER",
+                  "-e", "IDIS_PG_APP_USER",
+                  image, "-c", container_script,
+              ],
+              stdout=subprocess.PIPE,
+              stderr=subprocess.STDOUT,
+              check=False,
+              env=os.environ.copy(),
+          )
+          log.write_bytes(result.stdout)
+          print(json.dumps({"phase": "pg-bootstrap", "exit": result.returncode}, sort_keys=True))
+          if result.returncode != 0:
+              raise SystemExit(result.returncode)
+          H1B_PY
+      - name: Qualify startup env and start the API
+        id: start-api
+        if: success()
+        run: |
+          set -euo pipefail
+          sudo -n GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_SHA="$GITHUB_SHA" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" .venv/bin/python - <<'H1B_PY'
+          import importlib.util
+          import json
+          import os
+          import re
+          import subprocess
+          import time
+          from pathlib import Path
+
+          run = os.environ["GITHUB_RUN_ID"]
+          image = "idis:ci-" + os.environ["GITHUB_SHA"]
+          holder = f"idis-h1b-netns-{run}"
+          root = Path(f"/opt/idis-ci-health/{run}/inputs")
+          spec = importlib.util.spec_from_file_location(
+              "ci_bootstrap_health", ".github/scripts/prepare_bootstrap_health.py"
+          )
+          helper = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(helper)
+          raw = subprocess.check_output(
+              [
+                  "docker", "image", "inspect",
+                  "--format", "{{range .Config.Env}}{{println .}}{{end}}",
+                  image,
+              ],
+              text=True,
+          )
+          image_defaults = {}
+          for line in raw.splitlines():
+              if "=" not in line:
+                  continue
+              name, value = line.split("=", 1)
+              if name not in helper._IMAGE_CONTROL_NAMES:
+                  raise SystemExit(1)
+              image_defaults[name] = value
+          defaults_path = Path(f"/opt/idis-ci-health/{run}/image-defaults.json")
+          defaults_path.write_text(json.dumps(image_defaults))
+          os.chown(defaults_path, 1000, 1000)
+          os.chmod(defaults_path, 0o400)
+          qualify = r"""
+          import importlib.util, json, os
+          from pathlib import Path
+          run = os.environ["GITHUB_RUN_ID"]
+          spec = importlib.util.spec_from_file_location(
+              "ci_bootstrap_health", ".github/scripts/prepare_bootstrap_health.py"
+          )
+          helper = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(helper)
+          image_defaults = json.loads(Path(f"/opt/idis-ci-health/{run}/image-defaults.json").read_text())
+          root = Path(f"/opt/idis-ci-health/{run}/inputs")
+          startup = dict(image_defaults)
+          startup["IDIS_STRICT_DOTENV_PATH"] = str(root / "api" / "synthetic-bootstrap.env")
+          import hashlib
+          digest = hashlib.sha256((root / "manifest.json").read_bytes()).hexdigest()
+          helper.qualify_inputs(
+              helper.PreparedInputs(root=root, manifest_sha256=digest),
+              startup_env=startup,
+              image_defaults=image_defaults,
+          )
+          print(json.dumps({"phase": "qualify", "code": "OK"}, sort_keys=True))
+          """
+          script_path = Path(f"/opt/idis-ci-health/{run}/qualify.py")
+          script_path.write_text(qualify)
+          os.chown(script_path, 1000, 1000)
+          os.chmod(script_path, 0o500)
+          venv = Path(os.environ["GITHUB_WORKSPACE"]) / ".venv" / "bin" / "python"
+          subprocess.check_call(
+              [
+                  "sudo", "-n", "-u", "#1000",
+                  "GITHUB_RUN_ID=" + run,
+                  "GITHUB_WORKSPACE=" + os.environ["GITHUB_WORKSPACE"],
+                  str(venv), str(script_path),
+              ]
+          )
+          dotenv = str(root / "api" / "synthetic-bootstrap.env")
+          objects = Path(f"/opt/idis-ci-health/{run}/object-path").read_text().strip()
+          model = "/opt/idis-models/0d3d19a32d3338f10357c0889762bd8d64bbdeba"
+          redis_name = f"idis-h1b-redis-{run}"
+          env_lines = Path(f"/opt/idis-ci-health/{run}/datastore.env").read_text().splitlines()
+          redis_password = ""
+          for line in env_lines:
+              name, value = line.split("=", 1)
+              if name == "REDIS_PASSWORD":
+                  redis_password = value
+          if not re.fullmatch(r"[A-Za-z0-9_-]+", redis_password):
+              raise SystemExit(1)
+          probe_env = os.environ.copy()
+          probe_env["REDISCLI_AUTH"] = redis_password
+          deadline = time.time() + 30
+          ready = False
+          while time.time() < deadline:
+              probe = subprocess.run(
+                  [
+                      "docker", "exec", "-e", "REDISCLI_AUTH", redis_name,
+                      "redis-cli", "-h", "127.0.0.1", "ping",
+                  ],
+                  env=probe_env,
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.DEVNULL,
+                  check=False,
+              )
+              if probe.returncode == 0:
+                  ready = True
+                  break
+              time.sleep(1)
+          if not ready:
+              print(json.dumps({"phase": "redis", "code": "CI_HEALTH_DATASTORE_TIMEOUT"}, sort_keys=True))
+              raise SystemExit(1)
+          api = f"idis-h1b-api-{run}"
+          child_env = os.environ.copy()
+          child_env["IDIS_STRICT_DOTENV_PATH"] = dotenv
+          subprocess.check_call(
+              [
+                  "docker", "run", "-d", "--name", api,
+                  "--network", f"container:{holder}",
+                  "--read-only",
+                  "--tmpfs", "/tmp:rw,nosuid,size=2147483648",
+                  "-v", f"{root}:{root}:ro",
+                  "-v", f"{model}:{model}:ro",
+                  "-v", f"{objects}:{objects}",
+                  "-e", "IDIS_STRICT_DOTENV_PATH",
+                  image,
+              ],
+              env=child_env,
+          )
+          expected = [
+              "python", "-m", "idis.runtime.strict_launcher", "api",
+              "--host", "0.0.0.0", "--port", "8000",
+              "--pid-file", "/tmp/idis-api.pid",
+          ]
+          inspected = json.loads(subprocess.check_output(["docker", "inspect", api], text=True))
+          entry = inspected[0] if isinstance(inspected, list) and inspected else {}
+          path = entry.get("Path") if isinstance(entry, dict) else None
+          args = entry.get("Args") if isinstance(entry, dict) else None
+          exact = (
+              isinstance(path, str)
+              and isinstance(args, list)
+              and all(isinstance(item, str) for item in args)
+              and [path, *args] == expected
+          )
+          print(json.dumps({"phase": "cmdline", "exact": exact}, sort_keys=True))
+          if not exact:
+              raise SystemExit(1)
+          H1B_PY
       - name: Test container health check
         id: container_health
+        if: success()
         run: |
-          echo "=== Starting container for health check ==="
-          docker run -d --name idis-test -p 8000:8000 \
-            -e IDIS_SERVICE_REGION=us-east-1 \
-            idis:ci-${{ github.sha }}
-          
+          set -euo pipefail
+          api="idis-h1b-api-${GITHUB_RUN_ID}"
           echo "=== Waiting for container to start ==="
           sleep 10
-          
           echo "=== Checking health endpoint ==="
-          for i in {1..30}; do
-            if curl -sf http://localhost:8000/health; then
-              echo ""
+          ok=0
+          i=1
+          while [ "$i" -le 30 ]; do
+            if docker exec "$api" curl -sf http://127.0.0.1:8000/health > /tmp/idis-health-body.json; then
+              python3 -c 'import json; body=json.load(open("/tmp/idis-health-body.json")); assert body["status"]=="ok" and body["version"]=="6.3"'
               echo "[OK] Health check passed"
-              exit 0
+              ok=1
+              break
             fi
-            echo "Attempt $i: waiting..."
+            echo "Attempt ${i}: waiting..."
             sleep 2
+            i=$((i + 1))
           done
-          
-          echo "[FAIL] Health check failed"
-          docker logs idis-test
-          exit 1
+          log="/opt/idis-ci-health/${GITHUB_RUN_ID}/maintenance/api-container.log"
+          set +e
+          if docker container inspect "$api" >/dev/null 2>&1; then
+            sudo -n sh -c "docker logs '$api' > '$log' 2>&1"
+          else
+            ok=0
+          fi
+          sudo -n GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_SHA="$GITHUB_SHA" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" .venv/bin/python - <<'H1B_PY'
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
 
+          run = os.environ["GITHUB_RUN_ID"]
+          log = Path(f"/opt/idis-ci-health/{run}/maintenance/api-container.log")
+          text = log.read_text(errors="replace") if log.is_file() else ""
+          known = {
+              "POPPLER_RUNTIME_DRIFTED",
+              "POPPLER_RUNTIME_IDENTITY_INVALID",
+              "POPPLER_RUNTIME_UNAVAILABLE",
+              "POPPLER_RUNTIME_VERSION_MISMATCH",
+              "CI_HEALTH_AUDIT_QUERY_FAILED",
+              "CI_HEALTH_DATASTORE_TIMEOUT",
+              "CI_HEALTH_STARTUP_ENV_REJECTED",
+              "GOVERNANCE_SCHEMA_INVALID",
+              "STRICT_FULL_LIVE_BLOCKED",
+              "STRICT_LAUNCH_TARGET_INVALID",
+              "STRICT_PROCESS_ROLE_INVALID",
+              "STRICT_PROFILE_GENERATION_INVALID",
+              "STRICT_PROFILE_LOAD_FAILED",
+              "STRICT_PROFILE_MISMATCH",
+          }
+          poppler_codes = {
+              "POPPLER_RUNTIME_DRIFTED",
+              "POPPLER_RUNTIME_IDENTITY_INVALID",
+              "POPPLER_RUNTIME_UNAVAILABLE",
+              "POPPLER_RUNTIME_VERSION_MISMATCH",
+          }
+          found = [
+              token
+              for token in re.findall(r"[A-Z][A-Z0-9_]+", text)
+              if token in known
+          ]
+          code = next((token for token in reversed(found) if token in poppler_codes), None)
+          if code is None and found:
+              code = found[-1]
+          exit_code = subprocess.check_output(
+              [
+                  "docker", "inspect", "--format", "{{.State.ExitCode}}",
+                  f"idis-h1b-api-{run}",
+              ],
+              text=True,
+          ).strip()
+          Path(f"/opt/idis-ci-health/{run}/api-exit.json").write_text(
+              json.dumps({"code": code, "exit": int(exit_code)}, sort_keys=True)
+          )
+          H1B_PY
+          extract_status=$?
+          set -e
+          if [ "$ok" -eq 1 ] && [ "$extract_status" -eq 0 ]; then
+            exit 0
+          fi
+          echo "[FAIL] Health check failed"
+          exit 1
+      - name: Record launch audit, topology, and maintenance absence
+        id: launch-proof
+        if: "always() && steps.start-api.outcome != 'skipped'"
+        env:
+          CONTAINER_HEALTH_OUTCOME: ${{ steps.container_health.outcome }}
+          IMAGE_ENV_OUTCOME: ${{ steps.inspect-image-env.outcome }}
+          MODEL_PRESENCE_OUTCOME: ${{ steps.model-verify.outcome }}
+          PROFILE_OUTCOME: ${{ steps.prepare-inputs.outcome }}
+          DATASTORES_OUTCOME: ${{ steps.disposable-datastores.outcome }}
+          TOPOLOGY_BEFORE_OUTCOME: ${{ steps.topology-before.outcome }}
+          MIGRATION_CEILING_OUTCOME: ${{ steps.migration-ceiling.outcome }}
+          ERASURE_ROLES_OUTCOME: ${{ steps.erasure-roles.outcome }}
+          PG_BOOTSTRAP_OUTCOME: ${{ steps.pg-bootstrap.outcome }}
+          API_START_OUTCOME: ${{ steps.start-api.outcome }}
+        run: |
+          set -euo pipefail
+          sudo -n GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_SHA="$GITHUB_SHA" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" CONTAINER_HEALTH_OUTCOME="$CONTAINER_HEALTH_OUTCOME" IMAGE_ENV_OUTCOME="$IMAGE_ENV_OUTCOME" MODEL_PRESENCE_OUTCOME="$MODEL_PRESENCE_OUTCOME" PROFILE_OUTCOME="$PROFILE_OUTCOME" DATASTORES_OUTCOME="$DATASTORES_OUTCOME" TOPOLOGY_BEFORE_OUTCOME="$TOPOLOGY_BEFORE_OUTCOME" MIGRATION_CEILING_OUTCOME="$MIGRATION_CEILING_OUTCOME" ERASURE_ROLES_OUTCOME="$ERASURE_ROLES_OUTCOME" PG_BOOTSTRAP_OUTCOME="$PG_BOOTSTRAP_OUTCOME" API_START_OUTCOME="$API_START_OUTCOME" .venv/bin/python - <<'H1B_PY'
+          import hashlib
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          run = os.environ["GITHUB_RUN_ID"]
+          image = "idis:ci-" + os.environ["GITHUB_SHA"]
+          holder = f"idis-h1b-netns-{run}"
+          api = f"idis-h1b-api-{run}"
+          present = subprocess.run(
+              ["docker", "container", "inspect", api],
+              stdout=subprocess.DEVNULL,
+              stderr=subprocess.DEVNULL,
+              check=False,
+          )
+          if present.returncode != 0:
+              print(json.dumps({"phase": "launch-proof", "api_created": False}, sort_keys=True))
+              raise SystemExit(1)
+          workspace = os.environ["GITHUB_WORKSPACE"]
+          maintenance = f"/opt/idis-ci-health/{run}/maintenance"
+          expected_files = {
+              "README.md": {"bytes": 1323, "sha256": "1b7816626bf0548e4b71a467f4112b4592924bc818e3117f19aefcc50ce4b6aa"},
+              "config.json": {"bytes": 2317, "sha256": "14b1b421a90349bc551b881461426b561a874049cb9e4c4864f2ca384f6a7cc5"},
+              "model.bin": {"bytes": 75537502, "sha256": "1a5afae06a4db91c975c9a9d78be5cc110ee4ea022ad57d55492e4550e936b2a"},
+              "tokenizer.json": {"bytes": 2128466, "sha256": "929c5252409436dce1b38a75d1abbcb5e132d170d8e324e4e04ed915fa2d22df"},
+              "vocabulary.txt": {"bytes": 422309, "sha256": "ff77588746d3a2595d32ab5b69ffd7b95ce2441ac57533cb66fc3eb575a115cf"},
+          }
+          linux_pin = "4b1662df734cdf3854f6a3de0a9fd9c3fdaadfa644d6c7471f5c63c9cb62f6e5"
+          windows_receipt = "47e043de5fce0c94a30e264cb503f65ccb69cf03b6db296fa14e937a0ab81aea"
+          census = (
+              "import pathlib,sys\n"
+              "names=sorted(p.name for p in pathlib.Path('/sys/class/net').iterdir())\n"
+              "if names!=['lo']:\n"
+              "    sys.exit(1)\n"
+              "rows=pathlib.Path('/proc/net/route').read_text().splitlines()[1:]\n"
+              "for row in rows:\n"
+              "    cols=row.split()\n"
+              "    if cols and cols[0]!='lo':\n"
+              "        sys.exit(1)\n"
+              "for row in pathlib.Path('/proc/net/ipv6_route').read_text().splitlines():\n"
+              "    cols=row.split()\n"
+              "    if cols and cols[-1]!='lo':\n"
+              "        sys.exit(1)\n"
+          )
+          topology = subprocess.run(
+              ["docker", "exec", holder, "python", "-c", census],
+              check=False,
+          )
+          inspected = json.loads(subprocess.check_output(["docker", "inspect", api], text=True))[0]
+          held = f"/opt/idis-ci-health/{run}/maintenance"
+          inputs = f"/opt/idis-ci-health/{run}/inputs"
+          visible = Path(inputs, "maintenance").exists()
+          for mount in inspected.get("Mounts", []):
+              source = mount.get("Source") or ""
+              destination = (mount.get("Destination") or "").rstrip("/")
+              if source == held or destination.endswith("/maintenance") or held in source:
+                  visible = True
+          query = r"""
+          import json, os, sys
+          from pathlib import Path
+          from urllib.parse import unquote, urlsplit
+          from sqlalchemy import create_engine, text
+          from sqlalchemy.exc import SQLAlchemyError
+          from sqlalchemy.pool import NullPool
+          payload = json.loads(Path("/maintenance/bootstrap.json").read_text())
+          admin = urlsplit(payload["IDIS_DATABASE_ADMIN_URL"])
+          password = unquote(admin.password or "")
+          url = "postgresql+psycopg2://postgres:" + password + "@127.0.0.1:5432/idis_ci_health"
+          sql = (
+              "SELECT COUNT(*) FILTER (WHERE event->'payload'->'safe'->>'command' = 'api'), "
+              "COUNT(*) FILTER (WHERE event->'payload'->'safe'->>'command' = 'gate') "
+              "FROM audit_events "
+              "WHERE event_type = 'integration.strict_launch.admitted'"
+          )
+          try:
+              engine = create_engine(url, poolclass=NullPool, connect_args={"connect_timeout": 5})
+              with engine.connect() as connection:
+                  api_rows, gate_rows = connection.execute(text(sql)).one()
+              engine.dispose()
+          except SQLAlchemyError:
+              sys.stderr.write("CI_HEALTH_AUDIT_QUERY_FAILED\n")
+              raise SystemExit(1)
+          sys.stdout.write(f"{int(api_rows)} {int(gate_rows)}\n")
+          """
+          counted = subprocess.run(
+              [
+                  "docker", "run", "--rm", "--user", "0",
+                  "--network", f"container:{holder}",
+                  "-v", f"{maintenance}:/maintenance:ro",
+                  "--entrypoint", "/opt/venv/bin/python",
+                  image, "-c", query,
+              ],
+              capture_output=True,
+              text=True,
+              check=False,
+          )
+          Path(maintenance, "launch-audit.log").write_text(counted.stderr)
+          line = counted.stdout.strip()
+          api_rows = -1
+          gate_rows = -1
+          if counted.returncode == 0 and line.count(" ") == 1:
+              api_text, gate_text = line.split(" ")
+              api_rows = int(api_text)
+              gate_rows = int(gate_text)
+          exit_path = Path(f"/opt/idis-ci-health/{run}/api-exit.json")
+          exit_info = json.loads(exit_path.read_text()) if exit_path.is_file() else {}
+          manifest = json.loads((Path(inputs) / "manifest.json").read_text())
+          verified = json.loads(Path(f"/opt/idis-ci-health/{run}/model-verified.json").read_text())
+          if verified.get("files") != expected_files:
+              raise SystemExit(1)
+          path = inspected.get("Path")
+          args = inspected.get("Args")
+          expected_cmd = [
+              "python", "-m", "idis.runtime.strict_launcher", "api",
+              "--host", "0.0.0.0", "--port", "8000",
+              "--pid-file", "/tmp/idis-api.pid",
+          ]
+          cmdline_exact = (
+              isinstance(path, str)
+              and isinstance(args, list)
+              and all(isinstance(item, str) for item in args)
+              and [path, *args] == expected_cmd
+          )
+          health_outcome = os.environ["CONTAINER_HEALTH_OUTCOME"]
+          receipt = {
+              "authority": "AUTH-CI-HEALTH-20261017",
+              "purpose": "container health with synthetic fixtures",
+              "provider_invocation_attempts": "NOT_EXECUTED",
+              "manifest_sha256": hashlib.sha256((Path(inputs) / "manifest.json").read_bytes()).hexdigest(),
+              "public_key_sha256": manifest["public_key_sha256"],
+              "api_launch_rows": api_rows,
+              "gate_launch_rows": gate_rows,
+              "code": exit_info.get("code"),
+              "api_exit": exit_info.get("exit"),
+              "maintenance_visible": visible,
+              "cmdline_exact": cmdline_exact,
+              "topology_after_only_lo": topology.returncode == 0,
+              "health_outcome": health_outcome,
+              "model_files": expected_files,
+              "model_tree_fingerprint_linux": linux_pin,
+              "model_tree_fingerprint_windows_receipt": windows_receipt,
+              "phases": {
+                  "image_env": os.environ["IMAGE_ENV_OUTCOME"],
+                  "model_presence": os.environ["MODEL_PRESENCE_OUTCOME"],
+                  "profile": os.environ["PROFILE_OUTCOME"],
+                  "datastores": os.environ["DATASTORES_OUTCOME"],
+                  "topology_before": os.environ["TOPOLOGY_BEFORE_OUTCOME"],
+                  "migration_ceiling": os.environ["MIGRATION_CEILING_OUTCOME"],
+                  "erasure_roles": os.environ["ERASURE_ROLES_OUTCOME"],
+                  "pg_bootstrap": os.environ["PG_BOOTSTRAP_OUTCOME"],
+                  "api_start": os.environ["API_START_OUTCOME"],
+                  "health": health_outcome,
+                  "poppler": exit_info.get("code"),
+              },
+          }
+          print(json.dumps(receipt, sort_keys=True))
+          if (
+              counted.returncode != 0
+              or api_rows < 1
+              or gate_rows != 0
+              or visible
+              or topology.returncode != 0
+              or not cmdline_exact
+          ):
+              raise SystemExit(1)
+          H1B_PY
       - name: Cleanup
+        id: cleanup
         if: always()
         run: |
-          docker stop idis-test || true
-          docker rm idis-test || true
+          set -euo pipefail
+          sudo -n GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_SHA="$GITHUB_SHA" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" .venv/bin/python - <<'H1B_PY'
+          import os
+          import shutil
+          import subprocess
+          from pathlib import Path
 
+          run = os.environ["GITHUB_RUN_ID"]
+          secret_root = Path(f"/opt/idis-ci-health/{run}")
+          errors = []
+
+          def unlink_file(path: Path, label: str) -> None:
+              if path.is_symlink():
+                  errors.append("refusing secret path")
+                  return
+              if path.exists():
+                  path.unlink()
+              if path.exists():
+                  errors.append(label)
+
+          unlink_file(secret_root / "datastore.env", "datastore.env remains")
+          unlink_file(secret_root / "redis.conf", "redis.conf remains")
+          for name in ("api", "pg", "redis", "netns"):
+              container = f"idis-h1b-{name}-{run}"
+              inspect = subprocess.run(
+                  ["docker", "container", "inspect", container],
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.DEVNULL,
+                  check=False,
+              )
+              if inspect.returncode == 0:
+                  removed = subprocess.run(
+                      ["docker", "rm", "-f", container],
+                      stdout=subprocess.DEVNULL,
+                      stderr=subprocess.DEVNULL,
+                      check=False,
+                  )
+                  if removed.returncode != 0:
+                      errors.append("docker rm failed")
+              again = subprocess.run(
+                  ["docker", "container", "inspect", container],
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.DEVNULL,
+                  check=False,
+              )
+              if again.returncode == 0:
+                  errors.append("container remains")
+          network = subprocess.run(
+              ["docker", "network", "inspect", f"idis-h1b-{run}"],
+              stdout=subprocess.DEVNULL,
+              stderr=subprocess.DEVNULL,
+              check=False,
+          )
+          if network.returncode == 0:
+              errors.append("network remains")
+          pointer = secret_root / "object-store-parent"
+          if pointer.is_symlink():
+              errors.append("refusing object path")
+          elif pointer.is_file():
+              parent = Path(pointer.read_text().strip())
+              root = Path("/var/lib/idis-ci-health")
+              if parent.parent != root or parent == root or parent.is_symlink():
+                  errors.append("refusing object path")
+              else:
+                  if parent.exists():
+                      shutil.rmtree(parent)
+                  if parent.exists():
+                      errors.append("object store remains")
+          for directory in (
+              secret_root,
+              Path(f"/var/lib/idis-ci-health/{run}"),
+          ):
+              if directory.is_symlink():
+                  errors.append("refusing run path")
+                  continue
+              if directory.exists():
+                  shutil.rmtree(directory)
+              if directory.exists():
+                  errors.append("run directory remains")
+          if "container remains" in errors:
+              raise SystemExit("container remains")
+          if errors:
+              raise SystemExit(errors[0])
+          H1B_PY
       - {"name": "Set up Python 3.11 for release manifest", "uses": "actions/setup-python@v5", "with": {"python-version": "3.11"}}
       - name: Generate release manifest
         run: |
@@ -570,7 +1549,6 @@ jobs:
           .venv/bin/python scripts/release_build.py --output release_manifest.json
           echo "=== Release Manifest ==="
           cat release_manifest.json
-
       - {"name": "Upload release manifest artifact", "uses": "actions/upload-artifact@v4", "with": {"name": "release-manifest", "path": "release_manifest.json", "retention-days": 30}}
       - name: Write container build summary
         if: always()
@@ -596,7 +1574,6 @@ jobs:
             cat release_manifest.json >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
           fi
-
   # ===========================================================================
   # Kubernetes Manifest Validation
   # ===========================================================================

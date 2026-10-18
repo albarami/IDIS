@@ -66,3 +66,11 @@ scripts/run_task8_v27_sql_authority_census.py text eol=lf
 scripts/run_task8_v27_signed_census.py text eol=lf
 tests/slice100_task8/test_v27_sql_authority_postgres_census_red.py text eol=lf
 tests/slice100_task8/test_run_task8_v27_signed_census.py text eol=lf
+
+# Hash-pinned files must check out as exactly the bytes their frozen pins name (CIR-04X1-b).
+# The committed blobs are LF; the pins below name the CRLF (or LF) form, so the checkout is fixed per file.
+tests/__init__.py text eol=crlf
+tests/test_run_methodology_deterministic_calculation_service.py text eol=crlf
+tests/test_run_methodology_validated_evidence_package_service.py text eol=crlf
+tests/fixtures/runtime_health/stt-human-en-v1.json text eol=crlf
+tests/fixtures/runtime_health/frame-ocr-health-v1.json text eol=lf

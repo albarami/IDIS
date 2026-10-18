@@ -6,6 +6,7 @@ import contextlib
 import hashlib
 import importlib.metadata
 import json
+import logging
 import math
 import multiprocessing as mp
 import os
@@ -52,6 +53,8 @@ FASTER_WHISPER_NUM_WORKERS = 1
 _FASTER_WHISPER_DISTRIBUTION_NAME = "faster-whisper"
 _SAFE_RUNTIME_VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+\-]{0,63}$")
 _MEDIA_CLEANUP_RESERVE_MAX_SECONDS = 0.25
+_MEDIA_PROCESS_REAP_SECONDS = 0.20
+_LOG = logging.getLogger(__name__)
 
 
 class MediaError(Exception):
@@ -1037,7 +1040,7 @@ def _close_media_process(
     started: bool,
     deadline: _MediaDeadline,
 ) -> None:
-    """Terminate and close a worker without fixed waits beyond the shared deadline."""
+    """Terminate a worker and close it once the post-kill reap observes exit."""
     if started and process.is_alive():
         _terminate_process_tree(
             process,
@@ -1048,10 +1051,17 @@ def _close_media_process(
         if process.is_alive():
             with contextlib.suppress(OSError, ValueError):
                 process.kill()
-            process.join(timeout=_remaining_cleanup_seconds(deadline))
+            process.join(
+                timeout=max(
+                    _remaining_cleanup_seconds(deadline),
+                    _MEDIA_PROCESS_REAP_SECONDS,
+                )
+            )
     if not started or not process.is_alive():
         with contextlib.suppress(OSError, ValueError):
             process.close()
+    else:
+        _LOG.error("MEDIA_WORKER_HANDLE_UNREAPED", extra={"pid": process.pid})
 
 
 def _close_media_queue(queue: mp.Queue[dict[str, object]]) -> None:
@@ -1568,15 +1578,16 @@ def _terminate_process_tree(process: mp.Process, *, timeout_seconds: float) -> N
         children = root.children(recursive=True)
         for child in children:
             child.terminate()
-        root.terminate()
         _gone, alive = psutil.wait_procs(
-            [*children, root],
+            children,
             timeout=max(0.0, timeout_seconds),
         )
         for child in alive:
             child.kill()
     except Exception:
         process.terminate()
+        return
+    process.terminate()
 
 
 def _suppress_output() -> contextlib.AbstractContextManager[None]:

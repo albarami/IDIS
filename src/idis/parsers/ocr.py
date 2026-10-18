@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import logging
 import math
 import multiprocessing as mp
 import os
@@ -45,6 +46,8 @@ PINNED_POPPLER_VERSION = "25.12.0"
 POPPLER_EXPECTED_DIMENSION_POLICY_ID = "poppler-pdftoppm-25.12.0-dimensions-v1"
 POPPLER_EXACT_COMPARISON_MODE = "exact-poppler-25.12.0"
 _OCR_CLEANUP_RESERVE_MAX_SECONDS = 0.25
+_OCR_PROCESS_REAP_SECONDS = 0.20
+_LOG = logging.getLogger(__name__)
 _PDF_OCR_RENDER_BATCH_SIZE = 8
 _PDF_OCR_PAGE_WORKERS = 4
 OCR_RESCUE_POLICY_VERSION = "pdf-ocr-rescue-v1"
@@ -1373,7 +1376,7 @@ def _receive_ocr_payload(
 
 
 def _close_ocr_process(*, process: mp.Process, started: bool, deadline: float) -> None:
-    """Terminate and close a worker without fixed waits beyond its OCR deadline."""
+    """Terminate a worker and close it once the post-kill reap observes exit."""
     if started and process.is_alive():
         _terminate_process_tree(
             process,
@@ -1384,10 +1387,17 @@ def _close_ocr_process(*, process: mp.Process, started: bool, deadline: float) -
         if process.is_alive():
             with contextlib.suppress(OSError, ValueError):
                 process.kill()
-            process.join(timeout=_remaining_cleanup_seconds(deadline))
+            process.join(
+                timeout=max(
+                    _remaining_cleanup_seconds(deadline),
+                    _OCR_PROCESS_REAP_SECONDS,
+                )
+            )
     if not started or not process.is_alive():
         with contextlib.suppress(OSError, ValueError):
             process.close()
+    else:
+        _LOG.error("OCR_WORKER_HANDLE_UNREAPED", extra={"pid": process.pid})
 
 
 def _close_ocr_queue(queue: mp.Queue[dict[str, object]]) -> None:
@@ -3249,16 +3259,16 @@ def _terminate_process_tree(process: mp.Process, *, timeout_seconds: float) -> N
         children = root.children(recursive=True)
         for child in children:
             child.terminate()
-        root.terminate()
-        gone, alive = psutil.wait_procs(
-            [*children, root],
+        _gone, alive = psutil.wait_procs(
+            children,
             timeout=max(0.0, timeout_seconds),
         )
-        del gone
         for child in alive:
             child.kill()
     except Exception:
         process.terminate()
+        return
+    process.terminate()
 
 
 def _is_timeout_error(exc: RuntimeError) -> bool:

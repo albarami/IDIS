@@ -1042,6 +1042,7 @@ jobs:
           import json
           import os
           import re
+          import shutil
           import subprocess
           import sys
           import time
@@ -1077,13 +1078,67 @@ jobs:
           defaults_path.write_text(json.dumps(image_defaults))
           os.chown(defaults_path, 1000, 1000)
           os.chmod(defaults_path, 0o400)
+          run_root = Path(f"/opt/idis-ci-health/{run}")
+          lib = run_root / "lib"
+          helper_copy = run_root / "prepare_bootstrap_health.py"
+          subprocess.check_call(
+              [
+                  "sudo", "-n", "install", "-m", "0644", "-o", "1000", "-g", "1000",
+                  ".github/scripts/prepare_bootstrap_health.py",
+                  str(helper_copy),
+              ]
+          )
+
+          def publish_file(source: Path, destination: Path) -> None:
+              if source.is_symlink() and source.is_dir():
+                  raise SystemExit(1)
+              if not source.is_file():
+                  raise SystemExit(1)
+              inside = destination.parent == lib or lib in destination.parents
+              if not inside:
+                  raise SystemExit(1)
+              destination.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copyfile(source, destination)
+              os.chown(destination, 1000, 1000)
+              os.chmod(destination, 0o644)
+              current = destination.parent
+              while current != run_root:
+                  os.chown(current, 1000, 1000)
+                  os.chmod(current, 0o755)
+                  current = current.parent
+
+          crypto_file = sys.modules["cryptography"].__file__
+          cffi_file = sys.modules["_cffi_backend"].__file__
+          idis_file = sys.modules["idis"].__file__
+          if crypto_file is None or cffi_file is None or idis_file is None:
+              raise SystemExit(1)
+          crypto_root = Path(crypto_file).resolve()
+          if crypto_root.name != "__init__.py":
+              raise SystemExit(1)
+          crypto_root = crypto_root.parent
+          for path in crypto_root.rglob("*"):
+              if "__pycache__" in path.parts or path.is_dir():
+                  continue
+              publish_file(path, lib / "cryptography" / path.relative_to(crypto_root))
+          cffi_path = Path(cffi_file).resolve()
+          publish_file(cffi_path, lib / cffi_path.name)
+          idis_root = Path(idis_file).resolve().parent
+          for relative in (
+              Path("__init__.py"),
+              Path("runtime") / "__init__.py",
+              Path("runtime") / "profile.py",
+              Path("runtime") / "secure_files.py",
+              Path("runtime") / "strict_auth.py",
+          ):
+              publish_file(idis_root / relative, lib / "idis" / relative)
           qualify = r"""
           import importlib.util, json, os
           import sys
           from pathlib import Path
           run = os.environ["GITHUB_RUN_ID"]
           spec = importlib.util.spec_from_file_location(
-              "ci_bootstrap_health", ".github/scripts/prepare_bootstrap_health.py"
+              "ci_bootstrap_health",
+              f"/opt/idis-ci-health/{run}/prepare_bootstrap_health.py",
           )
           helper = importlib.util.module_from_spec(spec)
           sys.modules[spec.name] = helper
@@ -1105,14 +1160,27 @@ jobs:
           script_path.write_text(qualify)
           os.chown(script_path, 1000, 1000)
           os.chmod(script_path, 0o500)
-          venv = Path(os.environ["GITHUB_WORKSPACE"]) / ".venv" / "bin" / "python"
+          interpreter = os.path.realpath(sys.executable)
+          workspace = os.environ["GITHUB_WORKSPACE"]
+          for prefix in (workspace, "/home/runner"):
+              if (
+                  interpreter == prefix
+                  or interpreter.startswith(prefix + "/")
+                  or interpreter.startswith(prefix + os.sep)
+              ):
+                  raise SystemExit(1)
+          if not os.path.isfile(interpreter):
+              raise SystemExit(1)
           subprocess.check_call(
               [
                   "sudo", "-n", "-u", "#1000",
                   "GITHUB_RUN_ID=" + run,
-                  "GITHUB_WORKSPACE=" + os.environ["GITHUB_WORKSPACE"],
-                  str(venv), str(script_path),
-              ]
+                  "PYTHONPATH=" + str(lib),
+                  interpreter,
+                  "-S",
+                  str(script_path),
+              ],
+              cwd=str(run_root),
           )
           dotenv = str(root / "api" / "synthetic-bootstrap.env")
           objects = Path(f"/opt/idis-ci-health/{run}/object-path").read_text().strip()

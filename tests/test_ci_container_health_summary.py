@@ -998,14 +998,26 @@ def test_start_api_outer_h1b_py_imports_helper_then_stops_before_containers(
 def test_start_api_qualify_h1b_py_imports_helper_then_stops_at_defaults_file(
     tmp_path: Path,
 ) -> None:
-    # Seam: this snippet does not call docker. After exec_module it reads
-    # /opt/idis-ci-health/<run>/image-defaults.json, which this test does not
-    # create. FileNotFoundError is the stop. No container is started.
+    # Seam: this snippet does not call docker. It loads the helper, then reads
+    # image-defaults.json, which this test does not create. FileNotFoundError
+    # is the stop. No container is started. The run-root helper copy is the
+    # file the uid-1000 script loads; the workspace copy remains for the
+    # outer loader.
     _allow, _outer, qualify = _three_loader_snippets()
     run_id = f"h1b1gqual{os.getpid()}"
+    mapped = tmp_path / "opt-health"
+    run_root = mapped / run_id
+    run_root.mkdir(parents=True)
+    shutil.copy2(
+        ROOT / ".github" / "scripts" / "prepare_bootstrap_health.py",
+        run_root / "prepare_bootstrap_health.py",
+    )
+    body = qualify.replace("/opt/idis-ci-health", mapped.as_posix())
+    if "/opt/idis-ci-health" in body:
+        raise AssertionError("qualify health root was not rewritten")
     completed, actions = _run_loader_snippet(
         tmp_path,
-        qualify,
+        body,
         image_env=_image_env_text(),
         github={"GITHUB_RUN_ID": run_id},
     )
@@ -1582,3 +1594,380 @@ def test_model_verify_pinned_linux_tree_writes_receipt(
         assert installed.is_file()
         assert not installed.is_symlink()
         assert installed.stat().st_size == size
+
+
+_HOSTED_WORKSPACE = "/home/runner/work/IDIS/IDIS"
+_QUALIFY_OK = '{"code": "OK", "phase": "qualify"}'
+_HANDOFF_TIMEOUT_SECONDS = 120
+_HANDOFF_CHOWN_LOG_NAME = "chown-records.jsonl"
+_HANDOFF_OWNER_UID = 1000
+_HANDOFF_OWNER_GID = 1000
+_HANDOFF_SHIM = r"""
+import json
+import os
+import sys
+
+
+def _chown(path, uid, gid, *, follow_symlinks=True):
+    del follow_symlinks
+    recorded = {"path": os.fspath(path), "uid": uid, "gid": gid}
+    with open(os.environ["H1B_CHOWN_LOG"], "a", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(recorded, sort_keys=True) + "\n")
+
+
+os.chown = _chown
+
+if sys.platform == "win32":
+    import subprocess
+    from pathlib import Path
+
+    _Popen = subprocess.Popen
+
+    class _HandoffPopen(_Popen):
+        def __init__(self, args, *pos, **kwargs):
+            if isinstance(args, (list, tuple)) and args:
+                command = Path(str(args[0])).name.lower()
+                if command in {"docker", "docker.exe"}:
+                    args = [sys.executable, os.environ["H1B_DOCKER_PY"], *list(args)[1:]]
+                elif command in {"sudo", "sudo.exe"}:
+                    args = [sys.executable, os.environ["H1B_SUDO_PY"], *list(args)[1:]]
+            super().__init__(args, *pos, **kwargs)
+
+    subprocess.Popen = _HandoffPopen
+"""
+_HANDOFF_SUDO_PY = r'''
+"""Execute one sudo argv as the current user and record it."""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+_OPT = "/opt/idis-ci-health"
+
+
+def _mapped(argument: str) -> str:
+    root = os.environ.get("H1B_SUDO_HEALTH")
+    if not root:
+        return argument
+    normalized = argument.replace("\\", "/")
+    prefix = _OPT
+    if normalized == prefix or normalized.startswith(prefix + "/"):
+        suffix = normalized[len(prefix) :].lstrip("/")
+        destination = Path(root) / suffix if suffix else Path(root)
+        return str(destination)
+    return argument
+
+
+def _install(args: list[str]) -> None:
+    mode: int | None = None
+    directory = False
+    operands: list[str] = []
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == "-d":
+            directory = True
+            index += 1
+            continue
+        if arg == "-m" and index + 1 < len(args):
+            mode = int(args[index + 1], 8)
+            index += 2
+            continue
+        if arg in {"-o", "-g"} and index + 1 < len(args):
+            index += 2
+            continue
+        if arg.startswith("-"):
+            sys.stderr.write(f"unexpected install flag {arg}\n")
+            raise SystemExit(97)
+        operands.append(_mapped(arg))
+        index += 1
+    if directory:
+        if len(operands) != 1:
+            raise SystemExit(97)
+        path = Path(operands[0])
+        path.mkdir(parents=True, exist_ok=True)
+        if mode is not None:
+            os.chmod(path, mode)
+        return
+    if len(operands) != 2:
+        raise SystemExit(97)
+    source = Path(operands[0])
+    destination = Path(operands[1])
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, destination)
+    if mode is not None:
+        os.chmod(destination, mode)
+
+
+def _clean_env(updates: dict[str, str]) -> dict[str, str]:
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "TMP": os.environ.get("TMP", ""),
+        "TEMP": os.environ.get("TEMP", ""),
+    }
+    if sys.platform == "win32":
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+        env["WINDIR"] = os.environ.get("WINDIR", os.environ["SYSTEMROOT"])
+        env["PATHEXT"] = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+    env.update(updates)
+    return env
+
+
+def main() -> None:
+    recorded = ["sudo", *sys.argv[1:]]
+    log_path = Path(os.environ["H1B_SUDO_LOG"])
+    with log_path.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(recorded) + "\n")
+    args = [arg for arg in sys.argv[1:] if arg != "-n"]
+    if args[:2] == ["-u", "#1000"]:
+        args = args[2:]
+    updates: dict[str, str] = {}
+    while args and "=" in args[0] and not args[0].startswith("-"):
+        key, value = args.pop(0).split("=", 1)
+        updates[key] = value
+    if not args:
+        raise SystemExit(97)
+    command, rest = args[0], args[1:]
+    if command == "install":
+        _install(rest)
+        return
+    child_args = [_mapped(command), *[_mapped(arg) for arg in rest]]
+    try:
+        completed = subprocess.run(child_args, env=_clean_env(updates), check=False)
+        code = completed.returncode
+    except FileNotFoundError:
+        code = 127
+    exit_path = Path(os.environ["H1B_HANDOFF_EXIT"])
+    exit_path.write_text(str(code) + "\n", encoding="utf-8", newline="\n")
+    raise SystemExit(code)
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+def _install_handoff_toolchain(tmp_path: Path) -> None:
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    _write_executable(tmp_path / "docker_fake.py", _IMAGE_ENV_DOCKER)
+    _write_executable(tmp_path / "sudo_fake.py", _HANDOFF_SUDO_PY)
+    for name, target in (("docker", "H1B_DOCKER_PY"), ("sudo", "H1B_SUDO_PY")):
+        script = bindir / name
+        text = f'#!/bin/sh\nexec "$H1B_PY" "${target}" "$@"\n'
+        script.write_bytes(text.encode("ascii"))
+        os.chmod(script, _EXECUTABLE_MODE)
+    shim = tmp_path / "shim"
+    shim.mkdir()
+    (shim / "sitecustomize.py").write_text(_HANDOFF_SHIM, encoding="utf-8", newline="\n")
+
+
+def _handoff_env(tmp_path: Path, state: Path) -> dict[str, str]:
+    pythonpath = [str(tmp_path / "shim"), str(ROOT / "src"), str(ROOT)]
+    env: dict[str, str] = {
+        "PATH": str(tmp_path / "bin"),
+        "HOME": str(tmp_path),
+        "TMP": str(tmp_path),
+        "TEMP": str(tmp_path),
+        "H1B_PY": Path(sys.executable).as_posix(),
+        "H1B_DOCKER_PY": (tmp_path / "docker_fake.py").as_posix(),
+        "H1B_SUDO_PY": (tmp_path / "sudo_fake.py").as_posix(),
+        "H1B_SUDO_LOG": str(tmp_path / "sudo-argv.log"),
+        "H1B_HANDOFF_EXIT": str(tmp_path / "handoff-exit.txt"),
+        "H1B_SUDO_HEALTH": str(tmp_path / "opt-health"),
+        "H1B_CHOWN_LOG": str(tmp_path / _HANDOFF_CHOWN_LOG_NAME),
+        "DOCKER_FAKE_STATE": str(state),
+        "PYTHONPATH": os.pathsep.join(pythonpath),
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    if sys.platform == "win32":
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+        env["WINDIR"] = os.environ.get("WINDIR", os.environ["SYSTEMROOT"])
+        env["PATHEXT"] = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+    env.pop("IDIS_STRICT_DOTENV_PATH", None)
+    return env
+
+
+def _handoff_argv(tmp_path: Path) -> list[str]:
+    text = (tmp_path / "sudo-argv.log").read_text(encoding="utf-8")
+    calls = [json.loads(line) for line in text.splitlines() if line]
+    handoffs = [call for call in calls if call[:4] == ["sudo", "-n", "-u", "#1000"]]
+    if len(handoffs) != 1:
+        raise AssertionError(calls)
+    return handoffs[0]
+
+
+def _handoff_problems(argv: list[str], qualify_text: str) -> list[str]:
+    rendered = " ".join(argv)
+    problems: list[str] = []
+    if "/home/runner" in rendered or _HOSTED_WORKSPACE in rendered or ".github" in rendered:
+        problems.append(rendered)
+    if any(token in qualify_text for token in (".github", "GITHUB_WORKSPACE", "/home/runner")):
+        problems.append(qualify_text)
+    return problems
+
+
+def _prepare_handoff_inputs(run_root: Path) -> None:
+    model = run_root.parent / "unit-model-not-qualified"
+    model.mkdir()
+    for name in ("model.bin", "config.json", "tokenizer.json", "vocabulary.txt"):
+        (model / name).write_bytes(b"unit-test-only-not-a-runtime-model")
+    spec = importlib.util.spec_from_file_location(
+        "h1b_handoff_prepare",
+        ROOT / ".github" / "scripts" / "prepare_bootstrap_health.py",
+    )
+    if spec is None or spec.loader is None:
+        raise AssertionError("prepare_bootstrap_health.py is missing")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    module.prepare_inputs(
+        output_root=run_root / "inputs",
+        model_path=model,
+        synthetic_ci_health=True,
+        authority=module.AUTHORITY,
+    )
+
+
+def _run_start_api_outer(
+    tmp_path: Path, *, run_id: str, prepare: bool
+) -> subprocess.CompletedProcess[str]:
+    _install_handoff_toolchain(tmp_path)
+    state = tmp_path / "docker-state"
+    state.mkdir()
+    (state / "actions.log").write_text("", encoding="utf-8")
+    (state / "image-env.txt").write_text(_image_env_text(), encoding="utf-8", newline="\n")
+    workspace = tmp_path / "workspace"
+    helper_dir = workspace / ".github" / "scripts"
+    helper_dir.mkdir(parents=True)
+    shutil.copy2(
+        ROOT / ".github" / "scripts" / "prepare_bootstrap_health.py",
+        helper_dir / "prepare_bootstrap_health.py",
+    )
+    run_root = tmp_path / "opt-health" / run_id
+    run_root.mkdir(parents=True)
+    if prepare:
+        _prepare_handoff_inputs(run_root)
+    _allow, outer, _qualify = _three_loader_snippets()
+    body = outer.replace("/opt/idis-ci-health", (tmp_path / "opt-health").as_posix())
+    if "/opt/idis-ci-health" in body:
+        raise AssertionError("start-api health root was not rewritten")
+    script = workspace / "snippet.py"
+    script.write_text(body, encoding="utf-8", newline="\n")
+    env = _handoff_env(tmp_path, state)
+    env.update(
+        {
+            "GITHUB_RUN_ID": run_id,
+            "GITHUB_SHA": _REVIEWED_SHA,
+            "GITHUB_WORKSPACE": _HOSTED_WORKSPACE,
+        }
+    )
+    return subprocess.run(
+        [sys.executable, os.fspath(script)],
+        cwd=workspace,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=_HANDOFF_TIMEOUT_SECONDS,
+        check=False,
+    )
+
+
+def _assert_handoff_chown_targets(tmp_path: Path, run_id: str) -> None:
+    log_path = tmp_path / _HANDOFF_CHOWN_LOG_NAME
+    if not log_path.is_file():
+        raise AssertionError("no chown records")
+    rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+    if not rows:
+        raise AssertionError("no chown records")
+    records = [(Path(row["path"]), int(row["uid"]), int(row["gid"])) for row in rows]
+    owner = (_HANDOFF_OWNER_UID, _HANDOFF_OWNER_GID)
+    offenders = [record for record in records if (record[1], record[2]) != owner]
+    assert offenders == [], offenders
+    run_root = tmp_path / "opt-health" / run_id
+    lib = run_root / "lib"
+    published = [
+        path for path in lib.rglob("*") if path.is_file() and "__pycache__" not in path.parts
+    ]
+    assert published, os.fspath(lib)
+    directories: set[Path] = set()
+    for published_file in published:
+        current = published_file.parent
+        while current != run_root:
+            directories.add(current)
+            current = current.parent
+    required = {
+        run_root / "image-defaults.json",
+        run_root / "qualify.py",
+        *published,
+        *directories,
+    }
+    recorded_paths = {path for path, _uid, _gid in records}
+    missing = sorted(required - recorded_paths, key=lambda item: item.as_posix())
+    assert missing == [], [os.fspath(path) for path in missing]
+    assert run_root not in recorded_paths
+
+
+def test_uid1000_qualify_handoff_avoids_runner_home_and_workspace(tmp_path: Path) -> None:
+    # The hosted command was sudo -u #1000 .../home/runner/work/IDIS/IDIS/.venv/bin/python
+    # and the qualify text loaded .github/scripts/prepare_bootstrap_health.py.
+    _allow, _outer, qualify = _three_loader_snippets()
+    run_id = f"h1b1iargv{os.getpid()}"
+    completed = _run_start_api_outer(tmp_path, run_id=run_id, prepare=False)
+    argv = _handoff_argv(tmp_path)
+    problems = _handoff_problems(argv, qualify)
+    output = completed.stdout + completed.stderr
+    assert problems == [], output
+    _assert_handoff_chown_targets(tmp_path, run_id)
+
+
+def test_uid1000_qualify_handoff_runs_from_run_root_copies(tmp_path: Path) -> None:
+    # Fake sudo records argv, maps /opt/idis-ci-health, and runs the handed-off
+    # command as this user. The qualify script must print OK from the run-root
+    # copies alone. The next start-api read is object-path, which is absent.
+    run_id = f"h1b1iok{os.getpid()}"
+    completed = _run_start_api_outer(tmp_path, run_id=run_id, prepare=True)
+    output = completed.stdout + completed.stderr
+    argv = _handoff_argv(tmp_path)
+    assert _QUALIFY_OK in completed.stdout, output + "\n" + json.dumps(argv)
+    written = (tmp_path / "opt-health" / run_id / "qualify.py").read_text(encoding="utf-8")
+    assert _handoff_problems(argv, written) == [], argv
+    assert "-S" in argv, argv
+    pythonpath = next(item for item in argv if item.startswith("PYTHONPATH="))
+    assert Path(pythonpath.split("=", 1)[1]) == tmp_path / "opt-health" / run_id / "lib"
+    assert "GITHUB_WORKSPACE=" not in " ".join(argv)
+    exit_text = (tmp_path / "handoff-exit.txt").read_text(encoding="utf-8").strip()
+    assert exit_text == "0", output
+    calls = [
+        json.loads(line)
+        for line in (tmp_path / "sudo-argv.log").read_text(encoding="utf-8").splitlines()
+    ]
+    helper_install = [
+        call
+        for call in calls
+        if len(call) == 11 and call[:5] == ["sudo", "-n", "install", "-m", "0644"]
+    ]
+    destination = tmp_path / "opt-health" / run_id / "prepare_bootstrap_health.py"
+    assert len(helper_install) == 1, calls
+    call = helper_install[0]
+    assert call[:9] == [
+        "sudo",
+        "-n",
+        "install",
+        "-m",
+        "0644",
+        "-o",
+        "1000",
+        "-g",
+        "1000",
+    ]
+    assert call[9] == ".github/scripts/prepare_bootstrap_health.py"
+    assert Path(call[10]) == destination
+    assert destination.is_file()
+    _assert_handoff_chown_targets(tmp_path, run_id)

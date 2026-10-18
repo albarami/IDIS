@@ -17,13 +17,17 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from idis.api.auth import IDIS_API_KEYS_ENV
 from idis.api.main import create_app
 from idis.audit.sink import InMemoryAuditSink
+from idis.models.run_source import RunSource
 from idis.persistence.repositories.run_steps import InMemoryRunStepsRepository
+from idis.persistence.repositories.strict_preflight_proofs import StrictPreflightProofError
 from idis.pipeline.contract_registry import FULL_STRICT_V21_CONTRACT_HASH
 from idis.pipeline.worker import (
+    InvalidRunSourceMetadataError,
     InvalidRunSourceSelectionError,
     PipelineWorker,
     WorkerLeaseConfig,
@@ -196,6 +200,116 @@ def _reviewed_worker_profile(tmp_path: Path) -> Any:
     )
 
 
+@dataclass
+class _ExactProofRepository:
+    """Record the two proof reads and reject every other identity."""
+
+    proof_id: str
+    run_id: str
+    deal_id: str
+    generation: str
+    profile_hmac: str
+    events: list[str]
+
+    def require_consumed_for_run(self, **kwargs: object) -> None:
+        self.events.append("require_consumed_for_run")
+        expected = {
+            "proof_id": self.proof_id,
+            "run_id": self.run_id,
+            "deal_id": self.deal_id,
+            "strict_profile_generation": self.generation,
+            "strict_profile_hmac": self.profile_hmac,
+        }
+        if kwargs != expected:
+            raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_MISMATCH")
+
+    def require_task7_admission_graph_for_run(self, **kwargs: object) -> None:
+        self.events.append("require_task7_admission_graph_for_run")
+        if kwargs != {"deal_id": self.deal_id, "run_id": self.run_id}:
+            raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_MISMATCH")
+
+
+def _proof_repository_factory(
+    repository: _ExactProofRepository,
+) -> Callable[..., _ExactProofRepository]:
+    def factory(_conn: Any, tenant_id: str) -> _ExactProofRepository:
+        if tenant_id != TENANT_A:
+            raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_INVALID")
+        return repository
+
+    return factory
+
+
+def _exact_proof_repository(
+    *,
+    proof_id: str,
+    run_id: str,
+    deal_id: str,
+    profile: Any,
+    events: list[str],
+) -> _ExactProofRepository:
+    return _ExactProofRepository(
+        proof_id=proof_id,
+        run_id=run_id,
+        deal_id=deal_id,
+        generation=profile.generation,
+        profile_hmac=profile.base_profile_hmac,
+        events=events,
+    )
+
+
+def _frozen_selected_loader(documents: list[dict[str, Any]]) -> Callable[..., list[dict[str, Any]]]:
+    """Validate the stored source, then refuse an absent selected id."""
+
+    def load(
+        *,
+        db_conn: Any,
+        tenant_id: str,
+        run_data: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        del db_conn, tenant_id
+        try:
+            source = RunSource.model_validate(run_data.get("source"))
+        except ValidationError as exc:
+            raise InvalidRunSourceMetadataError("invalid run source metadata") from exc
+        selected = list(source.document_ids)
+        present = {str(document["document_id"]) for document in documents}
+        if any(document_id not in present for document_id in selected):
+            raise InvalidRunSourceSelectionError(
+                "run source selected unfrozen or missing documents"
+            )
+        chosen = set(selected)
+        return [document for document in documents if str(document["document_id"]) in chosen]
+
+    return load
+
+
+def _present_preflight_doc(*, deal_id: str, document_id: str) -> dict[str, Any]:
+    document = _preflight_doc(deal_id=deal_id)
+    document["document_id"] = document_id
+    document["spans"][0]["document_id"] = document_id
+    return document
+
+
+def _assert_proof_called_before_block(events: list[str]) -> None:
+    assert events.index("require_consumed_for_run") < events.index(
+        "require_task7_admission_graph_for_run"
+    )
+    assert events.index("require_task7_admission_graph_for_run") < events.index("strict_block")
+
+
+def _record_real_strict_block(events: list[str]) -> Callable[..., Any]:
+    from idis.services.runs.strict_full_live import (
+        build_strict_full_live_admission_report as real_report,
+    )
+
+    def wrapped(**kwargs: Any) -> Any:
+        events.append("strict_block")
+        return real_report(**kwargs)
+
+    return wrapped
+
+
 def test_worker_full_strict_gate_blocks_before_run_execution_service_execute(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -215,7 +329,7 @@ def test_worker_full_strict_gate_blocks_before_run_execution_service_execute(
                 "tenant_id": TENANT_A,
                 "deal_id": "deal-1",
                 "mode": "FULL",
-                "source": {"document_ids": ["doc-1"]},
+                "source": {"type": "deal_documents", "document_ids": ["doc-1"]},
                 "strict_preflight_proof_id": "00000000-0000-4000-8000-000000000210",
             }
         ],
@@ -223,6 +337,19 @@ def test_worker_full_strict_gate_blocks_before_run_execution_service_execute(
     )
     execution_service = MagicMock()
     execution_service.audit_sink = InMemoryAuditSink()
+    profile = _reviewed_worker_profile(tmp_path)
+    events: list[str] = []
+    repository = _exact_proof_repository(
+        proof_id="00000000-0000-4000-8000-000000000210",
+        run_id="run-full-1",
+        deal_id="deal-1",
+        profile=profile,
+        events=events,
+    )
+
+    def blocking_report(**_kwargs: Any) -> _BlockingStrictReport:
+        events.append("strict_block")
+        return _BlockingStrictReport()
 
     worker = PipelineWorker(
         poll_interval=0,
@@ -230,7 +357,7 @@ def test_worker_full_strict_gate_blocks_before_run_execution_service_execute(
         execution_service_factory=lambda **_kwargs: execution_service,
         run_context_factory=lambda **_kwargs: MagicMock(),
         lease_config=LEASE_CONFIG,
-        strict_profile=_reviewed_worker_profile(tmp_path),
+        strict_profile=profile,
     )
 
     with (
@@ -240,20 +367,26 @@ def test_worker_full_strict_gate_blocks_before_run_execution_service_execute(
             "idis.pipeline.worker._default_worker_audit_sink",
             return_value=_TransactionalInMemoryAuditSink(),
         ),
-        patch("idis.pipeline.worker._verify_worker_strict_preflight_proof"),
+        patch(
+            "idis.pipeline.worker.get_strict_preflight_proofs_repository",
+            _proof_repository_factory(repository),
+        ),
         patch(
             "idis.pipeline.worker._load_worker_preflight_corpus",
-            return_value=[_preflight_doc(deal_id="deal-1")],
+            _frozen_selected_loader(
+                [_present_preflight_doc(deal_id="deal-1", document_id="doc-1")]
+            ),
         ),
         patch(
             "idis.pipeline.worker.build_strict_full_live_admission_report",
-            return_value=_BlockingStrictReport(),
+            side_effect=blocking_report,
         ),
         patch("idis.pipeline.worker.set_tenant_local", create=True),
         pytest.raises(RuntimeError, match="STRICT_FULL_LIVE_BLOCKED"),
     ):
         asyncio.run(worker._process_queued_runs())
 
+    _assert_proof_called_before_block(events)
     assert execution_service.execute_preclaimed.call_count == 0
     assert runs_repo.complete_calls == []
     assert runs_repo.last_claimed is not None
@@ -270,12 +403,14 @@ def test_api_and_worker_share_strict_readiness_helper_inputs(
     monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(_api_keys()))
     api_calls: list[dict[str, Any]] = []
     worker_calls: list[dict[str, Any]] = []
+    events: list[str] = []
 
     def record_api_strict_call(**kwargs: Any) -> _BlockingStrictReport:
         api_calls.append(kwargs)
         return _BlockingStrictReport()
 
     def record_worker_strict_call(**kwargs: Any) -> _BlockingStrictReport:
+        events.append("strict_block")
         worker_calls.append(kwargs)
         return _BlockingStrictReport()
 
@@ -322,6 +457,14 @@ def test_api_and_worker_share_strict_readiness_helper_inputs(
         ],
         complete_calls=[],
     )
+    profile = _reviewed_worker_profile(tmp_path)
+    repository = _exact_proof_repository(
+        proof_id="00000000-0000-4000-8000-000000000211",
+        run_id="run-full-2",
+        deal_id=deal_id,
+        profile=profile,
+        events=events,
+    )
     worker = PipelineWorker(
         poll_interval=0,
         tenant_ids=[TENANT_A],
@@ -331,7 +474,7 @@ def test_api_and_worker_share_strict_readiness_helper_inputs(
         ),
         run_context_factory=lambda **_kwargs: MagicMock(),
         lease_config=LEASE_CONFIG,
-        strict_profile=_reviewed_worker_profile(tmp_path),
+        strict_profile=profile,
     )
 
     with (
@@ -341,10 +484,13 @@ def test_api_and_worker_share_strict_readiness_helper_inputs(
             "idis.pipeline.worker._default_worker_audit_sink",
             return_value=_TransactionalInMemoryAuditSink(),
         ),
-        patch("idis.pipeline.worker._verify_worker_strict_preflight_proof"),
+        patch(
+            "idis.pipeline.worker.get_strict_preflight_proofs_repository",
+            _proof_repository_factory(repository),
+        ),
         patch(
             "idis.pipeline.worker._load_worker_preflight_corpus",
-            return_value=[_preflight_doc(deal_id=deal_id)],
+            _frozen_selected_loader([_preflight_doc(deal_id=deal_id)]),
         ),
         patch(
             "idis.pipeline.worker.build_strict_full_live_admission_report",
@@ -355,6 +501,7 @@ def test_api_and_worker_share_strict_readiness_helper_inputs(
     ):
         asyncio.run(worker._process_queued_runs())
 
+    _assert_proof_called_before_block(events)
     assert len(api_calls) == 1
     assert len(worker_calls) == 1
     api_call = api_calls[0]
@@ -405,13 +552,22 @@ def test_worker_strict_block_metadata_is_leakage_safe(
             )
         ),
     )
+    profile = _reviewed_worker_profile(tmp_path)
+    events: list[str] = []
+    repository = _exact_proof_repository(
+        proof_id="00000000-0000-4000-8000-000000000212",
+        run_id="run-full-3",
+        deal_id="deal-3",
+        profile=profile,
+        events=events,
+    )
     worker = PipelineWorker(
         poll_interval=0,
         tenant_ids=[TENANT_A],
         execution_service_factory=lambda **_kwargs: execution_service,
         run_context_factory=lambda **_kwargs: MagicMock(),
         lease_config=LEASE_CONFIG,
-        strict_profile=_reviewed_worker_profile(tmp_path),
+        strict_profile=profile,
     )
 
     with (
@@ -421,17 +577,27 @@ def test_worker_strict_block_metadata_is_leakage_safe(
             "idis.pipeline.worker._default_worker_audit_sink",
             return_value=_TransactionalInMemoryAuditSink(),
         ),
-        patch("idis.pipeline.worker._verify_worker_strict_preflight_proof"),
+        patch(
+            "idis.pipeline.worker.get_strict_preflight_proofs_repository",
+            _proof_repository_factory(repository),
+        ),
         patch("idis.pipeline.worker.get_run_steps_repository", return_value=run_steps_repo),
         patch(
             "idis.pipeline.worker._load_worker_preflight_corpus",
-            return_value=[_preflight_doc(deal_id="deal-3")],
+            _frozen_selected_loader(
+                [_present_preflight_doc(deal_id="deal-3", document_id="doc-3")]
+            ),
+        ),
+        patch(
+            "idis.pipeline.worker.build_strict_full_live_admission_report",
+            side_effect=_record_real_strict_block(events),
         ),
         patch("idis.pipeline.worker.set_tenant_local", create=True),
         pytest.raises(RuntimeError, match="STRICT_FULL_LIVE_BLOCKED") as exc_info,
     ):
         asyncio.run(worker._process_queued_runs())
 
+    _assert_proof_called_before_block(events)
     assert execution_service.execute_preclaimed.call_count == 0
     assert runs_repo.complete_calls == []
     assert runs_repo.last_claimed is not None
@@ -475,13 +641,22 @@ def test_worker_missing_selected_document_fails_closed_with_invalid_run_source_r
             )
         ),
     )
+    profile = _reviewed_worker_profile(tmp_path)
+    events: list[str] = []
+    repository = _exact_proof_repository(
+        proof_id="00000000-0000-4000-8000-000000000213",
+        run_id="run-full-missing-source",
+        deal_id="deal-missing-source",
+        profile=profile,
+        events=events,
+    )
     worker = PipelineWorker(
         poll_interval=0,
         tenant_ids=[TENANT_A],
         execution_service_factory=lambda **_kwargs: execution_service,
         run_context_factory=lambda **_kwargs: MagicMock(),
         lease_config=LEASE_CONFIG,
-        strict_profile=_reviewed_worker_profile(tmp_path),
+        strict_profile=profile,
     )
     strict_helper = MagicMock(return_value=_BlockingStrictReport())
 
@@ -492,8 +667,15 @@ def test_worker_missing_selected_document_fails_closed_with_invalid_run_source_r
             "idis.pipeline.worker._default_worker_audit_sink",
             return_value=_TransactionalInMemoryAuditSink(),
         ),
-        patch("idis.pipeline.worker._verify_worker_strict_preflight_proof"),
+        patch(
+            "idis.pipeline.worker.get_strict_preflight_proofs_repository",
+            _proof_repository_factory(repository),
+        ),
         patch("idis.pipeline.worker.get_run_steps_repository", return_value=run_steps_repo),
+        patch(
+            "idis.pipeline.worker._load_worker_preflight_corpus",
+            _frozen_selected_loader([_preflight_doc(deal_id="deal-missing-source")]),
+        ),
         patch(
             "idis.pipeline.worker.build_strict_full_live_admission_report",
             strict_helper,
@@ -503,6 +685,10 @@ def test_worker_missing_selected_document_fails_closed_with_invalid_run_source_r
     ):
         asyncio.run(worker._process_queued_runs())
 
+    assert events == [
+        "require_consumed_for_run",
+        "require_task7_admission_graph_for_run",
+    ]
     assert execution_service.execute_preclaimed.call_count == 0
     assert strict_helper.call_count == 0
     assert runs_repo.complete_calls == []
@@ -574,13 +760,22 @@ def test_api_and_worker_full_paths_produce_same_strict_block_ledger(
             )
         ),
     )
+    profile = _reviewed_worker_profile(tmp_path)
+    events: list[str] = []
+    repository = _exact_proof_repository(
+        proof_id="00000000-0000-4000-8000-000000000214",
+        run_id="run-full-4",
+        deal_id=deal_id,
+        profile=profile,
+        events=events,
+    )
     worker = PipelineWorker(
         poll_interval=0,
         tenant_ids=[TENANT_A],
         execution_service_factory=lambda **_kwargs: execution_service,
         run_context_factory=lambda **_kwargs: MagicMock(),
         lease_config=LEASE_CONFIG,
-        strict_profile=_reviewed_worker_profile(tmp_path),
+        strict_profile=profile,
     )
 
     with (
@@ -590,17 +785,25 @@ def test_api_and_worker_full_paths_produce_same_strict_block_ledger(
             "idis.pipeline.worker._default_worker_audit_sink",
             return_value=_TransactionalInMemoryAuditSink(),
         ),
-        patch("idis.pipeline.worker._verify_worker_strict_preflight_proof"),
+        patch(
+            "idis.pipeline.worker.get_strict_preflight_proofs_repository",
+            _proof_repository_factory(repository),
+        ),
         patch("idis.pipeline.worker.get_run_steps_repository", return_value=run_steps_repo),
         patch(
             "idis.pipeline.worker._load_worker_preflight_corpus",
-            return_value=[_preflight_doc(deal_id=deal_id)],
+            _frozen_selected_loader([_preflight_doc(deal_id=deal_id)]),
+        ),
+        patch(
+            "idis.pipeline.worker.build_strict_full_live_admission_report",
+            side_effect=_record_real_strict_block(events),
         ),
         patch("idis.pipeline.worker.set_tenant_local", create=True),
         pytest.raises(RuntimeError, match="STRICT_FULL_LIVE_BLOCKED") as exc_info,
     ):
         asyncio.run(worker._process_queued_runs())
 
+    _assert_proof_called_before_block(events)
     assert execution_service.execute_preclaimed.call_count == 0
     assert runs_repo.complete_calls == []
     assert runs_repo.last_claimed is not None

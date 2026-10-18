@@ -611,6 +611,7 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "tests/test_api_upload_to_run_smoke_postgres.py",
         "tests/test_api_default_upload_ingestion_postgres.py",
         "tests/test_api_full_run_step_name_postgres.py",
+        "tests/test_api_selected_multidocument_full_acceptance_postgres.py",
         "tests/test_api_full_run_durable_evidence_postgres.py",
         "tests/test_api_sanad_auto_grade_persistence_postgres.py",
         "tests/test_run_document_loader.py",
@@ -632,6 +633,18 @@ def _exists(root: Path, relative_path: str) -> bool:
 
 def _contains(files: dict[str, str], path: str, needle: str) -> bool:
     return needle in files.get(path, "")
+
+
+def _top_level_function_source(source: str, function_name: str) -> str:
+    """Return one top-level function, or empty text when that function is absent."""
+    marker = f"def {function_name}("
+    start = source.find(marker)
+    if start < 0:
+        return ""
+    next_function = source.find("\ndef ", start + len(marker))
+    if next_function < 0:
+        return source[start:]
+    return source[start:next_function]
 
 
 def _discover_provider_ids(root: Path) -> list[str]:
@@ -2828,6 +2841,14 @@ def _default_upload_ingestion_wiring(files: dict[str, str]) -> WiringItem:
     evidence_repo_text = files.get("src/idis/persistence/repositories/evidence.py", "")
     postgres_test_text = files.get("tests/test_api_default_upload_ingestion_postgres.py", "")
     full_run_step_name_test_text = files.get("tests/test_api_full_run_step_name_postgres.py", "")
+    multidocument_acceptance_test_text = files.get(
+        "tests/test_api_selected_multidocument_full_acceptance_postgres.py",
+        "",
+    )
+    preview_upload_helper_source = _top_level_function_source(
+        multidocument_acceptance_test_text,
+        "upload_and_bind_preview_members",
+    )
     full_run_durable_evidence_test_text = files.get(
         "tests/test_api_full_run_durable_evidence_postgres.py",
         "",
@@ -2859,9 +2880,10 @@ def _default_upload_ingestion_wiring(files: dict[str, str]) -> WiringItem:
     full_run_step_name_test_added = (
         "test_default_upload_selected_full_run_persists_long_step_name_without_sql_truncation"
         in full_run_step_name_test_text
-        and "documents/upload" in full_run_step_name_test_text
+        and "upload_and_bind_preview_members" in full_run_step_name_test_text
         and '"mode": "FULL"' in full_run_step_name_test_text
         and '"document_ids": [document_id]' in full_run_step_name_test_text
+        and "documents/upload" in preview_upload_helper_source
     )
     full_run_step_name_ci_added = "tests/test_api_full_run_step_name_postgres.py" in ci_text
     evidence_repo_wired = (

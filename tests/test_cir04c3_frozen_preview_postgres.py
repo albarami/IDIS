@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import re
+import subprocess
+import sys
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
@@ -13,7 +18,12 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import Connection, Engine, text
+from scripts.run_cir04_restart_reference_dev_migration import (
+    DEV0039_DATABASE_PREFIX,
+    DEV0039_RECEIPT_REVISION,
+    DEV0039_RECEIPT_SCHEMA,
+)
+from sqlalchemy import Connection, Engine, create_engine, text
 from sqlalchemy.exc import DBAPIError
 
 from idis.api.auth import IDIS_API_KEYS_ENV
@@ -2381,13 +2391,67 @@ def test_real_native_pdf_forged_span_root_fails_installed_deferred_guard(
     assert _source_rows(app_engine, tenant) == before
 
 
+@pytest.fixture
+def dev_0039_restart_engine() -> Iterator[Engine]:
+    """Receipt-bound development 0039 engine. Never uses get_app_engine."""
+    receipt_path = os.environ.get("IDIS_DEV0039_RECEIPT")
+    receipt_sha = os.environ.get("IDIS_DEV0039_RECEIPT_SHA256")
+    database_url = os.environ.get("IDIS_DEV0039_DATABASE_URL")
+    if not receipt_path or not receipt_sha or not database_url:
+        if os.environ.get("IDIS_REQUIRE_POSTGRES") == "1":
+            pytest.fail("DEV0039_RESTART_DATABASE_UNCONFIGURED")
+        pytest.skip("DEV0039_RESTART_DATABASE_UNCONFIGURED")
+    if os.environ.get("IDIS_DATABASE_URL"):
+        pytest.fail("DEV0039_DATABASE_URL_FORBIDDEN")
+    raw = Path(receipt_path).read_bytes()
+    receipt = json.loads(raw)
+    if (
+        hashlib.sha256(raw).hexdigest() != receipt_sha
+        or receipt.get("schema_version") != DEV0039_RECEIPT_SCHEMA
+        or receipt.get("revision") != DEV0039_RECEIPT_REVISION
+        or not str(receipt.get("database", "")).startswith(DEV0039_DATABASE_PREFIX)
+    ):
+        pytest.fail("DEV0039_RECEIPT_INVALID")
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            row = connection.execute(
+                text(
+                    "SELECT current_database(), database_row.oid, role_row.rolsuper, "
+                    "role_row.rolbypassrls "
+                    "FROM pg_database AS database_row "
+                    "JOIN pg_roles AS role_row ON role_row.rolname = current_user "
+                    "WHERE database_row.datname = current_database()"
+                )
+            ).one()
+            versions = list(
+                connection.execute(text("SELECT version_num FROM public.alembic_version")).scalars()
+            )
+        if (
+            row[0] != receipt["database"]
+            or int(row[1]) != int(receipt["database_oid"])
+            or row[2] is not False
+            or row[3] is not False
+            or versions != ["0039"]
+        ):
+            pytest.fail("DEV0039_RESTART_DATABASE_UNQUALIFIED")
+        yield engine
+    finally:
+        engine.dispose()
+
+
 @pytest.mark.parametrize("completed_prefix", [0, 1])
 def test_real_native_pdf_source_survives_hermetic_admission_and_restart_cut(
-    app_engine: Engine,
+    request: pytest.FixtureRequest,
     tmp_path: Path,
     completed_prefix: int,
 ) -> None:
     """Real native source; synthetic strict-proof/output mechanics, not FULL acceptance."""
+    app_engine = (
+        request.getfixturevalue("app_engine")
+        if completed_prefix == 0
+        else request.getfixturevalue("dev_0039_restart_engine")
+    )
     tenant, deal, _result, package = _real_open_native_package(app_engine, tmp_path, "pdf")
     frozen = freeze_source_package(
         engine=app_engine, tenant_id=tenant, deal_id=deal, package_id=package
@@ -2461,6 +2525,76 @@ def test_real_native_pdf_source_survives_hermetic_admission_and_restart_cut(
     source_after.pop("audit_events")
     assert source_after == source_before
     assert dict(contract_registry.PIPELINE_CONTRACTS) == registry_before
+
+
+def test_restart_cut_one_does_not_call_app_engine(tmp_path: Path) -> None:
+    """Node [1] is collected without the 0038 app_engine fixture."""
+    database = f"{DEV0039_DATABASE_PREFIX}offline"
+    receipt = {
+        "schema_version": DEV0039_RECEIPT_SCHEMA,
+        "revision": DEV0039_RECEIPT_REVISION,
+        "database": database,
+        "database_oid": 1,
+        "app_role": "dev0039_offline_app",
+    }
+    raw = json.dumps(receipt).encode("utf-8")
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_bytes(raw)
+    marker = tmp_path / "marker.txt"
+    probe = tmp_path / "dev0039_probe.py"
+    probe.write_text(
+        "import os\n"
+        "from pathlib import Path\n"
+        "def pytest_fixture_setup(fixturedef, request):\n"
+        "    if fixturedef.argname == 'app_engine':\n"
+        "        Path(os.environ['DEV0039_PROBE_MARKER']).write_text('called', encoding='utf-8')\n"
+        "        raise RuntimeError('APP_ENGINE_FIXTURE_FORBIDDEN')\n",
+        encoding="utf-8",
+    )
+    root = Path(__file__).resolve().parents[1]
+    env = {key: value for key, value in os.environ.items() if not key.startswith("IDIS_")}
+    env.update(
+        {
+            "IDIS_REQUIRE_POSTGRES": "1",
+            "IDIS_DEV0039_RECEIPT": str(receipt_path),
+            "IDIS_DEV0039_RECEIPT_SHA256": hashlib.sha256(raw).hexdigest(),
+            "IDIS_DEV0039_DATABASE_URL": (
+                f"postgresql+psycopg2://dev0039_offline_app:redacted@127.0.0.1:1/{database}?connect_timeout=2"
+            ),
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "DEV0039_PROBE_MARKER": str(marker),
+            "PYTHONPATH": os.pathsep.join((str(tmp_path), str(root / "src"), str(root))),
+        }
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-p",
+            "no:cacheprovider",
+            "-p",
+            "dev0039_probe",
+            "tests/test_cir04c3_frozen_preview_postgres.py::"
+            "test_real_native_pdf_source_survives_hermetic_admission_and_restart_cut[1]",
+            "--tb=short",
+            "-q",
+        ],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    output = re.sub(
+        r"postgresql(?:\+\w+)?://\S+",
+        "[redacted-url]",
+        completed.stdout + completed.stderr,
+    )
+    assert not marker.exists()
+    assert "APP_ENGINE_FIXTURE_FORBIDDEN" not in output
+    assert "dev_0039_restart_engine" in output
+    assert completed.returncode != 0
 
 
 def _synthetic_upload_receipts(prep: Any) -> list[dict[str, Any]]:

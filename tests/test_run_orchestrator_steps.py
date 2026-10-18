@@ -21,6 +21,7 @@ Updated for Phase 3.0 Slice 4: FULL mode now has 12 steps.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import secrets
 import uuid
@@ -1044,6 +1045,236 @@ def _open_preview_package(
     return uploaded
 
 
+def _install_watermark_authority(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    tenant_id: str,
+    fingerprint: str,
+    pdf_bytes: bytes,
+    safe_alias: str,
+) -> None:
+    """Configure the app authority before create_app reads the signer environment."""
+    from tests._cir04c3_exclusion_signer import (
+        configure_watermark_runtime,
+        write_signed_watermark_authority,
+    )
+
+    configure_watermark_runtime(
+        monkeypatch,
+        write_signed_watermark_authority(
+            tmp_path,
+            tenant_id=tenant_id,
+            safe_alias=safe_alias,
+            source_tree_fingerprint=fingerprint,
+            pdf_bytes=pdf_bytes,
+        ),
+    )
+    monkeypatch.setenv("IDIS_OBJECT_STORE_BASE_DIR", str(tmp_path / "objects"))
+
+
+def _open_signed_company_package(
+    engine: Any,
+    *,
+    tenant_id: str,
+    deal_id: str,
+    root: Path,
+    members: list[tuple[str, bytes]],
+    source_tree_fingerprint: str,
+) -> list[str]:
+    """Ingest named company-001 members, including FAILED exclusions, into one package."""
+    from idis.audit.postgres_sink import PostgresAuditSink
+    from idis.persistence.repositories.data_room_packages import PostgresDataRoomPackagesRepository
+    from idis.persistence.repositories.documents import PostgresDocumentsRepository
+    from idis.services.data_room.package_service import create_data_room_package
+    from idis.services.ingestion import IngestionContext, IngestionService
+    from idis.storage.compliant_store import ComplianceEnforcedStore
+    from idis.storage.filesystem_store import FilesystemObjectStore
+    from tests._cir04c3_exclusion_signer import (
+        build_bound_source_manifest,
+        watermark_service_options,
+    )
+
+    store = ComplianceEnforcedStore(inner_store=FilesystemObjectStore(base_dir=root))
+    uploaded: list[str] = []
+    with engine.begin() as conn:
+        service = IngestionService(
+            compliant_store=store,
+            audit_sink=PostgresAuditSink(),
+            db_conn=conn,
+            **watermark_service_options(),
+        )
+        ctx = IngestionContext(
+            tenant_id=uuid.UUID(tenant_id),
+            actor_id="actor-a",
+            request_id="c3-batch4-exclusion",
+        )
+        for filename, payload in members:
+            result = service.ingest_bytes(
+                ctx=ctx,
+                deal_id=uuid.UUID(deal_id),
+                filename=filename,
+                media_type="application/pdf",
+                data=payload,
+                metadata={
+                    "source_system": "c3-watermark-exclusion",
+                    "upload_filename": filename,
+                    "source_tree_fingerprint": source_tree_fingerprint,
+                },
+            )
+            assert result.document_id is not None
+            uploaded.append(str(result.document_id))
+        documents_repository = PostgresDocumentsRepository(conn, tenant_id)
+        documents = []
+        for document_id in uploaded:
+            document = documents_repository.get_document(document_id)
+            if document is None:
+                raise AssertionError("uploaded document was not persisted")
+            documents.append(document)
+        manifest = build_bound_source_manifest(
+            documents,
+            source_tree_fingerprint=source_tree_fingerprint,
+        )
+        ordered_ids = [str(item.document_id) for item in manifest.files]
+        create_data_room_package(
+            repo=PostgresDataRoomPackagesRepository(conn, tenant_id),
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            created_by_actor_id="actor-a",
+            created_by_actor_type="SERVICE",
+            document_ids=ordered_ids,
+            documents=documents,
+            source_manifest=manifest,
+        )
+    return ordered_ids
+
+
+def _assert_registered_exclusion_ref(engine: Any, *, tenant_id: str, document_id: str) -> None:
+    """The persisted v2 receipt is wrapped in the one registered v1 ref."""
+    from sqlalchemy import text
+
+    from idis.persistence.db import set_tenant_local
+    from idis.persistence.repositories.task7_source_freeze import _SOURCE_SCHEMA_AUTHORITIES
+
+    with engine.begin() as conn:
+        set_tenant_local(conn, tenant_id)
+        metadata = conn.execute(
+            text("SELECT metadata FROM documents WHERE document_id=CAST(:document AS uuid)"),
+            {"document": document_id},
+        ).scalar_one()
+        file_status = conn.execute(
+            text(
+                """
+                SELECT files.file_status
+                FROM data_room_package_files AS files
+                JOIN documents
+                  ON documents.deal_id = files.deal_id
+                JOIN document_artifacts
+                  ON document_artifacts.doc_id = documents.doc_id
+                 AND document_artifacts.sha256 = files.sha256
+                WHERE documents.document_id = CAST(:document AS uuid)
+                """
+            ),
+            {"document": document_id},
+        ).scalar_one()
+    receipt = metadata["document_no_substantive_content_receipt"]
+    schema_sha256 = _SOURCE_SCHEMA_AUTHORITIES[
+        ("no-substantive-content-receipt", "document-no-substantive-content-receipt-v1")
+    ]
+    assert metadata["applicable_schema_refs"] == [
+        {
+            "schema_id": "no-substantive-content-receipt",
+            "schema_version": "document-no-substantive-content-receipt-v1",
+            "schema_sha256": schema_sha256,
+            "validated_payload": receipt,
+        }
+    ]
+    assert receipt["schema_version"] == "document-no-substantive-content-receipt-v2"
+    assert receipt["whole_document_terminal"] is True
+    assert file_status == "blocked"
+
+
+def _assert_exclusion_runtime_attempt(
+    engine: Any,
+    *,
+    tenant_id: str,
+    document_id: str,
+    content: bytes,
+) -> None:
+    """The exclusion member has one runtime attempt over the stored projection."""
+    from sqlalchemy import text
+
+    from idis.persistence.db import set_tenant_local
+    from idis.persistence.repositories.task7_source_freeze import (
+        _sha256_json,
+        _terminal_document_projection,
+    )
+
+    content_sha256 = hashlib.sha256(content).hexdigest()
+    with engine.begin() as conn:
+        set_tenant_local(conn, tenant_id)
+        rows = (
+            conn.execute(
+                text(
+                    "SELECT * FROM document_parse_attempts "
+                    "WHERE document_id = CAST(:document AS uuid)"
+                ),
+                {"document": document_id},
+            )
+            .mappings()
+            .all()
+        )
+        document = (
+            conn.execute(
+                text(
+                    "SELECT doc_type, parse_status, metadata FROM documents "
+                    "WHERE document_id = CAST(:document AS uuid)"
+                ),
+                {"document": document_id},
+            )
+            .mappings()
+            .one()
+        )
+        artifact_metadata = conn.execute(
+            text(
+                """
+                SELECT artifacts.metadata
+                FROM document_artifacts AS artifacts
+                JOIN documents ON documents.doc_id = artifacts.doc_id
+                WHERE documents.document_id = CAST(:document AS uuid)
+                """
+            ),
+            {"document": document_id},
+        ).scalar_one()
+    assert len(rows) == 1
+    attempt = rows[0]
+    assert attempt["write_origin"] == "RUNTIME"
+    assert attempt["status"] == "FAILED"
+    assert attempt["attempt_ordinal"] == 1
+    assert attempt["input_sha256"] == content_sha256
+    assert attempt["parser_name"] == "idis-ingestion/pre-ocr-watermark/pdf"
+    assert str(attempt["parser_version"]).startswith("idis-watermark-pre-ocr-runtime-v1:")
+    assert "tesseract" not in str(attempt["parser_name"])
+    assert "pypdf" not in str(attempt["parser_version"])
+    projection = _terminal_document_projection(
+        document["metadata"],
+        doc_type=document["doc_type"],
+        parse_status=document["parse_status"],
+        spans=[],
+    )
+    assert attempt["receipt_sha256"] == _sha256_json(
+        [
+            "terminal-document-metadata-v2",
+            document["doc_type"],
+            document["parse_status"],
+            projection,
+        ]
+    )
+    assert "source_preparation_prerequisite" not in document["metadata"]
+    assert "source_preparation_prerequisite" not in artifact_metadata
+    assert document["metadata"]["parser_mode"] == "ocr"
+
+
 class TestStartRunPreflightCorpusBehavior:
     """API start-run behavior for full preflight corpus checks."""
 
@@ -1078,31 +1309,65 @@ class TestStartRunPreflightCorpusBehavior:
     def test_api_corpus_exists_but_no_usable_docs_fails_document_preflight(
         self,
         monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
     ) -> None:
-        """No usable docs creates a run and fails at DOCUMENT_PREFLIGHT."""
-        monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(_make_api_keys()))
-        audit_sink = InMemoryAuditSink()
-        app = create_app(audit_sink=audit_sink, service_region="me-south-1")
-        app.state.deal_documents = {}
-        client = TestClient(app)
+        """A package of one signed watermark exclusion fails at DOCUMENT_PREFLIGHT."""
+        from tests._cir04c3_exclusion_signer import EXCLUSION_UPLOAD_NAME, watermark_only_pdf
 
-        create_resp = client.post(
-            "/v1/deals",
-            json={"name": "Failed Corpus Deal", "company_name": "TestCo"},
-            headers={"X-IDIS-API-Key": API_KEY_A},
-        )
-        assert create_resp.status_code == 201
-        deal_id = create_resp.json()["deal_id"]
-        seed_deal_access(TENANT_A, deal_id, "actor-a")
-        failed_doc = _make_failed_preflight_document()
-        failed_doc["deal_id"] = deal_id
-        app.state.deal_documents[deal_id] = [failed_doc]
+        tenant_id = str(uuid.uuid4())
+        api_keys = _make_api_keys()
+        api_keys[API_KEY_A]["tenant_id"] = tenant_id
+        pdf_bytes = watermark_only_pdf()
+        fingerprint = hashlib.sha256(b"c3-batch4-all-failed-tree").hexdigest()
+        with required_frozen_preview(monkeypatch) as preview_db:
+            preview_db.add_tenant(tenant_id, "me-south-1")
+            _install_watermark_authority(
+                monkeypatch,
+                tmp_path,
+                tenant_id=tenant_id,
+                fingerprint=fingerprint,
+                pdf_bytes=pdf_bytes,
+                safe_alias=EXCLUSION_UPLOAD_NAME,
+            )
+            monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys))
+            app = create_app(
+                audit_sink=CapturingRequiredPostgresAuditSink(InMemoryAuditSink()),
+                service_region="me-south-1",
+            )
+            client = TestClient(app)
+            create_resp = client.post(
+                "/v1/deals",
+                json={"name": "Failed Corpus Deal", "company_name": "TestCo"},
+                headers={"X-IDIS-API-Key": API_KEY_A},
+            )
+            assert create_resp.status_code == 201
+            deal_id = create_resp.json()["deal_id"]
+            seed_deal_access(tenant_id, deal_id, "actor-a")
+            document_ids = _open_signed_company_package(
+                preview_db.engine,
+                tenant_id=tenant_id,
+                deal_id=deal_id,
+                root=tmp_path / "objects",
+                members=[(EXCLUSION_UPLOAD_NAME, pdf_bytes)],
+                source_tree_fingerprint=fingerprint,
+            )
+            _assert_registered_exclusion_ref(
+                preview_db.engine,
+                tenant_id=tenant_id,
+                document_id=document_ids[0],
+            )
+            _assert_exclusion_runtime_attempt(
+                preview_db.engine,
+                tenant_id=tenant_id,
+                document_id=document_ids[0],
+                content=pdf_bytes,
+            )
 
-        run_resp = client.post(
-            f"/v1/deals/{deal_id}/runs",
-            json={"mode": "SNAPSHOT"},
-            headers={"X-IDIS-API-Key": API_KEY_A},
-        )
+            run_resp = client.post(
+                f"/v1/deals/{deal_id}/runs",
+                json={"mode": "SNAPSHOT"},
+                headers={"X-IDIS-API-Key": API_KEY_A},
+            )
 
         assert run_resp.status_code == 202
         body = run_resp.json()
@@ -1173,34 +1438,92 @@ class TestStartRunPreflightCorpusBehavior:
     def test_api_mixed_corpus_continues_with_eligible_docs_only(
         self,
         monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
     ) -> None:
-        """Mixed usable/unusable corpus should continue through extraction."""
-        monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(_make_api_keys()))
-        audit_sink = InMemoryAuditSink()
-        app = create_app(audit_sink=audit_sink, service_region="me-south-1")
-        app.state.deal_documents = {}
-        client = TestClient(app)
-
-        create_resp = client.post(
-            "/v1/deals",
-            json={"name": "Mixed Corpus Deal", "company_name": "TestCo"},
-            headers={"X-IDIS-API-Key": API_KEY_A},
+        """One parsed PDF plus one signed exclusion continues through CALC."""
+        from tests._cir04c3_exclusion_signer import (
+            EXCLUSION_UPLOAD_NAME,
+            PARSED_UPLOAD_NAME,
+            watermark_only_pdf,
         )
-        assert create_resp.status_code == 201
-        deal_id = create_resp.json()["deal_id"]
-        seed_deal_access(TENANT_A, deal_id, "actor-a")
-        usable_doc = _make_preflight_document(document_id="doc-usable")
-        usable_doc["deal_id"] = deal_id
-        usable_doc["spans"][0]["deal_id"] = deal_id
-        failed_doc = _make_failed_preflight_document()
-        failed_doc["deal_id"] = deal_id
-        app.state.deal_documents[deal_id] = [usable_doc, failed_doc]
+        from tests.test_pdf_parser import create_test_pdf
 
-        run_resp = client.post(
-            f"/v1/deals/{deal_id}/runs",
-            json={"mode": "SNAPSHOT"},
-            headers={"X-IDIS-API-Key": API_KEY_A},
-        )
+        tenant_id = str(uuid.uuid4())
+        api_keys = _make_api_keys()
+        api_keys[API_KEY_A]["tenant_id"] = tenant_id
+        exclusion_bytes = watermark_only_pdf()
+        parsed_bytes = create_test_pdf(["PUBLIC SYNTHETIC MIXED CORPUS REVENUE"])
+        fingerprint = hashlib.sha256(b"c3-batch4-mixed-tree").hexdigest()
+        with required_frozen_preview(monkeypatch) as preview_db:
+            preview_db.add_tenant(tenant_id, "me-south-1")
+            _install_watermark_authority(
+                monkeypatch,
+                tmp_path,
+                tenant_id=tenant_id,
+                fingerprint=fingerprint,
+                pdf_bytes=exclusion_bytes,
+                safe_alias=EXCLUSION_UPLOAD_NAME,
+            )
+            monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(api_keys))
+            app = create_app(
+                audit_sink=CapturingRequiredPostgresAuditSink(InMemoryAuditSink()),
+                service_region="me-south-1",
+            )
+            client = TestClient(app)
+            create_resp = client.post(
+                "/v1/deals",
+                json={"name": "Mixed Corpus Deal", "company_name": "TestCo"},
+                headers={"X-IDIS-API-Key": API_KEY_A},
+            )
+            assert create_resp.status_code == 201
+            deal_id = create_resp.json()["deal_id"]
+            seed_deal_access(tenant_id, deal_id, "actor-a")
+            document_ids = _open_signed_company_package(
+                preview_db.engine,
+                tenant_id=tenant_id,
+                deal_id=deal_id,
+                root=tmp_path / "objects",
+                members=[
+                    (EXCLUSION_UPLOAD_NAME, exclusion_bytes),
+                    (PARSED_UPLOAD_NAME, parsed_bytes),
+                ],
+                source_tree_fingerprint=fingerprint,
+            )
+            _assert_registered_exclusion_ref(
+                preview_db.engine,
+                tenant_id=tenant_id,
+                document_id=document_ids[0],
+            )
+            _assert_exclusion_runtime_attempt(
+                preview_db.engine,
+                tenant_id=tenant_id,
+                document_id=document_ids[0],
+                content=exclusion_bytes,
+            )
+
+            run_resp = client.post(
+                f"/v1/deals/{deal_id}/runs",
+                json={"mode": "SNAPSHOT"},
+                headers={"X-IDIS-API-Key": API_KEY_A},
+            )
+            from sqlalchemy import text
+
+            from idis.persistence.db import set_tenant_local
+
+            assert run_resp.status_code == 202
+            with preview_db.engine.begin() as conn:
+                set_tenant_local(conn, tenant_id)
+                preflight_summary = conn.execute(
+                    text(
+                        "SELECT result_summary FROM run_steps "
+                        "WHERE run_id = CAST(:run_id AS uuid) "
+                        "AND step_name = 'DOCUMENT_PREFLIGHT'"
+                    ),
+                    {"run_id": run_resp.json()["run_id"]},
+                ).scalar_one()
+            if isinstance(preflight_summary, str):
+                preflight_summary = json.loads(preflight_summary)
+            extraction_document_ids = preflight_summary["eligible_document_ids"]
 
         assert run_resp.status_code == 202
         body = run_resp.json()
@@ -1216,6 +1539,7 @@ class TestStartRunPreflightCorpusBehavior:
             "GRADE",
             "CALC",
         ]
+        assert extraction_document_ids == [document_ids[1]]
 
     def test_api_rejects_unknown_and_path_like_run_source_fields(
         self,

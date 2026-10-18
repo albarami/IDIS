@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from idis.api.main import create_app
@@ -16,6 +16,12 @@ from idis.models.run_step import StepName
 from tests import test_ingestion_persists_documents_postgres as pg_helpers
 from tests.abac_seed import seed_deal_access
 from tests.test_api_default_upload_ingestion_postgres import _configure_api_key
+from tests.test_api_selected_multidocument_full_acceptance_postgres import (
+    clear_frozen_methodology_rows,
+    frozen_full_methodology_selection,
+    public_fdd_fixture,
+    upload_and_bind_preview_members,
+)
 
 pytest_plugins = ("tests.test_ingestion_persists_documents_postgres",)
 
@@ -39,9 +45,17 @@ def _assert_safe_public_payload(payload: object, *, storage_base_dir: str) -> No
     assert storage_base_dir not in encoded
 
 
+@pytest.fixture
+def methodology_cleanup(admin_engine: Any, clean_tables: None) -> Any:
+    yield
+    clear_frozen_methodology_rows(admin_engine)
+
+
 def test_default_upload_selected_full_run_persists_long_step_name_without_sql_truncation(
     app_engine: Any,
+    admin_engine: Any,
     clean_tables: None,
+    methodology_cleanup: None,
     monkeypatch: Any,
     tmp_path: Any,
 ) -> None:
@@ -51,6 +65,8 @@ def test_default_upload_selected_full_run_persists_long_step_name_without_sql_tr
     _configure_api_key(monkeypatch)
     storage_base_dir = str(tmp_path / "objects")
     monkeypatch.setenv("IDIS_OBJECT_STORE_BASE_DIR", storage_base_dir)
+    fdd_fixture = public_fdd_fixture(tmp_path)
+    monkeypatch.setenv("IDIS_FDD_METHODOLOGY_PATH", str(fdd_fixture))
 
     app = create_app(idempotency_store=SqliteIdempotencyStore(in_memory=True))
     client = TestClient(app, raise_server_exceptions=False)
@@ -66,25 +82,22 @@ def test_default_upload_selected_full_run_persists_long_step_name_without_sql_tr
     seed_deal_access(str(pg_helpers.TENANT_ID), deal_id, pg_helpers.ACTOR_ID)
 
     data = pg_helpers._pdf_bytes()
-    upload_response = client.post(
-        f"/v1/deals/{deal_id}/documents/upload",
-        headers={
-            "X-IDIS-API-Key": pg_helpers.API_KEY,
-            "Content-Type": "application/octet-stream",
-        },
-        params={
-            "filename": "slice25-selected-full.pdf",
-            "doc_type": "DATA_ROOM_FILE",
-            "sha256": hashlib.sha256(data).hexdigest(),
-            "source_system": "slice25-step-name",
-        },
-        content=data,
+    upload_bodies = upload_and_bind_preview_members(
+        client,
+        app_engine,
+        deal_id=deal_id,
+        members=[("pdf", data)],
     )
-    assert upload_response.status_code == 201
-    upload_body = upload_response.json()
+    upload_body = upload_bodies[0]
     document_id = upload_body["document_id"]
     assert document_id
     _assert_safe_public_payload(upload_body, storage_base_dir=storage_base_dir)
+    methodology_selection = frozen_full_methodology_selection(
+        app_engine,
+        admin_engine,
+        str(pg_helpers.TENANT_ID),
+        fdd_fixture,
+    )
 
     run_response = client.post(
         f"/v1/deals/{deal_id}/runs",
@@ -95,6 +108,7 @@ def test_default_upload_selected_full_run_persists_long_step_name_without_sql_tr
                 "type": "deal_documents",
                 "document_ids": [document_id],
             },
+            "methodology_selection": methodology_selection,
         },
     )
 

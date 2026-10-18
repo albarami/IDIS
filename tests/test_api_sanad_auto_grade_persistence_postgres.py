@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
@@ -20,16 +21,27 @@ from tests.test_api_default_upload_ingestion_postgres import _configure_api_key
 from tests.test_api_selected_multidocument_full_acceptance_postgres import (
     KNOWN_SANAD_BLOCKER,
     _assert_safe_payload,
-    _upload_supported_file,
     _write_supported_data_room_like_fixture,
+    clear_frozen_methodology_rows,
+    frozen_full_methodology_selection,
+    public_fdd_fixture,
+    upload_and_bind_preview_members,
 )
 
 pytest_plugins = ("tests.test_ingestion_persists_documents_postgres",)
 
 
+@pytest.fixture
+def methodology_cleanup(admin_engine: Any, clean_tables: None) -> Any:
+    yield
+    clear_frozen_methodology_rows(admin_engine)
+
+
 def test_slice28_selected_full_run_persists_sanad_grades_without_known_blocker(
     app_engine: Any,
+    admin_engine: Any,
     clean_tables: None,
+    methodology_cleanup: None,
     monkeypatch: Any,
     tmp_path: Path,
 ) -> None:
@@ -40,6 +52,8 @@ def test_slice28_selected_full_run_persists_sanad_grades_without_known_blocker(
     storage_base_dir = str(tmp_path / "objects")
     room_root = tmp_path / "generated_nested_data_room"
     monkeypatch.setenv("IDIS_OBJECT_STORE_BASE_DIR", storage_base_dir)
+    fdd_fixture = public_fdd_fixture(tmp_path)
+    monkeypatch.setenv("IDIS_FDD_METHODOLOGY_PATH", str(fdd_fixture))
     audit_sink = InMemoryAuditSink()
 
     app = create_app(
@@ -58,15 +72,26 @@ def test_slice28_selected_full_run_persists_sanad_grades_without_known_blocker(
     # Deal-scoped ABAC is deny-by-default: assign the creating actor to operate on its own deal.
     seed_deal_access(str(pg_helpers.TENANT_ID), deal_id, pg_helpers.ACTOR_ID)
 
-    document_ids: list[str] = []
-    for path in _write_supported_data_room_like_fixture(room_root):
-        upload_body = _upload_supported_file(client, deal_id=deal_id, path=path)
-        document_ids.append(str(upload_body["document_id"]))
+    supported_files = _write_supported_data_room_like_fixture(room_root)
+    upload_bodies = upload_and_bind_preview_members(
+        client,
+        app_engine,
+        deal_id=deal_id,
+        members=[(path.suffix.lstrip("."), path.read_bytes()) for path in supported_files],
+    )
+    document_ids = [str(body["document_id"]) for body in upload_bodies]
+    for upload_body in upload_bodies:
         _assert_safe_payload(
             upload_body,
             storage_base_dir=storage_base_dir,
             room_root=room_root,
         )
+    methodology_selection = frozen_full_methodology_selection(
+        app_engine,
+        admin_engine,
+        str(pg_helpers.TENANT_ID),
+        fdd_fixture,
+    )
 
     run_response = client.post(
         f"/v1/deals/{deal_id}/runs",
@@ -77,6 +102,7 @@ def test_slice28_selected_full_run_persists_sanad_grades_without_known_blocker(
                 "type": "deal_documents",
                 "document_ids": document_ids,
             },
+            "methodology_selection": methodology_selection,
         },
     )
     assert run_response.status_code == 202
@@ -202,7 +228,7 @@ def _load_durable_sanad_grade_state(
             SELECT COUNT(*)
             FROM sanads sanad
             JOIN evidence_items evidence
-              ON evidence.evidence_id::text = sanad.primary_evidence_id
+              ON evidence.evidence_id = sanad.primary_evidence_id
              AND evidence.claim_id = sanad.claim_id
             WHERE sanad.deal_id = :deal_id
             """

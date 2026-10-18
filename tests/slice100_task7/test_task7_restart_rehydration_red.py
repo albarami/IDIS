@@ -11,6 +11,9 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from scripts.run_cir04_restart_reference_dev_migration import (
+    upgrade_disposable_to_dev_0039,
+)
 from sqlalchemy import text
 from tests.slice100_task2b._support import (
     DisposablePostgres,
@@ -547,6 +550,7 @@ def test_real_postgres_all_27_restart_cuts_reclaim_and_fence_without_repair() ->
         with database.admin_engine.begin() as connection:
             provision_exact_erasure_principals(connection)
         migrate(database.admin_engine, "0038")
+        upgrade_disposable_to_dev_0039(database)
         grant_application_access(database)
         with database.app_engine.connect() as connection:
             posture = connection.execute(

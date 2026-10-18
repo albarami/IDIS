@@ -135,6 +135,125 @@ def _with_streaming_proof(metadata: dict[str, Any]) -> dict[str, Any]:
     return stamped
 
 
+_NO_SUBSTANTIVE_CONTENT_RECEIPT_SCHEMA_ID = "no-substantive-content-receipt"
+_REGISTERED_NO_SUBSTANTIVE_CONTENT_RECEIPT_VERSION = "document-no-substantive-content-receipt-v1"
+
+
+class ReceiptSchemaRefError(ValueError):
+    """Applicable schema refs were not a list of dict refs."""
+
+    def __init__(self) -> None:
+        super().__init__("RECEIPT_SCHEMA_REF_INVALID")
+
+
+def _loaded_distribution_version(module_name: str, distribution_name: str) -> str | None:
+    """Return a distribution version only when the executing file belongs to it."""
+    try:
+        module = importlib.import_module(module_name)
+        distribution = importlib.metadata.distribution(distribution_name)
+    except (ImportError, OSError, importlib.metadata.PackageNotFoundError):
+        return None
+    if not module.__file__ or not distribution.version or not distribution.files:
+        return None
+    executing = Path(module.__file__).resolve()
+    if not any(
+        Path(str(distribution.locate_file(entry))).resolve() == executing
+        for entry in distribution.files
+    ):
+        return None
+    return distribution.version
+
+
+def _receipt_payloads_match(existing_payload: object, receipt: Mapping[str, object]) -> bool:
+    """Return whether two receipt payloads are the same canonical JSON value."""
+    from idis.persistence.repositories.task7_source_freeze import (
+        Task7SourceFreezeError,
+        _canonical_json_bytes,
+    )
+
+    try:
+        return _canonical_json_bytes(existing_payload) == _canonical_json_bytes(receipt)
+    except Task7SourceFreezeError:
+        raise ReceiptSchemaRefError() from None
+
+
+def _attested_pre_ocr_watermark_receipt(receipt: Mapping[str, object] | None) -> bool:
+    """Return whether every classified page is an attested pre-OCR exclusion."""
+    if receipt is None:
+        return False
+    rows = receipt.get("watermark_page_classifications")
+    if not isinstance(rows, list) or not rows:
+        return False
+    return all(
+        isinstance(row, Mapping)
+        and row.get("batch_membership") == "ATTESTED"
+        and row.get("classification_phase") == "pre_ocr"
+        and row.get("full_resolution_ocr_attempted") is False
+        for row in rows
+    )
+
+
+def _schema_ref_sort_key(item: Mapping[str, object]) -> tuple[str, str, str, bytes]:
+    """Sort with the freeze key: id, version, sha256, canonical payload."""
+    from idis.persistence.repositories.task7_source_freeze import _canonical_json_bytes
+
+    schema_id = item.get("schema_id")
+    schema_version = item.get("schema_version")
+    schema_sha256 = item.get("schema_sha256")
+    if (
+        not isinstance(schema_id, str)
+        or not isinstance(schema_version, str)
+        or not isinstance(schema_sha256, str)
+        or "validated_payload" not in item
+    ):
+        raise ReceiptSchemaRefError()
+    return (
+        schema_id,
+        schema_version,
+        schema_sha256,
+        _canonical_json_bytes(item["validated_payload"]),
+    )
+
+
+def _receipt_schema_refs(
+    existing: object, receipt: Mapping[str, object]
+) -> list[dict[str, object]]:
+    """Attach the registered receipt ref without dropping other document metadata."""
+    from idis.persistence.repositories.task7_source_freeze import _SOURCE_SCHEMA_AUTHORITIES
+
+    if not isinstance(existing, list):
+        raise ReceiptSchemaRefError()
+    schema_sha256 = _SOURCE_SCHEMA_AUTHORITIES[
+        (
+            _NO_SUBSTANTIVE_CONTENT_RECEIPT_SCHEMA_ID,
+            _REGISTERED_NO_SUBSTANTIVE_CONTENT_RECEIPT_VERSION,
+        )
+    ]
+    ref: dict[str, object] = {
+        "schema_id": _NO_SUBSTANTIVE_CONTENT_RECEIPT_SCHEMA_ID,
+        "schema_version": _REGISTERED_NO_SUBSTANTIVE_CONTENT_RECEIPT_VERSION,
+        "schema_sha256": schema_sha256,
+        "validated_payload": receipt,
+    }
+    kept: list[dict[str, object]] = []
+    for item in existing:
+        if not isinstance(item, dict):
+            raise ReceiptSchemaRefError()
+        if item.get("schema_id") == _NO_SUBSTANTIVE_CONTENT_RECEIPT_SCHEMA_ID:
+            if "validated_payload" not in item or not _receipt_payloads_match(
+                item["validated_payload"], receipt
+            ):
+                raise ReceiptSchemaRefError()
+            continue
+        copied: dict[str, object] = {}
+        for key, value in item.items():
+            if not isinstance(key, str):
+                raise ReceiptSchemaRefError()
+            copied[key] = value
+        kept.append(copied)
+    return sorted([*kept, ref], key=_schema_ref_sort_key)
+
+
 class IngestionErrorCode(StrEnum):
     """Standardized error codes for ingestion failures."""
 
@@ -1273,9 +1392,11 @@ class IngestionService:
                 "streaming_verified": True,
             }
         parser_identity = self._runtime_parser_identity(parse_result)
+        watermark_identity = self._watermark_pre_ocr_parser_identity(parse_result)
+        durable_identity_unavailable = actual_version != verified_object.version_id
         prerequisite = (
             "DURABLE_OBJECT_IDENTITY_UNAVAILABLE"
-            if actual_version != verified_object.version_id
+            if durable_identity_unavailable
             else "PARSER_NATIVE_IDENTITY_UNAVAILABLE"
             if parser_identity is None
             else None
@@ -1311,6 +1432,21 @@ class IngestionService:
                 now=now,
             )
 
+        attested_watermark = _attested_pre_ocr_watermark_receipt(no_substantive_content_receipt)
+        if (
+            not durable_identity_unavailable
+            and parser_identity is None
+            and watermark_identity is not None
+            and attested_watermark
+        ):
+            # This member's classification identified the qualified closure.
+            # Genuine OCR never reaches this branch: its identity stays None.
+            prerequisite = None
+            metadata.pop("source_preparation_prerequisite", None)
+        attempt_identity = parser_identity
+        if attempt_identity is None and prerequisite is None and attested_watermark:
+            attempt_identity = watermark_identity
+
         artifact = self._create_artifact(
             artifact_id=artifact_id,
             tenant_id=ctx.tenant_id,
@@ -1337,6 +1473,11 @@ class IngestionService:
             parse_metadata.pop("watermark_page_classifications", None)
             parse_metadata["document_no_substantive_content_receipt"] = (
                 no_substantive_content_receipt
+            )
+            existing_refs: object = parse_metadata.get("applicable_schema_refs", [])
+            parse_metadata["applicable_schema_refs"] = _receipt_schema_refs(
+                existing_refs,
+                no_substantive_content_receipt,
             )
 
         document = self._create_document(
@@ -1394,13 +1535,13 @@ class IngestionService:
             try:
                 self._persist_artifact(ctx.tenant_id, artifact, db_conn=db_conn)
                 self._persist_document(ctx.tenant_id, document, db_conn=db_conn)
-                if prerequisite is None and parser_identity is not None:
+                if prerequisite is None and attempt_identity is not None:
                     self._persist_runtime_attempt(
                         ctx=ctx,
                         document=document,
                         spans=spans,
                         input_sha256=sha256,
-                        parser_identity=parser_identity,
+                        parser_identity=attempt_identity,
                         started_at=parser_started_at,
                         finished_at=parser_finished_at,
                         db_conn=db_conn,
@@ -2422,6 +2563,70 @@ class IngestionService:
             f"{self._parser_source_type(parse_result)}/{parse_result.doc_type.lower()}"
         )
         return name, "idis-parser-runtime-v1:" + digest
+
+    def _watermark_pre_ocr_parser_identity(
+        self, parse_result: ParseResult
+    ) -> tuple[str, str] | None:
+        """Bind pillow, pdf2image, and the governed Poppler closure.
+
+        Classification that did not run, and any parse that actually performed
+        OCR, get no identity. A Poppler build other than the governed closure
+        is not named. This path does not name pypdf or Tesseract.
+        """
+        if parse_result.metadata.get("ocr_performed") is True:
+            return None
+        classifications = parse_result.metadata.get("watermark_page_classifications")
+        if not isinstance(classifications, list) or not classifications:
+            return None
+        if any(
+            not isinstance(row, Mapping)
+            or row.get("classification_phase") != "pre_ocr"
+            or row.get("full_resolution_ocr_attempted") is not False
+            for row in classifications
+        ):
+            return None
+        pillow_version = _loaded_distribution_version("PIL", "pillow")
+        renderer_version = _loaded_distribution_version("pdf2image", "pdf2image")
+        if pillow_version is None or renderer_version is None:
+            return None
+        try:
+            from idis.evaluation.real_example_terminal_reconciliation import (
+                _PINNED_POPPLER_RUNTIME_IDENTITY_SHA256,
+            )
+            from idis.parsers.poppler_runtime import (
+                PopplerRuntimeBindingError,
+                resolve_pinned_poppler_runtime,
+            )
+
+            binding = resolve_pinned_poppler_runtime()
+        except PopplerRuntimeBindingError:
+            return None
+        if binding.runtime_identity_sha256 != _PINNED_POPPLER_RUNTIME_IDENTITY_SHA256:
+            return None
+        digest = hashlib.sha256(
+            canonicalize_json(
+                [
+                    "idis-watermark-pre-ocr-runtime-v1",
+                    sys.implementation.name,
+                    platform.python_version(),
+                    sorted(
+                        [
+                            ["pdf2image", renderer_version],
+                            ["pillow", pillow_version],
+                        ]
+                    ),
+                    [
+                        "poppler-runtime-identity-v1",
+                        binding.version,
+                        binding.runtime_identity_sha256,
+                    ],
+                ]
+            )
+        ).hexdigest()
+        return (
+            "idis-ingestion/pre-ocr-watermark/pdf",
+            "idis-watermark-pre-ocr-runtime-v1:" + digest,
+        )
 
     def _persist_runtime_attempt(
         self,

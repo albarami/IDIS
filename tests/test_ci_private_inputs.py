@@ -16,6 +16,7 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Mapping
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -3293,10 +3294,82 @@ _CANARY_ADMIT_NAME = "Canary admit genuine exact-run approval without seed"
 _CANARY_CAPTURE_NAME = "Canary capture synthetic failure privacy"
 
 
+_CANARY_TOKENS = (
+    "IDIS_CANARY_PROBE_SHA256",
+    "IDIS_CI_CANARY_SEED",
+    "temporary_canary_wiring",
+    "ci_canary_probe",
+    "canary-admit",
+    "canary-capture",
+    "idis-canary-",
+    "CANARY_SENTINEL",
+)
+_REVIEWED_BOOTSTRAP_SHA256 = "ff5cba5bd92683d4d4e5b9fc101f74006899d3f9863b1ee02ffb9e0025e148e6"
+_CHECK_JOB_STEPS: tuple[tuple[str, str], ...] = (
+    ("Checkout code", "81ca817f61e7e77651fa289b36db997ae4451008e5d1325139508e178731af09"),
+    ("private-admission", "2b4458698a79aa875840db03d3897a4a6d48e130b0eb297ce055f94e5137fb4b"),
+    ("private-fetch", "25d8bca879b2106dcd436bbdec52382af5705dfbb8ca889b112e392f0b8612d3"),
+    ("Set up Python 3.11", "fb9c1afa96b3eb18a189971b0ce84c1886d865a7d8550381dc51d3a3e9b084ea"),
+    (
+        "Install OCR and media system dependencies",
+        "dc09a8fa31b143acd4fdb6764a6e54597b9bdfbdc9c318c0d2ae80f32221c94b",
+    ),
+    ("Install dependencies", "4e52a24746e879efe1b3a9cb00260eb0d31ed7a9afe71e5add08ebc86ac8c8a9"),
+    (
+        "Enforce authorized migration ceiling before checks",
+        "a27e77393a743da1d5a19030bd8b1d7a0fb6cd88ebc9c4255ee5027a7495ffc8",
+    ),
+    ("required-callers-setup", "49abb8bb4d3c373fd93be255526ac08164a6759218a1f4fb534f51fd8c84d49c"),
+    (
+        "Provision Redis URL for the cross-replica rate-limit integration test (Slice96 DEC-A)",
+        "2f640b43216ddee76e76b29a0b68ee85e9ca65c55b07f01ee8997a62f1bc5351",
+    ),
+    (
+        "Validate prompt registry governance (Slice99)",
+        "87897f3f9347457d768481b5f589cc63ee5e56c1b1f3d335c7c5ed35b24d32b4",
+    ),
+    (
+        "Verify OpenAPI/schema/client contract lock (Slice99)",
+        "64c7e5292a0281bd0315b722b6deef5fec2414c01e46a21b86a2a8106e26e124",
+    ),
+    (
+        "Upload prompt governance report",
+        "4fa69c4ab0f8e5f3c8635564b8e804ea9f538e6f79d85e59c08816a63dcfcc76",
+    ),
+    ("private-overlay", "0ab1e9371cd4c04b421ab26371e5732fc939a109f16f38c033c8acc35651eb56"),
+    (
+        "Derive labelled v27 staging bytes with existing tools",
+        "034ff9deb3d6370e9d6039f1c059948d843caac6635ba26149fc109684237d55",
+    ),
+    (
+        "historical-source-fetch",
+        "d3a175faf1dfb7c1c445d0fb31f666d4d054f9d62d4071021dd5251b99e467d0",
+    ),
+    ("Run all checks", "7e35713084937394ed5a894d5b0693944efc5ba5a6f80afdd4756ae5af60f2b3"),
+    (
+        "Remove only validated invocation-owned overlay files",
+        "81bbeaa2295627611740c2c0a9f9a291ec1f3155d6469395504790494d205fe9",
+    ),
+)
+
+
+def _step_digest(step: Mapping[str, Any]) -> str:
+    """Digest one parsed step. Key order cannot hide an added or changed field."""
+    raw = json.dumps(step, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _assert_canary_tokens_absent(workflow_text: str, conftest_text: str) -> None:
+    for token in _CANARY_TOKENS:
+        assert token not in workflow_text
+        assert token not in conftest_text
+    assert list((ROOT / "scripts").glob("*canary*.py")) == []
+
+
 def assert_no_canary_wiring(workflow: dict[str, Any]) -> None:
     """Removal pin: no canary steps, no probe pin, and no probe file.
 
-    test_temporary_canary_wiring_is_present_until_removal calls this helper.
+    test_no_temporary_canary_wiring_remains calls this helper.
     """
     check = workflow["jobs"]["check"]
     steps = check["steps"]
@@ -3308,9 +3381,50 @@ def assert_no_canary_wiring(workflow: dict[str, Any]) -> None:
     assert _CANARY_CAPTURE_NAME not in names
     assert "IDIS_CANARY_PROBE_SHA256" not in check.get("env", {})
     assert not (ROOT / "scripts" / "ci_canary_probe.py").exists()
+    _assert_canary_tokens_absent(
+        (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"),
+        (ROOT / "tests/conftest.py").read_text(encoding="utf-8"),
+    )
 
 
-def test_temporary_canary_wiring_is_present_until_removal() -> None:
+def test_no_temporary_canary_wiring_remains() -> None:
     """Permanent absence pin: the temporary steps, pin, and probe stay gone."""
     workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
     assert_no_canary_wiring(workflow)
+
+
+@pytest.mark.parametrize("token", _CANARY_TOKENS)
+def test_canary_token_pin_rejects_one_specific_token(token: str) -> None:
+    with pytest.raises(AssertionError):
+        _assert_canary_tokens_absent(token, "")
+
+
+def test_reviewed_bootstrap_sha256_matches_check_env_and_helper_bytes() -> None:
+    """The production bootstrap pin is the reviewed constant, not only self-consistency."""
+    assert _check()["env"]["IDIS_BOOTSTRAP_SHA256"] == _REVIEWED_BOOTSTRAP_SHA256
+    observed = hashlib.sha256((ROOT / "scripts/ci_private_inputs.py").read_bytes()).hexdigest()
+    assert observed == _REVIEWED_BOOTSTRAP_SHA256
+
+
+def test_check_job_steps_match_reviewed_removal_digests() -> None:
+    """The check job step list is the 17-step removal revision, in order."""
+    steps = _check()["steps"]
+    observed = [(step.get("id") or step.get("name"), _step_digest(step)) for step in steps]
+    assert observed == list(_CHECK_JOB_STEPS)
+    assert len(_CHECK_JOB_STEPS) == 17
+
+
+def test_check_job_step_digest_pin_rejects_one_byte_step_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    step = workflow["jobs"]["check"]["steps"][4]
+    name = step["name"]
+    step["name"] = name[:-1] + ("X" if name[-1] != "X" else "Y")
+
+    def mutated(_source: object) -> object:
+        return workflow
+
+    monkeypatch.setattr(yaml, "safe_load", mutated)
+    with pytest.raises(AssertionError):
+        test_check_job_steps_match_reviewed_removal_digests()

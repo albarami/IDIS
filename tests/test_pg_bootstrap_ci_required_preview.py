@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import importlib.util
+import inspect
 import json
 import os
 import re
@@ -455,8 +456,16 @@ def test_required_tests_phase_invokes_pinned_modules_fail_closed(
     assert isinstance(argv, list)
     assert argv[0] == "exec"
     assert argv[2:4] == ["-m", "pytest"]
-    assert argv[4:-2] == list(C3_FILES)
-    assert argv[-2:] == ["-v", "--junitxml=c3_postgres_integration_pytest.xml"]
+    assert argv[4:-4] == list(C3_FILES)
+    assert argv[-4:] == [
+        "--deselect",
+        (
+            "tests/test_cir04c3_frozen_preview_postgres.py::"
+            "test_real_native_pdf_source_survives_hermetic_admission_and_restart_cut[1]"
+        ),
+        "-v",
+        "--junitxml=c3_postgres_integration_pytest.xml",
+    ]
     environment = seen["environment"]
     assert isinstance(environment, Mapping)
     assert environment["IDIS_REQUIRE_POSTGRES"] == "1"
@@ -654,6 +663,47 @@ def test_child_boundary_records_allow_listed_code_only(
         bootstrap._call_preview_child(config, allow_listed)
     assert code_path.read_bytes() == b"PREVIEW_RECEIPT_SHORT_WRITE"
     bootstrap._validate_required_preview_root(config)
+
+
+def test_preview_root_accepts_dev0039_receipt_and_rejects_unknown_file(
+    bootstrap: ModuleType, ci_env: dict[str, str]
+) -> None:
+    """Allowed preview-root files plus the dev-0039 receipt validate."""
+    config = bootstrap.required_preview_config("check", ci_env)
+    bootstrap.create_required_preview_root(config)
+    receipt_name = "dev-0039-receipt.json"
+    allowed_files = (
+        "bootstrap.log",
+        "database-receipt.json",
+        "revalidate.log",
+        "bootstrap-command.sh",
+        "revalidate-command.sh",
+        "tests-command.sh",
+        "c3-tests.log",
+        _PREVIEW_FAILURE_CODE_NAME,
+        receipt_name,
+    )
+    for name in allowed_files:
+        descriptor = os.open(config.root / name, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(descriptor)
+    assert {path.name for path in config.root.iterdir()} == {"home", "tmp", *allowed_files}
+    bootstrap._validate_required_preview_root(config)
+    assert receipt_name == bootstrap._DEV0039_RECEIPT_NAME
+    writer = inspect.getsource(bootstrap.write_dev0039_restart_receipt)
+    reader = inspect.getsource(bootstrap._read_dev0039_receipt)
+    validator = inspect.getsource(bootstrap._validate_required_preview_root)
+    assert "config.root / _DEV0039_RECEIPT_NAME" in writer
+    assert "config.root / _DEV0039_RECEIPT_NAME" in reader
+    assert "_DEV0039_RECEIPT_NAME" in validator
+    assert receipt_name not in writer
+    assert receipt_name not in reader
+    assert receipt_name not in validator
+    descriptor = os.open(
+        config.root / "unknown-extra.txt", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600
+    )
+    os.close(descriptor)
+    with pytest.raises(ValueError, match="^PREVIEW_ROOT_CONTENT_INVALID$"):
+        bootstrap._validate_required_preview_root(config)
 
 
 def test_raised_preview_literals_match_public_codes(bootstrap: ModuleType) -> None:
@@ -923,7 +973,11 @@ def _assert_preview_main_child_boundary(source: str) -> None:
     ]
     assert len(mains) == 1
     found: set[str] = set()
-    expected = {"--required-preview-worker", "--required-preview-revalidate"}
+    expected = {
+        "--required-preview-worker",
+        "--required-preview-revalidate",
+        "--dev0039-restart-worker",
+    }
     for stmt in mains[0].body:
         if not isinstance(stmt, ast.If):
             continue
@@ -953,6 +1007,7 @@ _PREVIEW_BOUNDARY_WORK = frozenset(
         "_read_required_preview_receipt",
         "_prepare_required_roles",
         "_verify_required_database",
+        "create_dev0039_restart_database",
     }
 )
 
@@ -967,9 +1022,34 @@ def _loaded_boundary_work(node: ast.AST) -> set[str]:
     }
 
 
+def _assert_dev0039_public_argv_branches(main: ast.If) -> None:
+    """The two sibling gates exist and neither creates the dev-0039 database."""
+    expected = {"--run-required-dev0039-restart", "--run-required-dev0039-historical"}
+    found: set[str] = set()
+    for stmt in main.body:
+        if not isinstance(stmt, ast.If):
+            continue
+        flags = _string_constants(stmt.test) & expected
+        if not flags:
+            continue
+        assert len(flags) == 1
+        loaded = {
+            node.id
+            for node in ast.walk(stmt)
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+        }
+        assert "create_dev0039_restart_database" not in loaded
+        found.update(flags)
+    assert found == expected
+
+
 def _assert_preview_work_stays_inside_child_bodies(main: ast.If) -> None:
-    """JC3-05: the four workers are only called from bodies passed to the child."""
-    expected = {"--required-preview-worker", "--required-preview-revalidate"}
+    """JC3-05: preview and dev-0039 workers stay inside child bodies."""
+    expected = {
+        "--required-preview-worker",
+        "--required-preview-revalidate",
+        "--dev0039-restart-worker",
+    }
     inside: set[str] = set()
     for stmt in main.body:
         if not isinstance(stmt, ast.If):
@@ -1001,6 +1081,7 @@ def _assert_preview_work_stays_inside_child_bodies(main: ast.If) -> None:
             if isinstance(node, ast.FunctionDef) and id(node) in passed_ids:
                 continue
             assert not _loaded_boundary_work(node)
+    _assert_dev0039_public_argv_branches(main)
     assert inside == set(_PREVIEW_BOUNDARY_WORK)
 
 
@@ -1082,18 +1163,28 @@ def test_required_postgres_invocations_have_exact_zero_skip_steps() -> None:
     pairs = (
         ("pg-tests", "pg-zero-skip", "postgres_integration_pytest.xml"),
         ("c3-tests", "c3-zero-skip", "c3_postgres_integration_pytest.xml"),
+        ("c3-dev0039-restart", "c3-dev0039-zero-skip", "c3_dev0039_restart_pytest.xml"),
+        (
+            "dev0039-historical",
+            "dev0039-historical-zero-skip",
+            "dev0039_historical_restart_pytest.xml",
+        ),
     )
     for previous, current, xml_name in pairs:
+        assert previous in by_id
+        assert current in by_id
         assert steps.index(by_id[current]) == steps.index(by_id[previous]) + 1
         step = by_id[current]
         assert "continue-on-error" not in step
         assert step["run"] == _zero_skip_run(xml_name)
-        if current == "c3-zero-skip":
-            assert set(step) == {"name", "id", "if", "run"}
-            assert step["if"] == "${{ !cancelled() && steps.c3-tests.outcome == 'success' }}"
-        else:
+        if current == "pg-zero-skip":
             assert set(step) == {"name", "id", "run"}
             assert "if" not in step
+        else:
+            assert set(step) == {"name", "id", "if", "run"}
+            assert step["if"] == (
+                "${{ !cancelled() && steps." + previous + ".outcome == 'success' }}"
+            )
     original = by_id["pg-tests"]["run"]
     line = next(item for item in original.splitlines() if item.startswith("pytest "))
     assert hashlib.sha256(("          " + line).encode()).hexdigest() == (
@@ -1106,6 +1197,8 @@ def test_required_postgres_invocations_have_exact_zero_skip_steps() -> None:
     [
         ("pg-zero-skip", "postgres_integration_pytest.xml"),
         ("c3-zero-skip", "c3_postgres_integration_pytest.xml"),
+        ("c3-dev0039-zero-skip", "c3_dev0039_restart_pytest.xml"),
+        ("dev0039-historical-zero-skip", "dev0039_historical_restart_pytest.xml"),
     ],
 )
 def test_zero_skip_pin_rejects_removed_assertion(
@@ -1253,3 +1346,483 @@ def test_keyboard_interrupt_during_required_tests_reports_tests_phase(
         '{"required_c3_postgres":"interrupted","exit":130,"cleanup_failed":false,'
         '"code":"PREVIEW_UNCLASSIFIED","phase":"tests"}\n'
     )
+
+
+_RESTART_NODE_ID = (
+    "tests/test_cir04c3_frozen_preview_postgres.py::"
+    "test_real_native_pdf_source_survives_hermetic_admission_and_restart_cut[1]"
+)
+_HISTORICAL_NODE_ID = (
+    "tests/slice100_task7/test_task7_restart_rehydration_red.py::"
+    "test_real_postgres_all_27_restart_cuts_reclaim_and_fence_without_repair"
+)
+_ROLLBACK_NODE_ID = (
+    "tests/slice100_task7/test_task7_restart_rehydration_red.py::"
+    "test_real_postgres_step_boundary_exception_rolls_back_graph_step_and_audit"
+)
+_C3_TESTS_IF = (
+    "${{ !cancelled() && steps.pg-install.outcome == 'success' "
+    "&& steps.pg-ceiling.outcome == 'success' && steps.pg-roles.outcome == 'success' "
+    "&& steps.pg-bootstrap.outcome == 'success' && steps.pg-verify.outcome == 'success' "
+    "&& steps.c3-setup.outcome == 'success' }}"
+)
+_PG_NATIVE_INPUTS_RUN = (
+    "sudo apt-get update\n"
+    "sudo apt-get install -y --no-install-recommends "
+    "ffmpeg poppler-utils tesseract-ocr tesseract-ocr-eng\n"
+)
+_PG_ARCHIVE_FENCE_RUN = (
+    ".venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple "
+    '-c requirements/constraints-py311.txt "hatchling==1.32.4"\n'
+    ".venv/bin/python -m pip show hatchling\n"
+    ".venv/bin/python -m hatchling build -t sdist -t wheel "
+    '-d "$RUNNER_TEMP/idis-archive-fence"\n'
+    ".venv/bin/python - <<'PY'\n"
+    "import os\n"
+    "import tarfile\n"
+    "import zipfile\n"
+    "from pathlib import Path\n"
+    "\n"
+    'root = Path(os.environ["RUNNER_TEMP"]) / "idis-archive-fence"\n'
+    "files = [path for path in root.iterdir() if path.is_file()]\n"
+    'sdists = [path for path in files if path.name.endswith(".tar.gz")]\n'
+    'wheels = [path for path in files if path.suffix == ".whl"]\n'
+    "if len(sdists) != 1 or len(wheels) != 1:\n"
+    "    raise SystemExit(1)\n"
+    "if {path.name for path in files} != {sdists[0].name, wheels[0].name}:\n"
+    "    raise SystemExit(1)\n"
+    "\n"
+    "def names(path: Path) -> list[str]:\n"
+    '    if path.name.endswith(".tar.gz"):\n'
+    "        with tarfile.open(path) as archive:\n"
+    "            return archive.getnames()\n"
+    "    with zipfile.ZipFile(path) as archive:\n"
+    "        return archive.namelist()\n"
+    "\n"
+    "def norm(name: str) -> str:\n"
+    '    return name.replace(chr(92), "/").lstrip("./")\n'
+    "\n"
+    "def dev_only(name: str) -> bool:\n"
+    "    text = norm(name)\n"
+    '    return text.startswith("scripts/dev_only/") or "/scripts/dev_only/" in "/" + text\n'
+    "\n"
+    "def wheel_scripts(name: str) -> bool:\n"
+    "    text = norm(name)\n"
+    '    return text == "scripts" or text.startswith("scripts/") or "/scripts/" in "/" + text\n'
+    "\n"
+    "for member in names(sdists[0]):\n"
+    "    if dev_only(member):\n"
+    "        raise SystemExit(1)\n"
+    "for member in names(wheels[0]):\n"
+    "    if dev_only(member) or wheel_scripts(member):\n"
+    "        raise SystemExit(1)\n"
+    "PY\n"
+)
+_RESTART_CHILD_KEYS = (
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "PYTHONDONTWRITEBYTECODE",
+    "IDIS_DEV0039_RECEIPT",
+    "IDIS_DEV0039_RECEIPT_SHA256",
+    "IDIS_DEV0039_DATABASE_URL",
+    "IDIS_REQUIRE_POSTGRES",
+)
+_HISTORICAL_CHILD_KEYS = (
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "PYTHONDONTWRITEBYTECODE",
+    "IDIS_REQUIRE_POSTGRES",
+    "IDIS_DATABASE_ADMIN_URL",
+)
+
+
+def _dev0039_receipt_identity() -> tuple[str, str]:
+    script = REPO / "scripts" / "run_cir04_restart_reference_dev_migration.py"
+    spec = importlib.util.spec_from_file_location("dev0039_driver_pins", script)
+    assert spec is not None and spec.loader is not None and spec.name is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    schema = module.DEV0039_RECEIPT_SCHEMA
+    revision = module.DEV0039_RECEIPT_REVISION
+    assert isinstance(schema, str) and isinstance(revision, str)
+    return schema, revision
+
+
+def _sibling_pytest_run(flag: str, log_name: str) -> str:
+    unset = (
+        "env -u IDIS_DATABASE_URL -u IDIS_DATABASE_ADMIN_URL "
+        "-u IDIS_DATABASE_ERASURE_URL -u IDIS_ERASURE_DATABASE_URL "
+        "-u IDIS_REQUIRE_POSTGRES "
+    )
+    return (
+        unset + f"python scripts/pg_bootstrap_ci.py {flag} 2>&1 | tee {log_name}\n"
+        "exit ${PIPESTATUS[0]}\n"
+    )
+
+
+def _dev_env(ci_env: Mapping[str, str]) -> dict[str, str]:
+    env = dict(ci_env)
+    env["IDIS_CI_PREVIEW_NONCE"] = "ab" * 8
+    return env
+
+
+def test_required_preview_config_rejects_dev0039_context(
+    bootstrap: ModuleType, ci_env: dict[str, str]
+) -> None:
+    with pytest.raises(ValueError, match="^PREVIEW_CONTEXT_INVALID$"):
+        bootstrap.required_preview_config("dev0039", ci_env)
+    assert not (Path(ci_env["RUNNER_TEMP"]) / "idis-dev0039-1234-2").exists()
+
+
+def test_dev0039_restart_config_forces_name_service_and_never_exports(
+    bootstrap: ModuleType, ci_env: dict[str, str]
+) -> None:
+    assert callable(getattr(bootstrap, "dev0039_restart_config", None))
+    before = Path(ci_env["GITHUB_ENV"]).read_bytes()
+    config = bootstrap.dev0039_restart_config(_dev_env(ci_env))
+    assert config.context == "dev0039"
+    assert config.github_env is None
+    assert config.database == "idis_dev0039_1234_2_" + ("ab" * 8)
+    assert config.root.name == "idis-dev0039-1234-2"
+    assert bootstrap._PREVIEW_DATABASE.fullmatch(config.database) is None
+    assert len(config.database.encode()) <= 63
+    assert Path(ci_env["GITHUB_ENV"]).read_bytes() == before
+    missing = dict(ci_env)
+    del missing["IDIS_CI_POSTGRES_SERVICE_ID"]
+    with pytest.raises(ValueError, match="^PREVIEW_INPUT_MISSING$"):
+        bootstrap.dev0039_restart_config(missing)
+    invalid = dict(ci_env)
+    invalid["IDIS_CI_POSTGRES_SERVICE_ID"] = "abc"
+    with pytest.raises(ValueError, match="^PREVIEW_SERVICE_INVALID$"):
+        bootstrap.dev0039_restart_config(invalid)
+    debug = dict(ci_env)
+    debug["RUNNER_DEBUG"] = "1"
+    with pytest.raises(ValueError, match="^PREVIEW_DEBUG_FORBIDDEN$"):
+        bootstrap.dev0039_restart_config(debug)
+
+
+@pytest.mark.parametrize(
+    "key",
+    (
+        "IDIS_DATABASE_URL",
+        "IDIS_DATABASE_ADMIN_URL",
+        "IDIS_DATABASE_ERASURE_URL",
+        "IDIS_ERASURE_DATABASE_URL",
+        "IDIS_REQUIRE_POSTGRES",
+        *KEYS,
+    ),
+)
+def test_dev0039_restart_config_rejects_global_and_preview_keys(
+    bootstrap: ModuleType, ci_env: dict[str, str], key: str
+) -> None:
+    assert callable(getattr(bootstrap, "dev0039_restart_config", None))
+    env = dict(ci_env)
+    env[key] = "synthetic-forbidden"
+    with pytest.raises(ValueError, match="^PREVIEW_GLOBAL_DATABASE_ENV_FORBIDDEN$"):
+        bootstrap.dev0039_restart_config(env)
+
+
+def test_dev0039_receipt_is_0039_dev_and_leaves_0038_receipt_unchanged(
+    bootstrap: ModuleType, ci_env: dict[str, str]
+) -> None:
+    assert callable(getattr(bootstrap, "dev0039_restart_receipt", None))
+    assert callable(getattr(bootstrap, "write_dev0039_restart_receipt", None))
+    schema, revision = _dev0039_receipt_identity()
+    preview = bootstrap.required_preview_config("check", ci_env)
+    bootstrap.create_required_preview_root(preview)
+    preview_path, _digest = bootstrap.write_required_preview_receipt(
+        preview, bootstrap.required_preview_receipt(preview, 9)
+    )
+    preview_bytes = preview_path.read_bytes()
+    dev = bootstrap.dev0039_restart_config(_dev_env(ci_env))
+    bootstrap.create_required_preview_root(dev)
+    planted = dev.root / "database-receipt.json"
+    planted.write_bytes(preview_bytes)
+    receipt = bootstrap.dev0039_restart_receipt(dev, 11)
+    assert receipt["revision"] == "0039-dev" == revision
+    assert receipt["schema_version"] == schema
+    assert bootstrap._PREVIEW_DATABASE.fullmatch(str(receipt["database"])) is None
+    bootstrap.write_dev0039_restart_receipt(dev, receipt)
+    assert preview_path.read_bytes() == preview_bytes
+    assert planted.read_bytes() == preview_bytes
+    assert (dev.root / "dev-0039-receipt.json").is_file()
+    preview_path.write_bytes((dev.root / "dev-0039-receipt.json").read_bytes())
+    with pytest.raises(ValueError, match="^PREVIEW_(DATABASE_INVALID|RECEIPT_INVALID)$"):
+        bootstrap._read_required_preview_receipt(preview)
+
+
+def test_dev0039_node_id_is_defined_once_and_selected_by_the_sibling(
+    bootstrap: ModuleType,
+) -> None:
+    source = (REPO / "scripts/pg_bootstrap_ci.py").read_text(encoding="utf-8")
+    constants = [
+        node.value
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Constant) and node.value == _RESTART_NODE_ID
+    ]
+    assert constants == [_RESTART_NODE_ID]
+    assert bootstrap.DEV0039_RESTART_NODE_ID == _RESTART_NODE_ID
+    assert source.count("DEV0039_RESTART_NODE_ID") >= 3
+
+
+def _bind_capture(
+    bootstrap: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    fake: object,
+) -> None:
+    monkeypatch.syspath_prepend(str(REPO / "scripts"))
+    import ci_private_inputs as capture
+
+    monkeypatch.setattr(capture, "capture_script", fake)
+    monkeypatch.setattr(capture, "bash_path", lambda: "/usr/bin/bash")
+
+
+def test_dev0039_restart_child_allow_list_is_eight_names_without_database_url(
+    bootstrap: ModuleType,
+    ci_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert callable(getattr(bootstrap, "run_required_dev0039_restart", None))
+    seen: dict[str, object] = {}
+
+    def fake_capture(script: Path, log: Path, *, environment: Mapping[str, str], bash: str) -> int:
+        del bash
+        command = script.read_text(encoding="utf-8")
+        if "--dev0039-restart-worker" in command:
+            bound = bootstrap.dev0039_restart_config(environment)
+            bootstrap.write_dev0039_restart_receipt(
+                bound, bootstrap.dev0039_restart_receipt(bound, 11)
+            )
+            log.write_bytes(b"worker\n")
+            return 0
+        seen["environment"] = dict(environment)
+        seen["argv"] = shlex.split(command.splitlines()[-1])
+        log.write_bytes(b"RESTART_CHILD\n")
+        return 0
+
+    _bind_capture(bootstrap, monkeypatch, fake_capture)
+    monkeypatch.setattr(bootstrap.os, "environ", _dev_env(ci_env))
+    assert bootstrap.run_required_dev0039_restart() == 0
+    assert capsys.readouterr().out == "RESTART_CHILD\n"
+    environment = seen["environment"]
+    assert isinstance(environment, dict)
+    assert tuple(environment) == _RESTART_CHILD_KEYS
+    assert "IDIS_DATABASE_URL" not in environment
+    assert environment["IDIS_REQUIRE_POSTGRES"] == "1"
+    assert environment["PYTHONDONTWRITEBYTECODE"] == "1"
+    receipt = Path(str(environment["IDIS_DEV0039_RECEIPT"]))
+    assert receipt.name == "dev-0039-receipt.json"
+    assert environment["HOME"] == str(receipt.parent / "home")
+    assert environment["TMPDIR"] == str(receipt.parent / "tmp")
+    database = str(environment["IDIS_DEV0039_DATABASE_URL"]).rsplit("/", 1)[-1]
+    assert database.startswith("idis_dev0039_")
+    assert bootstrap._PREVIEW_DATABASE.fullmatch(database) is None
+    argv = seen["argv"]
+    assert isinstance(argv, list)
+    assert _RESTART_NODE_ID in argv
+    assert "--deselect" not in argv
+    assert _ROLLBACK_NODE_ID not in argv
+
+
+def test_dev0039_historical_child_allow_list_uses_maintenance_postgres(
+    bootstrap: ModuleType,
+    ci_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert callable(getattr(bootstrap, "run_required_dev0039_historical", None))
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("historical sibling created a dev0039 database")
+
+    monkeypatch.setattr(bootstrap, "create_dev0039_restart_database", forbidden, raising=False)
+    seen: dict[str, object] = {}
+
+    def fake_capture(script: Path, log: Path, *, environment: Mapping[str, str], bash: str) -> int:
+        del bash
+        seen["environment"] = dict(environment)
+        seen["argv"] = shlex.split(script.read_text(encoding="utf-8").splitlines()[-1])
+        log.write_bytes(b"HISTORICAL_CHILD\n")
+        return 0
+
+    _bind_capture(bootstrap, monkeypatch, fake_capture)
+    monkeypatch.setattr(bootstrap.os, "environ", _dev_env(ci_env))
+    assert bootstrap.run_required_dev0039_historical() == 0
+    assert capsys.readouterr().out == "HISTORICAL_CHILD\n"
+    assert not (Path(ci_env["RUNNER_TEMP"]) / "idis-dev0039-1234-2").exists()
+    environment = seen["environment"]
+    assert isinstance(environment, dict)
+    assert set(environment) == set(_HISTORICAL_CHILD_KEYS)
+    assert "IDIS_DATABASE_URL" not in environment
+    assert environment["IDIS_REQUIRE_POSTGRES"] == "1"
+    assert environment["IDIS_DATABASE_ADMIN_URL"].rsplit("/", 1)[-1] == "postgres"
+    assert Path(str(environment["HOME"])).parent.name == "idis-dev0039-historical-1234-2"
+    argv = seen["argv"]
+    assert isinstance(argv, list)
+    assert _HISTORICAL_NODE_ID in argv
+    assert _ROLLBACK_NODE_ID not in argv
+
+
+def test_dev0039_public_json_pins_code_and_phase(
+    bootstrap: ModuleType,
+    ci_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert callable(getattr(bootstrap, "run_required_dev0039_restart", None))
+    assert callable(getattr(bootstrap, "run_required_dev0039_historical", None))
+    missing = dict(ci_env)
+    del missing["IDIS_CI_POSTGRES_SERVICE_ID"]
+    monkeypatch.setattr(bootstrap.os, "environ", missing)
+    assert bootstrap.run_required_dev0039_restart() == 1
+    assert capsys.readouterr().out == (
+        '{"required_dev0039_restart":"failed","code":"PREVIEW_INPUT_MISSING",'
+        '"phase":"dev0039-restart"}\n'
+    )
+    assert bootstrap.run_required_dev0039_historical() == 1
+    assert capsys.readouterr().out == (
+        '{"required_dev0039_historical":"failed","code":"PREVIEW_INPUT_MISSING",'
+        '"phase":"dev0039-historical"}\n'
+    )
+
+
+def test_dev0039_unclassified_failure_hides_exception_text(
+    bootstrap: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def explode(env: Mapping[str, str]) -> object:
+        del env
+        raise RuntimeError("SYNTHETIC_PRIVATE_DIAGNOSTIC")
+
+    monkeypatch.setattr(bootstrap, "dev0039_restart_config", explode)
+    assert bootstrap.run_required_dev0039_restart() == 1
+    captured = capsys.readouterr().out
+    assert "SYNTHETIC_PRIVATE_DIAGNOSTIC" not in captured
+    assert captured == (
+        '{"required_dev0039_restart":"failed","code":"PREVIEW_UNCLASSIFIED",'
+        '"phase":"dev0039-restart"}\n'
+    )
+
+
+def test_dev0039_pytest_interrupt_uses_interrupted_line(
+    bootstrap: ModuleType,
+    ci_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fake_capture(script: Path, log: Path, *, environment: Mapping[str, str], bash: str) -> int:
+        del bash, environment
+        command = script.read_text(encoding="utf-8")
+        if "--dev0039-restart-worker" in command:
+            bound = bootstrap.dev0039_restart_config(dict(bootstrap.os.environ))
+            bootstrap.write_dev0039_restart_receipt(
+                bound, bootstrap.dev0039_restart_receipt(bound, 11)
+            )
+            log.write_bytes(b"worker\n")
+            return 0
+        log.write_bytes(b"hidden\n")
+        return 130
+
+    _bind_capture(bootstrap, monkeypatch, fake_capture)
+    monkeypatch.setattr(bootstrap.os, "environ", _dev_env(ci_env))
+    assert bootstrap.run_required_dev0039_restart() == 130
+    assert capsys.readouterr().out == (
+        '{"required_dev0039_restart":"interrupted","exit":130,"cleanup_failed":false,'
+        '"code":"PREVIEW_UNCLASSIFIED","phase":"tests"}\n'
+    )
+
+
+def test_dev0039_sibling_steps_follow_c3_zero_skip_with_exact_guards() -> None:
+    workflow = yaml.safe_load((REPO / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["postgres-integration"]["steps"]
+    by_id = {step.get("id"): step for step in steps}
+    assert "c3-dev0039-restart" in by_id
+    assert "dev0039-historical" in by_id
+    assert steps.index(by_id["c3-tests"]) < steps.index(by_id["c3-zero-skip"])
+    assert steps.index(by_id["c3-zero-skip"]) < steps.index(by_id["c3-dev0039-restart"])
+    assert steps.index(by_id["c3-dev0039-restart"]) < steps.index(by_id["dev0039-historical"])
+    c3 = by_id["c3-tests"]
+    assert c3["if"] == _C3_TESTS_IF
+    for step_id, flag, log_name in (
+        ("c3-dev0039-restart", "--run-required-dev0039-restart", "c3_dev0039_restart_pytest.log"),
+        (
+            "dev0039-historical",
+            "--run-required-dev0039-historical",
+            "dev0039_historical_restart_pytest.log",
+        ),
+    ):
+        step = by_id[step_id]
+        assert set(step) == {"name", "id", "if", "env", "run"}
+        assert step["if"] == c3["if"] == _C3_TESTS_IF
+        assert "pg-tests" not in step["if"]
+        assert set(step["env"]) == {"IDIS_CI_POSTGRES_SERVICE_ID"}
+        assert step["run"] == _sibling_pytest_run(flag, log_name)
+        assert "continue-on-error" not in step
+        _assert_closed_github_expressions(step["if"])
+        _assert_closed_github_expressions(step["run"])
+    summary = next(
+        step for step in steps if step.get("name") == "Write explicit pytest summary to job summary"
+    )
+    assert "${{ steps.c3-dev0039-restart.outcome }}" in summary["run"]
+    assert "${{ steps.dev0039-historical.outcome }}" in summary["run"]
+    _assert_closed_github_expressions(summary["run"])
+    logs = next(step for step in steps if step.get("name") == "Upload pytest log artifact")
+    xmls = next(step for step in steps if step.get("name") == "Upload pytest JUnit XML artifact")
+    assert "c3_dev0039_restart_pytest.log" in logs["with"]["path"]
+    assert "dev0039_historical_restart_pytest.log" in logs["with"]["path"]
+    assert "c3_dev0039_restart_pytest.xml" in xmls["with"]["path"]
+    assert "dev0039_historical_restart_pytest.xml" in xmls["with"]["path"]
+
+
+def test_pg_native_inputs_has_no_if_and_fence_follows_dev0039() -> None:
+    """Native inputs stay before the ceiling; the archive fence runs after dev-0039."""
+    workflow = yaml.safe_load((REPO / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["postgres-integration"]["steps"]
+    by_id = {step.get("id"): step for step in steps}
+    assert "pg-native-inputs" in by_id
+    assert "pg-archive-fence" in by_id
+    native = by_id["pg-native-inputs"]
+    fence = by_id["pg-archive-fence"]
+    check_steps = workflow["jobs"]["check"]["steps"]
+    ocr = next(
+        step
+        for step in check_steps
+        if step.get("name") == "Install OCR and media system dependencies"
+    )
+    assert steps.index(native) == steps.index(by_id["pg-install"]) + 1
+    assert steps.index(by_id["pg-ceiling"]) == steps.index(native) + 1
+    assert "if" not in native
+    assert set(native) == {"name", "id", "run"}
+    assert native["run"] == ocr["run"] == _PG_NATIVE_INPUTS_RUN
+    assert "continue-on-error" not in native
+    historical_zero = by_id["dev0039-historical-zero-skip"]
+    uploads = [
+        step
+        for step in steps
+        if step.get("if") == "always()"
+        and isinstance(step.get("uses"), str)
+        and step["uses"].startswith("actions/upload-artifact@")
+    ]
+    assert uploads
+    zero_index = steps.index(historical_zero)
+    fence_index = steps.index(fence)
+    upload_index = steps.index(uploads[0])
+    fence_if = fence.get("if")
+    expected_if = "${{ !cancelled() && steps.pg-install.outcome == 'success' }}"
+    assert (
+        steps[zero_index + 1] is fence
+        and steps[fence_index + 1] is uploads[0]
+        and fence_if == expected_if
+    ), (zero_index, fence_index, upload_index, fence_if)
+    assert fence["name"] == "Fence dev-only scripts out of the sdist and wheel"
+    assert set(fence) == {"name", "id", "if", "run"}
+    assert "env" not in fence
+    assert fence["run"] == _PG_ARCHIVE_FENCE_RUN
+    assert "continue-on-error" not in fence
+    assert "hatchling==1.32.4" in fence["run"]
+    assert "build" not in fence["run"].split("hatchling==1.32.4", 1)[0]

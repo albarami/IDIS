@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from pathlib import Path
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
@@ -16,8 +18,16 @@ from idis.api.routes.documents import clear_document_store
 from idis.audit.sink import InMemoryAuditSink
 from idis.idempotency.store import SqliteIdempotencyStore
 from idis.models.run_step import FULL_STEPS, STEP_ORDER, StepName, StepStatus
+from idis.persistence.repositories.data_room_packages import PostgresDataRoomPackagesRepository
+from idis.persistence.repositories.documents import PostgresDocumentsRepository
+from idis.services.data_room.package_service import create_data_room_package
+from idis.tools.preview_source_preparation import (
+    PREVIEW_SOURCE_SYSTEM,
+    create_preview_preparation,
+)
 from tests import test_ingestion_persists_documents_postgres as pg_helpers
 from tests.abac_seed import seed_deal_access
+from tests.slice100_task5._workbook_factory import production_fdd_workbook_bytes
 from tests.test_api_default_upload_ingestion_postgres import _configure_api_key
 from tests.test_docx_parser import create_test_docx
 from tests.test_pdf_parser import create_test_pdf
@@ -54,9 +64,17 @@ FORBIDDEN_PUBLIC_TOKENS = (
 )
 
 
+@pytest.fixture
+def methodology_cleanup(admin_engine: Any, clean_tables: None) -> Any:
+    yield
+    clear_frozen_methodology_rows(admin_engine)
+
+
 def test_slice27_selected_multidocument_full_acceptance_is_durable_and_safe(
     app_engine: Any,
+    admin_engine: Any,
     clean_tables: None,
+    methodology_cleanup: None,
     monkeypatch: Any,
     tmp_path: Path,
 ) -> None:
@@ -67,6 +85,8 @@ def test_slice27_selected_multidocument_full_acceptance_is_durable_and_safe(
     storage_base_dir = str(tmp_path / "objects")
     room_root = tmp_path / "generated_nested_data_room"
     monkeypatch.setenv("IDIS_OBJECT_STORE_BASE_DIR", storage_base_dir)
+    fdd_fixture = public_fdd_fixture(tmp_path)
+    monkeypatch.setenv("IDIS_FDD_METHODOLOGY_PATH", str(fdd_fixture))
     audit_sink = InMemoryAuditSink()
 
     app = create_app(
@@ -86,10 +106,14 @@ def test_slice27_selected_multidocument_full_acceptance_is_durable_and_safe(
     seed_deal_access(str(pg_helpers.TENANT_ID), deal_id, pg_helpers.ACTOR_ID)
 
     supported_files = _write_supported_data_room_like_fixture(room_root)
-    document_ids: list[str] = []
-    for path in supported_files:
-        upload_body = _upload_supported_file(client, deal_id=deal_id, path=path)
-        document_ids.append(str(upload_body["document_id"]))
+    upload_bodies = upload_and_bind_preview_members(
+        client,
+        app_engine,
+        deal_id=deal_id,
+        members=[(path.suffix.lstrip("."), path.read_bytes()) for path in supported_files],
+    )
+    document_ids = [str(body["document_id"]) for body in upload_bodies]
+    for upload_body in upload_bodies:
         _assert_safe_payload(
             upload_body,
             storage_base_dir=storage_base_dir,
@@ -133,6 +157,13 @@ def test_slice27_selected_multidocument_full_acceptance_is_durable_and_safe(
         )
 
     assert unsupported_artifact_count == 0
+    document_ids = sorted(document_ids)
+    methodology_selection = frozen_full_methodology_selection(
+        app_engine,
+        admin_engine,
+        str(pg_helpers.TENANT_ID),
+        fdd_fixture,
+    )
 
     run_response = client.post(
         f"/v1/deals/{deal_id}/runs",
@@ -143,6 +174,7 @@ def test_slice27_selected_multidocument_full_acceptance_is_durable_and_safe(
                 "type": "deal_documents",
                 "document_ids": document_ids,
             },
+            "methodology_selection": methodology_selection,
         },
     )
     assert run_response.status_code == 202
@@ -219,24 +251,143 @@ def _write_supported_data_room_like_fixture(root: Path) -> list[Path]:
     return files
 
 
-def _upload_supported_file(client: TestClient, *, deal_id: str, path: Path) -> dict[str, Any]:
-    data = path.read_bytes()
-    response = client.post(
-        f"/v1/deals/{deal_id}/documents/upload",
-        headers={
-            "X-IDIS-API-Key": pg_helpers.API_KEY,
-            "Content-Type": "application/octet-stream",
-        },
-        params={
-            "filename": path.name,
-            "doc_type": "DATA_ROOM_FILE",
-            "sha256": hashlib.sha256(data).hexdigest(),
-            "source_system": "slice27-multidocument-full",
-        },
-        content=data,
+def upload_and_bind_preview_members(
+    client: TestClient,
+    app_engine: Any,
+    *,
+    deal_id: str,
+    members: list[tuple[str, bytes]],
+) -> list[dict[str, Any]]:
+    """Upload selected bytes under one manifest package. The run route freezes it."""
+    preparation = create_preview_preparation(
+        tenant_id=str(pg_helpers.TENANT_ID),
+        deal_id=deal_id,
+        files=members,
     )
-    assert response.status_code == 201
-    return response.json()
+    bodies: list[dict[str, Any]] = []
+    for sequence, (_extension, data) in enumerate(members):
+        row = preparation.files[sequence]
+        response = client.post(
+            f"/v1/deals/{deal_id}/documents/upload",
+            headers={
+                "X-IDIS-API-Key": pg_helpers.API_KEY,
+                "Content-Type": "application/octet-stream",
+                "X-IDIS-Source-Tree-Fingerprint": preparation.source_tree_fingerprint,
+            },
+            params={
+                "filename": row.generated_upload_name,
+                "doc_type": "DATA_ROOM_FILE",
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "source_system": PREVIEW_SOURCE_SYSTEM,
+            },
+            content=data,
+        )
+        assert response.status_code == 201, response.text
+        bodies.append(response.json())
+    with app_engine.begin() as conn:
+        documents_repository = PostgresDocumentsRepository(conn, str(pg_helpers.TENANT_ID))
+        documents = [documents_repository.get_document(str(body["document_id"])) for body in bodies]
+        if any(document is None for document in documents):
+            raise AssertionError("preview upload was not durable")
+        persisted = [document for document in documents if document is not None]
+        manifest = preparation.build_manifest(persisted)
+        create_data_room_package(
+            repo=PostgresDataRoomPackagesRepository(conn, str(pg_helpers.TENANT_ID)),
+            tenant_id=str(pg_helpers.TENANT_ID),
+            deal_id=deal_id,
+            created_by_actor_id=pg_helpers.ACTOR_ID,
+            created_by_actor_type="HUMAN",
+            document_ids=[str(item.document_id) for item in manifest.files],
+            documents=persisted,
+            source_manifest=manifest,
+        )
+    return bodies
+
+
+def clear_frozen_methodology_rows(admin_engine: Any) -> None:
+    """Remove Task 5 rows so the shared migration fixture can downgrade."""
+    with admin_engine.begin() as conn:
+        conn.execute(
+            text(
+                "TRUNCATE methodology_coverage_records, methodology_questions, "
+                "methodology_versions, run_methodology_selections CASCADE"
+            )
+        )
+
+
+def public_fdd_fixture(directory: Path) -> Path:
+    """Write the public synthetic FDD workbook and return its path."""
+    path = directory / "public-fdd-fixture.xlsx"
+    path.write_bytes(production_fdd_workbook_bytes())
+    return path
+
+
+def frozen_full_methodology_selection(
+    app_engine: Any,
+    admin_engine: Any,
+    tenant_id: str,
+    fdd_path: Path,
+) -> dict[str, str]:
+    """Freeze the checked-in CDD template and the same public FDD fixture."""
+    from idis.methodology.importers.cdd_json import import_cdd_template
+    from idis.methodology.importers.fdd_excel import import_fdd_workbook
+    from idis.persistence.repositories.methodologies import (
+        PostgresMethodologiesRepository,
+        methodology_source_trace_digest,
+    )
+
+    cdd_path = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "idis"
+        / "methodology"
+        / "templates"
+        / "commercial_dd_v1.json"
+    )
+    if not fdd_path.is_file():
+        raise AssertionError("FDD_METHODOLOGY_SOURCE_UNAVAILABLE")
+    # The bytes are the public synthetic fixture. This source_type is the
+    # production-shaped FDD contract value the importer stamps and the
+    # repository requires; it does not name a private operator file.
+    registries = (
+        (import_cdd_template(cdd_path), "checked_in_template", cdd_path),
+        (import_fdd_workbook(fdd_path), "operator_workbook", fdd_path),
+    )
+    frozen_ids: list[str] = []
+    with admin_engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO tenants (tenant_id, name) "
+                "VALUES (CAST(:tenant_id AS uuid), 'C3 synthetic') "
+                "ON CONFLICT (tenant_id) DO NOTHING"
+            ),
+            {"tenant_id": tenant_id},
+        )
+    with app_engine.begin() as conn:
+        repository = PostgresMethodologiesRepository(conn, tenant_id)
+        for registry, source_type, source_path in registries:
+            imported = repository.import_registry(
+                registry=registry,
+                source_type=source_type,
+                source_alias=registry.current_version.source_name,
+                source_byte_count=source_path.stat().st_size,
+                source_contract_hash=hashlib.sha256(source_type.encode("utf-8")).hexdigest(),
+                source_trace_digest=methodology_source_trace_digest(registry),
+                imported_by_actor_id=pg_helpers.ACTOR_ID,
+                import_audit_event_id=str(uuid.uuid4()),
+            )
+            frozen = repository.freeze_version(
+                methodology_version_record_id=imported.methodology_version_record_id,
+                expected_source_sha256=registry.current_version.source_hash,
+                frozen_by_actor_id=pg_helpers.ACTOR_ID,
+                freeze_audit_event_id=str(uuid.uuid4()),
+                expected_registry=registry,
+            )
+            frozen_ids.append(str(frozen.methodology_version_record_id))
+    return {
+        "commercial_dd_version_record_id": frozen_ids[0],
+        "financial_dd_version_record_id": frozen_ids[1],
+    }
 
 
 def _unsupported_upload_examples() -> list[dict[str, Any]]:

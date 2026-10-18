@@ -19,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -32,7 +33,8 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Literal
+from types import ModuleType
+from typing import Any, Literal
 from urllib.parse import quote, urlparse
 
 _PREVIEW_KEYS = (
@@ -48,6 +50,22 @@ _GLOBAL_DATABASE_KEYS = (
     "IDIS_REQUIRE_POSTGRES",
 )
 _PREVIEW_DATABASE = re.compile(r"idis_c3_callers_[1-9][0-9]*_[1-9][0-9]*_[0-9a-f]{16}")
+_DEV0039_DATABASE = re.compile(r"idis_dev0039_[1-9][0-9]*_[1-9][0-9]*_[0-9a-f]{16}")
+DEV0039_RESTART_NODE_ID = (
+    "tests/test_cir04c3_frozen_preview_postgres.py::"
+    "test_real_native_pdf_source_survives_hermetic_admission_and_restart_cut[1]"
+)
+DEV0039_HISTORICAL_NODE_ID = (
+    "tests/slice100_task7/test_task7_restart_rehydration_red.py::"
+    "test_real_postgres_all_27_restart_cuts_reclaim_and_fence_without_repair"
+)
+_StatusKey = Literal[
+    "required_preview",
+    "required_c3_postgres",
+    "required_dev0039_restart",
+    "required_dev0039_historical",
+]
+_Phase = Literal["bootstrap", "revalidate", "tests", "dev0039-restart", "dev0039-historical"]
 
 
 @dataclass(frozen=True)
@@ -158,6 +176,72 @@ def required_preview_config(
     )
 
 
+def dev0039_restart_config(env: Mapping[str, str]) -> RequiredPreviewConfig:
+    """Build the single dev0039 context. It never exports and is not a preview context."""
+    if any(key in env for key in (*_GLOBAL_DATABASE_KEYS, *_PREVIEW_KEYS)):
+        raise ValueError("PREVIEW_GLOBAL_DATABASE_ENV_FORBIDDEN")
+    if any(key in env for key in ("RUNNER_DEBUG", "ACTIONS_STEP_DEBUG")):
+        raise ValueError("PREVIEW_DEBUG_FORBIDDEN")
+    try:
+        run, attempt = env["GITHUB_RUN_ID"], env["GITHUB_RUN_ATTEMPT"]
+        if not all(re.fullmatch(r"[1-9][0-9]*", value) for value in (run, attempt)):
+            raise ValueError("PREVIEW_RUN_INVALID")
+        host, port_value = env["IDIS_PG_HOST"], env["IDIS_PG_PORT"]
+        if host != "127.0.0.1" or not re.fullmatch(r"[1-9][0-9]*", port_value):
+            raise ValueError("PREVIEW_ENDPOINT_INVALID")
+        port = int(port_value)
+        if not 0 < port <= 65535:
+            raise ValueError("PREVIEW_ENDPOINT_INVALID")
+        service = env["IDIS_CI_POSTGRES_SERVICE_ID"]
+        if not re.fullmatch(r"[0-9a-f]{64}", service):
+            raise ValueError("PREVIEW_SERVICE_INVALID")
+        runner, workspace = (_unalias_path(env[key]) for key in ("RUNNER_TEMP", "GITHUB_WORKSPACE"))
+        root = runner / f"idis-dev0039-{run}-{attempt}"
+        if root.is_relative_to(workspace) or "_runner_file_commands" in root.parts:
+            raise ValueError("PREVIEW_ROOT_INVALID")
+        nonce = env.get("IDIS_CI_PREVIEW_NONCE", secrets.token_hex(8))
+        database = f"idis_dev0039_{run}_{attempt}_{nonce}"
+        if (
+            len(database.encode()) > 63
+            or _DEV0039_DATABASE.fullmatch(database) is None
+            or _PREVIEW_DATABASE.fullmatch(database) is not None
+        ):
+            raise ValueError("PREVIEW_DATABASE_INVALID")
+        admin_user, admin_password, app_user, app_password = (
+            env[key]
+            for key in (
+                "PG_ADMIN_USER",
+                "PG_ADMIN_PASSWORD",
+                "IDIS_PG_APP_USER",
+                "IDIS_PG_APP_PASSWORD",
+            )
+        )
+        if (
+            not all((admin_password, app_password))
+            or not all(
+                re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", user) for user in (admin_user, app_user)
+            )
+            or admin_user == app_user
+        ):
+            raise ValueError("PREVIEW_ROLE_INPUT_INVALID")
+    except KeyError:
+        raise ValueError("PREVIEW_INPUT_MISSING") from None
+    return RequiredPreviewConfig(
+        "dev0039",
+        root,
+        workspace,
+        database,
+        host,
+        port,
+        admin_user,
+        admin_password,
+        app_user,
+        app_password,
+        service,
+        None,
+    )
+
+
 def required_preview_environment(config: RequiredPreviewConfig) -> dict[str, str]:
     """Explicit allowlist: no ambient libpq, Python startup, token or file channels."""
     _, _, _, run, attempt, nonce = config.database.split("_")
@@ -259,6 +343,7 @@ def create_required_preview_root(config: RequiredPreviewConfig) -> None:
 
 
 _PREVIEW_FAILURE_CODE_NAME = "preview-failure-code"
+_DEV0039_RECEIPT_NAME = "dev-0039-receipt.json"
 
 
 def _validate_required_preview_root(config: RequiredPreviewConfig) -> None:
@@ -281,6 +366,7 @@ def _validate_required_preview_root(config: RequiredPreviewConfig) -> None:
         "tests-command.sh",
         "c3-tests.log",
         _PREVIEW_FAILURE_CODE_NAME,
+        _DEV0039_RECEIPT_NAME,
     }
     for path in config.root.iterdir():
         if path.name not in allowed or path.is_symlink():
@@ -489,6 +575,8 @@ def _capture_required_preview(
             "tests/test_cir04c3_frozen_preview_postgres.py",
             "tests/test_cir04c2_proof_admission_postgres.py",
             "tests/test_cir04c2_postgres_compat.py",
+            "--deselect",
+            DEV0039_RESTART_NODE_ID,
             "-v",
             "--junitxml=c3_postgres_integration_pytest.xml",
         ]
@@ -554,7 +642,9 @@ _PREVIEW_PUBLIC_CODES = frozenset(
         "PREVIEW_SERVICE_INVALID",
     }
 )
-_PREVIEW_PHASES = frozenset({"bootstrap", "revalidate", "tests"})
+_PREVIEW_PHASES = frozenset(
+    {"bootstrap", "revalidate", "tests", "dev0039-restart", "dev0039-historical"}
+)
 
 
 def _preview_public_code(exc: BaseException) -> str:
@@ -567,10 +657,10 @@ def _preview_public_code(exc: BaseException) -> str:
 
 
 def _preview_failure_line(
-    status_key: Literal["required_preview", "required_c3_postgres"],
+    status_key: _StatusKey,
     status: Literal["failed", "blocked"],
     exc: BaseException,
-    phase: Literal["bootstrap", "revalidate", "tests"],
+    phase: _Phase,
 ) -> str:
     """Public diagnostic: fixed code and phase only."""
     if phase not in _PREVIEW_PHASES:
@@ -625,12 +715,12 @@ def _read_preview_child_code(root: Path) -> str:
 
 
 def _preview_exit_line(
-    status_key: Literal["required_preview", "required_c3_postgres"],
+    status_key: _StatusKey,
     status: Literal["failed", "blocked", "interrupted"],
     exit_code: int,
     cleanup_failed: bool,
     root: Path,
-    phase: Literal["bootstrap", "revalidate", "tests"],
+    phase: _Phase,
 ) -> str:
     """Public capture-exit line: fixed keys and allow-listed literals only."""
     if phase not in _PREVIEW_PHASES:
@@ -758,6 +848,403 @@ def run_required_preview_postgres() -> int:
     except (Exception, SystemExit) as exc:
         # Raw SQL/credentials/paths remain in the separate owned log, never public diagnostics.
         print(_preview_failure_line("required_c3_postgres", "blocked", exc, phase))
+        return 1
+
+
+def _load_dev0039_driver() -> ModuleType:
+    name = "run_cir04_restart_reference_dev_migration"
+    cached = sys.modules.get(name)
+    if isinstance(cached, ModuleType) and hasattr(cached, "DEV0039_RECEIPT_SCHEMA"):
+        return cached
+    script = Path(__file__).resolve().parent / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(name, script)
+    if spec is None or spec.loader is None:
+        raise ValueError("PREVIEW_REVISION_INVALID")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _dev0039_name_parts(database: str) -> tuple[str, str, str]:
+    if _DEV0039_DATABASE.fullmatch(database) is None:
+        raise ValueError("PREVIEW_DATABASE_INVALID")
+    run, attempt, nonce = database.removeprefix("idis_dev0039_").split("_")
+    return run, attempt, nonce
+
+
+def _qualified_bin_path(workspace: Path) -> str:
+    return os.pathsep.join((str(workspace / ".venv" / "bin"), "/usr/bin", "/bin"))
+
+
+def dev0039_restart_receipt(config: RequiredPreviewConfig, oid: object) -> dict[str, object]:
+    """Receipt captured at CREATE time. Catalog 0039 stays distinct from revision 0039-dev."""
+    if config.context != "dev0039":
+        raise ValueError("PREVIEW_CONTEXT_INVALID")
+    if type(oid) is not int or oid <= 0:
+        raise ValueError("PREVIEW_OID_INVALID")
+    driver: Any = _load_dev0039_driver()
+    schema = driver.DEV0039_RECEIPT_SCHEMA
+    revision = driver.DEV0039_RECEIPT_REVISION
+    if not isinstance(schema, str) or not isinstance(revision, str):
+        raise ValueError("PREVIEW_REVISION_INVALID")
+    return {
+        "schema_version": schema,
+        "owner": "CIR-04 dev-0039 restart disposable fixture",
+        "absent_before_create": True,
+        "service_container_id": config.service_container_id,
+        "host": config.host,
+        "port": config.port,
+        "database": config.database,
+        "app_role": config.app_user,
+        "database_oid": oid,
+        "revision": revision,
+        "role_flags": {"rolsuper": False, "rolbypassrls": False},
+    }
+
+
+def write_dev0039_restart_receipt(
+    config: RequiredPreviewConfig, receipt: dict[str, object]
+) -> tuple[Path, str]:
+    """Exclusive dev-0039 receipt. Leaves any 0038 database-receipt.json untouched."""
+    path = config.root / _DEV0039_RECEIPT_NAME
+    raw = (json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    with os.fdopen(fd, "wb") as output:
+        if output.write(raw) != len(raw):
+            raise OSError("PREVIEW_RECEIPT_SHORT_WRITE")
+        output.flush()
+        os.fsync(output.fileno())
+    if path.read_bytes() != raw:
+        raise OSError("PREVIEW_RECEIPT_BYTES_CHANGED")
+    return path, hashlib.sha256(raw).hexdigest()
+
+
+def _read_dev0039_receipt(config: RequiredPreviewConfig) -> tuple[Path, str]:
+    path = config.root / _DEV0039_RECEIPT_NAME
+    raw = path.read_bytes()
+    loaded = json.loads(raw)
+    if not isinstance(loaded, dict) or type(loaded.get("database_oid")) is not int:
+        raise ValueError("PREVIEW_RECEIPT_INVALID")
+    expected = dev0039_restart_receipt(config, loaded["database_oid"])
+    canonical = (json.dumps(expected, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    if raw != canonical:
+        raise ValueError("PREVIEW_RECEIPT_INVALID")
+    return path, hashlib.sha256(raw).hexdigest()
+
+
+def _create_dev0039_database(config: RequiredPreviewConfig) -> tuple[int, dict[str, object]]:
+    """One CREATE. A duplicate is fatal and is never turned into a lookup."""
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.pool import NullPool
+
+    if (
+        _DEV0039_DATABASE.fullmatch(config.database) is None
+        or _PREVIEW_DATABASE.fullmatch(config.database) is not None
+        or len(config.database.encode()) > 63
+    ):
+        raise ValueError("PREVIEW_DATABASE_INVALID")
+    engine = create_engine(
+        config.database_url(admin=True, maintenance=True),
+        poolclass=NullPool,
+        isolation_level="AUTOCOMMIT",
+        connect_args={"connect_timeout": 10},
+    )
+    try:
+        with engine.connect() as connection:
+            connection.execute(text(f'CREATE DATABASE "{config.database}" TEMPLATE template0'))
+            oid = connection.execute(
+                text("SELECT oid FROM pg_catalog.pg_database WHERE datname=:name"),
+                {"name": config.database},
+            ).scalar_one()
+            receipt = dev0039_restart_receipt(config, oid)
+            connection.execute(
+                text(f'GRANT CONNECT ON DATABASE "{config.database}" TO "{config.app_user}"')
+            )
+            return int(oid), receipt
+    finally:
+        engine.dispose()
+
+
+def _verify_dev0039_database(config: RequiredPreviewConfig, oid: int) -> None:
+    """Posture for the new database: catalog 0039, app flags false, identity unchanged."""
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.pool import NullPool
+
+    for admin in (True, False):
+        engine = create_engine(
+            config.database_url(admin=admin),
+            poolclass=NullPool,
+            connect_args={"connect_timeout": 10},
+        )
+        try:
+            with engine.connect() as connection:
+                connection.execute(text("SET TRANSACTION READ ONLY"))
+                row = connection.execute(
+                    text(
+                        "SELECT current_database(),current_user,d.oid,r.rolsuper,r.rolbypassrls "
+                        "FROM pg_catalog.pg_database d "
+                        "JOIN pg_catalog.pg_roles r ON r.rolname=current_user "
+                        "WHERE d.datname=current_database()"
+                    )
+                ).one()
+                expected_role = config.admin_user if admin else config.app_user
+                if tuple(row[:3]) != (config.database, expected_role, oid):
+                    raise ValueError("PREVIEW_DATABASE_IDENTITY_CHANGED")
+                if not admin and (row[3] is not False or row[4] is not False):
+                    raise ValueError("PREVIEW_APP_POSTURE_INVALID")
+                if list(
+                    connection.execute(
+                        text("SELECT version_num FROM public.alembic_version")
+                    ).scalars()
+                ) != ["0039"]:
+                    raise ValueError("PREVIEW_REVISION_INVALID")
+        finally:
+            engine.dispose()
+
+
+def create_dev0039_restart_database(
+    config: RequiredPreviewConfig,
+) -> tuple[int, dict[str, object], Path, str]:
+    """Provision one owned dev-0039 database and write its exclusive receipt.
+
+    The 0038 and 0039 upgrades are the driver's connection-bound steps.
+    """
+    if config.context != "dev0039":
+        raise ValueError("PREVIEW_CONTEXT_INVALID")
+    _validate_required_preview_root(config)
+    subprocess.run(
+        [sys.executable, str(config.workspace / "scripts/check_migration_ceiling.py")],
+        check=True,
+        cwd=config.workspace,
+    )
+    _prepare_required_roles(config, create_missing=True)
+    oid, receipt = _create_dev0039_database(config)
+    from sqlalchemy import create_engine
+    from sqlalchemy.pool import NullPool
+
+    driver: Any = _load_dev0039_driver()
+    engine = create_engine(
+        config.database_url(admin=True),
+        poolclass=NullPool,
+        connect_args={"connect_timeout": 10},
+    )
+    try:
+        provenance = driver.Dev0039SiblingProvenance(engine, receipt)
+        driver.upgrade_disposable_to_dev_0039(provenance)
+    finally:
+        engine.dispose()
+    grant_schema_permissions(config.database_url(admin=True), config.app_user)
+    verify_tables_exist(config.database_url())
+    _verify_dev0039_database(config, oid)
+    path, digest = write_dev0039_restart_receipt(config, receipt)
+    return oid, receipt, path, digest
+
+
+def _dev0039_worker_environment(config: RequiredPreviewConfig) -> dict[str, str]:
+    run, attempt, nonce = _dev0039_name_parts(config.database)
+    return {
+        "PATH": _qualified_bin_path(config.workspace),
+        "HOME": str(config.root / "home"),
+        "TMPDIR": str(config.root / "tmp"),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PG_ADMIN_USER": config.admin_user,
+        "PG_ADMIN_PASSWORD": config.admin_password,
+        "RUNNER_TEMP": str(config.root.parent),
+        "GITHUB_WORKSPACE": str(config.workspace),
+        "GITHUB_RUN_ID": run,
+        "GITHUB_RUN_ATTEMPT": attempt,
+        "IDIS_CI_PREVIEW_NONCE": nonce,
+        "IDIS_PG_HOST": config.host,
+        "IDIS_PG_PORT": str(config.port),
+        "IDIS_PG_APP_USER": config.app_user,
+        "IDIS_PG_APP_PASSWORD": config.app_password,
+        "IDIS_CI_POSTGRES_SERVICE_ID": config.service_container_id,
+    }
+
+
+def _dev0039_pytest_environment(
+    config: RequiredPreviewConfig, receipt: Path, digest: str
+) -> dict[str, str]:
+    return {
+        "PATH": _qualified_bin_path(config.workspace),
+        "HOME": str(config.root / "home"),
+        "TMPDIR": str(config.root / "tmp"),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "IDIS_DEV0039_RECEIPT": str(receipt),
+        "IDIS_DEV0039_RECEIPT_SHA256": digest,
+        "IDIS_DEV0039_DATABASE_URL": config.database_url(),
+        "IDIS_REQUIRE_POSTGRES": "1",
+    }
+
+
+def _dev0039_historical_environment(config: RequiredPreviewConfig) -> dict[str, str]:
+    return {
+        "PATH": _qualified_bin_path(config.workspace),
+        "HOME": str(config.root / "home"),
+        "TMPDIR": str(config.root / "tmp"),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "IDIS_REQUIRE_POSTGRES": "1",
+        "IDIS_DATABASE_ADMIN_URL": config.database_url(admin=True, maintenance=True),
+    }
+
+
+def _capture_owned_script(
+    config: RequiredPreviewConfig,
+    arguments: Sequence[str],
+    *,
+    script_name: str,
+    log_name: str,
+    environment: Mapping[str, str],
+) -> tuple[int, bool]:
+    scripts = str(Path(__file__).resolve().parent)
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    from ci_private_inputs import Interrupted, bash_path, capture_script
+
+    script = config.root / script_name
+    with script.open("x", encoding="utf-8", newline="\n") as output:
+        output.write("cd -- " + shlex.quote(str(config.workspace)) + "\n")
+        output.write("exec " + shlex.join(arguments) + "\n")
+    try:
+        result = capture_script(
+            script,
+            config.root / log_name,
+            environment=environment,
+            bash=bash_path(),
+        )
+        return result, False
+    except Interrupted as exc:
+        return 128 + exc.signum, exc.cleanup_failed
+
+
+def _historical_config(config: RequiredPreviewConfig) -> RequiredPreviewConfig:
+    run, attempt, _nonce = _dev0039_name_parts(config.database)
+    root = config.root.parent / f"idis-dev0039-historical-{run}-{attempt}"
+    if root.is_relative_to(config.workspace) or "_runner_file_commands" in root.parts:
+        raise ValueError("PREVIEW_ROOT_INVALID")
+    return replace(config, root=root)
+
+
+def _sibling_keyboard_line(status_key: _StatusKey, phase: _Phase) -> str:
+    if phase not in _PREVIEW_PHASES:
+        phase = "bootstrap"
+    return json.dumps(
+        {
+            status_key: "interrupted",
+            "exit": 130,
+            "cleanup_failed": False,
+            "code": "PREVIEW_UNCLASSIFIED",
+            "phase": phase,
+        },
+        separators=(",", ":"),
+    )
+
+
+def run_required_dev0039_restart() -> int:
+    """Create one dev-0039 database, then run only the restart node."""
+    phase: _Phase = "dev0039-restart"
+    try:
+        config = dev0039_restart_config(os.environ)
+        create_required_preview_root(config)
+        result, cleanup_failed = _capture_owned_script(
+            config,
+            [sys.executable, str(Path(__file__).resolve()), "--dev0039-restart-worker"],
+            script_name="bootstrap-command.sh",
+            log_name="bootstrap.log",
+            environment=_dev0039_worker_environment(config),
+        )
+        if result != 0:
+            print(
+                _preview_exit_line(
+                    "required_dev0039_restart",
+                    "failed",
+                    result,
+                    cleanup_failed,
+                    config.root,
+                    phase,
+                )
+            )
+            return result
+        receipt_path, digest = _read_dev0039_receipt(config)
+        phase = "tests"
+        result, cleanup_failed = _capture_owned_script(
+            config,
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                DEV0039_RESTART_NODE_ID,
+                "-v",
+                "--junitxml=c3_dev0039_restart_pytest.xml",
+            ],
+            script_name="tests-command.sh",
+            log_name="c3-tests.log",
+            environment=_dev0039_pytest_environment(config, receipt_path, digest),
+        )
+        if result in {130, 143} or cleanup_failed:
+            print(
+                _preview_exit_line(
+                    "required_dev0039_restart",
+                    "interrupted",
+                    result,
+                    cleanup_failed,
+                    config.root,
+                    "tests",
+                )
+            )
+            return result
+        with (config.root / "c3-tests.log").open("rb") as log:
+            shutil.copyfileobj(log, sys.stdout.buffer)
+        return result
+    except KeyboardInterrupt:
+        print(_sibling_keyboard_line("required_dev0039_restart", phase))
+        return 130
+    except (Exception, SystemExit) as exc:
+        print(_preview_failure_line("required_dev0039_restart", "failed", exc, phase))
+        return 1
+
+
+def run_required_dev0039_historical() -> int:
+    """Run the historical restart node. This entry creates no idis_dev0039_ database."""
+    phase: _Phase = "dev0039-historical"
+    try:
+        config = _historical_config(dev0039_restart_config(os.environ))
+        create_required_preview_root(config)
+        result, cleanup_failed = _capture_owned_script(
+            config,
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                DEV0039_HISTORICAL_NODE_ID,
+                "-v",
+                "--junitxml=dev0039_historical_restart_pytest.xml",
+            ],
+            script_name="tests-command.sh",
+            log_name="c3-tests.log",
+            environment=_dev0039_historical_environment(config),
+        )
+        if result in {130, 143} or cleanup_failed:
+            print(
+                _preview_exit_line(
+                    "required_dev0039_historical",
+                    "interrupted",
+                    result,
+                    cleanup_failed,
+                    config.root,
+                    phase,
+                )
+            )
+            return result
+        with (config.root / "c3-tests.log").open("rb") as log:
+            shutil.copyfileobj(log, sys.stdout.buffer)
+        return result
+    except KeyboardInterrupt:
+        print(_sibling_keyboard_line("required_dev0039_historical", phase))
+        return 130
+    except (Exception, SystemExit) as exc:
+        print(_preview_failure_line("required_dev0039_historical", "failed", exc, phase))
         return 1
 
 
@@ -1267,4 +1754,16 @@ if __name__ == "__main__":
         raise SystemExit(0)
     if sys.argv[1:] == ["--run-required-preview-postgres"]:
         raise SystemExit(run_required_preview_postgres())
+    if sys.argv[1:] == ["--dev0039-restart-worker"]:
+        _config = dev0039_restart_config(os.environ)
+
+        def _dev0039_worker() -> None:
+            create_dev0039_restart_database(_config)
+
+        _call_preview_child(_config, _dev0039_worker)
+        raise SystemExit(0)
+    if sys.argv[1:] == ["--run-required-dev0039-restart"]:
+        raise SystemExit(run_required_dev0039_restart())
+    if sys.argv[1:] == ["--run-required-dev0039-historical"]:
+        raise SystemExit(run_required_dev0039_historical())
     main()

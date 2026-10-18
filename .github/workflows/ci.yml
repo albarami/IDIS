@@ -229,6 +229,13 @@ jobs:
           .venv/bin/python scripts/verify_dependency_resolution.py
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
+      # Gates the database phases: this step has no if, so a failure skips later default-gated steps.
+      - name: Install native OCR inputs
+        id: pg-native-inputs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg poppler-utils tesseract-ocr tesseract-ocr-eng
+
       - {"name": "Enforce authorized migration ceiling before PostgreSQL bootstrap", "id": "pg-ceiling", "run": "python scripts/check_migration_ceiling.py"}
       - name: Prepare exact migration 0038 roles on disposable CI
         id: pg-roles
@@ -297,9 +304,97 @@ jobs:
               raise SystemExit("REQUIRED_PYTEST_SKIPPED")
           PY
 
+      - name: Run required dev-0039 restart node
+        id: c3-dev0039-restart
+        if: ${{ !cancelled() && steps.pg-install.outcome == 'success' && steps.pg-ceiling.outcome == 'success' && steps.pg-roles.outcome == 'success' && steps.pg-bootstrap.outcome == 'success' && steps.pg-verify.outcome == 'success' && steps.c3-setup.outcome == 'success' }}
+        env:
+          IDIS_CI_POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
+        run: |
+          env -u IDIS_DATABASE_URL -u IDIS_DATABASE_ADMIN_URL -u IDIS_DATABASE_ERASURE_URL -u IDIS_ERASURE_DATABASE_URL -u IDIS_REQUIRE_POSTGRES python scripts/pg_bootstrap_ci.py --run-required-dev0039-restart 2>&1 | tee c3_dev0039_restart_pytest.log
+          exit ${PIPESTATUS[0]}
+      - name: Reject skipped tests in the required dev-0039 restart invocation
+        id: c3-dev0039-zero-skip
+        if: ${{ !cancelled() && steps.c3-dev0039-restart.outcome == 'success' }}
+        run: |
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse("c3_dev0039_restart_pytest.xml").getroot()
+          suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+          skipped = sum(int(suite.get("skipped", 0)) for suite in suites)
+          if skipped > 0:
+              raise SystemExit("REQUIRED_PYTEST_SKIPPED")
+          PY
+      - name: Run required dev-0039 historical restart node
+        id: dev0039-historical
+        if: ${{ !cancelled() && steps.pg-install.outcome == 'success' && steps.pg-ceiling.outcome == 'success' && steps.pg-roles.outcome == 'success' && steps.pg-bootstrap.outcome == 'success' && steps.pg-verify.outcome == 'success' && steps.c3-setup.outcome == 'success' }}
+        env:
+          IDIS_CI_POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
+        run: |
+          env -u IDIS_DATABASE_URL -u IDIS_DATABASE_ADMIN_URL -u IDIS_DATABASE_ERASURE_URL -u IDIS_ERASURE_DATABASE_URL -u IDIS_REQUIRE_POSTGRES python scripts/pg_bootstrap_ci.py --run-required-dev0039-historical 2>&1 | tee dev0039_historical_restart_pytest.log
+          exit ${PIPESTATUS[0]}
+      - name: Reject skipped tests in the required dev-0039 historical invocation
+        id: dev0039-historical-zero-skip
+        if: ${{ !cancelled() && steps.dev0039-historical.outcome == 'success' }}
+        run: |
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse("dev0039_historical_restart_pytest.xml").getroot()
+          suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+          skipped = sum(int(suite.get("skipped", 0)) for suite in suites)
+          if skipped > 0:
+              raise SystemExit("REQUIRED_PYTEST_SKIPPED")
+          PY
+
+      - name: Fence dev-only scripts out of the sdist and wheel
+        id: pg-archive-fence
+        if: ${{ !cancelled() && steps.pg-install.outcome == 'success' }}
+        run: |
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple -c requirements/constraints-py311.txt "hatchling==1.32.4"
+          .venv/bin/python -m pip show hatchling
+          .venv/bin/python -m hatchling build -t sdist -t wheel -d "$RUNNER_TEMP/idis-archive-fence"
+          .venv/bin/python - <<'PY'
+          import os
+          import tarfile
+          import zipfile
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "idis-archive-fence"
+          files = [path for path in root.iterdir() if path.is_file()]
+          sdists = [path for path in files if path.name.endswith(".tar.gz")]
+          wheels = [path for path in files if path.suffix == ".whl"]
+          if len(sdists) != 1 or len(wheels) != 1:
+              raise SystemExit(1)
+          if {path.name for path in files} != {sdists[0].name, wheels[0].name}:
+              raise SystemExit(1)
+
+          def names(path: Path) -> list[str]:
+              if path.name.endswith(".tar.gz"):
+                  with tarfile.open(path) as archive:
+                      return archive.getnames()
+              with zipfile.ZipFile(path) as archive:
+                  return archive.namelist()
+
+          def norm(name: str) -> str:
+              return name.replace(chr(92), "/").lstrip("./")
+
+          def dev_only(name: str) -> bool:
+              text = norm(name)
+              return text.startswith("scripts/dev_only/") or "/scripts/dev_only/" in "/" + text
+
+          def wheel_scripts(name: str) -> bool:
+              text = norm(name)
+              return text == "scripts" or text.startswith("scripts/") or "/scripts/" in "/" + text
+
+          for member in names(sdists[0]):
+              if dev_only(member):
+                  raise SystemExit(1)
+          for member in names(wheels[0]):
+              if dev_only(member) or wheel_scripts(member):
+                  raise SystemExit(1)
+          PY
       - {"name": "Upload bootstrap log artifact", "if": "always()", "uses": "actions/upload-artifact@v4", "with": {"name": "postgres-bootstrap-log", "path": "postgres_bootstrap.log", "retention-days": 7}}
-      - {"name": "Upload pytest log artifact", "if": "always()", "uses": "actions/upload-artifact@v4", "with": {"name": "postgres-integration-pytest-log", "path": "postgres_integration_pytest.log\nc3_postgres_integration_pytest.log", "retention-days": 7}}
-      - {"name": "Upload pytest JUnit XML artifact", "if": "always()", "uses": "actions/upload-artifact@v4", "with": {"name": "postgres-integration-pytest-xml", "path": "postgres_integration_pytest.xml\nc3_postgres_integration_pytest.xml", "retention-days": 7}}
+      - {"name": "Upload pytest log artifact", "if": "always()", "uses": "actions/upload-artifact@v4", "with": {"name": "postgres-integration-pytest-log", "path": "postgres_integration_pytest.log\nc3_postgres_integration_pytest.log\nc3_dev0039_restart_pytest.log\ndev0039_historical_restart_pytest.log", "retention-days": 7}}
+      - {"name": "Upload pytest JUnit XML artifact", "if": "always()", "uses": "actions/upload-artifact@v4", "with": {"name": "postgres-integration-pytest-xml", "path": "postgres_integration_pytest.xml\nc3_postgres_integration_pytest.xml\nc3_dev0039_restart_pytest.xml\ndev0039_historical_restart_pytest.xml", "retention-days": 7}}
       - name: Write explicit pytest summary to job summary
         if: always()
         run: |
@@ -344,6 +439,32 @@ jobs:
                   f.write(f"{passed} passed, {totals['failures']} failed, {totals['errors']} errors, {totals['skipped']} skipped.\n")
               except Exception:
                   f.write("NOT QUALIFIED: C3 XML absent or invalid; no passing result inferred.\n")
+          with open(summary_file, "a") as f:
+              f.write("## Required dev-0039 restart results\n\n")
+              f.write("Step outcome: ${{ steps.c3-dev0039-restart.outcome }}\n\n")
+              try:
+                  root = ET.parse("c3_dev0039_restart_pytest.xml").getroot()
+                  suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+                  if not suites:
+                      raise ValueError("missing suite")
+                  totals = {name: sum(int(s.get(name, 0)) for s in suites) for name in ("tests", "failures", "errors", "skipped")}
+                  passed = totals["tests"] - totals["failures"] - totals["errors"] - totals["skipped"]
+                  f.write(f"{passed} passed, {totals['failures']} failed, {totals['errors']} errors, {totals['skipped']} skipped.\n")
+              except Exception:
+                  f.write("NOT QUALIFIED: dev-0039 restart XML absent or invalid; no passing result inferred.\n")
+          with open(summary_file, "a") as f:
+              f.write("## Required dev-0039 historical results\n\n")
+              f.write("Step outcome: ${{ steps.dev0039-historical.outcome }}\n\n")
+              try:
+                  root = ET.parse("dev0039_historical_restart_pytest.xml").getroot()
+                  suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+                  if not suites:
+                      raise ValueError("missing suite")
+                  totals = {name: sum(int(s.get(name, 0)) for s in suites) for name in ("tests", "failures", "errors", "skipped")}
+                  passed = totals["tests"] - totals["failures"] - totals["errors"] - totals["skipped"]
+                  f.write(f"{passed} passed, {totals['failures']} failed, {totals['errors']} errors, {totals['skipped']} skipped.\n")
+              except Exception:
+                  f.write("NOT QUALIFIED: dev-0039 historical XML absent or invalid; no passing result inferred.\n")
           EOF
 
       - name: Write logs summary to job summary

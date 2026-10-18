@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import importlib.util
 import json
@@ -766,3 +767,248 @@ def test_cleanup_checks_existence_and_fails_when_a_resource_remains(tmp_path: Pa
         for path in (secret_root, object_parent, var_run):
             if path.exists() and not path.is_symlink():
                 shutil.rmtree(path)
+
+
+_IMAGE_ENV_FORMAT = "{{range .Config.Env}}{{println .}}{{end}}"
+_EXTRA_IMAGE_ENV_NAME = "H1B_UNREVIEWED_IMAGE_ENV"
+_LOADER_TIMEOUT_SECONDS = 120
+_REVIEWED_SHA = "c" * 40
+_IMAGE_ENV_DOCKER = r"""
+import os
+import sys
+from pathlib import Path
+
+state = Path(os.environ["DOCKER_FAKE_STATE"])
+args = sys.argv[1:]
+with (state / "actions.log").open("a", encoding="utf-8") as handle:
+    handle.write(" ".join(args) + "\n")
+format_arg = "{{range .Config.Env}}{{println .}}{{end}}"
+if args[:4] != ["image", "inspect", "--format", format_arg] or len(args) != 5:
+    sys.stderr.write("unexpected docker args\n")
+    raise SystemExit(97)
+if args[4] != "idis:ci-" + os.environ["GITHUB_SHA"]:
+    sys.stderr.write("unexpected image\n")
+    raise SystemExit(97)
+sys.stdout.write((state / "image-env.txt").read_text(encoding="utf-8"))
+raise SystemExit(0)
+"""
+
+
+def _h1b_py_bodies(run: str) -> list[str]:
+    lines = run.splitlines()
+    bodies: list[str] = []
+    index = 0
+    while index < len(lines):
+        if "<<'H1B_PY'" not in lines[index]:
+            index += 1
+            continue
+        index += 1
+        body: list[str] = []
+        while index < len(lines) and lines[index] != "H1B_PY":
+            body.append(lines[index])
+            index += 1
+        if index >= len(lines):
+            raise AssertionError("H1B_PY heredoc is unterminated")
+        bodies.append("\n".join(body) + "\n")
+        index += 1
+    return bodies
+
+
+def _qualify_snippet(outer: str) -> str:
+    marker = "qualify = r" + ('"' * 3) + "\n"
+    start = outer.find(marker)
+    if start < 0:
+        raise AssertionError("start-api heredoc has no qualify script")
+    start += len(marker)
+    end = outer.find("\n" + ('"' * 3), start)
+    if end < 0:
+        raise AssertionError("qualify script is unterminated")
+    return outer[start:end] + "\n"
+
+
+def _three_loader_snippets() -> tuple[str, str, str]:
+    allow_bodies = _h1b_py_bodies(_by_id("inspect-image-env")["run"])
+    start_bodies = _h1b_py_bodies(_by_id("start-api")["run"])
+    if len(allow_bodies) != 1 or len(start_bodies) != 1:
+        raise AssertionError((len(allow_bodies), len(start_bodies)))
+    allow, outer = allow_bodies[0], start_bodies[0]
+    qualify = _qualify_snippet(outer)
+    if allow.count("spec.loader.exec_module") != 1:
+        raise AssertionError("allowlist snippet lost its helper loader")
+    if outer.count("spec.loader.exec_module") != 2:
+        raise AssertionError("start-api snippet lost a helper loader")
+    if qualify.count("spec.loader.exec_module") != 1:
+        raise AssertionError("qualify snippet lost its helper loader")
+    if qualify not in outer:
+        raise AssertionError("qualify snippet is not taken from the start-api heredoc")
+    return allow, outer, qualify
+
+
+@functools.lru_cache(maxsize=1)
+def _image_control_names() -> frozenset[str]:
+    spec = importlib.util.spec_from_file_location(
+        "h1b_image_control_names",
+        ROOT / ".github" / "scripts" / "prepare_bootstrap_health.py",
+    )
+    if spec is None or spec.loader is None:
+        raise AssertionError("prepare_bootstrap_health.py is missing")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    names = module._IMAGE_CONTROL_NAMES
+    if not isinstance(names, frozenset):
+        raise AssertionError("image control names are not a frozenset")
+    if any(not isinstance(name, str) for name in names):
+        raise AssertionError("image control names are not strings")
+    return names
+
+
+def _image_env_text(*, extra: str | None = None) -> str:
+    names = set(_image_control_names())
+    if extra is not None:
+        if extra in names:
+            raise AssertionError("extra image env name collides with the allowlist")
+        names.add(extra)
+    return "".join(f"{name}=reviewed\n" for name in sorted(names))
+
+
+def _snippet_env(tmp_path: Path, state: Path, github: dict[str, str]) -> dict[str, str]:
+    pythonpath = [str(ROOT / "src"), str(ROOT)]
+    env: dict[str, str] = {
+        "PATH": str(tmp_path / "bin"),
+        "HOME": str(tmp_path),
+        "TMP": str(tmp_path),
+        "TEMP": str(tmp_path),
+        "H1B_PY": Path(sys.executable).as_posix(),
+        "H1B_DOCKER_PY": (tmp_path / "docker_fake.py").as_posix(),
+        "DOCKER_FAKE_STATE": str(state),
+        "PYTHONPATH": os.pathsep.join(pythonpath),
+    }
+    if sys.platform == "win32":
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+        env["WINDIR"] = os.environ.get("WINDIR", os.environ["SYSTEMROOT"])
+        env["PATHEXT"] = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+        shim = tmp_path / "shim"
+        env["H1B_SHIM"] = shim.as_posix()
+        env["PYTHONPATH"] = os.pathsep.join([str(shim), *pythonpath])
+    env.update(github)
+    return env
+
+
+def _run_loader_snippet(
+    tmp_path: Path,
+    body: str,
+    *,
+    image_env: str,
+    github: dict[str, str],
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    _install_fake_toolchain(tmp_path)
+    _write_executable(tmp_path / "docker_fake.py", _IMAGE_ENV_DOCKER)
+    state = _docker_state(tmp_path)
+    (state / "image-env.txt").write_text(image_env, encoding="utf-8", newline="\n")
+    workspace = tmp_path / "workspace"
+    helper_dir = workspace / ".github" / "scripts"
+    helper_dir.mkdir(parents=True)
+    shutil.copy2(
+        ROOT / ".github" / "scripts" / "prepare_bootstrap_health.py",
+        helper_dir / "prepare_bootstrap_health.py",
+    )
+    snippet_path = workspace / "h1b_snippet.py"
+    snippet_path.write_text(body, encoding="utf-8", newline="\n")
+    completed = subprocess.run(
+        [sys.executable, os.fspath(snippet_path)],
+        cwd=workspace,
+        env=_snippet_env(tmp_path, state, github),
+        capture_output=True,
+        text=True,
+        timeout=_LOADER_TIMEOUT_SECONDS,
+        check=False,
+    )
+    actions = (state / "actions.log").read_text(encoding="utf-8")
+    return completed, actions
+
+
+def _assert_no_unregistered_dataclass_failure(output: str) -> None:
+    assert "AttributeError" not in output, output
+    assert "'NoneType' object has no attribute '__dict__'" not in output, output
+
+
+def test_allowlist_h1b_py_accepts_reviewed_image_env_names(tmp_path: Path) -> None:
+    allow, _outer, _qualify = _three_loader_snippets()
+    assert _IMAGE_ENV_FORMAT in allow
+    assert _IMAGE_ENV_FORMAT in _IMAGE_ENV_DOCKER
+    completed, actions = _run_loader_snippet(
+        tmp_path,
+        allow,
+        image_env=_image_env_text(),
+        github={"GITHUB_SHA": _REVIEWED_SHA},
+    )
+    output = completed.stdout + completed.stderr
+    _assert_no_unregistered_dataclass_failure(output)
+    assert completed.returncode == 0, output
+    payload = json.loads(completed.stdout)
+    assert payload["extra_names"] == [], payload
+    assert f"idis:ci-{_REVIEWED_SHA}" in actions
+
+
+def test_allowlist_h1b_py_rejects_one_extra_image_env_name(tmp_path: Path) -> None:
+    allow, _outer, _qualify = _three_loader_snippets()
+    assert _EXTRA_IMAGE_ENV_NAME not in _image_control_names()
+    completed, _actions = _run_loader_snippet(
+        tmp_path,
+        allow,
+        image_env=_image_env_text(extra=_EXTRA_IMAGE_ENV_NAME),
+        github={"GITHUB_SHA": _REVIEWED_SHA},
+    )
+    output = completed.stdout + completed.stderr
+    _assert_no_unregistered_dataclass_failure(output)
+    assert completed.returncode == 1, output
+    payload = json.loads(completed.stdout)
+    assert payload["extra_names"] == [_EXTRA_IMAGE_ENV_NAME], payload
+
+
+def test_start_api_outer_h1b_py_imports_helper_then_stops_before_containers(
+    tmp_path: Path,
+) -> None:
+    # Seam: fake image inspect includes H1B_UNREVIEWED_IMAGE_ENV. The outer
+    # snippet raises SystemExit(1) at `if name not in helper._IMAGE_CONTROL_NAMES`
+    # immediately after that inspect, before image-defaults.json, os.chown, the
+    # nested qualify script, redis, and `docker run`.
+    _allow, outer, _qualify = _three_loader_snippets()
+    run_id = f"h1b1gapi{os.getpid()}"
+    completed, actions = _run_loader_snippet(
+        tmp_path,
+        outer,
+        image_env=_image_env_text(extra=_EXTRA_IMAGE_ENV_NAME),
+        github={"GITHUB_SHA": _REVIEWED_SHA, "GITHUB_RUN_ID": run_id},
+    )
+    output = completed.stdout + completed.stderr
+    _assert_no_unregistered_dataclass_failure(output)
+    assert "Traceback" not in output, output
+    assert completed.returncode == 1, output
+    expected = f"image inspect --format {_IMAGE_ENV_FORMAT} idis:ci-{_REVIEWED_SHA}"
+    assert actions.splitlines() == [expected], output + "\n" + actions
+    assert not Path(f"/opt/idis-ci-health/{run_id}/image-defaults.json").exists()
+
+
+def test_start_api_qualify_h1b_py_imports_helper_then_stops_at_defaults_file(
+    tmp_path: Path,
+) -> None:
+    # Seam: this snippet does not call docker. After exec_module it reads
+    # /opt/idis-ci-health/<run>/image-defaults.json, which this test does not
+    # create. FileNotFoundError is the stop. No container is started.
+    _allow, _outer, qualify = _three_loader_snippets()
+    run_id = f"h1b1gqual{os.getpid()}"
+    completed, actions = _run_loader_snippet(
+        tmp_path,
+        qualify,
+        image_env=_image_env_text(),
+        github={"GITHUB_RUN_ID": run_id},
+    )
+    output = completed.stdout + completed.stderr
+    _assert_no_unregistered_dataclass_failure(output)
+    assert completed.returncode != 0, output
+    assert actions.strip() == "", output + "\n" + actions
+    assert "FileNotFoundError" in output, output
+    assert run_id in output, output
+    assert "image-defaults.json" in output, output

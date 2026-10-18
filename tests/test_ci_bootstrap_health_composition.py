@@ -11,6 +11,9 @@ import shutil
 import stat
 import subprocess
 import sys
+import uuid
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
 from typing import Protocol, runtime_checkable
@@ -908,3 +911,134 @@ def test_composition_api_closed_code_is_admission_before_the_route_inventory(
     assert dict(checks)["auth"] is None
     assert [code for _component, code in checks] == [*codes, None]
     assert _path_inventory(outside_store) == store_before
+
+
+# Image install layout from Dockerfile: non-editable /opt/venv and schemas at /app/schemas.
+_IMAGE_SITE_PACKAGES = Path("opt/venv/lib/python3.11/site-packages")
+_INSTALLED_SCHEMA_MODULE = "h1b_installed_schema_validator"
+_FROZEN_PREVIEW_ENV = (
+    "IDIS_TEST_FROZEN_PREVIEW_DATABASE_URL",
+    "IDIS_TEST_FROZEN_PREVIEW_DATABASE_RECEIPT",
+    "IDIS_TEST_FROZEN_PREVIEW_DATABASE_RECEIPT_SHA256",
+)
+_REQUIRE_COMPOSITION_AUDIT_INSERT = "IDIS_REQUIRE_COMPOSITION_AUDIT_INSERT"
+
+
+def _readiness_audit_event() -> dict[str, object]:
+    """Same event collect_postgres_audit_facts builds before validate_audit_event."""
+    event_id = str(uuid.uuid4())
+    return {
+        "event_id": event_id,
+        "tenant_id": "10000000-0000-4000-8000-000000000001",
+        "occurred_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "event_type": "integration.dependency_readiness.probed",
+        "severity": "LOW",
+        "summary": "Durable dependency audit round-trip probed",
+        "actor": {"actor_id": "strict-runtime-readiness", "actor_type": "SERVICE"},
+        "request": {
+            "request_id": f"readiness-{event_id}",
+            "method": "POST",
+            "path": "/internal/dependency-readiness/audit",
+            "status_code": 200,
+        },
+        "resource": {
+            "resource_type": "integration",
+            "resource_id": f"dependency-readiness:{event_id}",
+        },
+        "payload": {"safe": {"backend": "postgres"}, "hashes": [], "refs": []},
+    }
+
+
+def _load_installed_schema_validator(path: Path) -> ModuleType:
+    spec = importlib.util.spec_from_file_location(_INSTALLED_SCHEMA_MODULE, path)
+    if spec is None or spec.loader is None:
+        raise AssertionError("installed schema validator spec missing")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[_INSTALLED_SCHEMA_MODULE] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_noneditable_image_install_loads_the_readiness_audit_schema(tmp_path: Path) -> None:
+    """Copied schema_validator.py loads idis/_schemas beside that module.
+
+    Form (1) resolves a path next to the loaded file, so this copy uses the
+    temporary site-packages tree. It does not use importlib.resources.
+    """
+    from idis.validators.schema_validator import SchemaValidator
+
+    event = _readiness_audit_event()
+    source = SchemaValidator().validate("audit_event", event)
+    assert source.passed, [error.code for error in source.errors]
+
+    site = tmp_path / _IMAGE_SITE_PACKAGES
+    module_path = site / "idis" / "validators" / "schema_validator.py"
+    module_path.parent.mkdir(parents=True)
+    shutil.copyfile(ROOT / "src/idis/validators/schema_validator.py", module_path)
+    packaged = site / "idis" / "_schemas"
+    image_schemas = tmp_path / "app" / "schemas"
+    packaged.mkdir()
+    image_schemas.mkdir(parents=True)
+    for schema in sorted((ROOT / "schemas").glob("*.schema.json")):
+        shutil.copyfile(schema, packaged / schema.name)
+        shutil.copyfile(schema, image_schemas / schema.name)
+
+    module = _load_installed_schema_validator(module_path)
+    try:
+        validator = module.SchemaValidator()
+        loaded = module.__file__
+        assert isinstance(loaded, str)
+        chosen = Path(validator._schema_dir).resolve()
+        walk = Path(loaded).resolve().parents[3] / "schemas"
+        assert (walk / "audit_event.schema.json").is_file() is False
+        assert (image_schemas / "audit_event.schema.json").is_file()
+        assert (packaged / "audit_event.schema.json").is_file()
+        assert chosen == packaged.resolve()
+        assert chosen != image_schemas.resolve()
+        result = validator.validate("audit_event", event)
+    finally:
+        sys.modules.pop(_INSTALLED_SCHEMA_MODULE, None)
+
+    details = [f"{error.code}:{error.message}" for error in result.errors]
+    assert result.passed, details
+    project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    openapi_line = '"openapi/IDIS_OpenAPI_v6_3.yaml" = "idis/_openapi/IDIS_OpenAPI_v6_3.yaml"'
+    assert project.count(openapi_line) == 1
+    for schema in sorted((ROOT / "schemas").glob("*.schema.json")):
+        mapping = f'"schemas/{schema.name}" = "idis/_schemas/{schema.name}"'
+        assert mapping in project
+
+
+def _assert_composition_audit_insert(monkeypatch: pytest.MonkeyPatch) -> None:
+    from idis.audit.postgres_sink import PostgresAuditSink
+    from idis.persistence import db
+    from idis.runtime.dependency_probes import collect_postgres_audit_facts
+    from tests._cir04c3_required_frozen_preview import required_frozen_preview
+
+    with required_frozen_preview(monkeypatch):
+        facts = collect_postgres_audit_facts(
+            audit_sink_factory=PostgresAuditSink,
+            connection_factory=db.begin_app_conn,
+            tenant_setter=db.set_tenant_local,
+            tenant_id=str(uuid.uuid4()),
+        )
+    assert facts.backend == "postgres"
+    assert facts.emit_ok is True
+    assert facts.read_ok is True
+    assert facts.restart_read_ok is True
+
+
+def test_composition_audit_sink_insert_records_not_executed_without_a_qualified_database(
+    monkeypatch: pytest.MonkeyPatch,
+    record_property: Callable[[str, object], None],
+) -> None:
+    """Opt-in app-role INSERT. The default records NOT_EXECUTED and does not connect."""
+    if os.environ.get(_REQUIRE_COMPOSITION_AUDIT_INSERT) != "1":
+        reason = "IDIS_REQUIRE_COMPOSITION_AUDIT_INSERT is not 1"
+        record_property("audit_sink_insert", f"NOT_EXECUTED: {reason}")
+        print(f"AUDIT_SINK_INSERT NOT_EXECUTED: {reason}")
+        return
+    missing = [name for name in _FROZEN_PREVIEW_ENV if not os.environ.get(name)]
+    if missing:
+        pytest.fail("qualified database unavailable")
+    _assert_composition_audit_insert(monkeypatch)

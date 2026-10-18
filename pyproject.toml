@@ -68,6 +68,16 @@ packages = ["src/idis"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "openapi/IDIS_OpenAPI_v6_3.yaml" = "idis/_openapi/IDIS_OpenAPI_v6_3.yaml"
+"schemas/audit_event.schema.json" = "idis/_schemas/audit_event.schema.json"
+"schemas/calc_sanad.schema.json" = "idis/_schemas/calc_sanad.schema.json"
+"schemas/claim.schema.json" = "idis/_schemas/claim.schema.json"
+"schemas/debate_state.schema.json" = "idis/_schemas/debate_state.schema.json"
+"schemas/defect.schema.json" = "idis/_schemas/defect.schema.json"
+"schemas/evidence_item.schema.json" = "idis/_schemas/evidence_item.schema.json"
+"schemas/muhasabah_record.schema.json" = "idis/_schemas/muhasabah_record.schema.json"
+"schemas/sanad.schema.json" = "idis/_schemas/sanad.schema.json"
+"schemas/transmission_node.schema.json" = "idis/_schemas/transmission_node.schema.json"
+"schemas/value_struct.schema.json" = "idis/_schemas/value_struct.schema.json"
 
 [tool.hatch.build.targets.sdist]
 exclude = ["scripts/dev_only/"]

@@ -2157,6 +2157,168 @@ def test_pg_governed_poppler_workspace_mounts_are_read_only() -> None:
     assert '-v "${RUNNER_TEMP}:${RUNNER_TEMP}"' in governed
 
 
+_ADMIT_SCRIPT_NAME = "pg-governed-poppler-admit.sh"
+_ADMIT_VENV_CREATE = 'python -m venv "${RUNNER_TEMP}/idis-admit-venv"'
+_ADMIT_PIP_PIN = (
+    '"${RUNNER_TEMP}/idis-admit-venv/bin/python" -m pip --isolated install '
+    '--index-url https://pypi.org/simple "pip==26.2.1"'
+)
+_ADMIT_PIP_INSTALL = (
+    '"${RUNNER_TEMP}/idis-admit-venv/bin/python" -m pip --isolated install '
+    "--index-url https://pypi.org/simple -c requirements/constraints-py311.txt "
+    "--build-constraint requirements/constraints-py311.txt "
+    '".[dev]" setuptools wheel'
+)
+_ADMIT_PIP_CHECK = '"${RUNNER_TEMP}/idis-admit-venv/bin/python" -m pip check'
+_ADMIT_VERIFIER = (
+    '"${RUNNER_TEMP}/idis-admit-venv/bin/python" scripts/verify_dependency_resolution.py'
+)
+_ADMIT_ENTRY = "\"${RUNNER_TEMP}/idis-admit-venv/bin/python\" - <<'PY'"
+_ADMIT_CHECKOUT_COPY = (
+    'find "${GITHUB_WORKSPACE}" -mindepth 1 -maxdepth 1 '
+    "! -name .venv ! -name poppler-linux-prefix "
+    "-exec cp -a {} /tmp/idis-admit-checkout/ \\;"
+)
+_ADMIT_BEFORE_IMPORT = (
+    "apt-mark hold libc6 liblzma5 libpcre2-8-0",
+    "--install-runtime-closure",
+    "mkdir -p /tmp/idis-admit-checkout",
+    _ADMIT_CHECKOUT_COPY,
+    "cd /tmp/idis-admit-checkout",
+    _ADMIT_VENV_CREATE,
+    _ADMIT_PIP_PIN,
+    _ADMIT_PIP_INSTALL,
+    _ADMIT_PIP_CHECK,
+    _ADMIT_VERIFIER,
+    "unset PYTHONPATH",
+    _ADMIT_ENTRY,
+)
+_PROJECT_DEPENDENCY_MARKERS = (
+    "python -m venv",
+    '"pip==26.2.1"',
+    "-c requirements/constraints-py311.txt",
+    "--build-constraint requirements/constraints-py311.txt",
+    "setuptools wheel",
+)
+_IDIS_IMPORT_LINE = re.compile(r"(?m)^(?:from idis\b|import idis\b)")
+
+
+def _governed_poppler_run() -> str:
+    run = next(step for step in _postgres_steps() if step.get("id") == "pg-governed-poppler")["run"]
+    assert isinstance(run, str)
+    return run
+
+
+def _runner_temp_scripts(run: str) -> list[tuple[str, str]]:
+    """Return heredocs this job writes under ${RUNNER_TEMP}, in source order."""
+
+    marker = 'cat > "${RUNNER_TEMP}/'
+    header = "<<'EOF'\n"
+    found: list[tuple[str, str]] = []
+    cursor = 0
+    while True:
+        at = run.find(marker, cursor)
+        if at < 0:
+            return found
+        name_start = at + len(marker)
+        name_end = run.index('"', name_start)
+        body_start = run.index(header, name_end) + len(header)
+        body_end = run.index("\nEOF\n", body_start)
+        found.append((run[name_start:name_end], run[body_start:body_end]))
+        cursor = body_end + len("\nEOF\n")
+
+
+def _admit_script() -> str:
+    scripts = dict(_runner_temp_scripts(_governed_poppler_run()))
+    assert _ADMIT_SCRIPT_NAME in scripts
+    return scripts[_ADMIT_SCRIPT_NAME]
+
+
+def _first_idis_import(script: str) -> int:
+    match = _IDIS_IMPORT_LINE.search(script)
+    assert match is not None, "container script imports idis"
+    return match.start()
+
+
+def _admit_prefix_text(governed: str) -> str:
+    start = governed.index("admit_prefix() {")
+    end = governed.index('if [[ "${POPPLER_CACHE_HIT}" != "true" && -f', start)
+    return governed[start:end]
+
+
+def test_admit_script_installs_c3_dependencies_before_idis_import() -> None:
+    """The admit script copies the checkout and installs before importing idis."""
+
+    script = _admit_script()
+    import_at = _first_idis_import(script)
+    previous = -1
+    for marker in _ADMIT_BEFORE_IMPORT:
+        found = script.find(marker)
+        assert found != -1, marker
+        assert previous < found < import_at, marker
+        previous = found
+    assert ' -e ".[dev]"' not in script
+
+
+def test_admit_script_runs_pip_check_and_dependency_verifier() -> None:
+    """pip check and the dependency verifier run on the admit venv before idis."""
+
+    script = _admit_script()
+    import_at = _first_idis_import(script)
+    check_at = script.index(_ADMIT_PIP_CHECK)
+    verifier_at = script.index(_ADMIT_VERIFIER)
+    install_at = script.index(_ADMIT_PIP_INSTALL)
+    assert install_at < check_at < verifier_at < import_at
+
+
+def test_admit_script_runs_admission_with_the_venv_python() -> None:
+    """Admission runs under the admit venv, and that container receives RUNNER_TEMP."""
+
+    script = _admit_script()
+    import_at = _first_idis_import(script)
+    entry_at = script.index(_ADMIT_ENTRY)
+    assert entry_at < import_at
+    assert "python - <<'PY'" not in script
+    admit = _admit_prefix_text(_governed_poppler_run())
+    assert "-e RUNNER_TEMP" in admit
+    assert "-e GITHUB_WORKSPACE" in admit
+    assert '-e PYTHONPATH="${GITHUB_WORKSPACE}/src"' in admit
+    assert 'bash "${RUNNER_TEMP}/pg-governed-poppler-admit.sh"' in admit
+
+
+def test_admit_invocation_workspace_read_only_mount_count_stays_two() -> None:
+    """Build and admit keep two read-only checkout mounts; admit adds no writable one."""
+
+    governed = _governed_poppler_run()
+    admit = _admit_prefix_text(governed)
+    checkout_ro = '-v "${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}:ro"'
+    prefix_ro = '-v "${prefix_host}:${GITHUB_WORKSPACE}/poppler-linux-prefix:ro"'
+    assert governed.count(checkout_ro) == 2
+    assert admit.count(checkout_ro) == 1
+    assert admit.count(prefix_ro) == 1
+    writable_checkout = '-v "${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}"'
+    assert writable_checkout not in admit.replace(checkout_ro, "")
+
+
+def test_postgres_runner_scripts_install_dependencies_before_idis_import() -> None:
+    """Every postgres-integration container script that imports idis installs first."""
+
+    importers: list[str] = []
+    for step in _postgres_steps():
+        run = step.get("run")
+        if not isinstance(run, str):
+            continue
+        for name, body in _runner_temp_scripts(run):
+            match = _IDIS_IMPORT_LINE.search(body)
+            if match is None:
+                continue
+            importers.append(name)
+            for marker in _PROJECT_DEPENDENCY_MARKERS:
+                found = body.find(marker)
+                assert found != -1 and found < match.start(), name
+    assert _ADMIT_SCRIPT_NAME in importers
+
+
 _LINUX_POPPLER_IF = "${{ !cancelled() && steps.pg-governed-poppler.outcome == 'success' }}"
 _LINUX_POPPLER_MANIFEST_LINE = "POPPLER_LINUX_MANIFEST_SHA256="
 

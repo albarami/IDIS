@@ -335,7 +335,16 @@ jobs:
           export PYTHONDONTWRITEBYTECODE=1
           apt-mark hold libc6 liblzma5 libpcre2-8-0
           python "${GITHUB_WORKSPACE}/scripts/build_linux_poppler_prefix.py" --install-runtime-closure
-          PYTHONPATH="${GITHUB_WORKSPACE}/src" python - <<'PY'
+          mkdir -p /tmp/idis-admit-checkout
+          find "${GITHUB_WORKSPACE}" -mindepth 1 -maxdepth 1 ! -name .venv ! -name poppler-linux-prefix -exec cp -a {} /tmp/idis-admit-checkout/ \;
+          cd /tmp/idis-admit-checkout
+          python -m venv "${RUNNER_TEMP}/idis-admit-venv"
+          "${RUNNER_TEMP}/idis-admit-venv/bin/python" -m pip --isolated install --index-url https://pypi.org/simple "pip==26.2.1"
+          "${RUNNER_TEMP}/idis-admit-venv/bin/python" -m pip --isolated install --index-url https://pypi.org/simple -c requirements/constraints-py311.txt --build-constraint requirements/constraints-py311.txt ".[dev]" setuptools wheel
+          "${RUNNER_TEMP}/idis-admit-venv/bin/python" -m pip check
+          "${RUNNER_TEMP}/idis-admit-venv/bin/python" scripts/verify_dependency_resolution.py
+          unset PYTHONPATH
+          "${RUNNER_TEMP}/idis-admit-venv/bin/python" - <<'PY'
           import hashlib
           import importlib.util
           import os
@@ -390,6 +399,7 @@ jobs:
               -v "${prefix_host}:/opt/idis-native/poppler-25.12.0:ro" \
               -v "${prefix_host}:${GITHUB_WORKSPACE}/poppler-linux-prefix:ro" \
               -e GITHUB_WORKSPACE \
+              -e RUNNER_TEMP \
               -e PYTHONPATH="${GITHUB_WORKSPACE}/src" \
               -e POPPLER_LINUX_SOURCE_SHA256 \
               -e POPPLER_LINUX_RECIPE_SHA256 \

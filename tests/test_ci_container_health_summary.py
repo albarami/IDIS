@@ -84,7 +84,10 @@ _F99595EF_JOB_DIGESTS = {
     # b37e61ca1faba82cbeebd9f096010433e6c63f164c8df0c7ed471e990b02b986
     # CIR-04H3-6 re-pin. Previous digest:
     # 3d98ec97b87694ad67c9c7a4f593d464122b1747b48309819842c5b386ce0fa3
-    "postgres-integration": "63b724e74963fa54db7452c1e8567a965a248fb5b6e945009834a5b635890c60",
+    # CIR-04H3-8 re-pin: the admit script installs into its own venv before idis.
+    # Previous digest:
+    # 63b724e74963fa54db7452c1e8567a965a248fb5b6e945009834a5b635890c60
+    "postgres-integration": "18c818cfbeb1479f854760eb3b5766a2c59205ddd74cd2323e4032cbbf5085f6",
     "release-gate": "95f9816c495581f5b642ec6932d84ba16d75704d5ca1435f77b4406e87f6c8ab",
     "terraform-validate": "1938b5718ff7e1eff243b5a982c453a7745372ebd4145d55d639dd0af74d47a4",
     "ui-check": "cc279df20f4a53d6426db11701765cb386b2d1e36aae57dcbb23829df89ea03b",

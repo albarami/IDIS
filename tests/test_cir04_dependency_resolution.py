@@ -61,10 +61,13 @@ _COUNT_MARKERS = (
     _HISTORICAL_CEILING_RUN,
 )
 # f99595ef per-job counts, in _COUNT_MARKERS order.
+# CIR-04H3-8 postgres-integration was (1, 2, 1, 2, 2, 1, 1). The admit venv
+# adds one "setuptools wheel", one build-constraint, and one pip pin.
+# The venv marker stays 1: the new command is not "python -m venv .venv".
 _F99595EF_JOB_COUNTS: dict[str, tuple[int, ...]] = {
     "ui-check": (0, 0, 0, 0, 0, 0, 0),
     "check": (1, 1, 1, 1, 1, 1, 1),
-    "postgres-integration": (1, 2, 1, 2, 2, 1, 1),
+    "postgres-integration": (1, 3, 1, 3, 3, 1, 1),
     "evaluation-harness": (1, 1, 1, 1, 1, 1, 0),
     "container-build": (1, 1, 1, 1, 1, 1, 0),
     "k8s-validate": (0, 0, 0, 0, 0, 0, 0),
@@ -307,13 +310,15 @@ class DependencyWiringTests(unittest.TestCase):
     def test_every_ci_install_uses_a_fresh_environment_and_pinned_seed_tools(self) -> None:
         workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         self.assertEqual(workflow.count("python -m venv .venv"), 7)
-        self.assertEqual(workflow.count("setuptools wheel"), 8)
+        # CIR-04H3-8: 8 before the admit install, 9 after it.
+        self.assertEqual(workflow.count("setuptools wheel"), 9)
         self.assertEqual(workflow.count('echo "$PWD/.venv/bin" >> "$GITHUB_PATH"'), 6)
 
     def test_ci_retains_checks_and_bounds_all_dependency_installations(self) -> None:
         workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        self.assertEqual(workflow.count("--build-constraint requirements/constraints-py311.txt"), 8)
-        self.assertEqual(workflow.count('"pip==26.2.1"'), 8)
+        # CIR-04H3-8: each was 8 before the admit install and is 9 after it.
+        self.assertEqual(workflow.count("--build-constraint requirements/constraints-py311.txt"), 9)
+        self.assertEqual(workflow.count('"pip==26.2.1"'), 9)
         self.assertEqual(workflow.count("python scripts/verify_dependency_resolution.py"), 7)
         self.assertIn("pytest tests/test_slice99_backup_restore_postgres.py -v", workflow)
         self.assertEqual(workflow.count("python scripts/check_migration_ceiling.py"), 4)

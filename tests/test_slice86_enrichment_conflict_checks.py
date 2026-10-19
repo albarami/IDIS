@@ -39,6 +39,7 @@ from tests.test_slice86_source_grade_vc_visibility import (
 )
 
 _LEAK_MARKERS = ("sk-s86-conf-LEAK-1", "/var/secret/s86-conf", "Other Corp Confidential Ltd")
+_DEAL_COMPANY_LABEL = "Acme Robotics Ltd"
 
 
 class _IdentityConnector(_StatusConnector):
@@ -83,6 +84,7 @@ def _run_step(registry_factory: Any, *, strict: bool = False) -> dict[str, Any]:
             calc_ids=[],
             db_conn=None,
             audit_sink=RecordingPostgresAuditSink(),
+            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
         )
 
 
@@ -116,7 +118,7 @@ def test_identifier_conflicts_comparator() -> None:
 def test_ledger_rows_record_identifier_mismatch_per_hit() -> None:
     def registry() -> EnrichmentProviderRegistry:
         reg = EnrichmentProviderRegistry()
-        reg.register(_IdentityConnector("matching_hit", "deal-1"))  # step queries deal_id
+        reg.register(_IdentityConnector("matching_hit", _DEAL_COMPANY_LABEL))
         reg.register(_IdentityConnector("mismatched_hit", _LEAK_MARKERS[2]))
         reg.register(_StatusConnector("plain_miss", EnrichmentStatus.MISS))
         return reg

@@ -402,7 +402,12 @@ def build_run_context(
         ),
         rag_fn=partial(_run_full_rag_evidence, db_conn=db_conn) if is_full else None,
         enrich_fn=(
-            partial(_run_full_enrichment, db_conn=db_conn, audit_sink=audit_sink)
+            partial(
+                _run_full_enrichment,
+                db_conn=db_conn,
+                audit_sink=audit_sink,
+                deal_metadata=deal_metadata,
+            )
             if is_full
             else None
         ),

@@ -52,6 +52,7 @@ from tests.test_slice86_enrichment_ledger_cache_visibility import _service
 
 _TIMESTAMP = "2026-06-11T00:00:00Z"
 _LEAK_MARKERS = ("sk-s86-vc-LEAK-1", "/var/secret/s86-vc", "C:\\secret\\s86vc")
+_DEAL_COMPANY_LABEL = "Tailspin Toys Ltd"
 
 _ENRICHMENT_EVIDENCE = {
     "enrichment_ledger": {
@@ -176,6 +177,7 @@ def test_ledger_rows_carry_source_grade() -> None:
             created_claim_ids=[],
             calc_ids=[],
             db_conn=None,
+            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
         )
     grades = {
         row["provider_id"]: row["source_grade"] for row in summary["enrichment_ledger"]["providers"]
@@ -210,6 +212,7 @@ def test_red_provider_grades_c_with_byol_d_without() -> None:
             created_claim_ids=[],
             calc_ids=[],
             db_conn=None,
+            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
         )
     (row,) = summary["enrichment_ledger"]["providers"]
     assert row["status"] == "HIT"
@@ -235,6 +238,7 @@ def test_red_provider_grades_c_with_byol_d_without() -> None:
             created_claim_ids=[],
             calc_ids=[],
             db_conn=None,
+            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
         )
     (row,) = summary["enrichment_ledger"]["providers"]
     assert row["status"] == "BLOCKED_MISSING_BYOL"

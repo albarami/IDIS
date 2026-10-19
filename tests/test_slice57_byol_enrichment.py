@@ -35,6 +35,7 @@ from idis.services.runs.strict_full_live import build_strict_full_live_readiness
 from tests.strict_runtime_test_support import RecordingPostgresAuditSink
 
 TENANT_ID = "tenant-slice57"
+_DEAL_COMPANY_LABEL = "Fabrikam Holdings Ltd"
 SECRET_PROCESS_VALUE = "PROCESS_TOKEN_VALUE_SHOULD_NOT_LEAK"
 SECRET_DOTENV_VALUE = "DOTENV_TOKEN_VALUE_SHOULD_NOT_LEAK"
 
@@ -446,6 +447,7 @@ def test_strict_full_enrichment_fails_closed_on_provider_error(
             run_id="00000000-0000-4000-8000-000000000057",
             tenant_id=TENANT_ID,
             deal_id="safe-public-company",
+            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
             created_claim_ids=[],
             calc_ids=[],
             audit_sink=RecordingPostgresAuditSink(),
@@ -476,7 +478,7 @@ def test_service_provider_exception_details_are_redacted() -> None:
         request=EnrichmentRequest(
             tenant_id=TENANT_ID,
             entity_type="COMPANY",
-            query={"company_name": "safe-public-company"},
+            query={"company_name": _DEAL_COMPANY_LABEL},
         ),
     )
 
@@ -522,6 +524,7 @@ def test_strict_full_enrichment_public_provider_error_uses_generic_wording(
             run_id="00000000-0000-4000-8000-000000000061",
             tenant_id=TENANT_ID,
             deal_id="safe-public-company",
+            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
             created_claim_ids=[],
             calc_ids=[],
             audit_sink=RecordingPostgresAuditSink(),
@@ -571,6 +574,7 @@ def test_strict_full_enrichment_fails_closed_on_blocked_missing_byol(
             run_id="00000000-0000-4000-8000-000000000060",
             tenant_id=TENANT_ID,
             deal_id="safe-public-company",
+            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
             created_claim_ids=[],
             calc_ids=[],
             audit_sink=RecordingPostgresAuditSink(),
@@ -610,6 +614,7 @@ def test_non_strict_full_enrichment_keeps_best_effort_on_provider_error(
         run_id="00000000-0000-4000-8000-000000000058",
         tenant_id=TENANT_ID,
         deal_id="safe-public-company",
+        deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
         created_claim_ids=[],
         calc_ids=[],
     )
@@ -649,6 +654,7 @@ def test_full_enrichment_preserves_provenance_refs(monkeypatch: pytest.MonkeyPat
         run_id="00000000-0000-4000-8000-000000000059",
         tenant_id=TENANT_ID,
         deal_id="safe-public-company",
+        deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
         created_claim_ids=[],
         calc_ids=[],
     )

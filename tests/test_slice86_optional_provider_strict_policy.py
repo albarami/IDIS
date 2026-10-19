@@ -35,6 +35,7 @@ from tests.test_slice86_enrichment_execution_provenance_characterization import 
 )
 
 _LEAK_MARKERS = ("sk-s86-opt-LEAK-1", "/var/secret/s86", "C:\\secret\\s86")
+_DEAL_COMPANY_LABEL = "Lucerne Publishing Ltd"
 
 
 def _registry_with(
@@ -63,6 +64,7 @@ def _run_strict(registry_factory: Any) -> dict[str, Any]:
             calc_ids=[],
             db_conn=None,
             audit_sink=RecordingPostgresAuditSink(),
+            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
         )
 
 

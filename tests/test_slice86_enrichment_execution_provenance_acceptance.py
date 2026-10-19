@@ -51,6 +51,7 @@ from tests.test_slice86_source_grade_vc_visibility import (
 _KEY = "sk-s86-acc-LEAK-0001"
 _PAYLOAD_MARKER = "NORMALIZED-PAYLOAD-LEAK-s86"
 _MARKERS = (_KEY, "/var/secret/s86-acc", "C:\\secret\\s86acc", _PAYLOAD_MARKER)
+_DEAL_COMPANY_LABEL = "Contoso Industrial Ltd"
 
 
 def _run_step(*, strict: bool, registry_factory: Any = None, service: Any = None) -> dict[str, Any]:
@@ -83,6 +84,7 @@ def _run_step(*, strict: bool, registry_factory: Any = None, service: Any = None
             calc_ids=[],
             db_conn=None,
             audit_sink=RecordingPostgresAuditSink(),
+            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
         )
 
 
@@ -142,7 +144,7 @@ def test_acceptance_ledger_covers_all_outcomes_including_cache() -> None:
         request=EnrichmentRequest(
             tenant_id=TENANT_ID,
             entity_type=EntityType.COMPANY,
-            query=EnrichmentQuery(company_name="deal-1"),
+            query=EnrichmentQuery(company_name=_DEAL_COMPANY_LABEL),
             purpose=EnrichmentPurpose.DUE_DILIGENCE,
         ),
     )

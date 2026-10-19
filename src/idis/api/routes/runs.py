@@ -1757,6 +1757,7 @@ def _run_full_enrichment(
     calc_ids: list[str],
     db_conn: Any = None,
     audit_sink: AuditSink | None = None,
+    deal_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run enrichment for all configured providers in a FULL pipeline run.
 
@@ -1771,10 +1772,21 @@ def _run_full_enrichment(
         created_claim_ids: Claim IDs from extraction/grading.
         calc_ids: Calc IDs from calculation step.
         db_conn: Optional database connection for durable BYOL credential repository.
+        deal_metadata: Deal record fields. company_name is the enrichment query
+            identity. A blank or missing label blocks the step before any provider call.
 
     Returns:
         Dict with provider_count, result_count, blocked_count, enrichment_refs.
     """
+    label = str((deal_metadata or {}).get("company_name") or "").strip()
+    if not label:
+        from idis.services.runs.orchestrator import RunStepBlockedError
+
+        raise RunStepBlockedError(
+            "ENRICHMENT_DEAL_LABEL_BLANK",
+            "enrichment requires a nonblank explicit deal company label",
+        )
+
     from idis.persistence.repositories.enrichment_credentials import (
         get_enrichment_credentials_repository,
     )
@@ -1824,7 +1836,7 @@ def _run_full_enrichment(
     request = EnrichmentRequest(
         tenant_id=tenant_id,
         entity_type=EntityType.COMPANY,
-        query=EnrichmentQuery(company_name=deal_id),
+        query=EnrichmentQuery(company_name=label),
         purpose=EnrichmentPurpose.DUE_DILIGENCE,
     )
 

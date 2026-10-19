@@ -61,6 +61,7 @@ from tests.strict_runtime_test_support import RecordingPostgresAuditSink
 
 TENANT_ID = "tenant-slice86"
 _KEY_MARKER = "sk-s86-LEAK-0001"
+_DEAL_COMPANY_LABEL = "Northwind Analytics Ltd"
 
 _ENRICHMENT_DIR = Path("src/idis/services/enrichment")
 
@@ -151,6 +152,7 @@ def test_summary_keeps_legacy_fields_and_gains_ledger() -> None:
             created_claim_ids=[],
             calc_ids=[],
             db_conn=None,
+            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
         )
     assert set(summary) == {
         "provider_count",
@@ -209,6 +211,7 @@ def test_strict_fatality_is_uniform(
             calc_ids=[],
             db_conn=None,
             audit_sink=RecordingPostgresAuditSink(),
+            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
         )
     assert expected_fragment in str(exc_info.value)
 

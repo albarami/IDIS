@@ -60,6 +60,7 @@ _ENV_MARKERS = {
 }
 _ENC_KEY_MARKER = "acc-enc-key-LEAK-/var/secret/byol"
 _ALL_MARKERS = (*_ENV_MARKERS.values(), _ENC_KEY_MARKER)
+_DEAL_COMPANY_LABEL = "Adventure Works Ltd"
 
 
 def _env_without(*keys: str) -> dict[str, str]:
@@ -255,6 +256,7 @@ def test_acceptance_execution_backstop_fails_closed_in_strict_without_leak() -> 
             calc_ids=[],
             db_conn=None,
             audit_sink=RecordingPostgresAuditSink(),
+            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
         )
     surfaced = f"{exc_info.value!s}|{exc_info.value!r}"
     assert "fake_byol" in surfaced  # provider id only
@@ -281,6 +283,7 @@ def test_acceptance_non_strict_summary_is_unchanged_and_leak_free() -> None:
             created_claim_ids=[],
             calc_ids=[],
             db_conn=None,
+            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
         )
     assert summary["provider_count"] == 1
     assert summary["blocked_count"] == 1

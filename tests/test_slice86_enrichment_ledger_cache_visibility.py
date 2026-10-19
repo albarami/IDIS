@@ -44,6 +44,7 @@ from tests.test_slice86_enrichment_execution_provenance_characterization import 
 )
 
 _LEAK_MARKERS = ("sk-s86-ledger-LEAK-1", "/var/secret/s86-ledger", "C:\\secret\\s86l")
+_DEAL_COMPANY_LABEL = "Alpine Ski House Ltd"
 
 _ROW_FIELDS = {
     "provider_id",
@@ -113,6 +114,7 @@ def _run_step(*, strict: bool, registry_factory: Any = None, service: Any = None
                     calc_ids=[],
                     db_conn=None,
                     audit_sink=RecordingPostgresAuditSink(),
+                    deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
                 )
         return _run_full_enrichment(
             run_id="run-1",
@@ -122,6 +124,7 @@ def _run_step(*, strict: bool, registry_factory: Any = None, service: Any = None
             calc_ids=[],
             db_conn=None,
             audit_sink=RecordingPostgresAuditSink(),
+            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
         )
 
 
@@ -203,12 +206,12 @@ def test_ledger_counts_cache_hits_via_warm_service() -> None:
     registry.register(_CachingConnector("warm_provider", EnrichmentStatus.HIT))
     service = _service(registry)
     # Warm the cache out-of-band with the EXACT request shape the step builds (the cache key
-    # includes tenant + query; the step uses deal_id as company_name), then run the step
+    # includes tenant + query; the step queries the deal company label), then run the step
     # against the SAME service instance.
     step_request = EnrichmentRequest(
         tenant_id=TENANT_ID,
         entity_type=EntityType.COMPANY,
-        query=EnrichmentQuery(company_name="deal-1"),
+        query=EnrichmentQuery(company_name=_DEAL_COMPANY_LABEL),
         purpose=EnrichmentPurpose.DUE_DILIGENCE,
     )
     warmed = service.enrich(provider_id="warm_provider", request=step_request)

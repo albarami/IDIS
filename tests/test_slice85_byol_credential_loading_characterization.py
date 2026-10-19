@@ -78,6 +78,7 @@ from idis.services.runs.strict_full_live import (
 from tests.strict_runtime_test_support import RecordingPostgresAuditSink
 
 TENANT_ID = "tenant-slice85"
+_DEAL_COMPANY_LABEL = "Wide World Importers Ltd"
 
 # Planted markers (never real credentials) — must never surface in any report/exception.
 _ENV_MARKERS = {
@@ -295,6 +296,7 @@ def test_run_full_enrichment_strict_raises_on_missing_byol_without_leak() -> Non
             calc_ids=[],
             db_conn=None,
             audit_sink=RecordingPostgresAuditSink(),
+            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
         )
     # Note: with env markers present, the strict execution path bootstraps them into the
     # (in-memory) repo, so the block is the rights/credential outcome for the fake provider;
@@ -323,6 +325,7 @@ def test_run_full_enrichment_non_strict_counts_blocked_without_raise() -> None:
             created_claim_ids=[],
             calc_ids=[],
             db_conn=None,
+            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
         )
     assert summary["provider_count"] == 1
     assert summary["blocked_count"] == 1  # BLOCKED_MISSING_BYOL swallowed, not raised

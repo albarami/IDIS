@@ -28,6 +28,7 @@ from idis.services.ingestion.no_substantive_content_attestation import (
 )
 from idis.services.ingestion.password_manifest import DocumentPasswordManifest
 from idis.storage.filesystem_store import FilesystemObjectStore
+from tests._linux_poppler_gate import requires_linux_governed_poppler
 from tests.slice100_task4 import test_watermark_batch_attestation_red as batch_contract
 from tests.slice100_task4.test_ingestion_readiness import _ingestion_env
 
@@ -74,6 +75,7 @@ def _write_secure_fixture(
     return env, manifest, public_pem
 
 
+@requires_linux_governed_poppler
 def test_loader_accepts_canonical_sorted_manifest_member_order(tmp_path: Path) -> None:
     """Canonical governance JSON sorts members; object order is non-semantic."""
 
@@ -127,6 +129,7 @@ def _expected_safe_summary(
     }
 
 
+@requires_linux_governed_poppler
 def test_secure_v2_loader_and_real_collector_admit_exact_hash_bound_summary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -203,6 +206,7 @@ def test_secure_v2_loader_and_real_collector_admit_exact_hash_bound_summary(
     assert (readiness.may_proceed, readiness.code) == (True, None)
 
 
+@requires_linux_governed_poppler
 def test_secure_v2_loader_rejects_invalid_batch_signature(tmp_path: Path) -> None:
     def corrupt_signature(manifest: dict[str, object]) -> None:
         batch = manifest["watermark_batch_attestation_envelope"]
@@ -223,6 +227,7 @@ def test_secure_v2_loader_rejects_invalid_batch_signature(tmp_path: Path) -> Non
     assert caught.value.code == "GOVERNANCE_SIGNATURE_INVALID"
 
 
+@requires_linux_governed_poppler
 def test_secure_v2_loader_rejects_expired_batch(tmp_path: Path) -> None:
     env, _manifest, _public_pem = _write_secure_fixture(tmp_path)
 
@@ -235,6 +240,7 @@ def test_secure_v2_loader_rejects_expired_batch(tmp_path: Path) -> None:
     assert caught.value.code == "WATERMARK_BATCH_ATTESTATION_NOT_ACTIVE"
 
 
+@requires_linux_governed_poppler
 def test_secure_v2_loader_does_not_mutate_the_caller_manifest(tmp_path: Path) -> None:
     env, manifest, _public_pem = _write_secure_fixture(tmp_path)
     original = copy.deepcopy(manifest)

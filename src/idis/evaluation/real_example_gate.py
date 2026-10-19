@@ -734,6 +734,18 @@ def _require_task4_gate_profile(profile: object) -> str:
 
 def _require_task4_local_runtime_readiness(*, env: Mapping[str, str]) -> str:
     """Run presence checks plus real pinned-fixture STT and frame-OCR probes."""
+    from idis.parsers.poppler_linux_runtime import PinnedLinuxPopplerRuntime
+    from idis.parsers.poppler_runtime import (
+        PopplerRuntimeBindingError,
+        resolve_pinned_poppler_runtime,
+    )
+
+    try:
+        governed_poppler = resolve_pinned_poppler_runtime()
+    except PopplerRuntimeBindingError:
+        governed_poppler = None
+    if type(governed_poppler) is PinnedLinuxPopplerRuntime:
+        raise DurableIngestionGateError("POPPLER_RUNTIME_NONCANONICAL")
     ocr = check_ocr_health(env=env)
     media = check_media_health(env=env)
     inference = check_media_inference_health(env=env)

@@ -45,6 +45,7 @@ CONTAINER_STEP_NAMES = (
     "Bootstrap the sealed database to the packaged Alembic head",
     "Qualify startup env and start the API",
     HEALTH_STEP_NAME,
+    "Run the loader negative in the step-21 image",
     "Record launch audit, topology, and maintenance absence",
     "Record admission codes when the API is blocked",
     "Cleanup",
@@ -62,16 +63,28 @@ _PRESERVED_STEP_NAMES = (
     "Upload release manifest artifact",
     SUMMARY_STEP_NAME,
 )
-# Job digests from _canonical_digest (sort_keys JSON). Values are unchanged.
+# Job digests from _canonical_digest (sort_keys JSON).
 # check: reviewed checkpoint 16 (4563316f); unchanged at checkpoint 17.
+# postgres-integration: H3-4c host-uid drop, receipt labels, read-only mounts, no Poppler on PATH.
+# H3-4d: the c3 dropped script runs the dependency verifier after pip check.
 # Every other job in this table: reviewed checkpoint 07
 # (f99595ef053883807f58b703252de25a24e91edb).
+# postgres-integration was recomputed after the R5-04 pg-tests edit (R5-04b).
 _F99595EF_JOB_DIGESTS = {
     "backup-restore-drill": "152593732bb006b84ac1c26fe3a178d27f5d200ca69a2a2c7c48f720d87d70d3",
     "check": "6dc86cde933106f39b7eda71332029a7ca4bc94c08fec9a0f65e57cecc0e20f1",
     "evaluation-harness": "ea835316a4d6d092d26f4739f66c75f852f396003cf8ce59f8ddb02d0a54eb35",
     "k8s-validate": "5054b069fee639461e357604d3ff5f7003386045b23703dccbaff80f8485ca19",
-    "postgres-integration": "832f49f0129dfe12205ec76eecb4b79746016a77b9cab0bcd2982698f9b3583a",
+    # CIR-04 checkpoint 23 assembly re-pin: the H3 set and R5-04/R5-04b on the combined job.
+    # Previous digests: 16c82ea3c93ff8df074a669f6e643ae2808099d22b05a4588683376f34ee0e7e (H3-6g)
+    # and 305efd64e5ee57bce2ce6f406137d427db2062047fe5e068eebbc75affc23346 (R5-04b).
+    # CIR-04H3-6g re-pin. Previous digest:
+    # fa0de3934ff268fc561c2d1e316b6fc3b782f1f4920d8a02eeed7f9748a4cc54
+    # CIR-04H3-6b re-pin. Previous digest:
+    # b37e61ca1faba82cbeebd9f096010433e6c63f164c8df0c7ed471e990b02b986
+    # CIR-04H3-6 re-pin. Previous digest:
+    # 3d98ec97b87694ad67c9c7a4f593d464122b1747b48309819842c5b386ce0fa3
+    "postgres-integration": "63b724e74963fa54db7452c1e8567a965a248fb5b6e945009834a5b635890c60",
     "release-gate": "95f9816c495581f5b642ec6932d84ba16d75704d5ca1435f77b4406e87f6c8ab",
     "terraform-validate": "1938b5718ff7e1eff243b5a982c453a7745372ebd4145d55d639dd0af74d47a4",
     "ui-check": "cc279df20f4a53d6426db11701765cb386b2d1e36aae57dcbb23829df89ea03b",
@@ -120,6 +133,7 @@ _STEP_IF = {
     "pg-bootstrap": "success()",
     "start-api": "success()",
     "container_health": "success()",
+    "loader-negative": "always() && steps.container_health.outcome != 'skipped'",
     "launch-proof": "always() && steps.start-api.outcome != 'skipped'",
     "admission-codes": "always() && steps.start-api.outcome != 'skipped'",
     "cleanup": "always()",
@@ -386,6 +400,38 @@ def test_new_steps_pin_fail_closed_if_and_have_no_continue_on_error() -> None:
     assert set(_by_id("cleanup")) == {"name", "id", "if", "run"}
     assert set(_by_id("pg-bootstrap")) == {"name", "id", "if", "env", "run"}
     assert set(_by_id("launch-proof")) == {"name", "id", "if", "env", "run"}
+
+
+def test_loader_negative_follows_the_step_21_health_probe() -> None:
+    """One disposable pytest of the loader negative in the image step 21 probes."""
+
+    steps = _container_steps()
+    names = [step["name"] for step in steps]
+    health_at = names.index(HEALTH_STEP_NAME)
+    assert names[health_at + 1] == "Run the loader negative in the step-21 image"
+    step = steps[health_at + 1]
+    assert step["id"] == "loader-negative"
+    assert step["if"] == _STEP_IF["loader-negative"]
+    assert "continue-on-error" not in step
+    run = str(step["run"])
+    assert "|| true" not in run
+    assert "docker commit" not in run
+    assert "docker build" not in run
+    assert "docker run --rm" in run
+    assert "idis:ci-${GITHUB_SHA}" in run
+    assert "${GITHUB_WORKSPACE}/tests:${GITHUB_WORKSPACE}/tests:ro" in run
+    assert "--target" in run
+    assert "requirements/constraints-py311.txt" in run
+    assert "IDIS_REQUIRE_LOADER_NEGATIVE=1" in run
+    assert "-p no:cacheprovider" in run
+    assert "--junitxml=" in run
+    assert "loader_negative_pytest.xml" in run
+    assert "tests/slice100_task4/test_linux_poppler_loader_negative.py" in run
+    assert "tests != 1" in run
+    assert "failures != 0" in run
+    assert "errors != 0" in run
+    assert "skipped != 0" in run
+    assert "poppler-utils" not in run
 
 
 def test_composition_literals_keep_secrets_off_the_command_line() -> None:
@@ -854,7 +900,7 @@ def test_admission_codes_snippet_filters_unlisted_codes_and_hides_dsn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     steps = _container_steps()
-    assert len(steps) == len(CONTAINER_STEP_NAMES) == 27
+    assert len(steps) == len(CONTAINER_STEP_NAMES) == 28
     assert tuple(step["name"] for step in steps) == CONTAINER_STEP_NAMES
     step = _by_id("admission-codes")
     assert step["name"] == _ADMISSION_STEP_NAME

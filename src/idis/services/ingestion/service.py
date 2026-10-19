@@ -2601,7 +2601,29 @@ class IngestionService:
             binding = resolve_pinned_poppler_runtime()
         except PopplerRuntimeBindingError:
             return None
-        if binding.runtime_identity_sha256 != _PINNED_POPPLER_RUNTIME_IDENTITY_SHA256:
+        from idis.parsers.poppler_linux_runtime import (
+            LINUX_PREFIX_IDENTITY_SCHEMA_VERSION,
+            PinnedLinuxPopplerRuntime,
+            pinned_linux_poppler_identity_sha256,
+        )
+        from idis.parsers.poppler_runtime import (
+            POPPLER_RUNTIME_IDENTITY_SCHEMA_VERSION,
+            PinnedPopplerRuntime,
+        )
+
+        if type(binding) is PinnedPopplerRuntime:
+            if binding.runtime_identity_sha256 != _PINNED_POPPLER_RUNTIME_IDENTITY_SHA256:
+                return None
+            poppler_label = POPPLER_RUNTIME_IDENTITY_SCHEMA_VERSION
+        elif type(binding) is PinnedLinuxPopplerRuntime:
+            recomputed = pinned_linux_poppler_identity_sha256(binding)
+            if (
+                binding.runtime_identity_sha256 != recomputed
+                or binding.runtime_identity_sha256 == _PINNED_POPPLER_RUNTIME_IDENTITY_SHA256
+            ):
+                return None
+            poppler_label = LINUX_PREFIX_IDENTITY_SCHEMA_VERSION
+        else:
             return None
         digest = hashlib.sha256(
             canonicalize_json(
@@ -2616,7 +2638,7 @@ class IngestionService:
                         ]
                     ),
                     [
-                        "poppler-runtime-identity-v1",
+                        poppler_label,
                         binding.version,
                         binding.runtime_identity_sha256,
                     ],

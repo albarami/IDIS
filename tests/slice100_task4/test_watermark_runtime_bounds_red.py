@@ -22,6 +22,7 @@ from idis.parsers.watermark_page_classifier import (
     WatermarkPageRuntimeConfig,
     default_watermark_page_policy,
 )
+from tests._linux_poppler_gate import requires_linux_governed_poppler
 from tests.slice100_task4.test_watermark_composition_root_red import (
     _fixture_page,
     _fixture_pdf,
@@ -54,6 +55,7 @@ class _Clock:
         return self.now
 
 
+@requires_linux_governed_poppler
 def test_classification_does_not_start_after_render_exhausts_original_ocr_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -105,6 +107,7 @@ def _oversized_mediabox_pdf(*, width_points: float, height_points: float) -> byt
     return output.getvalue()
 
 
+@requires_linux_governed_poppler
 def test_oversized_page_is_rejected_before_parent_process_rasterization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

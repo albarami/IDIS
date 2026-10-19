@@ -238,6 +238,38 @@ def _build_default_runtime_probe(
     return _probe
 
 
+def _probe_admitted_linux_poppler() -> None:
+    """Run the admitted prefix binaries under the child environment, never PATH."""
+
+    import subprocess
+
+    from idis.parsers.poppler_linux_runtime import (
+        PinnedLinuxPopplerRuntime,
+        install_poppler_child_environment,
+    )
+
+    binding = resolve_pinned_poppler_runtime()
+    if type(binding) is not PinnedLinuxPopplerRuntime:
+        raise PopplerRuntimeBindingError("POPPLER_RUNTIME_IDENTITY_INVALID")
+    environment = install_poppler_child_environment(binding, apply_to_process=False)
+    if environment is None:
+        raise PopplerRuntimeBindingError("POPPLER_RUNTIME_IDENTITY_INVALID")
+    for executable in (binding.pdfinfo_path, binding.pdftoppm_path):
+        try:
+            completed = subprocess.run(
+                [str(executable), "-v"],
+                capture_output=True,
+                timeout=_RUNTIME_PROBE_TIMEOUT_SECONDS,
+                check=False,
+                env=environment,
+                cwd=environment["HOME"],
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise OcrHealthProbeError(type(exc).__name__) from None
+        if completed.returncode != 0:
+            raise OcrHealthProbeError("nonzero_exit")
+
+
 def check_ocr_health(
     *,
     env: Mapping[str, str] | None = None,
@@ -256,7 +288,7 @@ def check_ocr_health(
         module_probe: Injectable Python-module importability probe.
         language_probe: Injectable tessdata/language availability probe.
         runtime_probe: Optional injectable runtime probe; raises on timeout/failure.
-            Defaults to bounded ``tesseract --version`` / ``pdfinfo -v`` checks.
+            Defaults to a bounded ``tesseract --version`` check.
         command_runner: Injectable command executor used by the default runtime
             probe (defaults to a bounded, output-suppressing subprocess runner).
         poppler_runtime_probe: Injectable exact Poppler identity admission. The
@@ -286,10 +318,11 @@ def check_ocr_health(
     missing: list[str] = []
     if resolve(TESSERACT_BINARY) is None:
         missing.append("tesseract")
-    if resolve(POPPLER_PDFINFO_BINARY) is None:
-        missing.append("poppler")
-    if resolve(POPPLER_PDFTOPPM_BINARY) is None:
-        missing.append("poppler")
+    if platform.system() != "Linux":
+        if resolve(POPPLER_PDFINFO_BINARY) is None:
+            missing.append("poppler")
+        if resolve(POPPLER_PDFTOPPM_BINARY) is None:
+            missing.append("poppler")
     for module_name, safe_name in _REQUIRED_MODULES:
         if not has_module(module_name):
             missing.append(safe_name)
@@ -302,6 +335,8 @@ def check_ocr_health(
     try:
         if poppler_runtime_probe is not None:
             poppler_runtime_probe()
+        elif platform.system() == "Linux":
+            _probe_admitted_linux_poppler()
         else:
             resolve_pinned_poppler_runtime(binary_resolver=resolve)
     except PopplerRuntimeBindingError as exc:

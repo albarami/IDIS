@@ -47,6 +47,7 @@ from tests._cir04c3_required_frozen_preview import (
     CapturingRequiredPostgresAuditSink,
     required_frozen_preview,
 )
+from tests._linux_poppler_gate import requires_linux_governed_poppler
 from tests.abac_seed import seed_deal_access
 
 TENANT_A = "11111111-1111-1111-1111-111111111111"
@@ -1306,6 +1307,7 @@ class TestStartRunPreflightCorpusBehavior:
         assert body["code"] == "NO_INGESTED_DOCUMENTS"
         assert "run_id" not in body
 
+    @requires_linux_governed_poppler
     def test_api_corpus_exists_but_no_usable_docs_fails_document_preflight(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -1435,6 +1437,7 @@ class TestStartRunPreflightCorpusBehavior:
                 set_tenant_local(conn, tenant_id)
                 assert conn.execute(text("SELECT count(*) FROM runs")).scalar_one() == 0
 
+    @requires_linux_governed_poppler
     def test_api_mixed_corpus_continues_with_eligible_docs_only(
         self,
         monkeypatch: pytest.MonkeyPatch,

@@ -34,6 +34,8 @@ import pytest
 from pdf2image import convert_from_bytes  # type: ignore[import-untyped]
 from PIL import Image, ImageDraw
 
+from idis.parsers.poppler_runtime import resolve_pinned_poppler_runtime
+from tests._linux_poppler_gate import requires_linux_governed_poppler
 from tests.slice100_task4.test_watermark_classifier_domains_red import _pdf_from_page
 from tests.slice100_task4.test_watermark_composition_root_red import _verified_runtime_config
 
@@ -227,6 +229,7 @@ def _classify(
     policy = module.default_watermark_page_policy()
     exemplar_pdf = _pdf_from_page(exemplar)
     runtime = _verified_runtime_config(exemplar_pdf)
+    binding = resolve_pinned_poppler_runtime()
     rendered = convert_from_bytes(
         exemplar_pdf,
         dpi=policy.render_dpi,
@@ -234,6 +237,7 @@ def _classify(
         last_page=1,
         fmt="png",
         thread_count=1,
+        poppler_path=str(binding.binary_dir),
     )
     assert len(rendered) == 1
     with rendered[0] as rendered_exemplar:
@@ -301,6 +305,7 @@ def test_similarity_threshold_uses_exact_integer_dice_comparison() -> None:
     )
 
 
+@requires_linux_governed_poppler
 def test_signed_exemplar_classifies_itself_with_exact_similarity() -> None:
     module = _api()
     with _synthetic_stamp() as exemplar:
@@ -314,6 +319,7 @@ def test_signed_exemplar_classifies_itself_with_exact_similarity() -> None:
     assert payload["similarity_numerator"] == payload["similarity_denominator"]
 
 
+@requires_linux_governed_poppler
 def test_structurally_similar_fictional_stamp_clears_strict_threshold() -> None:
     module = _api()
     with _synthetic_stamp() as exemplar, _synthetic_stamp(horizontal_shift=8) as page:
@@ -332,6 +338,7 @@ def test_structurally_similar_fictional_stamp_clears_strict_threshold() -> None:
         pytest.param(14_999, "0.985001", "0.014999", id="both-lower-limits-missed"),
     ],
 )
+@requires_linux_governed_poppler
 def test_faint_signature_fails_immediately_outside_exact_bounds(
     foreground_pixels: int,
     near_white: str,
@@ -357,6 +364,7 @@ def test_faint_signature_fails_immediately_outside_exact_bounds(
         pytest.param(15_000, id="near-white-0.985000-ink-0.015000"),
     ],
 )
+@requires_linux_governed_poppler
 def test_faint_signature_bounds_are_inclusive(foreground_pixels: int) -> None:
     module = _api()
     with _page_with_foreground_count(foreground_pixels) as page:
@@ -377,6 +385,7 @@ def test_faint_signature_bounds_are_inclusive(foreground_pixels: int) -> None:
         pytest.param({"native_text_character_count": False}, id="boolean-native-count"),
     ],
 )
+@requires_linux_governed_poppler
 def test_any_content_or_incomplete_rescue_bypasses_classifier(
     overrides: dict[str, object],
 ) -> None:
@@ -395,6 +404,7 @@ def test_any_content_or_incomplete_rescue_bypasses_classifier(
         )
 
 
+@requires_linux_governed_poppler
 def test_unrelated_faint_structure_remains_hard_blocked() -> None:
     module = _api()
     with _synthetic_stamp() as exemplar, _synthetic_stamp(vertical=True) as unrelated:
@@ -405,6 +415,7 @@ def test_unrelated_faint_structure_remains_hard_blocked() -> None:
         )
 
 
+@requires_linux_governed_poppler
 def test_signed_exemplar_policy_binding_drift_fails_closed() -> None:
     module = _api()
     policy = module.default_watermark_page_policy()
@@ -427,6 +438,7 @@ def test_signed_exemplar_policy_binding_drift_fails_closed() -> None:
         )
 
 
+@requires_linux_governed_poppler
 def test_signed_exemplar_canonical_bitmap_drift_fails_closed() -> None:
     module = _api()
     policy = module.default_watermark_page_policy()
@@ -453,6 +465,7 @@ def test_signed_exemplar_canonical_bitmap_drift_fails_closed() -> None:
     "render_dpi",
     [pytest.param(199, id="wrong-value"), pytest.param(200.0, id="float-equal-value")],
 )
+@requires_linux_governed_poppler
 def test_render_dpi_requires_the_exact_pinned_integer_type(render_dpi: object) -> None:
     module = _api()
     with _synthetic_stamp() as exemplar:
@@ -468,6 +481,7 @@ def test_render_dpi_requires_the_exact_pinned_integer_type(render_dpi: object) -
         )
 
 
+@requires_linux_governed_poppler
 def test_boolean_page_number_cannot_masquerade_as_page_one() -> None:
     module = _api()
     with _synthetic_stamp() as exemplar:
@@ -483,6 +497,7 @@ def test_boolean_page_number_cannot_masquerade_as_page_one() -> None:
         )
 
 
+@requires_linux_governed_poppler
 def test_classification_is_byte_deterministic_and_does_not_mutate_inputs() -> None:
     module = _api()
     with _synthetic_stamp() as exemplar, _synthetic_stamp(horizontal_shift=8) as page:
@@ -502,6 +517,7 @@ def test_classification_is_byte_deterministic_and_does_not_mutate_inputs() -> No
     assert len(set(payloads)) == 1
 
 
+@requires_linux_governed_poppler
 def test_provenance_is_complete_but_never_creates_evidence_text_or_spans() -> None:
     module = _api()
     policy = module.default_watermark_page_policy()

@@ -6,21 +6,25 @@ import hashlib
 
 from pdf2image import convert_from_bytes
 
+from idis.parsers.poppler_runtime import resolve_pinned_poppler_runtime
 from idis.parsers.watermark_page_classifier import (
     WatermarkPageEligibility,
     classify_runtime_watermark_page,
     default_watermark_page_policy,
 )
+from tests._linux_poppler_gate import requires_linux_governed_poppler
 from tests.slice100_task4.test_watermark_composition_root_red import (
     _fixture_pdf,
     _verified_runtime_config,
 )
 
 
+@requires_linux_governed_poppler
 def test_durable_labels_match_spatial_foreground_dice_pipeline() -> None:
     policy = default_watermark_page_policy()
     pdf_bytes = _fixture_pdf()
     runtime = _verified_runtime_config(pdf_bytes)
+    binding = resolve_pinned_poppler_runtime()
     pages = convert_from_bytes(
         pdf_bytes,
         dpi=policy.render_dpi,
@@ -28,6 +32,7 @@ def test_durable_labels_match_spatial_foreground_dice_pipeline() -> None:
         last_page=1,
         fmt="png",
         thread_count=1,
+        poppler_path=str(binding.binary_dir),
     )
     assert len(pages) == 1
     with pages[0] as rendered_page:

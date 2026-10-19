@@ -38,6 +38,7 @@ from idis.services.ingestion.service import (
 )
 from idis.storage.compliant_store import ComplianceEnforcedStore
 from idis.storage.filesystem_store import FilesystemObjectStore
+from tests._linux_poppler_gate import requires_linux_governed_poppler
 from tests.slice100_task4.test_watermark_composition_root_red import (
     SIGNER_ID as WATERMARK_SIGNER_ID,
 )
@@ -310,6 +311,7 @@ def _assert_image_only_receipt_v2(
     assert {key: value for key, value in metadata_render.items() if key != "page"} == render
 
 
+@requires_linux_governed_poppler
 def test_default_ingestion_composition_executes_real_faint_content_rescue(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -339,6 +341,7 @@ def test_default_ingestion_composition_executes_real_faint_content_rescue(
     assert document.metadata["ocr_rescue_span_count"] == len(rescue_spans)
 
 
+@requires_linux_governed_poppler
 def test_default_ingestion_composition_retains_mixed_document_spans_beside_reviewed_page(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -376,6 +379,7 @@ def test_default_ingestion_composition_retains_mixed_document_spans_beside_revie
     assert evaluation["substantive_span_count"] == len(spans)
 
 
+@requires_linux_governed_poppler
 def test_default_ingestion_composition_fails_all_reviewed_image_only_document(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

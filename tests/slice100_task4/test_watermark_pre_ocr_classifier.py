@@ -9,6 +9,8 @@ import pytest
 from pdf2image import convert_from_bytes
 
 from idis.parsers import watermark_page_classifier as classifier
+from idis.parsers.poppler_runtime import resolve_pinned_poppler_runtime
+from tests._linux_poppler_gate import requires_linux_governed_poppler
 from tests.slice100_task4.test_watermark_composition_root_red import (
     _fixture_pdf,
     _verified_runtime_config,
@@ -28,6 +30,7 @@ def _canonical_sha256(value: object) -> str:
 
 
 def _bounded_real_candidate(pdf_bytes: bytes):
+    binding = resolve_pinned_poppler_runtime()
     pages = convert_from_bytes(
         pdf_bytes,
         first_page=1,
@@ -36,6 +39,7 @@ def _bounded_real_candidate(pdf_bytes: bytes):
         grayscale=True,
         size=(512, 512),
         thread_count=1,
+        poppler_path=str(binding.binary_dir),
     )
     assert len(pages) == 1
     return pages[0]
@@ -91,6 +95,7 @@ def test_runtime_candidate_render_policy_is_separate_exact_and_hash_bound() -> N
     assert policy.policy_sha256 != classifier.default_watermark_page_policy().policy_sha256
 
 
+@requires_linux_governed_poppler
 def test_real_512x512_candidate_emits_typed_pre_ocr_v2_without_terminal_claims() -> None:
     pdf_bytes = _fixture_pdf()
     runtime = _verified_runtime_config(pdf_bytes)
@@ -152,6 +157,7 @@ def test_real_512x512_candidate_emits_typed_pre_ocr_v2_without_terminal_claims()
     "native_text_character_count",
     [pytest.param(1, id="native-text-present"), pytest.param(False, id="boolean-zero")],
 )
+@requires_linux_governed_poppler
 def test_pre_ocr_classifier_requires_an_exact_integer_zero_native_text_count(
     native_text_character_count: int,
 ) -> None:
@@ -172,6 +178,7 @@ def test_pre_ocr_classifier_requires_an_exact_integer_zero_native_text_count(
     assert caught.value.code == "WATERMARK_PAGE_NOT_ELIGIBLE"
 
 
+@requires_linux_governed_poppler
 def test_pre_ocr_classifier_rejects_non_grayscale_or_wrong_sized_candidates() -> None:
     pdf_bytes = _fixture_pdf()
     runtime = _verified_runtime_config(pdf_bytes)

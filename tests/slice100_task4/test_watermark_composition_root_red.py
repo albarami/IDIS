@@ -31,6 +31,7 @@ from reportlab.pdfgen import canvas  # type: ignore[import-untyped]
 from idis.audit.sink import InMemoryAuditSink
 from idis.parsers import ocr
 from idis.parsers import watermark_page_classifier as watermark_classifier
+from idis.parsers.poppler_runtime import resolve_pinned_poppler_runtime
 from idis.runtime.governance_envelopes import canonicalize_json
 from idis.runtime.secure_files import protect_path_for_current_user
 from idis.services.ingestion import defaults
@@ -39,6 +40,7 @@ from idis.services.ingestion.no_substantive_content_attestation import (
     verify_document_no_substantive_content_attestation_manifest,
 )
 from idis.services.ingestion.service import IngestionContext
+from tests._linux_poppler_gate import requires_linux_governed_poppler
 
 TENANT_ID = UUID("30000000-0000-4000-8000-000000000001")
 DEAL_ID = UUID("40000000-0000-4000-8000-000000000001")
@@ -126,6 +128,7 @@ def _signed_manifest(pdf_bytes: bytes) -> tuple[dict[str, object], bytes]:
         serialization.Encoding.PEM,
         serialization.PublicFormat.SubjectPublicKeyInfo,
     )
+    binding = resolve_pinned_poppler_runtime()
     rendered_pages = convert_from_bytes(
         pdf_bytes,
         dpi=200,
@@ -133,6 +136,7 @@ def _signed_manifest(pdf_bytes: bytes) -> tuple[dict[str, object], bytes]:
         last_page=1,
         fmt="png",
         thread_count=1,
+        poppler_path=str(binding.binary_dir),
     )
     assert len(rendered_pages) == 1
     with rendered_pages[0] as rendered_page:
@@ -309,6 +313,7 @@ def _deterministic_adapter_factory(**_kwargs: Any) -> _DeterministicNoConsensusO
     return _DeterministicNoConsensusOcrAdapter()
 
 
+@requires_linux_governed_poppler
 def test_signed_v2_manifest_composition_persists_watermark_terminal_receipt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

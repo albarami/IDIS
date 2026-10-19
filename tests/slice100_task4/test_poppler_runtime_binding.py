@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import pickle
 from pathlib import Path
 from typing import Any
@@ -275,3 +276,280 @@ def test_strict_builder_resolves_once_and_non_strict_does_not(
     assert calls == []
     non_strict_config = non_strict_result["ocr_config"]
     assert non_strict_config.adapter.kwargs["poppler_runtime"] is None
+
+
+def _linux_prefix(tmp_path: Path, **kwargs: object) -> Path:
+    from tests.slice100_task4.test_linux_poppler_identity_admission import write_linux_prefix
+
+    return write_linux_prefix(tmp_path, **kwargs)  # type: ignore[arg-type]
+
+
+def _resolve_linux_prefix(prefix: Path, **kwargs: object) -> Any:
+    from idis.parsers.poppler_runtime import resolve_pinned_poppler_runtime
+
+    probe = kwargs.pop("version_probe", lambda _path: PINNED_POPPLER_VERSION)
+    return resolve_pinned_poppler_runtime(
+        platform_name="Linux",
+        linux_prefix=prefix,
+        version_probe=probe,  # type: ignore[arg-type]
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
+def test_linux_prefix_with_consistent_manifest_is_admitted(tmp_path: Path) -> None:
+    from idis.parsers.poppler_linux_runtime import PinnedLinuxPopplerRuntime
+
+    binding = _resolve_linux_prefix(_linux_prefix(tmp_path))
+    assert type(binding) is PinnedLinuxPopplerRuntime
+    assert binding.version == "25.12.0"
+    assert binding.binary_dir == binding.pdftoppm_path.parent
+    assert binding.poppler_library_path.name == "libpoppler.so.155.0.0"
+    assert not hasattr(binding, "poppler_dll_sha256")
+    assert set(binding.safe_provenance()) == {
+        "poppler_version",
+        "poppler_linux_pdftoppm_sha256",
+        "poppler_linux_pdfinfo_sha256",
+        "poppler_libpoppler_sha256",
+        "poppler_linux_source_sha256",
+        "poppler_linux_builder_recipe_sha256",
+        "poppler_linux_identity_sha256",
+    }
+    assert str(tmp_path) not in repr(binding)
+
+
+def test_linux_flipped_library_byte_is_identity_invalid(tmp_path: Path) -> None:
+    from idis.parsers.poppler_runtime import PopplerRuntimeBindingError
+
+    prefix = _linux_prefix(tmp_path)
+    library = prefix / "lib" / "libpoppler.so.155.0.0"
+    blob = bytearray(library.read_bytes())
+    blob[-1] ^= 0x01
+    library.write_bytes(blob)
+    with pytest.raises(PopplerRuntimeBindingError) as error:
+        _resolve_linux_prefix(prefix)
+    assert error.value.code == "POPPLER_RUNTIME_IDENTITY_INVALID"
+
+
+def test_linux_runpath_or_wrong_rpath_is_identity_invalid(tmp_path: Path) -> None:
+    from idis.parsers.poppler_runtime import PopplerRuntimeBindingError
+
+    runpath_prefix = _linux_prefix(tmp_path / "runpath", runpath="/tmp/planted")
+    with pytest.raises(PopplerRuntimeBindingError) as runpath_error:
+        _resolve_linux_prefix(runpath_prefix)
+    assert runpath_error.value.code == "POPPLER_RUNTIME_IDENTITY_INVALID"
+
+    wrong = _linux_prefix(tmp_path / "wrong", rpath="/tmp/not-the-prefix/lib")
+    with pytest.raises(PopplerRuntimeBindingError) as wrong_error:
+        _resolve_linux_prefix(wrong)
+    assert wrong_error.value.code == "POPPLER_RUNTIME_IDENTITY_INVALID"
+
+    origin = _linux_prefix(tmp_path / "origin", origin=True)
+    with pytest.raises(PopplerRuntimeBindingError) as origin_error:
+        _resolve_linux_prefix(origin)
+    assert origin_error.value.code == "POPPLER_RUNTIME_IDENTITY_INVALID"
+
+
+def test_linux_missing_library_is_unavailable(tmp_path: Path) -> None:
+    from idis.parsers.poppler_runtime import PopplerRuntimeBindingError
+
+    prefix = _linux_prefix(tmp_path)
+    (prefix / "lib" / "libpoppler.so.155.0.0").unlink()
+    with pytest.raises(PopplerRuntimeBindingError) as error:
+        _resolve_linux_prefix(prefix)
+    assert error.value.code == "POPPLER_RUNTIME_UNAVAILABLE"
+
+
+def test_linux_manifest_source_or_recipe_mismatch_is_identity_invalid(tmp_path: Path) -> None:
+    from idis.parsers.poppler_runtime import PopplerRuntimeBindingError
+
+    source = _linux_prefix(tmp_path / "source", source_sha256="ab" * 32)
+    with pytest.raises(PopplerRuntimeBindingError) as source_error:
+        _resolve_linux_prefix(source)
+    assert source_error.value.code == "POPPLER_RUNTIME_IDENTITY_INVALID"
+
+    recipe = _linux_prefix(tmp_path / "recipe", recipe_sha256="cd" * 32)
+    with pytest.raises(PopplerRuntimeBindingError) as recipe_error:
+        _resolve_linux_prefix(recipe)
+    assert recipe_error.value.code == "POPPLER_RUNTIME_IDENTITY_INVALID"
+
+
+def test_linux_path_resolver_outside_prefix_is_layout_unlisted(tmp_path: Path) -> None:
+    from idis.parsers.poppler_runtime import PopplerRuntimeBindingError
+
+    prefix = _linux_prefix(tmp_path)
+    with pytest.raises(PopplerRuntimeBindingError) as error:
+        _resolve_linux_prefix(
+            prefix,
+            binary_resolver=lambda _name: "/usr/bin/pdftoppm",
+        )
+    assert error.value.code == "POPPLER_RUNTIME_LAYOUT_UNLISTED"
+
+
+def test_darwin_platform_is_unsupported(tmp_path: Path) -> None:
+    from idis.parsers.poppler_runtime import (
+        PopplerRuntimeBindingError,
+        resolve_pinned_poppler_runtime,
+    )
+
+    observed: list[str] = []
+
+    def resolve(name: str) -> str | None:
+        observed.append(name)
+        return str(tmp_path / name)
+
+    with pytest.raises(PopplerRuntimeBindingError) as error:
+        resolve_pinned_poppler_runtime(
+            platform_name="Darwin",
+            binary_resolver=resolve,
+            version_probe=lambda _path: PINNED_POPPLER_VERSION,
+        )
+    assert error.value.code == "POPPLER_RUNTIME_PLATFORM_UNSUPPORTED"
+    assert observed == []
+
+
+def test_linux_resolve_does_not_call_which(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def forbidden(name: str) -> str | None:
+        raise AssertionError(name)
+
+    monkeypatch.setattr("shutil.which", forbidden)
+    binding = _resolve_linux_prefix(_linux_prefix(tmp_path))
+    assert binding.version == "25.12.0"
+
+
+def test_governed_verify_is_exact_type(tmp_path: Path) -> None:
+    from idis.parsers.poppler_runtime import (
+        PopplerRuntimeBindingError,
+        verify_governed_poppler_runtime,
+    )
+
+    with pytest.raises(PopplerRuntimeBindingError) as error:
+        verify_governed_poppler_runtime(object(), platform_name="Windows")
+    assert error.value.code == "POPPLER_RUNTIME_IDENTITY_INVALID"
+    windows = _binding(tmp_path)
+    verify_governed_poppler_runtime(
+        windows,
+        platform_name="Windows",
+        version_probe=lambda _path: PINNED_POPPLER_VERSION,
+    )
+
+
+def test_linux_child_environment_is_noop_for_windows_type(tmp_path: Path) -> None:
+    from idis.parsers.poppler_linux_runtime import install_poppler_child_environment
+
+    before = os.getcwd()
+    assert install_poppler_child_environment(_binding(tmp_path), apply_to_process=True) is None
+    assert os.getcwd() == before
+
+
+def _ocr_batches_with_convert(
+    convert: Any,
+    *,
+    poppler_runtime: object | None,
+) -> None:
+    import time
+
+    from idis.parsers.ocr import _ocr_pdf_file_batches
+
+    _ocr_pdf_file_batches(
+        source_path="page.pdf",
+        max_pages=1,
+        dpi=200,
+        language="eng",
+        deadline=time.monotonic() + 30,
+        convert_from_path=convert,
+        image_to_data=lambda *_args, **_kwargs: {},
+        output=object(),
+        poppler_runtime=poppler_runtime,  # type: ignore[arg-type]
+    )
+
+
+def test_linux_none_ocr_binding_resolves_before_convert(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import platform
+
+    from idis.parsers import ocr as ocr_module
+    from idis.parsers.ocr import OcrError
+
+    binding = _resolve_linux_prefix(_linux_prefix(tmp_path))
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+    resolved: list[str] = []
+    installed: list[object] = []
+    monkeypatch.setattr(
+        ocr_module,
+        "resolve_pinned_poppler_runtime",
+        lambda **_kwargs: resolved.append("resolve") or binding,
+        raising=False,
+    )
+    monkeypatch.setattr(ocr_module, "verify_governed_poppler_runtime", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        ocr_module,
+        "install_poppler_child_environment",
+        lambda runtime, **_kwargs: installed.append(runtime),
+    )
+    calls: list[object] = []
+
+    def convert(*_args: object, **kwargs: object) -> list[object]:
+        calls.append(kwargs.get("poppler_path"))
+        return []
+
+    with pytest.raises(OcrError):
+        _ocr_batches_with_convert(convert, poppler_runtime=None)
+    assert resolved == ["resolve"]
+    assert installed == [binding]
+    assert calls == [str(binding.binary_dir)]
+
+
+def test_linux_ocr_resolve_failure_does_not_convert(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import platform
+
+    from idis.parsers import ocr as ocr_module
+    from idis.parsers.ocr import OcrUnavailableError
+    from idis.parsers.poppler_runtime import PopplerRuntimeBindingError
+
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+
+    def fail(**_kwargs: object) -> object:
+        raise PopplerRuntimeBindingError("POPPLER_RUNTIME_UNAVAILABLE")
+
+    monkeypatch.setattr(ocr_module, "resolve_pinned_poppler_runtime", fail, raising=False)
+    calls: list[str] = []
+
+    def convert(*_args: object, **_kwargs: object) -> list[object]:
+        calls.append("convert")
+        return []
+
+    with pytest.raises(OcrUnavailableError):
+        _ocr_batches_with_convert(convert, poppler_runtime=None)
+    assert calls == []
+
+
+def test_windows_none_ocr_binding_keeps_path_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import platform
+
+    from idis.parsers import ocr as ocr_module
+    from idis.parsers.ocr import OcrError
+
+    monkeypatch.setattr(platform, "system", lambda: "Windows")
+    resolved: list[str] = []
+    monkeypatch.setattr(
+        ocr_module,
+        "resolve_pinned_poppler_runtime",
+        lambda **_kwargs: resolved.append("resolve"),
+        raising=False,
+    )
+    calls: list[object] = []
+
+    def convert(*_args: object, **kwargs: object) -> list[object]:
+        calls.append(kwargs.get("poppler_path", "MISSING"))
+        return []
+
+    with pytest.raises(OcrError):
+        _ocr_batches_with_convert(convert, poppler_runtime=None)
+    assert resolved == []
+    assert calls == ["MISSING"]

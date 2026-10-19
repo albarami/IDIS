@@ -15,6 +15,9 @@ from typing import Any
 import pytest
 
 from idis.parsers import ocr
+from tests.slice100_task4.test_linux_poppler_parent_guard import (
+    inject_inline_governed_child_seam,
+)
 
 
 class _CaptureQueue:
@@ -74,6 +77,7 @@ def _install_fake_runtime(
     monkeypatch.setitem(sys.modules, "pdf2image", pdf2image)
     monkeypatch.setitem(sys.modules, "pdf2image.exceptions", pdf2image_exceptions)
     monkeypatch.setitem(sys.modules, "pytesseract", pytesseract)
+    inject_inline_governed_child_seam(monkeypatch, ocr)
 
 
 def _run_file_worker(

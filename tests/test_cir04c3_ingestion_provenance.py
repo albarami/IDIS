@@ -31,6 +31,7 @@ from idis.services.ingestion import IngestionContext, IngestionService
 from idis.services.ingestion.service import RouteValidatedSha256
 from idis.storage.compliant_store import ComplianceEnforcedStore
 from idis.storage.filesystem_store import FilesystemObjectStore
+from tests._linux_poppler_gate import requires_linux_governed_poppler
 from tests.slice100_task4.test_watermark_runtime_bounds_red import _oversized_mediabox_pdf
 from tests.test_pdf_parser import create_test_pdf
 from tests.test_tesseract_ocr_adapter import _create_image_text_pdf
@@ -452,6 +453,7 @@ def test_package_bound_failed_native_upload_records_failed_attempt(
     assert attempt["parser_version"].startswith("idis-parser-runtime-v1:")
 
 
+@requires_linux_governed_poppler
 def test_verified_watermark_receipt_writes_registered_schema_ref(
     app_engine: Engine,
     store: ComplianceEnforcedStore,
@@ -688,6 +690,7 @@ def test_image_pdf_without_watermark_classification_gains_no_attempt(
         assert _attempt_rows(conn, str(result.document_id)) == []
 
 
+@requires_linux_governed_poppler
 def test_verified_watermark_exclusion_persists_one_pre_ocr_attempt(
     app_engine: Engine,
     store: ComplianceEnforcedStore,
@@ -813,6 +816,7 @@ def test_verified_watermark_exclusion_persists_one_pre_ocr_attempt(
         assert len(_attempt_rows(conn, str(result.document_id))) == 1
 
 
+@requires_linux_governed_poppler
 def test_rejected_watermark_receipts_persist_no_attempt(
     app_engine: Engine,
     store: ComplianceEnforcedStore,
@@ -943,6 +947,7 @@ def test_rejected_watermark_receipts_persist_no_attempt(
         )
 
 
+@requires_linux_governed_poppler
 def test_run_route_loads_verified_v2_exclusion_authority(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

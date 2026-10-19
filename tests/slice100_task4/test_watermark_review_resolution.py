@@ -7,6 +7,7 @@ import hashlib
 
 import pytest
 
+from tests._linux_poppler_gate import requires_linux_governed_poppler
 from tests.slice100_task4.test_watermark_batch_attestation_red import (
     ACTIVE_NOW,
     APPROVED_AT,
@@ -70,6 +71,7 @@ def _resolved_prescan() -> dict[str, object]:
     return receipt
 
 
+@requires_linux_governed_poppler
 def test_resolved_prescan_is_cross_bound_and_exposes_only_safe_image_page_records() -> None:
     private_pem, public_pem = _private_and_public_pem()
     resolved = _resolved_prescan()
@@ -101,6 +103,7 @@ def test_resolved_prescan_is_cross_bound_and_exposes_only_safe_image_page_record
         ),
     ],
 )
+@requires_linux_governed_poppler
 def test_resolved_prescan_mutation_fails_closed(mutation: object) -> None:
     private_pem, public_pem = _private_and_public_pem()
     resolved = _resolved_prescan()

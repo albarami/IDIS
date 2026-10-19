@@ -152,10 +152,25 @@ def test_api_main_path_crosses_admission_boundary_before_uvicorn_serve(
     assert events == ["admit:api", "audit", "profile:api", "serve"]
 
 
+def _refuse_pinned_poppler(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep host Poppler identity out of this launcher row."""
+
+    from idis.parsers.poppler_runtime import PopplerRuntimeBindingError
+
+    def unavailable(*_args: object, **_kwargs: object) -> None:
+        raise PopplerRuntimeBindingError("POPPLER_RUNTIME_UNAVAILABLE")
+
+    monkeypatch.setattr(
+        "idis.parsers.poppler_runtime.resolve_pinned_poppler_runtime",
+        unavailable,
+    )
+
+
 def test_worker_main_path_crosses_admission_boundary_before_first_poll(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _refuse_pinned_poppler(monkeypatch)
     launcher = _launcher()
     _admitted_runtime_helper(launcher)
     events: list[str] = []

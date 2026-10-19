@@ -129,11 +129,16 @@ def test_v27_sql_runner_database_urls_stay_on_postgres_and_drop_is_parameterised
 
 
 class _RecordedCursor:
-    def __init__(self, statements: list[tuple[str, object]]) -> None:
+    def __init__(
+        self,
+        connection: _RecordedConnection,
+        statements: list[tuple[str, object, bool]],
+    ) -> None:
+        self._connection = connection
         self._statements = statements
 
     def execute(self, statement: object, parameters: object = None) -> None:
-        self._statements.append((str(statement), parameters))
+        self._statements.append((str(statement), parameters, self._connection.autocommit))
 
     def __enter__(self) -> _RecordedCursor:
         return self
@@ -143,11 +148,12 @@ class _RecordedCursor:
 
 
 class _RecordedConnection:
-    def __init__(self, statements: list[tuple[str, object]]) -> None:
+    def __init__(self, statements: list[tuple[str, object, bool]]) -> None:
         self._statements = statements
+        self.autocommit = False
 
     def cursor(self, *_args: object, **_kwargs: object) -> _RecordedCursor:
-        return _RecordedCursor(self._statements)
+        return _RecordedCursor(self, self._statements)
 
     def close(self) -> None:
         return None
@@ -157,7 +163,7 @@ def test_v27_create_and_drop_bind_terminate_and_quote_closed_identifiers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runner = _load()
-    statements: list[tuple[str, object]] = []
+    statements: list[tuple[str, object, bool]] = []
 
     def connect_raw(database_url: str) -> _RecordedConnection:
         assert database_url == "postgresql://admin_role@127.0.0.1/postgres"
@@ -170,15 +176,18 @@ def test_v27_create_and_drop_bind_terminate_and_quote_closed_identifiers(
     runner._create_disposable_database(admin, name)
     runner._drop_disposable_database(admin, name)
     assert len(statements) == 3
-    create_sql, create_parameters = statements[0]
-    terminate_sql, terminate_parameters = statements[1]
-    drop_sql, drop_parameters = statements[2]
+    create_sql, create_parameters, create_autocommit = statements[0]
+    terminate_sql, terminate_parameters, terminate_autocommit = statements[1]
+    drop_sql, drop_parameters, drop_autocommit = statements[2]
     assert create_sql == f"CREATE DATABASE {quoted} TEMPLATE template0"
     assert create_parameters is None
+    assert create_autocommit is True
     assert "datname = %s" in terminate_sql
     assert terminate_parameters == (name,)
+    assert terminate_autocommit is True
     assert drop_sql == f"DROP DATABASE IF EXISTS {quoted}"
     assert drop_parameters is None
+    assert drop_autocommit is True
 
     for rejected in _REJECTED_IDENTIFIERS:
         statements.clear()
@@ -194,12 +203,13 @@ def test_v27_create_and_drop_bind_terminate_and_quote_closed_identifiers(
         ):
             runner._drop_disposable_database(admin, rejected)
         assert len(statements) == 1
-        rejected_sql, rejected_parameters = statements[0]
+        rejected_sql, rejected_parameters, rejected_autocommit = statements[0]
         assert rejected_sql == terminate_sql
         assert "DROP DATABASE" not in rejected_sql
         assert "CREATE DATABASE" not in rejected_sql
         assert "datname = %s" in rejected_sql
         assert rejected_parameters == (rejected,)
+        assert rejected_autocommit is True
 
 
 def test_v27_fk_observation_refuses_an_unclosed_catalog_identifier_before_interpolation(

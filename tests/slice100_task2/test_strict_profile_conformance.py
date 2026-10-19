@@ -102,10 +102,25 @@ def test_strict_api_launcher_passes_reviewed_profile_to_composition_root(
     assert observed == [profile]
 
 
+def _refuse_pinned_poppler(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep host Poppler identity out of this launcher row."""
+
+    from idis.parsers.poppler_runtime import PopplerRuntimeBindingError
+
+    def unavailable(*_args: object, **_kwargs: object) -> None:
+        raise PopplerRuntimeBindingError("POPPLER_RUNTIME_UNAVAILABLE")
+
+    monkeypatch.setattr(
+        "idis.parsers.poppler_runtime.resolve_pinned_poppler_runtime",
+        unavailable,
+    )
+
+
 def test_strict_worker_launcher_passes_profile_to_every_runtime_config_reader(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _refuse_pinned_poppler(monkeypatch)
     launcher = importlib.import_module("idis.runtime.strict_launcher")
     profile = _reviewed_profile(tmp_path, "worker")
     observed: list[tuple[str, object]] = []
@@ -146,6 +161,69 @@ def test_strict_worker_launcher_passes_profile_to_every_runtime_config_reader(
         ("tenants", profile.values),
         ("worker", profile),
     ]
+
+
+def _stub_linux_poppler(tmp_path: Path) -> object:
+    from idis.parsers.poppler_linux_runtime import (
+        PINNED_POPPLER_LINUX_LIBRARY_NAME,
+        PinnedLinuxPopplerRuntime,
+        _identity_sha256,
+    )
+    from idis.parsers.poppler_runtime import PINNED_POPPLER_VERSION
+
+    prefix = (tmp_path / "prefix").resolve()
+    source_sha256 = "a" * 64
+    recipe_sha256 = "b" * 64
+    pdftoppm_sha256 = "c" * 64
+    pdfinfo_sha256 = "d" * 64
+    library_sha256 = "e" * 64
+    rpath = str(prefix / "lib")
+    digest = _identity_sha256(
+        version=PINNED_POPPLER_VERSION,
+        source_sha256=source_sha256,
+        recipe_sha256=recipe_sha256,
+        prefix=str(prefix),
+        pdftoppm_sha256=pdftoppm_sha256,
+        pdfinfo_sha256=pdfinfo_sha256,
+        library_sha256=library_sha256,
+        rpath=rpath,
+    )
+    return PinnedLinuxPopplerRuntime(
+        version=PINNED_POPPLER_VERSION,
+        runtime_identity_sha256=digest,
+        pdftoppm_sha256=pdftoppm_sha256,
+        pdfinfo_sha256=pdfinfo_sha256,
+        poppler_libpoppler_sha256=library_sha256,
+        poppler_source_sha256=source_sha256,
+        poppler_builder_recipe_sha256=recipe_sha256,
+        prefix=str(prefix),
+        rpath=rpath,
+        _pdftoppm_path=prefix / "bin" / "pdftoppm",
+        _pdfinfo_path=prefix / "bin" / "pdfinfo",
+        _poppler_library_path=prefix / "lib" / PINNED_POPPLER_LINUX_LIBRARY_NAME,
+    )
+
+
+def test_acceptance_v1_worker_refuses_noncanonical_linux_poppler_before_poll(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launcher = importlib.import_module("idis.runtime.strict_launcher")
+    profile = _reviewed_profile(tmp_path, "worker")
+    assert profile.generation == "acceptance-v1"
+    binding = _stub_linux_poppler(tmp_path)
+    monkeypatch.setattr(
+        "idis.parsers.poppler_runtime.resolve_pinned_poppler_runtime",
+        lambda *_args, **_kwargs: binding,
+    )
+    pid_file = tmp_path / "worker.pid"
+    args = SimpleNamespace(poll_seconds=2.0, watch=False, pid_file=pid_file)
+
+    with pytest.raises(launcher.StrictLauncherError) as error:
+        launcher._run_worker(SimpleNamespace(), args, profile)
+
+    assert error.value.code == "POPPLER_RUNTIME_NONCANONICAL"
+    assert pid_file.exists() is False
 
 
 def test_direct_api_factory_fails_strict_mode_without_reviewed_profile(

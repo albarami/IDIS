@@ -17,6 +17,7 @@ from idis.evaluation.real_example_source_package import build_two_company_source
 from idis.parsers.base import ParseErrorCode, ParseLimits, ParseResult
 from idis.parsers.ocr import OcrConfig, OcrPageText
 from idis.parsers.pdf import parse_pdf
+from tests._canonical_poppler_pin import requires_canonical_poppler_pin
 
 
 def _source_render_plan(
@@ -253,6 +254,7 @@ def test_ocr_adapter_result_with_duplicate_page_is_rejected() -> None:
     assert [error.code for error in result.errors] == [ParseErrorCode.OCR_FAILED]
 
 
+@requires_canonical_poppler_pin
 def test_read_only_pdf_ocr_census_binds_required_files_by_content_hash(
     tmp_path: Path,
 ) -> None:
@@ -313,6 +315,7 @@ def test_read_only_pdf_ocr_census_binds_required_files_by_content_hash(
     assert "fictional-mixed" not in encoded
 
 
+@requires_canonical_poppler_pin
 def test_read_only_census_derives_highest_fitting_rung_from_source_geometry(
     tmp_path: Path,
 ) -> None:

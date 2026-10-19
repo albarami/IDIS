@@ -1,8 +1,10 @@
 """RED-first contracts for the full-strict-v27 PostgreSQL census.
 
 This module is intentionally hermetic: it may inspect and execute pure planning
-code, but it must never load an operator profile, open PostgreSQL, or read a
-signing key.  Operator-backed execution is a later, separately reviewed gate.
+code, but it must never load an operator profile or read a signing key.
+``test_v27_create_and_drop_disposable_database_against_postgres`` is the only
+node that opens PostgreSQL, and only through the admin URL the other database
+tests already use. Operator-backed census execution stays a separate gate.
 """
 
 from __future__ import annotations
@@ -3041,6 +3043,165 @@ def test_v27_database_lifecycle_drops_only_a_database_created_by_this_run(
     assert caught.value.__cause__ is None
     assert caught.value.__context__ is None
     assert events == ["CAPTURE"]
+
+
+_DISPOSABLE_TERMINATE_BACKENDS = """
+                SELECT pg_terminate_backend(pid)
+                  FROM pg_stat_activity
+                 WHERE datname = %s
+                   AND pid <> pg_backend_pid()
+                """
+
+
+class _ObservedCursor:
+    def __init__(
+        self,
+        cursor: object,
+        statements: list[tuple[str, object]],
+    ) -> None:
+        self._cursor = cursor
+        self._statements = statements
+
+    def execute(self, statement: object, parameters: object = None) -> object:
+        self._statements.append((str(statement), parameters))
+        if parameters is None:
+            return self._cursor.execute(statement)
+        return self._cursor.execute(statement, parameters)
+
+    def __enter__(self) -> _ObservedCursor:
+        self._cursor.__enter__()
+        return self
+
+    def __exit__(self, *exc_info: object) -> object:
+        return self._cursor.__exit__(*exc_info)
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._cursor, name)
+
+
+class _ObservedConnection:
+    """Forward attribute writes so the production proxy can reach psycopg2."""
+
+    def __init__(self, connection: object, statements: list[tuple[str, object]]) -> None:
+        object.__setattr__(self, "_connection", connection)
+        object.__setattr__(self, "_statements", statements)
+
+    def cursor(self, *args: object, **kwargs: object) -> _ObservedCursor:
+        return _ObservedCursor(self._connection.cursor(*args, **kwargs), self._statements)
+
+    def close(self) -> None:
+        self._connection.close()
+
+    def __setattr__(self, name: str, value: object) -> None:
+        setattr(self._connection, name, value)
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._connection, name)
+
+
+def _normalize_admin_database_url(admin_url: str) -> str:
+    """Strip a SQLAlchemy driver suffix, matching pg_bootstrap_ci.py.
+
+    The runner ``_replace_database`` contract stays plain ``postgres`` or
+    ``postgresql``. A non-postgres scheme is rejected.
+    """
+    if admin_url.startswith("postgresql+psycopg2://"):
+        admin_url = admin_url.replace("postgresql+psycopg2://", "postgresql://", 1)
+    if admin_url.startswith("postgresql+psycopg://"):
+        admin_url = admin_url.replace("postgresql+psycopg://", "postgresql://", 1)
+    scheme, separator, _remainder = admin_url.partition("://")
+    if separator != "://" or scheme not in {"postgres", "postgresql"}:
+        raise ValueError("admin database URL scheme is not postgres or postgresql")
+    return admin_url
+
+
+def _require_admin_database_url() -> str:
+    admin_url = os.environ.get("IDIS_DATABASE_ADMIN_URL", "")
+    if admin_url:
+        return _normalize_admin_database_url(admin_url)
+    message = "Postgres create/drop requires IDIS_DATABASE_ADMIN_URL"
+    if os.environ.get("IDIS_REQUIRE_POSTGRES") == "1":
+        pytest.fail(f"REQUIRED: {message} (IDIS_REQUIRE_POSTGRES=1)")
+    pytest.skip(message)
+
+
+def test_normalize_admin_database_url_strips_driver_and_rejects_other_schemes() -> None:
+    plain = "postgresql://postgres@127.0.0.1:1/postgres"
+    assert _normalize_admin_database_url(plain) == plain
+    assert (
+        _normalize_admin_database_url("postgresql+psycopg2://postgres@127.0.0.1:1/postgres")
+        == plain
+    )
+    assert (
+        _normalize_admin_database_url("postgresql+psycopg://postgres@127.0.0.1:1/postgres") == plain
+    )
+    with pytest.raises(ValueError, match="postgres or postgresql"):
+        _normalize_admin_database_url("mysql://postgres@127.0.0.1:1/postgres")
+
+
+def _database_exists(admin_url: str, database_name: str) -> bool:
+    import psycopg2
+
+    connection = psycopg2.connect(admin_url)
+    try:
+        connection.autocommit = True
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1 FROM pg_database WHERE datname = %s", (database_name,))
+            return cursor.fetchone() is not None
+    finally:
+        connection.close()
+
+
+def test_v27_unclassified_dml_proxy_delegates_attribute_assignment() -> None:
+    runner = _sql()
+
+    class Inner:
+        def __init__(self) -> None:
+            self.autocommit = False
+            self.marker = "inner-read"
+
+    inner = Inner()
+    proxy = runner._UnclassifiedDmlRejectingConnection(inner)
+    assert proxy._connection is inner
+    assert proxy.marker == "inner-read"
+    proxy.autocommit = True
+    assert inner.autocommit is True
+    assert "autocommit" not in vars(proxy)
+    assert proxy.autocommit is True
+    assert proxy._connection is inner
+
+
+def test_v27_create_and_drop_disposable_database_against_postgres(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    admin_url = _require_admin_database_url()
+    runner = _sql()
+    database_name = f"idis_task8_census_{uuid.uuid4().hex[:16]}"
+    quoted = f'"{database_name}"'
+    statements: list[tuple[str, object]] = []
+    connect_raw = runner._connect_raw
+
+    def observe(database_url: str) -> _ObservedConnection:
+        return _ObservedConnection(connect_raw(database_url), statements)
+
+    monkeypatch.setattr(runner, "_connect_raw", observe)
+    created = False
+    try:
+        assert _database_exists(admin_url, database_name) is False
+        runner._create_disposable_database(admin_url, database_name)
+        created = True
+        assert _database_exists(admin_url, database_name) is True
+        runner._drop_disposable_database(admin_url, database_name)
+        created = False
+        assert _database_exists(admin_url, database_name) is False
+    finally:
+        if created:
+            runner._drop_disposable_database(admin_url, database_name)
+    assert statements == [
+        (f"CREATE DATABASE {quoted} TEMPLATE template0", None),
+        (_DISPOSABLE_TERMINATE_BACKENDS, (database_name,)),
+        (f"DROP DATABASE IF EXISTS {quoted}", None),
+    ]
 
 
 def test_v27_public_runner_sanitizes_exceptions_and_suppresses_bytecode(

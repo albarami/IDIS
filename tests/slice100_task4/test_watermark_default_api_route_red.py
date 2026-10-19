@@ -20,12 +20,14 @@ from idis.api.main import create_app
 from idis.api.routes.deals import clear_deals_store
 from idis.api.routes.documents import clear_document_store
 from idis.idempotency.store import SqliteIdempotencyStore
+from idis.parsers.poppler_runtime import resolve_pinned_poppler_runtime
 from idis.parsers.watermark_page_classifier import (
     build_watermark_page_canonical_exemplar_bitmap,
     default_watermark_page_policy,
 )
 from idis.runtime.governance_envelopes import canonicalize_json
 from idis.runtime.secure_files import protect_path_for_current_user
+from tests._linux_poppler_gate import requires_linux_governed_poppler
 from tests.abac_seed import seed_deal_access
 from tests.slice100_task4 import test_watermark_batch_attestation_red as batch_contract
 
@@ -61,7 +63,14 @@ def _watermark_pdf() -> bytes:
 
 
 def _canonical_bitmap(pdf_bytes: bytes) -> tuple[bytes, str]:
-    pages = convert_from_bytes(pdf_bytes, dpi=200, first_page=1, last_page=1)
+    binding = resolve_pinned_poppler_runtime()
+    pages = convert_from_bytes(
+        pdf_bytes,
+        dpi=200,
+        first_page=1,
+        last_page=1,
+        poppler_path=str(binding.binary_dir),
+    )
     assert len(pages) == 1
     policy = default_watermark_page_policy()
     with pages[0] as page:
@@ -186,6 +195,7 @@ def _write_governance(tmp_path: Path, pdf_bytes: bytes) -> dict[str, str]:
     }
 
 
+@requires_linux_governed_poppler
 def test_default_api_upload_admits_signed_watermark_only_document(
     tmp_path: Path,
     monkeypatch,

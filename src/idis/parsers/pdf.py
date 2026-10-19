@@ -15,6 +15,7 @@ import hashlib
 import io
 import json
 import math
+import platform
 import time
 import unicodedata
 from dataclasses import asdict, replace
@@ -62,10 +63,17 @@ from idis.parsers.ocr import (
     validate_ocr_no_consensus_file_proof,
     validate_partial_ocr_pages,
 )
+from idis.parsers.poppler_linux_runtime import (
+    PinnedLinuxPopplerRuntime,
+    install_poppler_child_environment,
+    mark_governed_worker_child,
+)
 from idis.parsers.poppler_runtime import (
+    GovernedPopplerRuntime,
     PinnedPopplerRuntime,
+    PopplerRuntimeBindingError,
     resolve_pinned_poppler_runtime,
-    verify_pinned_poppler_runtime,
+    verify_governed_poppler_runtime,
 )
 from idis.parsers.watermark_page_classifier import (
     WatermarkPageClassificationError,
@@ -493,8 +501,9 @@ def _parse_pdf_with_ocr(
             content_sha256=content_sha256,
         )
         adapter_poppler_runtime = getattr(ocr_config.adapter, "poppler_runtime", None)
-        if adapter_poppler_runtime is not None and not isinstance(
-            adapter_poppler_runtime, PinnedPopplerRuntime
+        if adapter_poppler_runtime is not None and (
+            type(adapter_poppler_runtime) is not PinnedPopplerRuntime
+            and type(adapter_poppler_runtime) is not PinnedLinuxPopplerRuntime
         ):
             raise OcrError("OCR Poppler runtime binding is invalid")
         if watermark_page_config is not None:
@@ -705,7 +714,7 @@ def _build_pdf_ocr_render_admissions(
     data: bytes,
     page_numbers: tuple[int, ...],
     configured_dpi: int,
-    poppler_runtime: PinnedPopplerRuntime | None = None,
+    poppler_runtime: GovernedPopplerRuntime | None = None,
 ) -> tuple[OcrPageRenderAdmission, ...]:
     """Choose exactly one bounded render DPI for every requested PDF page."""
 
@@ -890,9 +899,11 @@ def build_pdf_ocr_render_admissions(
     resolves the pinned runtime exactly once for the resulting plan.
     """
 
-    if poppler_runtime is not None and not isinstance(poppler_runtime, PinnedPopplerRuntime):
+    if poppler_runtime is not None and type(poppler_runtime) is not PinnedPopplerRuntime:
         raise OcrError("OCR Poppler runtime binding is invalid")
     runtime = poppler_runtime or resolve_pinned_poppler_runtime()
+    if type(runtime) is not PinnedPopplerRuntime:
+        raise OcrError("OCR Poppler runtime binding is invalid")
     return _build_pdf_ocr_render_admissions(
         data=data,
         page_numbers=page_numbers,
@@ -1141,7 +1152,7 @@ def _classify_watermark_before_ocr(
     page_numbers: tuple[int, ...],
     runtime_config: WatermarkPageRuntimeConfig,
     deadline: float,
-    poppler_runtime: PinnedPopplerRuntime | None = None,
+    poppler_runtime: GovernedPopplerRuntime | None = None,
 ) -> list[dict[str, object]]:
     if not isinstance(runtime_config, WatermarkPageRuntimeConfig):
         raise OcrError("Watermark page configuration is untrusted")
@@ -1178,11 +1189,13 @@ def _watermark_page_pre_ocr_worker(
     content_sha256: str,
     page_numbers: tuple[int, ...],
     runtime_config: WatermarkPageRuntimeConfig,
-    poppler_runtime: PinnedPopplerRuntime | None,
+    poppler_runtime: GovernedPopplerRuntime | None,
     execution_deadline: float,
     queue: object,
 ) -> None:
     """Render fixed 512x512 candidates in one killable pre-OCR worker."""
+
+    mark_governed_worker_child()
 
     def put(payload: dict[str, object]) -> None:
         sender = getattr(queue, "put", None)
@@ -1201,9 +1214,26 @@ def _watermark_page_pre_ocr_worker(
         render_from_bytes = cast(Any, convert_from_bytes)
         render_from_path = cast(Any, convert_from_path)
         poppler_path: str | None = None
-        if poppler_runtime is not None:
-            verify_pinned_poppler_runtime(poppler_runtime)
-            poppler_path = str(poppler_runtime.binary_dir)
+        runtime = poppler_runtime
+        if runtime is None and platform.system() == "Linux":
+            try:
+                runtime = resolve_pinned_poppler_runtime()
+            except PopplerRuntimeBindingError as exc:
+                put(
+                    {
+                        "status": (
+                            "unavailable" if exc.code == "POPPLER_RUNTIME_UNAVAILABLE" else "failed"
+                        )
+                    }
+                )
+                return
+        if runtime is not None:
+            verify_governed_poppler_runtime(runtime)
+            install_poppler_child_environment(runtime, apply_to_process=True)
+            poppler_path = str(runtime.binary_dir)
+        elif platform.system() == "Linux":
+            put({"status": "failed"})
+            return
         classifications: list[dict[str, object]] = []
         for page_number in page_numbers:
             remaining = execution_deadline - time.monotonic()
@@ -1285,7 +1315,7 @@ def _classify_watermark_no_consensus_pages(
     runtime_config: WatermarkPageRuntimeConfig | None,
     deadline: float,
     projected_pixel_counts: dict[int, int] | None = None,
-    poppler_runtime: PinnedPopplerRuntime | None = None,
+    poppler_runtime: GovernedPopplerRuntime | None = None,
 ) -> list[dict[str, object]]:
     """Classify eligible unresolved pages under the original OCR wall clock."""
 
@@ -1442,11 +1472,13 @@ def _watermark_page_runtime_worker(
     jobs: tuple[tuple[int, int, int, int, str, str], ...],
     admitted_pixel_counts: dict[int, int],
     runtime_config: WatermarkPageRuntimeConfig,
-    poppler_runtime: PinnedPopplerRuntime | None,
+    poppler_runtime: GovernedPopplerRuntime | None,
     execution_deadline: float,
     queue: object,
 ) -> None:
     """Render and classify pages only inside one killable, deadline-bound worker."""
+
+    mark_governed_worker_child()
 
     def put(payload: dict[str, object]) -> None:
         sender = getattr(queue, "put", None)
@@ -1465,9 +1497,26 @@ def _watermark_page_runtime_worker(
         render_from_bytes = cast(Any, convert_from_bytes)
         render_from_path = cast(Any, convert_from_path)
         poppler_path: str | None = None
-        if poppler_runtime is not None:
-            verify_pinned_poppler_runtime(poppler_runtime)
-            poppler_path = str(poppler_runtime.binary_dir)
+        runtime = poppler_runtime
+        if runtime is None and platform.system() == "Linux":
+            try:
+                runtime = resolve_pinned_poppler_runtime()
+            except PopplerRuntimeBindingError as exc:
+                put(
+                    {
+                        "status": (
+                            "unavailable" if exc.code == "POPPLER_RUNTIME_UNAVAILABLE" else "failed"
+                        )
+                    }
+                )
+                return
+        if runtime is not None:
+            verify_governed_poppler_runtime(runtime)
+            install_poppler_child_environment(runtime, apply_to_process=True)
+            poppler_path = str(runtime.binary_dir)
+        elif platform.system() == "Linux":
+            put({"status": "failed"})
+            return
         classifications: list[dict[str, object]] = []
         for (
             page_number,

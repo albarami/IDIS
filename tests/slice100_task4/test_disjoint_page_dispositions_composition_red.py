@@ -22,6 +22,7 @@ from reportlab.lib.utils import ImageReader  # type: ignore[import-untyped]
 from reportlab.pdfgen import canvas  # type: ignore[import-untyped]
 
 from idis.models.document import ParseStatus
+from idis.parsers.poppler_runtime import resolve_pinned_poppler_runtime
 from idis.services.ingestion.no_substantive_content_attestation import (
     VerifiedDocumentNoSubstantiveContentAttestationManifest,
     verify_document_no_substantive_content_attestation_manifest,
@@ -32,6 +33,7 @@ from idis.services.ingestion.service import (
     IngestionService,
     RouteValidatedSha256,
 )
+from tests._linux_poppler_gate import requires_linux_governed_poppler
 from tests.slice100_task4.test_ocr_image_only_composition_root_red import (
     DEAL_ID,
     _default_service,
@@ -95,6 +97,7 @@ def _mixed_disposition_pdf(path: Path) -> None:
 
 
 def _page_one_packed_bitmap(source_path: Path) -> bytes:
+    binding = resolve_pinned_poppler_runtime()
     pages = convert_from_path(
         str(source_path),
         dpi=200,
@@ -102,6 +105,7 @@ def _page_one_packed_bitmap(source_path: Path) -> bytes:
         last_page=1,
         fmt="png",
         thread_count=1,
+        poppler_path=str(binding.binary_dir),
     )
     assert len(pages) == 1
     with pages[0] as page:
@@ -238,6 +242,7 @@ def _assert_closed(
     assert "image_only_page_receipts" not in document.metadata
 
 
+@requires_linux_governed_poppler
 def test_disjoint_signed_watermark_and_image_only_pages_compose_with_native_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -289,6 +294,7 @@ def test_disjoint_signed_watermark_and_image_only_pages_compose_with_native_evid
     assert watermark_pages.isdisjoint(image_only_pages)
 
 
+@requires_linux_governed_poppler
 def test_missing_image_only_authorization_stays_fail_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -313,6 +319,7 @@ def test_missing_image_only_authorization_stays_fail_closed(
     )
 
 
+@requires_linux_governed_poppler
 def test_overlapping_watermark_and_image_only_authorizations_stay_fail_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

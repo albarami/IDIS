@@ -15,7 +15,7 @@ import hashlib
 import json
 import os
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
@@ -39,6 +39,7 @@ from idis.evaluation.real_example_source_package import (
 )
 from idis.idempotency.store import SqliteIdempotencyStore
 from idis.parsers.image_only_page import evaluate_image_only_page_receipts
+from idis.parsers.poppler_runtime import PopplerRuntimeBindingError
 from idis.persistence.repositories.data_room_packages import clear_data_room_packages_store
 from idis.persistence.repositories.runs import clear_in_memory_runs_store
 from idis.runtime.profile import StrictProfileError, load_strict_runtime_profile
@@ -51,6 +52,11 @@ from idis.services.ingestion.no_substantive_content_attestation import (
 from idis.services.ingestion.service import IngestionService
 from idis.storage.compliant_store import ComplianceEnforcedStore
 from idis.storage.filesystem_store import FilesystemObjectStore
+from tests._canonical_poppler_pin import requires_canonical_poppler_pin
+from tests._linux_poppler_gate import (
+    linux_governed_poppler_absent,
+    requires_linux_governed_poppler,
+)
 from tests.abac_seed import seed_deal_access
 from tests.slice100_task4.test_ocr_image_only_composition_root_red import (
     TENANT_ID as SYNTHETIC_TENANT_ID,
@@ -480,51 +486,67 @@ def _assert_pdf_page_census(
 
 
 @pytest.fixture(scope="module")
-def synthetic_mixed_fixture(tmp_path_factory: pytest.TempPathFactory) -> _CollectorFixture:
-    tmp_path = tmp_path_factory.mktemp("page-census-production-fixture")
-    source_path = tmp_path / "company-002-document-00001.pdf"
-    _reviewed_image_pdf(source_path, "native", "reviewed_image")
-    content_sha256 = hashlib.sha256(source_path.read_bytes()).hexdigest()
-    records = _review_records(
-        source_path=source_path,
-        safe_alias=source_path.name,
-        reviewed_pages=(2,),
-    )
-    verified_manifest = _verified_review_manifest(records)
-    source = SourceFileContract(
-        sequence=0,
-        generated_upload_name=source_path.name,
-        source_locator_sha256=_digest("synthetic-page-census-source-locator"),
-        content_sha256=content_sha256,
-        size_bytes=source_path.stat().st_size,
-        extension="pdf",
-    )
-    patcher = pytest.MonkeyPatch()
-    try:
-        service = _build_service(
-            tmp_path=tmp_path,
-            monkeypatch=patcher,
-            env={
-                "IDIS_INGEST_MAX_BYTES": str(512 * 1024 * 1024),
-                "IDIS_OCR_ENABLED": "true",
-                "IDIS_OCR_ADAPTER": "tesseract",
-                "IDIS_OCR_DPI": "200",
-                "IDIS_OCR_MAX_PAGES": "72",
-                "IDIS_OCR_TIMEOUT_SECONDS": "60",
-            },
-            verified_manifest=verified_manifest,
-        )
-        return _upload_and_snapshot(
-            tmp_path=tmp_path,
-            monkeypatch=patcher,
-            service=service,
-            tenant_id=SYNTHETIC_TENANT_ID,
-            source_tree_fingerprint=_digest("synthetic-page-census-source-tree"),
+def synthetic_mixed_fixture(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Callable[[], _CollectorFixture]:
+    """Return a cached factory. Rendering starts on the first call from a test body."""
+
+    cached: dict[str, _CollectorFixture] = {}
+
+    def build() -> _CollectorFixture:
+        existing = cached.get("value")
+        if existing is not None:
+            return existing
+        if linux_governed_poppler_absent():
+            raise PopplerRuntimeBindingError("POPPLER_RUNTIME_UNAVAILABLE")
+        tmp_path = tmp_path_factory.mktemp("page-census-production-fixture")
+        source_path = tmp_path / "company-002-document-00001.pdf"
+        _reviewed_image_pdf(source_path, "native", "reviewed_image")
+        content_sha256 = hashlib.sha256(source_path.read_bytes()).hexdigest()
+        records = _review_records(
             source_path=source_path,
-            source=source,
+            safe_alias=source_path.name,
+            reviewed_pages=(2,),
         )
-    finally:
-        patcher.undo()
+        verified_manifest = _verified_review_manifest(records)
+        source = SourceFileContract(
+            sequence=0,
+            generated_upload_name=source_path.name,
+            source_locator_sha256=_digest("synthetic-page-census-source-locator"),
+            content_sha256=content_sha256,
+            size_bytes=source_path.stat().st_size,
+            extension="pdf",
+        )
+        patcher = pytest.MonkeyPatch()
+        try:
+            service = _build_service(
+                tmp_path=tmp_path,
+                monkeypatch=patcher,
+                env={
+                    "IDIS_INGEST_MAX_BYTES": str(512 * 1024 * 1024),
+                    "IDIS_OCR_ENABLED": "true",
+                    "IDIS_OCR_ADAPTER": "tesseract",
+                    "IDIS_OCR_DPI": "200",
+                    "IDIS_OCR_MAX_PAGES": "72",
+                    "IDIS_OCR_TIMEOUT_SECONDS": "60",
+                },
+                verified_manifest=verified_manifest,
+            )
+            built = _upload_and_snapshot(
+                tmp_path=tmp_path,
+                monkeypatch=patcher,
+                service=service,
+                tenant_id=SYNTHETIC_TENANT_ID,
+                source_tree_fingerprint=_digest("synthetic-page-census-source-tree"),
+                source_path=source_path,
+                source=source,
+            )
+        finally:
+            patcher.undo()
+        cached["value"] = built
+        return built
+
+    return build
 
 
 @pytest.fixture(scope="module")
@@ -637,9 +659,11 @@ def test_real_document_00105_reconciles_through_durable_collector_and_gate(
     assert all(headers == {"X-IDIS-API-Key": API_KEY} for _, headers in api.calls)
 
 
+@requires_canonical_poppler_pin
 def test_production_mixed_fixture_persists_complete_disjoint_census(
-    synthetic_mixed_fixture: _CollectorFixture,
+    synthetic_mixed_fixture: Callable[[], _CollectorFixture],
 ) -> None:
+    synthetic_mixed_fixture = synthetic_mixed_fixture()
     rows, _api = _collect(synthetic_mixed_fixture)
 
     evidence = rows[0]["ocr_evidence"]
@@ -697,9 +721,11 @@ def _assert_collector_blocked(
     assert str(caught.value) == expected_message
 
 
+@requires_canonical_poppler_pin
 def test_page_claimed_by_native_text_and_image_only_receipt_fails_closed(
-    synthetic_mixed_fixture: _CollectorFixture,
+    synthetic_mixed_fixture: Callable[[], _CollectorFixture],
 ) -> None:
+    synthetic_mixed_fixture = synthetic_mixed_fixture()
     responses = copy.deepcopy(dict(synthetic_mixed_fixture.responses))
     spans_url = next(url for url in responses if url.endswith("/spans"))
     span_page = cast(dict[str, Any], responses[spans_url])
@@ -717,9 +743,12 @@ def test_page_claimed_by_native_text_and_image_only_receipt_fails_closed(
     )
 
 
+@requires_linux_governed_poppler
 def test_page_in_no_disposition_fails_closed(
-    synthetic_mixed_fixture: _CollectorFixture,
+    synthetic_mixed_fixture: Callable[[], _CollectorFixture],
 ) -> None:
+    synthetic_mixed_fixture = synthetic_mixed_fixture()
+
     def omit(document: dict[str, Any]) -> None:
         metadata = cast(dict[str, Any], document["metadata"])
         metadata.pop("image_only_page_receipts")
@@ -740,10 +769,13 @@ def test_page_in_no_disposition_fails_closed(
     "missing_field",
     ["ocr_render_admission", "ocr_page_execution_receipt"],
 )
+@requires_linux_governed_poppler
 def test_image_only_receipt_without_render_or_no_consensus_provenance_fails_closed(
-    synthetic_mixed_fixture: _CollectorFixture,
+    synthetic_mixed_fixture: Callable[[], _CollectorFixture],
     missing_field: str,
 ) -> None:
+    synthetic_mixed_fixture = synthetic_mixed_fixture()
+
     def strip_provenance(document: dict[str, Any]) -> None:
         receipt = cast(
             dict[str, Any],
@@ -757,9 +789,11 @@ def test_image_only_receipt_without_render_or_no_consensus_provenance_fails_clos
     )
 
 
+@requires_canonical_poppler_pin
 def test_all_image_only_pdf_remains_reviewer_disposition_blocker(
-    synthetic_mixed_fixture: _CollectorFixture,
+    synthetic_mixed_fixture: Callable[[], _CollectorFixture],
 ) -> None:
+    synthetic_mixed_fixture = synthetic_mixed_fixture()
     document = synthetic_mixed_fixture.responses[_document_url(synthetic_mixed_fixture)]
     metadata = cast(dict[str, Any], document["metadata"])
     receipt = copy.deepcopy(metadata["image_only_page_receipts"][0])

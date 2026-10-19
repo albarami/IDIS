@@ -1673,6 +1673,18 @@ def build_postgres_claimed_run_runtime(
             require_runtime_profile(strict_profile, command="worker")
         except StrictProfileError as exc:
             raise RuntimeError(exc.code) from exc
+        from idis.parsers.poppler_linux_runtime import PinnedLinuxPopplerRuntime
+        from idis.parsers.poppler_runtime import (
+            PopplerRuntimeBindingError,
+            resolve_pinned_poppler_runtime,
+        )
+
+        try:
+            governed_poppler = resolve_pinned_poppler_runtime()
+        except PopplerRuntimeBindingError:
+            governed_poppler = None
+        if type(governed_poppler) is PinnedLinuxPopplerRuntime:
+            raise RuntimeError("POPPLER_RUNTIME_NONCANONICAL")
         if not is_full_strict_v21:
             raise RuntimeError("PIPELINE_CONTRACT_UNAVAILABLE")
         # The API's consume-and-create transaction is not trusted as worker admission.

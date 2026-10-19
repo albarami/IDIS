@@ -60,6 +60,7 @@ from idis.services.ingestion.service import (
 )
 from idis.storage.compliant_store import ComplianceEnforcedStore
 from idis.storage.filesystem_store import FilesystemObjectStore
+from tests._linux_poppler_gate import requires_linux_governed_poppler
 from tests.abac_seed import seed_deal_access
 
 CONFIGURED_DPI = 200
@@ -632,6 +633,7 @@ def _canonical_sha256(value: object) -> str:
     return hashlib.sha256(canonicalize_json(value)).hexdigest()
 
 
+@requires_linux_governed_poppler
 def test_synthetic_oversized_poster_steps_down_dpi_and_persists_exact_provenance(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -747,6 +749,7 @@ def test_synthetic_oversized_poster_steps_down_dpi_and_persists_exact_provenance
     assert admissions[0]["chosen_dpi"] in ledger.attempted_dpis
 
 
+@requires_linux_governed_poppler
 def test_synthetic_oversized_poster_uses_real_poppler_and_tesseract_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -798,6 +801,7 @@ def _pdf_above_pixel_cap_at_floor(path: Path) -> tuple[float, float]:
     return width_points, height_points
 
 
+@requires_linux_governed_poppler
 def test_pdf_above_pixel_cap_at_72_dpi_fails_before_ocr_with_stable_code(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

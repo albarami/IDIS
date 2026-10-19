@@ -252,7 +252,7 @@ No staffed engineering budget or human person-day-to-AI-calendar conversion is v
 | Milestone from separate implementation authorization | Deliverable / dependency | Provisional timing |
 |---|---|---|
 | M0 | This documentation PR; publication is not implementation acceptance | Current task |
-| M1 | Baseline reconciled, bounded authority, GL-P01/02/03 calibration | Reserve two weeks plus one contingency week; low confidence, not a completion promise |
+| M1 | Baseline reconciled, bounded authority, GL-P01/02/03 calibration (read with D-11: per-packet gating; GL-P02's owner-input prerequisites) | Reserve two weeks plus one contingency week; low confidence, not a completion promise |
 | M2 | Production-relevant two-question evidence path and route comparison | Forecast only after measured M1; models/data/fund answers may constrain live evidence |
 | M3 | Full requirement mapping, remaining formula/provider/context/IC/UI integration | Rolling four-week forecast from measured packet classes; parallel only with disjoint ownership |
 | M4 | Canonical full execution and real-case/fund acceptance gates | Critical path includes contract rulings, services, prompts, live spending and review |
@@ -298,5 +298,6 @@ Owner time is recorded separately as product decisions, technical review, source
 | D-08 | Residency, provider rights, required case providers, budget and service access remain unknown until admission; owner, before live evaluation |
 | D-09 | Documentation may be published now; implementation history, private inputs, activation, deployment and merge authority do not follow from that permission |
 | D-10 | Basic correction/invalidation/reuse required for release; adaptive routing, autonomous repeated investigation and learning remain later tracked work |
+| D-11 | AUTH-SEQUENCING-BOUNDED-20261019 (owner, 2026-10-19; verbatim in RUN_STATE): the blanket prohibition on product work while CIR-04 is red is superseded within eight bounds — the complete agreed product stands; H3 finishes without restart; R2's remaining development-only proofs move to GL-21 under a recorded register; packets proceed on their own prerequisites, tests and independent review; one executable production target is the integration objective; execution evidence stays truthful (NOT_EXECUTED is never a pass through totals; private present-mode evidence tied to the accepted revision); the eight-file package is corrected with supersession links; routing AUTH-ROUTING-20261017 and every hold unchanged. Main merge and release still require all applicable integrated checks and required private evidence |
 
 This package supersedes only prior conversational planning statements that assumed a hired team, salary/person-day budget, fixed 18–24-week schedule, unconditional separate pilot infrastructure, or a two-question demonstration as the full product. It consolidates the accepted full scope, not frozen technical authority. It does not supersede Slice100 Tasks8–15, Tier1/Tier2 rulings, the 0039 hold, activation gates, model/data permissions or unresolved source-schema ownership. Historical documents are not rewritten to conceal prior decisions.

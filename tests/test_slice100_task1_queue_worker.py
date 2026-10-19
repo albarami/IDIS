@@ -31,6 +31,7 @@ from idis.pipeline.contract_registry import FULL_STRICT_V21_CONTRACT_HASH
 from idis.pipeline.worker import PipelineWorker
 from idis.services.runs.execution import RunExecutionService
 from idis.services.runs.orchestrator import OrchestratorResult, RunContext, RunOrchestrator
+from tests._linux_poppler_gate import requires_linux_governed_poppler
 from tests.abac_seed import seed_deal_access
 
 TENANT_ID = "11111111-1111-1111-1111-111111111111"
@@ -298,6 +299,7 @@ def test_strict_full_create_returns_queued_without_inline_execution(
     assert proof_repo.calls[0]["proof_id"] == proof_id
 
 
+@requires_linux_governed_poppler
 def test_strict_full_create_requires_preflight_proof_before_run_row(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -653,6 +655,7 @@ def test_strict_worker_proof_mismatch_fails_before_readiness_or_service(
 
 
 @pytest.mark.parametrize("role", [None, "", "worker", "api,worker", "combined"])
+@requires_linux_governed_poppler
 def test_strict_api_uses_reviewed_role_despite_ambient_mutation(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -678,6 +681,7 @@ def test_strict_api_uses_reviewed_role_despite_ambient_mutation(
     asyncio.run(app.router.on_startup[0]())
 
 
+@requires_linux_governed_poppler
 def test_strict_api_role_starts_no_in_process_pipeline_worker(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

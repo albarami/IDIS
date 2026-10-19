@@ -38,6 +38,7 @@ from idis.services.ingestion.service import (
 )
 from idis.storage.compliant_store import ComplianceEnforcedStore
 from idis.storage.filesystem_store import FilesystemObjectStore
+from tests._linux_poppler_gate import requires_linux_governed_poppler
 from tests.slice100_task4.test_no_substantive_content_ingestion_persistence import (
     OCR_RESULT_SHA256,
     _complete_no_consensus_result,
@@ -333,6 +334,7 @@ def _event_types(audit: InMemoryAuditSink) -> list[str]:
     return [str(event["event_type"]) for event in audit.events]
 
 
+@requires_linux_governed_poppler
 def test_terminal_watermark_classification_persists_v2_and_safe_audit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -362,6 +364,7 @@ def test_terminal_watermark_classification_persists_v2_and_safe_audit(
         assert forbidden not in serialized
 
 
+@requires_linux_governed_poppler
 def test_mixed_document_excludes_only_watermark_page_and_keeps_substantive_span(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -438,6 +441,7 @@ def _validate_replay(
     )
 
 
+@requires_linux_governed_poppler
 def test_cached_terminal_response_replays_only_against_current_v2_admission(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -457,6 +461,7 @@ def test_cached_terminal_response_replays_only_against_current_v2_admission(
     )
 
 
+@requires_linux_governed_poppler
 def test_cached_mixed_document_replays_only_with_durable_substantive_span(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -538,6 +543,7 @@ def test_cached_mixed_document_replays_only_with_durable_substantive_span(
         "batch_envelope_sha256",
     ],
 )
+@requires_linux_governed_poppler
 def test_replay_rejects_current_admission_binding_drift(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -602,6 +608,7 @@ def test_preparation_idempotency_binds_all_current_watermark_admission_digests()
     ],
     ids=("whole-document-terminal", "mixed-document-page-exclusion"),
 )
+@requires_linux_governed_poppler
 def test_source_package_revalidates_v2_receipt_before_membership(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -677,6 +684,7 @@ def test_source_package_revalidates_v2_receipt_before_membership(
     assert expired.value.code == "DOCUMENT_NO_SUBSTANTIVE_CONTENT_ATTESTATION_NOT_ACTIVE"
 
 
+@requires_linux_governed_poppler
 def test_worker_threads_current_v2_verifier_into_preflight_and_rejects_drift(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

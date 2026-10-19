@@ -18,10 +18,14 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SIGNED_RUNNER = REPO_ROOT / "scripts" / "run_task8_v27_signed_census.py"
 SQL_RUNNER = REPO_ROOT / "scripts" / "run_task8_v27_sql_authority_census.py"
-_APPROVED_SQL_RUNNER_SHA256 = "812bfeb229f37b15fe8670339b46c98831b301a895cf6add2227913ec1e9dd4c"
+_APPROVED_SQL_RUNNER_SHA256 = "f422f702880a4f58eef4cc2b12944c98f550729c7ba6ab0faaabe3611f34bab2"
 # Names the pre-hardening runner whose bytes are not in this repository; retained as historical evidence (owner decision R5 option B, 2026-10-19).  # noqa: E501
 _SUPERSEDED_SQL_RUNNER_SHA256_2026_10_18 = (
     "d12ea370927706fb969fed3bc586e39d8cc212e25e484eae32e4df52c3f9814b"
+)
+# Hardened runner before connection-attribute delegation; refused at load (R5-04, 2026-10-19).
+_SUPERSEDED_SQL_RUNNER_SHA256_2026_10_19 = (
+    "812bfeb229f37b15fe8670339b46c98831b301a895cf6add2227913ec1e9dd4c"
 )
 
 
@@ -56,10 +60,21 @@ def test_v27_cli_pins_the_frozen_sql_runner_bytes() -> None:
 
 def test_v27_cli_retains_superseded_sql_runner_pin_as_historical_evidence() -> None:
     runner = _load()
-    superseded = _SUPERSEDED_SQL_RUNNER_SHA256_2026_10_18
-    assert superseded == runner._SUPERSEDED_SQL_RUNNER_SHA256_2026_10_18
-    assert superseded != runner._APPROVED_SQL_RUNNER_SHA256
-    assert hashlib.sha256(SQL_RUNNER.read_bytes()).hexdigest() != superseded
+    superseded = (
+        (
+            "_SUPERSEDED_SQL_RUNNER_SHA256_2026_10_18",
+            _SUPERSEDED_SQL_RUNNER_SHA256_2026_10_18,
+        ),
+        (
+            "_SUPERSEDED_SQL_RUNNER_SHA256_2026_10_19",
+            _SUPERSEDED_SQL_RUNNER_SHA256_2026_10_19,
+        ),
+    )
+    current = hashlib.sha256(SQL_RUNNER.read_bytes()).hexdigest()
+    for name, digest in superseded:
+        assert digest == getattr(runner, name)
+        assert digest != runner._APPROVED_SQL_RUNNER_SHA256
+        assert current != digest
 
 
 def test_v27_cli_refuses_sql_runner_whose_digest_is_not_the_approved_pin(
@@ -69,14 +84,17 @@ def test_v27_cli_refuses_sql_runner_whose_digest_is_not_the_approved_pin(
     runner = _load()
     approved = runner._APPROVED_SQL_RUNNER_SHA256
     assert runner._current_runner_sha256() == approved
-    superseded = runner._SUPERSEDED_SQL_RUNNER_SHA256_2026_10_18
+    superseded = (
+        runner._SUPERSEDED_SQL_RUNNER_SHA256_2026_10_18,
+        runner._SUPERSEDED_SQL_RUNNER_SHA256_2026_10_19,
+    )
     mutated_path = (tmp_path / "run_task8_v27_sql_authority_census.py").resolve()
     mutated = bytearray(SQL_RUNNER.read_bytes())
     mutated[0] ^= 0xFF
     mutated_path.write_bytes(bytes(mutated))
     mutated_digest = hashlib.sha256(mutated_path.read_bytes()).hexdigest()
     assert mutated_digest != approved
-    assert mutated_digest != superseded
+    assert mutated_digest not in superseded
     monkeypatch.setattr(runner, "SQL_RUNNER_PATH", mutated_path)
     with pytest.raises(
         runner.Task8V27SignedCensusError,
@@ -93,16 +111,20 @@ def test_v27_cli_refuses_sql_runner_whose_digest_is_not_the_approved_pin(
             module_name="_task8_r5_mutated_sql_runner",
             code="TASK8_V27_SIGNED_CENSUS_RUNNER_UNAUTHORIZED",
         )
-    with pytest.raises(
-        runner.Task8V27SignedCensusError,
-        match="^TASK8_V27_SIGNED_CENSUS_RUNNER_UNAUTHORIZED$",
+    for digest, module_name in (
+        (superseded[0], "_task8_r5_superseded_sql_runner_2026_10_18"),
+        (superseded[1], "_task8_r5_superseded_sql_runner_2026_10_19"),
     ):
-        runner._load_hashed_module(
-            path=SQL_RUNNER,
-            expected_sha256=superseded,
-            module_name="_task8_r5_superseded_sql_runner",
-            code="TASK8_V27_SIGNED_CENSUS_RUNNER_UNAUTHORIZED",
-        )
+        with pytest.raises(
+            runner.Task8V27SignedCensusError,
+            match="^TASK8_V27_SIGNED_CENSUS_RUNNER_UNAUTHORIZED$",
+        ):
+            runner._load_hashed_module(
+                path=SQL_RUNNER,
+                expected_sha256=digest,
+                module_name=module_name,
+                code="TASK8_V27_SIGNED_CENSUS_RUNNER_UNAUTHORIZED",
+            )
 
 
 def test_v27_cli_private_mapping_has_only_dotenv_locator() -> None:

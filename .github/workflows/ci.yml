@@ -267,7 +267,7 @@ jobs:
         run: |
           echo "=== Postgres Integration Tests (IDIS_REQUIRE_POSTGRES=1) ==="
           echo "Test files: test_postgres_rls_and_audit_immutability.py, test_api_deals_postgres.py, test_api_claims_postgres.py, test_postgres_break_attempts.py, test_api_run_observability_postgres.py, test_api_default_upload_ingestion_postgres.py, test_api_full_run_step_name_postgres.py, test_api_full_run_durable_evidence_postgres.py, test_api_selected_multidocument_full_acceptance_postgres.py, test_api_sanad_auto_grade_persistence_postgres.py, test_slice96_provider_budget_postgres.py (Slice96 DEC-C durable provider budget), test_slice96_idempotency_ttl_postgres.py (Slice96 DEC-E idempotency TTL cleanup), test_slice97_webhook_outbox_postgres.py (Slice97 durable webhook outbox), test_slice97_webhook_dispatcher_postgres.py (Slice97 webhook dispatcher), test_slice98_abac_durable_store_postgres.py, test_slice98_access_admin_api_postgres.py, test_slice98_break_glass_workflow_postgres.py, test_slice98_byok_legal_hold_postgres.py, test_slice98_durable_residency_postgres.py, test_slice98_erasure_export_postgres.py, test_slice98_retention_janitor_postgres.py (Slice98 durable auth/ABAC/compliance)"
-          pytest tests/test_postgres_rls_and_audit_immutability.py tests/test_api_deals_postgres.py tests/test_api_claims_postgres.py tests/test_postgres_break_attempts.py tests/test_api_run_observability_postgres.py tests/test_api_default_upload_ingestion_postgres.py tests/test_api_full_run_step_name_postgres.py tests/test_api_full_run_durable_evidence_postgres.py tests/test_api_selected_multidocument_full_acceptance_postgres.py tests/test_api_sanad_auto_grade_persistence_postgres.py tests/test_slice96_provider_budget_postgres.py tests/test_slice96_idempotency_ttl_postgres.py tests/test_slice97_webhook_outbox_postgres.py tests/test_slice97_webhook_dispatcher_postgres.py tests/test_slice98_abac_durable_store_postgres.py tests/test_slice98_access_admin_api_postgres.py tests/test_slice98_break_glass_workflow_postgres.py tests/test_slice98_byok_legal_hold_postgres.py tests/test_slice98_durable_residency_postgres.py tests/test_slice98_erasure_export_postgres.py tests/test_slice98_retention_janitor_postgres.py -v --junitxml=postgres_integration_pytest.xml 2>&1 | tee postgres_integration_pytest.log
+          pytest tests/test_postgres_rls_and_audit_immutability.py tests/test_api_deals_postgres.py tests/test_api_claims_postgres.py tests/test_postgres_break_attempts.py tests/test_api_run_observability_postgres.py tests/test_api_default_upload_ingestion_postgres.py tests/test_api_full_run_step_name_postgres.py tests/test_api_full_run_durable_evidence_postgres.py tests/test_api_selected_multidocument_full_acceptance_postgres.py tests/test_api_sanad_auto_grade_persistence_postgres.py tests/test_slice96_provider_budget_postgres.py tests/test_slice96_idempotency_ttl_postgres.py tests/test_slice97_webhook_outbox_postgres.py tests/test_slice97_webhook_dispatcher_postgres.py tests/test_slice98_abac_durable_store_postgres.py tests/test_slice98_access_admin_api_postgres.py tests/test_slice98_break_glass_workflow_postgres.py tests/test_slice98_byok_legal_hold_postgres.py tests/test_slice98_durable_residency_postgres.py tests/test_slice98_erasure_export_postgres.py tests/test_slice98_retention_janitor_postgres.py tests/slice100_task8/test_v27_sql_authority_postgres_census_red.py::test_v27_create_and_drop_disposable_database_against_postgres -v --junitxml=postgres_integration_pytest.xml 2>&1 | tee postgres_integration_pytest.log
           exit ${PIPESTATUS[0]}
 
       - name: Reject skipped tests in the original PostgreSQL invocation
@@ -282,13 +282,268 @@ jobs:
               raise SystemExit("REQUIRED_PYTEST_SKIPPED")
           PY
 
+      - name: Restore governed Linux Poppler prefix
+        id: pg-poppler-cache
+        if: ${{ !cancelled() && steps.pg-install.outcome == 'success' && steps.pg-ceiling.outcome == 'success' && steps.pg-roles.outcome == 'success' && steps.pg-bootstrap.outcome == 'success' && steps.pg-verify.outcome == 'success' && steps.c3-setup.outcome == 'success' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: poppler-linux-prefix
+          key: "poppler-linux-prefix-v1|Linux|X64|c18b40eb36b1a0c5b86e29ca054bf0770304583da4f2cdd42fe86eca6a20de48|e0ff366be570c7e30c5d354a51af83f76b6c2d05ee2bce73a43e68db8f9ae7fd"
+
+      - name: Build and admit the governed Linux Poppler prefix
+        id: pg-governed-poppler
+        if: ${{ !cancelled() && steps.pg-install.outcome == 'success' && steps.pg-ceiling.outcome == 'success' && steps.pg-roles.outcome == 'success' && steps.pg-bootstrap.outcome == 'success' && steps.pg-verify.outcome == 'success' && steps.c3-setup.outcome == 'success' }}
+        env:
+          POPPLER_LINUX_SOURCE_SHA256: c18b40eb36b1a0c5b86e29ca054bf0770304583da4f2cdd42fe86eca6a20de48
+          POPPLER_LINUX_SOURCE_SIZE_BYTES: "1992456"
+          POPPLER_LINUX_RECIPE_SHA256: e0ff366be570c7e30c5d354a51af83f76b6c2d05ee2bce73a43e68db8f9ae7fd
+          POPPLER_LINUX_PREFIX: /opt/idis-native/poppler-25.12.0
+          POPPLER_CACHE_HIT: ${{ steps.pg-poppler-cache.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          prefix_host="${GITHUB_WORKSPACE}/poppler-linux-prefix"
+          mkdir -p "${prefix_host}"
+          image="python:3.11-slim-bookworm@sha256:04cd27899595a99dfe77709d96f08876bf2ee99139ee2f0fe9ac948005034e5b"
+          cat > "${RUNNER_TEMP}/pg-governed-poppler-build.sh" <<'EOF'
+          set -euo pipefail
+          export PYTHONDONTWRITEBYTECODE=1
+          mkdir -p /opt/idis-poppler-build
+          python - <<'PY'
+          import hashlib
+          import urllib.request
+          from pathlib import Path
+
+          destination = Path("/opt/idis-poppler-build/poppler-25.12.0.tar.xz")
+          urllib.request.urlretrieve(
+              "https://poppler.freedesktop.org/poppler-25.12.0.tar.xz",
+              destination,
+          )
+          print("POPPLER_LINUX_SOURCE_SHA256=" + hashlib.sha256(destination.read_bytes()).hexdigest())
+          recipe = Path("/opt/idis-poppler-build/recipe-v2.json")
+          print("POPPLER_LINUX_RECIPE_SHA256=" + hashlib.sha256(recipe.read_bytes()).hexdigest())
+          PY
+          python "${GITHUB_WORKSPACE}/scripts/build_linux_poppler_prefix.py" \
+            --prefix /opt/idis-native/poppler-25.12.0 \
+            --recipe /opt/idis-poppler-build/recipe-v2.json \
+            --source /opt/idis-poppler-build/poppler-25.12.0.tar.xz \
+            --manifest-out /opt/idis-native/poppler-25.12.0/share/idis/poppler-linux-prefix-identity-v1.json
+          cp /opt/idis-poppler-build/poppler-25.12.0.tar.xz "${RUNNER_TEMP}/poppler-25.12.0.tar.xz"
+          EOF
+          cat > "${RUNNER_TEMP}/pg-governed-poppler-admit.sh" <<'EOF'
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          export PYTHONDONTWRITEBYTECODE=1
+          apt-mark hold libc6 liblzma5 libpcre2-8-0
+          python "${GITHUB_WORKSPACE}/scripts/build_linux_poppler_prefix.py" --install-runtime-closure
+          PYTHONPATH="${GITHUB_WORKSPACE}/src" python - <<'PY'
+          import hashlib
+          import importlib.util
+          import os
+          import sys
+          from pathlib import Path
+
+          from idis.parsers.poppler_linux_runtime import admit_linux_poppler_prefix
+
+          prefix = Path("/opt/idis-native/poppler-25.12.0")
+          admit_linux_poppler_prefix(prefix)
+          manifest = prefix / "share/idis/poppler-linux-prefix-identity-v1.json"
+          print("POPPLER_LINUX_MANIFEST_SHA256=" + hashlib.sha256(manifest.read_bytes()).hexdigest())
+          print("POPPLER_LINUX_ADMISSION=ADMITTED")
+          workspace = Path(os.environ["GITHUB_WORKSPACE"])
+          recipe = workspace / "native/poppler/recipe-v2.json"
+          print("POPPLER_LINUX_RECIPE_SHA256=" + hashlib.sha256(recipe.read_bytes()).hexdigest())
+          source = Path(os.environ["POPPLER_SOURCE_ARCHIVE"]) if os.environ.get("POPPLER_SOURCE_ARCHIVE") else None
+          if source is not None and source.is_file():
+              print("POPPLER_LINUX_SOURCE_SHA256=" + hashlib.sha256(source.read_bytes()).hexdigest())
+          else:
+              print("POPPLER_LINUX_SOURCE_SHA256_PINNED=" + os.environ["POPPLER_LINUX_SOURCE_SHA256"])
+          spec = importlib.util.spec_from_file_location(
+              "poppler_prefix_build",
+              workspace / "scripts/build_linux_poppler_prefix.py",
+          )
+          if spec is None or spec.loader is None:
+              raise SystemExit(1)
+          module = importlib.util.module_from_spec(spec)
+          sys.modules[spec.name] = module
+          spec.loader.exec_module(module)
+          for suite, root in sorted(module.SNAPSHOT_ROOTS.items()):
+              print("POPPLER_LINUX_SNAPSHOT_ROOT_" + suite.upper().replace("-", "_") + "=" + root)
+          PY
+          EOF
+          if [[ "${POPPLER_CACHE_HIT}" != "true" ]]; then
+            docker run --rm \
+              -v "${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}:ro" \
+              -v "${RUNNER_TEMP}:${RUNNER_TEMP}" \
+              -v "${prefix_host}:/opt/idis-native/poppler-25.12.0" \
+              -v "${GITHUB_WORKSPACE}/native/poppler/recipe-v2.json:/opt/idis-poppler-build/recipe-v2.json:ro" \
+              -e GITHUB_WORKSPACE \
+              -e RUNNER_TEMP \
+              -w "${GITHUB_WORKSPACE}" \
+              "${image}" \
+              bash "${RUNNER_TEMP}/pg-governed-poppler-build.sh" \
+              | tee "${RUNNER_TEMP}/pg-governed-poppler-build.log"
+          fi
+          admit_prefix() {
+            docker run --rm \
+              -v "${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}:ro" \
+              -v "${RUNNER_TEMP}:${RUNNER_TEMP}" \
+              -v "${prefix_host}:/opt/idis-native/poppler-25.12.0:ro" \
+              -v "${prefix_host}:${GITHUB_WORKSPACE}/poppler-linux-prefix:ro" \
+              -e GITHUB_WORKSPACE \
+              -e PYTHONPATH="${GITHUB_WORKSPACE}/src" \
+              -e POPPLER_LINUX_SOURCE_SHA256 \
+              -e POPPLER_LINUX_RECIPE_SHA256 \
+              "$@" \
+              -w "${GITHUB_WORKSPACE}" \
+              "${image}" \
+              bash "${RUNNER_TEMP}/pg-governed-poppler-admit.sh"
+          }
+          if [[ "${POPPLER_CACHE_HIT}" != "true" && -f "${RUNNER_TEMP}/poppler-25.12.0.tar.xz" ]]; then
+            admit_prefix -e "POPPLER_SOURCE_ARCHIVE=${RUNNER_TEMP}/poppler-25.12.0.tar.xz" \
+              > "${RUNNER_TEMP}/pg-governed-poppler-admit.log"
+          else
+            admit_prefix > "${RUNNER_TEMP}/pg-governed-poppler-admit.log"
+          fi
+          cat "${RUNNER_TEMP}/pg-governed-poppler-admit.log"
+          admission_manifest_line="$(grep '^POPPLER_LINUX_MANIFEST_SHA256=' "${RUNNER_TEMP}/pg-governed-poppler-admit.log")"
+          if [[ "${POPPLER_CACHE_HIT}" != "true" ]]; then
+            build_manifest_line="$(grep '^POPPLER_LINUX_MANIFEST_SHA256=' "${RUNNER_TEMP}/pg-governed-poppler-build.log")"
+            printf '%s\n' "${build_manifest_line}"
+            printf '%s\n' "${admission_manifest_line}"
+            if [[ "${build_manifest_line}" != "${admission_manifest_line}" ]]; then
+              echo "pg-governed-poppler: build manifest line does not equal the admission line" >&2
+              exit 1
+            fi
+          fi
+          printf '%s\n' "${admission_manifest_line}" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Save governed Linux Poppler prefix
+        id: pg-poppler-cache-save
+        if: "${{ !cancelled() && steps.pg-install.outcome == 'success' && steps.pg-ceiling.outcome == 'success' && steps.pg-roles.outcome == 'success' && steps.pg-bootstrap.outcome == 'success' && steps.pg-verify.outcome == 'success' && steps.c3-setup.outcome == 'success' && steps.pg-governed-poppler.outcome == 'success' && steps.pg-poppler-cache.outputs.cache-hit != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}"
+        uses: actions/cache/save@v4
+        with:
+          path: poppler-linux-prefix
+          key: "poppler-linux-prefix-v1|Linux|X64|c18b40eb36b1a0c5b86e29ca054bf0770304583da4f2cdd42fe86eca6a20de48|e0ff366be570c7e30c5d354a51af83f76b6c2d05ee2bce73a43e68db8f9ae7fd"
+
       - name: Run required C2 and C3 PostgreSQL modules independently (REQUIRED)
         id: c3-tests
         if: ${{ !cancelled() && steps.pg-install.outcome == 'success' && steps.pg-ceiling.outcome == 'success' && steps.pg-roles.outcome == 'success' && steps.pg-bootstrap.outcome == 'success' && steps.pg-verify.outcome == 'success' && steps.c3-setup.outcome == 'success' }}
         env:
           IDIS_CI_POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
         run: |
-          env -u IDIS_DATABASE_URL -u IDIS_DATABASE_ADMIN_URL -u IDIS_DATABASE_ERASURE_URL -u IDIS_ERASURE_DATABASE_URL -u IDIS_REQUIRE_POSTGRES python scripts/pg_bootstrap_ci.py --run-required-preview-postgres 2>&1 | tee c3_postgres_integration_pytest.log
+          set -euo pipefail
+          HOST_UID="$(id -u)"
+          HOST_GID="$(id -g)"
+          export HOST_UID HOST_GID
+          mkdir -p "${RUNNER_TEMP}/idis-c3-venv"
+          cat > "${RUNNER_TEMP}/idis-c3-inside.sh" <<'EOF'
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          manifest = Path(
+              "/opt/idis-native/poppler-25.12.0/share/idis/"
+              "poppler-linux-prefix-identity-v1.json"
+          )
+          digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+          print("POPPLER_LINUX_MANIFEST_SHA256=" + digest)
+          runner = Path(os.environ["RUNNER_TEMP"])
+          sources = []
+          build_log = runner / "pg-governed-poppler-build.log"
+          admit_log = runner / "pg-governed-poppler-admit.log"
+          if build_log.is_file():
+              sources.append(build_log)
+          if admit_log.is_file():
+              sources.append(admit_log)
+          if not sources:
+              raise SystemExit("POPPLER_LINUX_MANIFEST_SHA256 source log is absent")
+          observed = []
+          for source in sources:
+              found = [
+                  row.split("=", 1)[1]
+                  for row in source.read_text(encoding="utf-8", errors="replace").splitlines()
+                  if row.startswith("POPPLER_LINUX_MANIFEST_SHA256=")
+              ]
+              if len(found) != 1:
+                  raise SystemExit(
+                      "POPPLER_LINUX_MANIFEST_SHA256 count in "
+                      + source.name
+                      + " is "
+                      + str(len(found))
+                  )
+              observed.append(found[0])
+          if any(value != digest for value in observed):
+              raise SystemExit("POPPLER_LINUX_MANIFEST_SHA256 mismatch")
+          PY
+          export DEBIAN_FRONTEND=noninteractive
+          apt-mark hold libc6 liblzma5 libpcre2-8-0
+          python "${GITHUB_WORKSPACE}/scripts/build_linux_poppler_prefix.py" --install-runtime-closure
+          python - <<'PY'
+          import importlib.util
+          import os
+          import sys
+          from pathlib import Path
+
+          script = Path(os.environ["GITHUB_WORKSPACE"]) / "scripts/build_linux_poppler_prefix.py"
+          spec = importlib.util.spec_from_file_location("poppler_prefix_build", script)
+          if spec is None or spec.loader is None:
+              raise SystemExit(1)
+          module = importlib.util.module_from_spec(spec)
+          sys.modules[spec.name] = module
+          spec.loader.exec_module(module)
+          names = [body.package for body in module._runtime_closure_bodies()]
+          Path("/tmp/idis-closure-holds.txt").write_text(" ".join(names))
+          PY
+          apt-mark hold $(cat /tmp/idis-closure-holds.txt)
+          apt-get update
+          apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng
+          python "${GITHUB_WORKSPACE}/scripts/build_linux_poppler_prefix.py" --assert-runtime-closure
+          if command -v pdfinfo >/dev/null 2>&1 || command -v pdftoppm >/dev/null 2>&1; then echo "Poppler binaries must not be on PATH in the c3 container" >&2; exit 1; fi
+          if ! command -v setpriv >/dev/null 2>&1; then
+            echo "setpriv is required in the pinned image and was not found" >&2
+            exit 1
+          fi
+          exec setpriv --reuid="${HOST_UID}" --regid="${HOST_GID}" --clear-groups -- bash "${RUNNER_TEMP}/idis-c3-dropped.sh"
+          EOF
+          cat > "${RUNNER_TEMP}/idis-c3-dropped.sh" <<'EOF'
+          set -euo pipefail
+          export HOME="${RUNNER_TEMP}/idis-c3-home"
+          mkdir -p "${HOME}"
+          python -m venv "${GITHUB_WORKSPACE}/.venv"
+          "${GITHUB_WORKSPACE}/.venv/bin/python" -m pip --isolated install --index-url https://pypi.org/simple "pip==26.2.1"
+          "${GITHUB_WORKSPACE}/.venv/bin/python" -m pip --isolated install --index-url https://pypi.org/simple -c requirements/constraints-py311.txt --build-constraint requirements/constraints-py311.txt -e ".[dev]" setuptools wheel
+          "${GITHUB_WORKSPACE}/.venv/bin/python" -m pip check
+          "${GITHUB_WORKSPACE}/.venv/bin/python" scripts/verify_dependency_resolution.py
+          export PATH="${GITHUB_WORKSPACE}/.venv/bin:${PATH}"
+          env -u IDIS_DATABASE_URL -u IDIS_DATABASE_ADMIN_URL -u IDIS_DATABASE_ERASURE_URL -u IDIS_ERASURE_DATABASE_URL -u IDIS_REQUIRE_POSTGRES python scripts/pg_bootstrap_ci.py --run-required-preview-postgres
+          EOF
+          set +e
+          docker run --rm --network host \
+            -v "${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}" \
+            -v "${GITHUB_WORKSPACE}/poppler-linux-prefix:/opt/idis-native/poppler-25.12.0:ro" \
+            -v "${GITHUB_WORKSPACE}/poppler-linux-prefix:${GITHUB_WORKSPACE}/poppler-linux-prefix:ro" \
+            -v "${RUNNER_TEMP}/idis-c3-venv:${GITHUB_WORKSPACE}/.venv" \
+            -v "${RUNNER_TEMP}:${RUNNER_TEMP}" \
+            -e HOST_UID \
+            -e HOST_GID \
+            -e PG_ADMIN_USER \
+            -e PG_ADMIN_PASSWORD \
+            -e IDIS_PG_APP_USER \
+            -e IDIS_PG_APP_PASSWORD \
+            -e IDIS_PG_DB_NAME \
+            -e IDIS_PG_HOST \
+            -e IDIS_PG_PORT \
+            -e IDIS_CI_POSTGRES_SERVICE_ID \
+            -e GITHUB_RUN_ID \
+            -e GITHUB_RUN_ATTEMPT \
+            -e GITHUB_WORKSPACE \
+            -e RUNNER_TEMP \
+            -w "${GITHUB_WORKSPACE}" \
+            python:3.11-slim-bookworm@sha256:04cd27899595a99dfe77709d96f08876bf2ee99139ee2f0fe9ac948005034e5b \
+            bash "${RUNNER_TEMP}/idis-c3-inside.sh" \
+            2>&1 | tee c3_postgres_integration_pytest.log
           exit ${PIPESTATUS[0]}
 
       - name: Reject skipped tests in the required C2 and C3 invocation
@@ -302,6 +557,223 @@ jobs:
           skipped = sum(int(suite.get("skipped", 0)) for suite in suites)
           if skipped > 0:
               raise SystemExit("REQUIRED_PYTEST_SKIPPED")
+          PY
+
+      - name: Run the Linux-Poppler closed list
+        id: c3-linux-poppler
+        if: ${{ !cancelled() && steps.pg-governed-poppler.outcome == 'success' }}
+        env:
+          IDIS_CI_POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          HOST_UID="$(id -u)"
+          HOST_GID="$(id -g)"
+          export HOST_UID HOST_GID
+          cat > "${RUNNER_TEMP}/idis-linux-poppler-inside.sh" <<'EOF'
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          manifest = Path(
+              "/opt/idis-native/poppler-25.12.0/share/idis/"
+              "poppler-linux-prefix-identity-v1.json"
+          )
+          digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+          print("POPPLER_LINUX_MANIFEST_SHA256=" + digest)
+          runner = Path(os.environ["RUNNER_TEMP"])
+          sources = []
+          build_log = runner / "pg-governed-poppler-build.log"
+          admit_log = runner / "pg-governed-poppler-admit.log"
+          if build_log.is_file():
+              sources.append(build_log)
+          if admit_log.is_file():
+              sources.append(admit_log)
+          if not sources:
+              raise SystemExit("POPPLER_LINUX_MANIFEST_SHA256 source log is absent")
+          observed = []
+          for source in sources:
+              found = [
+                  row.split("=", 1)[1]
+                  for row in source.read_text(encoding="utf-8", errors="replace").splitlines()
+                  if row.startswith("POPPLER_LINUX_MANIFEST_SHA256=")
+              ]
+              if len(found) != 1:
+                  raise SystemExit(
+                      "POPPLER_LINUX_MANIFEST_SHA256 count in "
+                      + source.name
+                      + " is "
+                      + str(len(found))
+                  )
+              observed.append(found[0])
+          if any(value != digest for value in observed):
+              raise SystemExit("POPPLER_LINUX_MANIFEST_SHA256 mismatch")
+          PY
+          export DEBIAN_FRONTEND=noninteractive
+          apt-mark hold libc6 liblzma5 libpcre2-8-0
+          python "${GITHUB_WORKSPACE}/scripts/build_linux_poppler_prefix.py" --install-runtime-closure
+          python - <<'PY'
+          import importlib.util
+          import os
+          import sys
+          from pathlib import Path
+
+          script = Path(os.environ["GITHUB_WORKSPACE"]) / "scripts/build_linux_poppler_prefix.py"
+          spec = importlib.util.spec_from_file_location("poppler_prefix_build", script)
+          if spec is None or spec.loader is None:
+              raise SystemExit(1)
+          module = importlib.util.module_from_spec(spec)
+          sys.modules[spec.name] = module
+          spec.loader.exec_module(module)
+          names = [body.package for body in module._runtime_closure_bodies()]
+          Path("/tmp/idis-closure-holds.txt").write_text(" ".join(names))
+          PY
+          apt-mark hold $(cat /tmp/idis-closure-holds.txt)
+          apt-get update
+          apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng
+          python "${GITHUB_WORKSPACE}/scripts/build_linux_poppler_prefix.py" --assert-runtime-closure
+          if command -v pdfinfo >/dev/null 2>&1 || command -v pdftoppm >/dev/null 2>&1; then echo "Poppler binaries must not be on PATH in the c3 container" >&2; exit 1; fi
+          if ! command -v setpriv >/dev/null 2>&1; then
+            echo "setpriv is required in the pinned image and was not found" >&2
+            exit 1
+          fi
+          exec setpriv --reuid="${HOST_UID}" --regid="${HOST_GID}" --clear-groups -- bash "${RUNNER_TEMP}/idis-linux-poppler-dropped.sh"
+          EOF
+          cat > "${RUNNER_TEMP}/idis-linux-poppler-dropped.sh" <<'EOF'
+          set -euo pipefail
+          export HOME="${RUNNER_TEMP}/idis-linux-poppler-home"
+          mkdir -p "${HOME}"
+          export PATH="${GITHUB_WORKSPACE}/.venv/bin:${PATH}"
+          python scripts/pg_bootstrap_ci.py --run-linux-poppler-closed-list
+          EOF
+          set +e
+          docker run --rm --network host \
+            -v "${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}" \
+            -v "${GITHUB_WORKSPACE}/poppler-linux-prefix:/opt/idis-native/poppler-25.12.0:ro" \
+            -v "${GITHUB_WORKSPACE}/poppler-linux-prefix:${GITHUB_WORKSPACE}/poppler-linux-prefix:ro" \
+            -v "${RUNNER_TEMP}/idis-c3-venv:${GITHUB_WORKSPACE}/.venv" \
+            -v "${RUNNER_TEMP}:${RUNNER_TEMP}" \
+            -e HOST_UID \
+            -e HOST_GID \
+            -e PG_ADMIN_USER \
+            -e PG_ADMIN_PASSWORD \
+            -e IDIS_PG_APP_USER \
+            -e IDIS_PG_APP_PASSWORD \
+            -e IDIS_PG_DB_NAME \
+            -e IDIS_PG_HOST \
+            -e IDIS_PG_PORT \
+            -e IDIS_CI_POSTGRES_SERVICE_ID \
+            -e GITHUB_RUN_ID \
+            -e GITHUB_RUN_ATTEMPT \
+            -e GITHUB_WORKSPACE \
+            -e RUNNER_TEMP \
+            -w "${GITHUB_WORKSPACE}" \
+            python:3.11-slim-bookworm@sha256:04cd27899595a99dfe77709d96f08876bf2ee99139ee2f0fe9ac948005034e5b \
+            bash "${RUNNER_TEMP}/idis-linux-poppler-inside.sh" \
+            2>&1 | tee c3_linux_poppler_pytest.log
+          exit ${PIPESTATUS[0]}
+
+      - name: Assert the Linux-Poppler closed list executed
+        id: c3-linux-poppler-count
+        if: ${{ !cancelled() && steps.pg-governed-poppler.outcome == 'success' }}
+        run: |
+          .venv/bin/python - <<'PY'
+          import subprocess
+          import sys
+          import xml.etree.ElementTree as ET
+
+          completed = subprocess.run(
+              [sys.executable, "-m", "tests._linux_poppler_gate", "--node-ids"],
+              check=True,
+              capture_output=True,
+              text=True,
+          )
+          expected = [line for line in completed.stdout.splitlines() if line]
+          if len(expected) == 0:
+              raise SystemExit("LINUX_POPPLER node id list is empty")
+
+          def listed(flag: str) -> list[str]:
+              completed = subprocess.run(
+                  [sys.executable, "-m", "tests._linux_poppler_gate", "--node-ids", flag],
+                  check=True,
+                  capture_output=True,
+                  text=True,
+              )
+              rows = [line for line in completed.stdout.splitlines() if line]
+              if len(rows) == 0:
+                  raise SystemExit("LINUX_POPPLER node id list is empty")
+              return rows
+
+          no_database = listed("--no-database-class")
+          database = listed("--database-class")
+          if set(no_database) & set(database) or set(no_database) | set(database) != set(expected):
+              raise SystemExit("LINUX_POPPLER identities differ")
+
+          def assert_file(path: str, class_ids: list[str]) -> list[str]:
+              root = ET.parse(path).getroot()
+              suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+              collected = sum(int(suite.get("tests", 0)) for suite in suites)
+              failed = sum(int(suite.get("failures", 0)) for suite in suites)
+              errors = sum(int(suite.get("errors", 0)) for suite in suites)
+              skipped = sum(int(suite.get("skipped", 0)) for suite in suites)
+              passed = collected - failed - errors - skipped
+              expected = class_ids
+              if (
+                  collected != len(expected)
+                  or passed != len(expected)
+                  or failed != 0
+                  or errors != 0
+                  or skipped != 0
+              ):
+                  raise SystemExit(
+                      "LINUX_POPPLER counts collected="
+                      + str(collected)
+                      + " passed="
+                      + str(passed)
+                      + " failed="
+                      + str(failed)
+                      + " errors="
+                      + str(errors)
+                      + " skipped="
+                      + str(skipped)
+                      + " expected="
+                      + str(len(expected))
+                  )
+              suffix = " <- tests/_linux_poppler_gate.py"
+              actual = []
+              for case in root.iter("testcase"):
+                  classname = (case.get("classname") or "").replace(suffix, "")
+                  name = (case.get("name") or "").replace(suffix, "")
+                  parts = classname.split(".")
+                  module_parts = []
+                  class_parts = []
+                  for part in parts:
+                      if class_parts or part[:1].isupper():
+                          class_parts.append(part)
+                      else:
+                          module_parts.append(part)
+                  node_id = "/".join(module_parts) + ".py"
+                  node_id = "::".join([node_id, *class_parts, name])
+                  actual.append(node_id)
+              if len(actual) != len(expected) or set(actual) != set(expected):
+                  raise SystemExit("LINUX_POPPLER identities differ")
+              not_executed = 0
+              for case in root.iter("testcase"):
+                  for prop in case.iter("property"):
+                      name_matches = prop.get("name") == "linux_poppler"
+                      if name_matches and "NOT_EXECUTED" in (prop.get("value") or ""):
+                          not_executed += 1
+              if not_executed != 0:
+                  raise SystemExit(
+                      "LINUX_POPPLER NOT_EXECUTED properties=" + str(not_executed)
+                  )
+              return actual
+
+          file_one = assert_file("c3_linux_poppler_pytest.xml", no_database)
+          file_two = assert_file("c3_linux_poppler_database_pytest.xml", database)
+          if set(file_one) & set(file_two) or set(file_one) | set(file_two) != set(expected):
+              raise SystemExit("LINUX_POPPLER identities differ")
           PY
 
       - name: Run required dev-0039 restart node
@@ -1339,6 +1811,51 @@ jobs:
           fi
           echo "[FAIL] Health check failed"
           exit 1
+
+      - name: Run the loader negative in the step-21 image
+        id: loader-negative
+        if: "always() && steps.container_health.outcome != 'skipped'"
+        run: |
+          set -euo pipefail
+          cat > "${RUNNER_TEMP}/idis-loader-negative.sh" <<'EOF'
+          set -euo pipefail
+          mkdir -p /tmp/idis-pyc
+          python -m pip --isolated install --index-url https://pypi.org/simple \
+            -c "${GITHUB_WORKSPACE}/requirements/constraints-py311.txt" \
+            --target /tmp/idis-loader-pytest \
+            pytest
+          PYTHONPATH="/tmp/idis-loader-pytest" \
+            PYTHONDONTWRITEBYTECODE=1 \
+            PYTHONPYCACHEPREFIX=/tmp/idis-pyc \
+            python -m pytest -p no:cacheprovider -q \
+            --junitxml="${GITHUB_WORKSPACE}/loader_negative_pytest.xml" \
+            tests/slice100_task4/test_linux_poppler_loader_negative.py
+          EOF
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e HOME=/tmp \
+            -e IDIS_REQUIRE_LOADER_NEGATIVE=1 \
+            -e GITHUB_WORKSPACE \
+            -v "${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}" \
+            -v "${GITHUB_WORKSPACE}/tests:${GITHUB_WORKSPACE}/tests:ro" \
+            -v "${RUNNER_TEMP}:${RUNNER_TEMP}" \
+            -w "${GITHUB_WORKSPACE}" \
+            "idis:ci-${GITHUB_SHA}" \
+            bash "${RUNNER_TEMP}/idis-loader-negative.sh"
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse("loader_negative_pytest.xml").getroot()
+          suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+          tests = sum(int(suite.get("tests", 0)) for suite in suites)
+          failures = sum(int(suite.get("failures", 0)) for suite in suites)
+          errors = sum(int(suite.get("errors", 0)) for suite in suites)
+          skipped = sum(int(suite.get("skipped", 0)) for suite in suites)
+          if tests != 1 or failures != 0 or errors != 0 or skipped != 0:
+              raise SystemExit(
+                  "LOADER_NEGATIVE_COUNT "
+                  f"tests={tests} failures={failures} errors={errors} skipped={skipped}"
+              )
+          PY
       - name: Record launch audit, topology, and maintenance absence
         id: launch-proof
         if: "always() && steps.start-api.outcome != 'skipped'"

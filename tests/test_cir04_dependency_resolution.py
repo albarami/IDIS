@@ -33,9 +33,24 @@ _SHARED_INSTALL_LINES = (
 )
 _GITHUB_PATH_LINE = 'echo "$PWD/.venv/bin" >> "$GITHUB_PATH"'
 _INSTALL_COMPOSITION_RUN = "\n".join(("set -euo pipefail", *_SHARED_INSTALL_LINES)) + "\n"
+_C3_DROPPED_INSTALL_SEQUENCE = "\n".join(
+    (
+        'python -m venv "${GITHUB_WORKSPACE}/.venv"',
+        '"${GITHUB_WORKSPACE}/.venv/bin/python" -m pip --isolated install --index-url '
+        'https://pypi.org/simple "pip==26.2.1"',
+        '"${GITHUB_WORKSPACE}/.venv/bin/python" -m pip --isolated install --index-url '
+        "https://pypi.org/simple -c requirements/constraints-py311.txt "
+        "--build-constraint requirements/constraints-py311.txt "
+        '-e ".[dev]" setuptools wheel',
+        '"${GITHUB_WORKSPACE}/.venv/bin/python" -m pip check',
+        '"${GITHUB_WORKSPACE}/.venv/bin/python" scripts/verify_dependency_resolution.py',
+    )
+)
 _MIGRATION_CEILING_RUN = "set -euo pipefail\n.venv/bin/python scripts/check_migration_ceiling.py\n"
 _HISTORICAL_CEILING_RUN = "python scripts/check_migration_ceiling.py"
 _VENV_MARKER = "python -m venv .venv"
+# The c3 venv and verifier lines are covered by _C3_DROPPED_INSTALL_SEQUENCE,
+# not by the marker counts.
 _COUNT_MARKERS = (
     _VENV_MARKER,
     "setuptools wheel",
@@ -49,7 +64,7 @@ _COUNT_MARKERS = (
 _F99595EF_JOB_COUNTS: dict[str, tuple[int, ...]] = {
     "ui-check": (0, 0, 0, 0, 0, 0, 0),
     "check": (1, 1, 1, 1, 1, 1, 1),
-    "postgres-integration": (1, 1, 1, 1, 1, 1, 1),
+    "postgres-integration": (1, 2, 1, 2, 2, 1, 1),
     "evaluation-harness": (1, 1, 1, 1, 1, 1, 0),
     "container-build": (1, 1, 1, 1, 1, 1, 0),
     "k8s-validate": (0, 0, 0, 0, 0, 0, 0),
@@ -292,13 +307,13 @@ class DependencyWiringTests(unittest.TestCase):
     def test_every_ci_install_uses_a_fresh_environment_and_pinned_seed_tools(self) -> None:
         workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         self.assertEqual(workflow.count("python -m venv .venv"), 7)
-        self.assertEqual(workflow.count("setuptools wheel"), 7)
+        self.assertEqual(workflow.count("setuptools wheel"), 8)
         self.assertEqual(workflow.count('echo "$PWD/.venv/bin" >> "$GITHUB_PATH"'), 6)
 
     def test_ci_retains_checks_and_bounds_all_dependency_installations(self) -> None:
         workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        self.assertEqual(workflow.count("--build-constraint requirements/constraints-py311.txt"), 7)
-        self.assertEqual(workflow.count('"pip==26.2.1"'), 7)
+        self.assertEqual(workflow.count("--build-constraint requirements/constraints-py311.txt"), 8)
+        self.assertEqual(workflow.count('"pip==26.2.1"'), 8)
         self.assertEqual(workflow.count("python scripts/verify_dependency_resolution.py"), 7)
         self.assertIn("pytest tests/test_slice99_backup_restore_postgres.py -v", workflow)
         self.assertEqual(workflow.count("python scripts/check_migration_ceiling.py"), 4)
@@ -448,6 +463,18 @@ class DependencyWiringTests(unittest.TestCase):
                 totals[index] += count
         for marker, total in zip(_COUNT_MARKERS, totals, strict=True):
             self.assertEqual(workflow_text.count(marker), total, marker)
+
+    def test_c3_dropped_script_install_sequence_is_exact(self) -> None:
+        workflow = yaml.safe_load(
+            (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        )
+        step = next(
+            item
+            for item in workflow["jobs"]["postgres-integration"]["steps"]
+            if item.get("id") == "c3-tests"
+        )
+        self.assertIn(_C3_DROPPED_INSTALL_SEQUENCE, step["run"])
+        self.assertEqual(step["run"].count(_C3_DROPPED_INSTALL_SEQUENCE), 1)
 
     def test_docker_uses_the_same_runtime_and_build_constraints(self) -> None:
         dockerfile = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")

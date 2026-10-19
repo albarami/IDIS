@@ -124,10 +124,25 @@ def _context(**kwargs: Any) -> RunContext:
     )
 
 
+def _refuse_pinned_poppler(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep host Poppler identity out of these admission rows."""
+
+    from idis.parsers.poppler_runtime import PopplerRuntimeBindingError
+
+    def unavailable(*_args: object, **_kwargs: object) -> None:
+        raise PopplerRuntimeBindingError("POPPLER_RUNTIME_UNAVAILABLE")
+
+    monkeypatch.setattr(
+        "idis.parsers.poppler_runtime.resolve_pinned_poppler_runtime",
+        unavailable,
+    )
+
+
 def test_production_builder_revalidates_consumed_proof_in_fresh_closed_transaction(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _refuse_pinned_poppler(monkeypatch)
     from tests.slice100_task2.test_strict_profile_conformance import _reviewed_profile
 
     profile = _reviewed_profile(
@@ -201,6 +216,7 @@ def test_production_builder_blocks_provider_composition_on_proof_mismatch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _refuse_pinned_poppler(monkeypatch)
     from tests.slice100_task2.test_strict_profile_conformance import _reviewed_profile
 
     profile = _reviewed_profile(
@@ -367,6 +383,7 @@ def test_strict_full_rejects_unsafe_claim_before_consumed_proof_or_composition(
     resume_state: str | None,
     error_code: str,
 ) -> None:
+    _refuse_pinned_poppler(monkeypatch)
     from tests.slice100_task2.test_strict_profile_conformance import _reviewed_profile
 
     profile = _reviewed_profile(
@@ -419,6 +436,8 @@ def test_injected_current_strict_full_checks_graph_before_corpus_and_report(
 def test_current_strict_full_rejects_graph_failure_before_corpus_or_provider(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, seam: str
 ) -> None:
+    if seam == "production":
+        _refuse_pinned_poppler(monkeypatch)
     from tests.slice100_task2.test_strict_profile_conformance import _reviewed_profile
 
     profile = _reviewed_profile(

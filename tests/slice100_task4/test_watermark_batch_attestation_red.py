@@ -23,6 +23,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from idis.runtime import governance_envelopes
 from idis.runtime.governance_envelopes import canonicalize_json
+from tests._linux_poppler_gate import requires_linux_governed_poppler
 
 MANIFEST_SCHEMA_VERSION = "document-no-substantive-content-attestation-manifest-v2"
 BATCH_SCHEMA_VERSION = "document-no-substantive-content-watermark-batch-attestation-v1"
@@ -223,10 +224,12 @@ def _canonical_bitmap() -> bytes:
     # exemplar.  Arbitrary 2,048-byte strings are not valid fixture exemplars.
     from pdf2image import convert_from_bytes
 
+    from idis.parsers.poppler_runtime import resolve_pinned_poppler_runtime
     from tests.slice100_task4.test_watermark_composition_root_red import (
         _packed_canonical_bitmap,
     )
 
+    binding = resolve_pinned_poppler_runtime()
     pages = convert_from_bytes(
         _exemplar_pdf_bytes(),
         dpi=200,
@@ -234,6 +237,7 @@ def _canonical_bitmap() -> bytes:
         last_page=1,
         fmt="png",
         thread_count=1,
+        poppler_path=str(binding.binary_dir),
     )
     assert len(pages) == 1
     with pages[0] as rendered_page:
@@ -355,6 +359,7 @@ def _verify(
     )
 
 
+@requires_linux_governed_poppler
 def test_batch_contract_pins_exact_schema_fields_order_and_governance_signing() -> None:
     module = _target()
     assert _required_attr("NO_SUBSTANTIVE_CONTENT_MANIFEST_SCHEMA_VERSION") == (
@@ -384,6 +389,7 @@ def test_batch_contract_pins_exact_schema_fields_order_and_governance_signing() 
     assert frozenset(verified.payload) == frozenset(BATCH_PAYLOAD_FIELDS)
 
 
+@requires_linux_governed_poppler
 def test_v2_manifest_verifies_both_envelopes_and_preserves_ordered_digests() -> None:
     private_pem, public_pem = _private_and_public_pem()
     manifest = _manifest(private_pem)
@@ -433,6 +439,7 @@ def test_v2_manifest_verifies_both_envelopes_and_preserves_ordered_digests() -> 
         ),
     ],
 )
+@requires_linux_governed_poppler
 def test_batch_rejects_order_duplicates_and_schema_drift(
     mutation: Any,
     expected_code: str,
@@ -461,6 +468,7 @@ def test_batch_rejects_order_duplicates_and_schema_drift(
         ("exemplar_canonical_bitmap_sha256", "b" * 64),
     ],
 )
+@requires_linux_governed_poppler
 def test_batch_rejects_digest_or_exemplar_drift(field: str, replacement: str) -> None:
     private_pem, public_pem = _private_and_public_pem()
     payload = _valid_batch_payload(private_pem)
@@ -480,6 +488,7 @@ def test_batch_rejects_digest_or_exemplar_drift(field: str, replacement: str) ->
         pytest.param("similarity_score", "0.900000", id="exemplar-not-exact-self-match"),
     ],
 )
+@requires_linux_governed_poppler
 def test_batch_rejects_signed_exemplar_candidate_identity_drift(
     field: str,
     replacement: object,
@@ -509,6 +518,7 @@ def test_batch_rejects_signed_exemplar_candidate_identity_drift(
     assert _code(caught.value) == "WATERMARK_BATCH_ATTESTATION_MISMATCH"
 
 
+@requires_linux_governed_poppler
 def test_batch_rejects_tampered_signature_and_untrusted_signer() -> None:
     private_pem, public_pem = _private_and_public_pem()
     manifest = _manifest(private_pem)
@@ -530,6 +540,7 @@ def test_batch_rejects_tampered_signature_and_untrusted_signer() -> None:
     assert _code(untrusted.value) == "GOVERNANCE_SIGNER_UNTRUSTED"
 
 
+@requires_linux_governed_poppler
 def test_batch_rejects_an_unresolved_prescan_even_when_its_hash_and_signature_match() -> None:
     private_pem, public_pem = _private_and_public_pem()
     prescan = _prescan_receipt(status="BLOCKED_PENDING_REVIEW", unresolved_count=1)
@@ -562,6 +573,7 @@ def test_batch_rejects_an_unresolved_prescan_even_when_its_hash_and_signature_ma
         datetime(2026, 11, 1, tzinfo=UTC),
     ],
 )
+@requires_linux_governed_poppler
 def test_batch_requires_active_half_open_reviewer_interval(now: datetime) -> None:
     private_pem, public_pem = _private_and_public_pem()
     with pytest.raises(_error_type()) as caught:
@@ -569,6 +581,7 @@ def test_batch_requires_active_half_open_reviewer_interval(now: datetime) -> Non
     assert _code(caught.value) == "WATERMARK_BATCH_ATTESTATION_NOT_ACTIVE"
 
 
+@requires_linux_governed_poppler
 def test_verified_batch_safe_summary_suppresses_private_material() -> None:
     private_pem, public_pem = _private_and_public_pem()
     verified = _verify(_manifest(private_pem), public_pem=public_pem)

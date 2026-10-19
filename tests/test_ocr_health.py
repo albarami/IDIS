@@ -15,6 +15,8 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 import idis.services.ocr_health as ocr_health
 from idis.parsers.poppler_runtime import PopplerRuntimeBindingError
 from idis.services.ocr_health import OcrHealthCheck, OcrHealthStatus, check_ocr_health
@@ -81,13 +83,24 @@ def test_missing_tesseract_binary() -> None:
     assert result.error is None
 
 
-def test_missing_poppler_pdfinfo_binary() -> None:
+def test_missing_poppler_pdfinfo_binary(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ocr_health.platform, "system", lambda: "Windows")
+
     def resolver(name: str) -> str | None:
         return None if name == ocr_health.POPPLER_PDFINFO_BINARY else f"/opt/bin/{name}"
 
     result = check_ocr_health(**_healthy_kwargs(binary_resolver=resolver))
     assert result.status is OcrHealthStatus.MISSING_DEPENDENCIES
     assert result.missing_dependencies == ["poppler"]
+
+    monkeypatch.setattr(ocr_health.platform, "system", lambda: "Linux")
+
+    def unavailable() -> None:
+        raise PopplerRuntimeBindingError("POPPLER_RUNTIME_UNAVAILABLE")
+
+    linux = check_ocr_health(**_healthy_kwargs(poppler_runtime_probe=unavailable))
+    assert linux.status is OcrHealthStatus.MISSING_DEPENDENCIES
+    assert linux.missing_dependencies == ["poppler"]
 
 
 def test_missing_python_dependencies() -> None:
@@ -188,7 +201,11 @@ def test_result_exposes_only_safe_fields_and_no_env_values() -> None:
     assert "secret" not in blob
 
 
-def test_missing_dependencies_are_sorted_and_deduplicated() -> None:
+def test_missing_dependencies_are_sorted_and_deduplicated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(ocr_health.platform, "system", lambda: "Windows")
+
     def resolver(name: str) -> str | None:
         return None
 
@@ -214,6 +231,16 @@ def test_missing_dependencies_are_sorted_and_deduplicated() -> None:
         "tessdata",
         "tesseract",
     ]
+
+    monkeypatch.setattr(ocr_health.platform, "system", lambda: "Linux")
+
+    def unavailable() -> None:
+        raise PopplerRuntimeBindingError("POPPLER_RUNTIME_UNAVAILABLE")
+
+    linux = check_ocr_health(**_healthy_kwargs(poppler_runtime_probe=unavailable))
+    assert linux.status is OcrHealthStatus.MISSING_DEPENDENCIES
+    assert linux.missing_dependencies == ["poppler"]
+    assert linux.missing_dependencies == sorted(set(linux.missing_dependencies))
 
 
 def test_default_language_probe_honors_supplied_env(tmp_path: Path) -> None:

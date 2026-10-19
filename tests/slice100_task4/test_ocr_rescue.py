@@ -23,6 +23,9 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from idis.parsers import ocr
 from idis.parsers import pdf as pdf_parser
+from tests.slice100_task4.test_linux_poppler_parent_guard import (
+    inject_inline_governed_child_seam,
+)
 
 _FICTIONAL_PHRASE = "fictional faint evidence alpha beta"
 _POLICY_VERSION = "pdf-ocr-rescue-v1"
@@ -412,6 +415,7 @@ def _install_fake_file_runtime(
     monkeypatch.setitem(sys.modules, "pdf2image", pdf2image)
     monkeypatch.setitem(sys.modules, "pdf2image.exceptions", pdf2image_exceptions)
     monkeypatch.setitem(sys.modules, "pytesseract", pytesseract)
+    inject_inline_governed_child_seam(monkeypatch, ocr)
 
 
 def test_rescue_matrix_is_exact_and_transforms_pixels_in_fixed_order() -> None:

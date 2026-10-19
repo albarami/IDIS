@@ -51,6 +51,7 @@ _GLOBAL_DATABASE_KEYS = (
 )
 _PREVIEW_DATABASE = re.compile(r"idis_c3_callers_[1-9][0-9]*_[1-9][0-9]*_[0-9a-f]{16}")
 _DEV0039_DATABASE = re.compile(r"idis_dev0039_[1-9][0-9]*_[1-9][0-9]*_[0-9a-f]{16}")
+_LINUX_POPPLER_DATABASE = re.compile(r"idis_linux_poppler_[1-9][0-9]*_[1-9][0-9]*_[0-9a-f]{16}")
 DEV0039_RESTART_NODE_ID = (
     "tests/test_cir04c3_frozen_preview_postgres.py::"
     "test_real_native_pdf_source_survives_hermetic_admission_and_restart_cut[1]"
@@ -64,8 +65,16 @@ _StatusKey = Literal[
     "required_c3_postgres",
     "required_dev0039_restart",
     "required_dev0039_historical",
+    "required_linux_poppler",
 ]
-_Phase = Literal["bootstrap", "revalidate", "tests", "dev0039-restart", "dev0039-historical"]
+_Phase = Literal[
+    "bootstrap",
+    "revalidate",
+    "tests",
+    "dev0039-restart",
+    "dev0039-historical",
+    "linux-poppler",
+]
 
 
 @dataclass(frozen=True)
@@ -242,6 +251,127 @@ def dev0039_restart_config(env: Mapping[str, str]) -> RequiredPreviewConfig:
     )
 
 
+def linux_poppler_config(env: Mapping[str, str]) -> RequiredPreviewConfig:
+    """Build the linux-poppler context. It never reads the c3 root and never exports."""
+
+    if any(key in env for key in (*_GLOBAL_DATABASE_KEYS, *_PREVIEW_KEYS)):
+        raise ValueError("PREVIEW_GLOBAL_DATABASE_ENV_FORBIDDEN")
+    if any(key in env for key in ("RUNNER_DEBUG", "ACTIONS_STEP_DEBUG")):
+        raise ValueError("PREVIEW_DEBUG_FORBIDDEN")
+    try:
+        run, attempt = env["GITHUB_RUN_ID"], env["GITHUB_RUN_ATTEMPT"]
+        if not all(re.fullmatch(r"[1-9][0-9]*", value) for value in (run, attempt)):
+            raise ValueError("PREVIEW_RUN_INVALID")
+        host, port_value = env["IDIS_PG_HOST"], env["IDIS_PG_PORT"]
+        if host != "127.0.0.1" or not re.fullmatch(r"[1-9][0-9]*", port_value):
+            raise ValueError("PREVIEW_ENDPOINT_INVALID")
+        port = int(port_value)
+        if not 0 < port <= 65535:
+            raise ValueError("PREVIEW_ENDPOINT_INVALID")
+        service = env["IDIS_CI_POSTGRES_SERVICE_ID"]
+        if not re.fullmatch(r"[0-9a-f]{64}", service):
+            raise ValueError("PREVIEW_SERVICE_INVALID")
+        runner, workspace = (_unalias_path(env[key]) for key in ("RUNNER_TEMP", "GITHUB_WORKSPACE"))
+        root = runner / f"idis-linux-poppler-{run}-{attempt}"
+        if root.is_relative_to(workspace) or "_runner_file_commands" in root.parts:
+            raise ValueError("PREVIEW_ROOT_INVALID")
+        nonce = env.get("IDIS_CI_PREVIEW_NONCE", secrets.token_hex(8))
+        # Six underscore fields so required_preview_environment can unpack the nonce.
+        database = f"idis_linux_poppler_{run}_{attempt}_{nonce}"
+        if (
+            len(database.encode()) > 63
+            or _LINUX_POPPLER_DATABASE.fullmatch(database) is None
+            or _PREVIEW_DATABASE.fullmatch(database) is not None
+            or _DEV0039_DATABASE.fullmatch(database) is not None
+        ):
+            raise ValueError("PREVIEW_DATABASE_INVALID")
+        admin_user, admin_password, app_user, app_password = (
+            env[key]
+            for key in (
+                "PG_ADMIN_USER",
+                "PG_ADMIN_PASSWORD",
+                "IDIS_PG_APP_USER",
+                "IDIS_PG_APP_PASSWORD",
+            )
+        )
+        if (
+            not all((admin_password, app_password))
+            or not all(
+                re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", user) for user in (admin_user, app_user)
+            )
+            or admin_user == app_user
+        ):
+            raise ValueError("PREVIEW_ROLE_INPUT_INVALID")
+    except KeyError:
+        raise ValueError("PREVIEW_INPUT_MISSING") from None
+    return RequiredPreviewConfig(
+        "linux-poppler",
+        root,
+        workspace,
+        database,
+        host,
+        port,
+        admin_user,
+        admin_password,
+        app_user,
+        app_password,
+        service,
+        None,
+    )
+
+
+def linux_poppler_callers_config(
+    env: Mapping[str, str],
+    *,
+    owned: RequiredPreviewConfig | None = None,
+) -> RequiredPreviewConfig:
+    """Required-caller database under the linux-poppler root.
+
+    Host, port, service id and roles match database 1. The database name
+    matches ``_PREVIEW_DATABASE``. A parent call draws a fresh nonce. A worker
+    call keeps the nonce carried in its environment.
+    """
+    if owned is None:
+        base = linux_poppler_config(env)
+        nonce = env.get("IDIS_CI_PREVIEW_NONCE")
+        if nonce is None:
+            raise ValueError("PREVIEW_INPUT_MISSING")
+    else:
+        if owned.context != "linux-poppler":
+            raise ValueError("PREVIEW_CONTEXT_INVALID")
+        stripped = {key: value for key, value in env.items() if key != "IDIS_CI_PREVIEW_NONCE"}
+        base = linux_poppler_config(stripped)
+        if (
+            base.root != owned.root
+            or base.host != owned.host
+            or base.port != owned.port
+            or base.service_container_id != owned.service_container_id
+            or base.admin_user != owned.admin_user
+            or base.app_user != owned.app_user
+            or base.workspace != owned.workspace
+        ):
+            raise ValueError("PREVIEW_DATABASE_CONTEXT_CHANGED")
+        owned_nonce = owned.database.rsplit("_", 1)[-1]
+        nonce = secrets.token_hex(8)
+        if nonce == owned_nonce:
+            nonce = secrets.token_hex(8)
+        if nonce == owned_nonce:
+            raise ValueError("PREVIEW_DATABASE_INVALID")
+    try:
+        run, attempt = env["GITHUB_RUN_ID"], env["GITHUB_RUN_ATTEMPT"]
+    except KeyError:
+        raise ValueError("PREVIEW_INPUT_MISSING") from None
+    database = f"idis_c3_callers_{run}_{attempt}_{nonce}"
+    if (
+        len(database.encode()) > 63
+        or _PREVIEW_DATABASE.fullmatch(database) is None
+        or _LINUX_POPPLER_DATABASE.fullmatch(database) is not None
+        or _DEV0039_DATABASE.fullmatch(database) is not None
+    ):
+        raise ValueError("PREVIEW_DATABASE_INVALID")
+    return replace(base, database=database)
+
+
 def required_preview_environment(config: RequiredPreviewConfig) -> dict[str, str]:
     """Explicit allowlist: no ambient libpq, Python startup, token or file channels."""
     _, _, _, run, attempt, nonce = config.database.split("_")
@@ -344,6 +474,17 @@ def create_required_preview_root(config: RequiredPreviewConfig) -> None:
 
 _PREVIEW_FAILURE_CODE_NAME = "preview-failure-code"
 _DEV0039_RECEIPT_NAME = "dev-0039-receipt.json"
+_LINUX_POPPLER_REVALIDATE_SCRIPT = "linux-poppler-revalidate-command.sh"
+_LINUX_POPPLER_REVALIDATE_LOG = "linux-poppler-revalidate.log"
+_LINUX_POPPLER_TESTS_SCRIPT = "linux-poppler-tests-command.sh"
+_LINUX_POPPLER_TESTS_LOG = "linux-poppler-tests.log"
+_LINUX_POPPLER_DATABASE_TESTS_SCRIPT = "linux-poppler-database-tests-command.sh"
+_LINUX_POPPLER_DATABASE_TESTS_LOG = "linux-poppler-database-tests.log"
+_LINUX_POPPLER_RECEIPT_NAME = "linux-poppler-receipt.json"
+_LINUX_POPPLER_CALLERS_SCRIPT = "linux-poppler-callers-command.sh"
+_LINUX_POPPLER_CALLERS_LOG = "linux-poppler-callers.log"
+_LINUX_POPPLER_CALLERS_REVALIDATE_SCRIPT = "linux-poppler-callers-revalidate-command.sh"
+_LINUX_POPPLER_CALLERS_REVALIDATE_LOG = "linux-poppler-callers-revalidate.log"
 
 
 def _validate_required_preview_root(config: RequiredPreviewConfig) -> None:
@@ -367,6 +508,17 @@ def _validate_required_preview_root(config: RequiredPreviewConfig) -> None:
         "c3-tests.log",
         _PREVIEW_FAILURE_CODE_NAME,
         _DEV0039_RECEIPT_NAME,
+        _LINUX_POPPLER_RECEIPT_NAME,
+        _LINUX_POPPLER_REVALIDATE_SCRIPT,
+        _LINUX_POPPLER_REVALIDATE_LOG,
+        _LINUX_POPPLER_TESTS_SCRIPT,
+        _LINUX_POPPLER_TESTS_LOG,
+        _LINUX_POPPLER_DATABASE_TESTS_SCRIPT,
+        _LINUX_POPPLER_DATABASE_TESTS_LOG,
+        _LINUX_POPPLER_CALLERS_SCRIPT,
+        _LINUX_POPPLER_CALLERS_LOG,
+        _LINUX_POPPLER_CALLERS_REVALIDATE_SCRIPT,
+        _LINUX_POPPLER_CALLERS_REVALIDATE_LOG,
     }
     for path in config.root.iterdir():
         if path.name not in allowed or path.is_symlink():
@@ -626,6 +778,8 @@ _PREVIEW_PUBLIC_CODES = frozenset(
         "PREVIEW_EXPORT_VALUE_INVALID",
         "PREVIEW_GLOBAL_DATABASE_ENV_FORBIDDEN",
         "PREVIEW_INPUT_MISSING",
+        "PREVIEW_LINUX_POPPLER_NODE_IDS_EMPTY",
+        "PREVIEW_LINUX_POPPLER_NODE_IDS_INVALID",
         "PREVIEW_OID_INVALID",
         "PREVIEW_PATH_ALIAS",
         "PREVIEW_PATH_INVALID",
@@ -643,7 +797,14 @@ _PREVIEW_PUBLIC_CODES = frozenset(
     }
 )
 _PREVIEW_PHASES = frozenset(
-    {"bootstrap", "revalidate", "tests", "dev0039-restart", "dev0039-historical"}
+    {
+        "bootstrap",
+        "revalidate",
+        "tests",
+        "dev0039-restart",
+        "dev0039-historical",
+        "linux-poppler",
+    }
 )
 
 
@@ -848,6 +1009,573 @@ def run_required_preview_postgres() -> int:
     except (Exception, SystemExit) as exc:
         # Raw SQL/credentials/paths remain in the separate owned log, never public diagnostics.
         print(_preview_failure_line("required_c3_postgres", "blocked", exc, phase))
+        return 1
+
+
+def _write_mode_600(path: Path, text: str) -> None:
+    raw = text.encode("utf-8")
+    descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    with os.fdopen(descriptor, "wb") as output:
+        if output.write(raw) != len(raw):
+            raise OSError("PREVIEW_RECEIPT_SHORT_WRITE")
+
+
+def _mode_command(config: RequiredPreviewConfig, arguments: Sequence[str]) -> str:
+    return "cd -- " + shlex.quote(str(config.workspace)) + "\nexec " + shlex.join(arguments) + "\n"
+
+
+def _chmod_mode_log(path: Path) -> None:
+    if path.is_symlink() or not path.is_file():
+        return
+    os.chmod(path, 0o600)
+
+
+def linux_poppler_frozen_preview_values(
+    config: RequiredPreviewConfig,
+) -> tuple[str, str, str]:
+    """The three preview values, computed as export_required_preview computes them.
+
+    The receipt is read from the mode root. Nothing is appended to an environment file.
+    """
+    bound, receipt, digest, _oid = _read_required_preview_receipt(config)
+    values = (bound.database_url(), str(receipt), digest)
+    if any(not value or any(token in value for token in ("\r", "\n", "<<")) for value in values):
+        raise ValueError("PREVIEW_EXPORT_VALUE_INVALID")
+    return values
+
+
+def linux_poppler_pytest_environment(
+    config: RequiredPreviewConfig,
+    *,
+    preview_url: str,
+    preview_receipt: str,
+    preview_digest: str,
+    database_class: bool = False,
+) -> dict[str, str]:
+    """Child environment for one closed-list invocation.
+
+    The no-database class receives the check-shaped keys and the three preview
+    values on database 2. The database class receives the eight H3-6d keys on
+    database 1 and no preview keys.
+    """
+
+    base = required_preview_environment(config)
+    shared = {
+        "PATH": base["PATH"],
+        "HOME": base["HOME"],
+        "TMPDIR": base["TMPDIR"],
+        "PYTHONDONTWRITEBYTECODE": base["PYTHONDONTWRITEBYTECODE"],
+    }
+    if database_class:
+        return {
+            **shared,
+            "IDIS_DATABASE_URL": config.database_url(),
+            "IDIS_DATABASE_ADMIN_URL": config.database_url(admin=True),
+            "IDIS_REQUIRE_POSTGRES": "1",
+            "IDIS_REQUIRE_LINUX_POPPLER": "1",
+        }
+    values = (preview_url, preview_receipt, preview_digest)
+    if any(not value or any(token in value for token in ("\r", "\n", "<<")) for value in values):
+        raise ValueError("PREVIEW_EXPORT_VALUE_INVALID")
+    if preview_url == config.database_url():
+        raise ValueError("PREVIEW_DATABASE_INVALID")
+    preview = dict(zip(_PREVIEW_KEYS, values, strict=True))
+    return {
+        **shared,
+        "IDIS_TEST_FROZEN_PREVIEW_DATABASE_URL": preview["IDIS_TEST_FROZEN_PREVIEW_DATABASE_URL"],
+        "IDIS_TEST_FROZEN_PREVIEW_DATABASE_RECEIPT": preview[
+            "IDIS_TEST_FROZEN_PREVIEW_DATABASE_RECEIPT"
+        ],
+        "IDIS_TEST_FROZEN_PREVIEW_DATABASE_RECEIPT_SHA256": preview[
+            "IDIS_TEST_FROZEN_PREVIEW_DATABASE_RECEIPT_SHA256"
+        ],
+        "IDIS_REQUIRE_LINUX_POPPLER": "1",
+    }
+
+
+def linux_poppler_pytest_arguments(
+    workspace: Path,
+    node_ids: Sequence[str],
+    *,
+    junit_name: str = "c3_linux_poppler_pytest.xml",
+) -> list[str]:
+    """Pytest argv. The closed-list node ids are the only positional targets."""
+
+    return [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-p",
+        "no:cacheprovider",
+        "-q",
+        "-rA",
+        "-o",
+        "junit_family=xunit1",
+        "--junitxml=" + str(workspace / junit_name),
+        *node_ids,
+    ]
+
+
+def linux_poppler_printer_environment(config: RequiredPreviewConfig) -> dict[str, str]:
+    """Node-id printer keys. No database URL and no credential."""
+
+    base = required_preview_environment(config)
+    return {
+        "PATH": base["PATH"],
+        "HOME": base["HOME"],
+        "TMPDIR": base["TMPDIR"],
+        "PYTHONDONTWRITEBYTECODE": base["PYTHONDONTWRITEBYTECODE"],
+    }
+
+
+def _require_linux_poppler_partition(
+    full: Sequence[str],
+    database: Sequence[str],
+    no_database: Sequence[str],
+) -> None:
+    """Require the two classes to be disjoint and to cover the full list."""
+
+    full_ids = set(full)
+    database_ids = set(database)
+    no_database_ids = set(no_database)
+    if (
+        len(full_ids) != len(full)
+        or len(database_ids) != len(database)
+        or len(no_database_ids) != len(no_database)
+        or not database_ids.isdisjoint(no_database_ids)
+        or database_ids | no_database_ids != full_ids
+    ):
+        raise ValueError("PREVIEW_LINUX_POPPLER_NODE_IDS_INVALID")
+
+
+def _linux_poppler_node_ids(
+    config: RequiredPreviewConfig,
+    *,
+    selection: str = "",
+) -> tuple[str, ...]:
+    """Collect closed-list node ids with a credential-free child environment."""
+
+    flags = {
+        "": (),
+        "database": ("--database-class",),
+        "no-database": ("--no-database-class",),
+    }.get(selection)
+    if flags is None:
+        raise ValueError("PREVIEW_LINUX_POPPLER_NODE_IDS_INVALID")
+    completed = subprocess.run(
+        [sys.executable, "-m", "tests._linux_poppler_gate", "--node-ids", *flags],
+        cwd=config.workspace,
+        env=linux_poppler_printer_environment(config),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        raise ValueError("PREVIEW_LINUX_POPPLER_NODE_IDS_INVALID")
+    lines = [line for line in completed.stdout.splitlines() if line]
+    if not lines:
+        raise ValueError("PREVIEW_LINUX_POPPLER_NODE_IDS_EMPTY")
+    node_id = re.compile(r"^[A-Za-z0-9_./:\-\[\],<>]+$")
+    rejected = any(
+        node_id.fullmatch(line) is None
+        or "::" not in line
+        or line.startswith("-")
+        or "<" in line.split("[", 1)[0]
+        or ">" in line.split("[", 1)[0]
+        for line in lines
+    )
+    if rejected:
+        raise ValueError("PREVIEW_LINUX_POPPLER_NODE_IDS_INVALID")
+    return tuple(lines)
+
+
+def _capture_linux_poppler(
+    config: RequiredPreviewConfig,
+    *,
+    script_name: str,
+    log_name: str,
+    arguments: Sequence[str],
+    environment: Mapping[str, str],
+) -> tuple[int, bool]:
+    from ci_private_inputs import Interrupted, bash_path, capture_script
+
+    if config.context != "linux-poppler":
+        raise ValueError("PREVIEW_PHASE_FORBIDDEN")
+    script = config.root / script_name
+    log = config.root / log_name
+    _write_mode_600(script, _mode_command(config, arguments))
+    try:
+        result = capture_script(script, log, environment=environment, bash=bash_path())
+        return result, False
+    except Interrupted as exc:
+        return 128 + exc.signum, exc.cleanup_failed
+    finally:
+        _chmod_mode_log(log)
+
+
+def _capture_linux_poppler_revalidate(config: RequiredPreviewConfig) -> tuple[int, bool]:
+    return _capture_linux_poppler(
+        config,
+        script_name=_LINUX_POPPLER_REVALIDATE_SCRIPT,
+        log_name=_LINUX_POPPLER_REVALIDATE_LOG,
+        arguments=[
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--linux-poppler-revalidate",
+        ],
+        environment=required_preview_environment(config),
+    )
+
+
+def _capture_linux_poppler_pytest(
+    config: RequiredPreviewConfig,
+    node_ids: Sequence[str],
+    *,
+    preview_url: str,
+    preview_receipt: str,
+    preview_digest: str,
+    database_class: bool = False,
+) -> tuple[int, bool]:
+    if database_class:
+        script_name = _LINUX_POPPLER_DATABASE_TESTS_SCRIPT
+        log_name = _LINUX_POPPLER_DATABASE_TESTS_LOG
+        junit_name = "c3_linux_poppler_database_pytest.xml"
+    else:
+        script_name = _LINUX_POPPLER_TESTS_SCRIPT
+        log_name = _LINUX_POPPLER_TESTS_LOG
+        junit_name = "c3_linux_poppler_pytest.xml"
+    return _capture_linux_poppler(
+        config,
+        script_name=script_name,
+        log_name=log_name,
+        arguments=linux_poppler_pytest_arguments(config.workspace, node_ids, junit_name=junit_name),
+        environment=linux_poppler_pytest_environment(
+            config,
+            preview_url=preview_url,
+            preview_receipt=preview_receipt,
+            preview_digest=preview_digest,
+            database_class=database_class,
+        ),
+    )
+
+
+def _capture_linux_poppler_callers(config: RequiredPreviewConfig) -> tuple[int, bool]:
+    return _capture_linux_poppler(
+        config,
+        script_name=_LINUX_POPPLER_CALLERS_SCRIPT,
+        log_name=_LINUX_POPPLER_CALLERS_LOG,
+        arguments=[
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--linux-poppler-callers-worker",
+        ],
+        environment=required_preview_environment(config),
+    )
+
+
+def _capture_linux_poppler_callers_revalidate(
+    config: RequiredPreviewConfig,
+) -> tuple[int, bool]:
+    return _capture_linux_poppler(
+        config,
+        script_name=_LINUX_POPPLER_CALLERS_REVALIDATE_SCRIPT,
+        log_name=_LINUX_POPPLER_CALLERS_REVALIDATE_LOG,
+        arguments=[
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--linux-poppler-callers-revalidate",
+        ],
+        environment=required_preview_environment(config),
+    )
+
+
+def linux_poppler_receipt(config: RequiredPreviewConfig, oid: object) -> dict[str, object]:
+    """Receipt captured at CREATE time. Revision is the 0038 catalog head."""
+
+    if config.context != "linux-poppler":
+        raise ValueError("PREVIEW_CONTEXT_INVALID")
+    if type(oid) is not int or oid <= 0:
+        raise ValueError("PREVIEW_OID_INVALID")
+    return {
+        "schema_version": "cir04h3-linux-poppler-db-v1",
+        "owner": "CIR-04 linux-poppler disposable fixture",
+        "absent_before_create": True,
+        "service_container_id": config.service_container_id,
+        "host": config.host,
+        "port": config.port,
+        "database": config.database,
+        "app_role": config.app_user,
+        "database_oid": oid,
+        "revision": "0038",
+        "role_flags": {"rolsuper": False, "rolbypassrls": False},
+    }
+
+
+def write_linux_poppler_receipt(
+    config: RequiredPreviewConfig, receipt: dict[str, object]
+) -> tuple[Path, str]:
+    """Exclusive linux-poppler receipt at revision 0038."""
+
+    path = config.root / _LINUX_POPPLER_RECEIPT_NAME
+    raw = (json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    with os.fdopen(fd, "wb") as output:
+        if output.write(raw) != len(raw):
+            raise OSError("PREVIEW_RECEIPT_SHORT_WRITE")
+        output.flush()
+        os.fsync(output.fileno())
+    if path.read_bytes() != raw:
+        raise OSError("PREVIEW_RECEIPT_BYTES_CHANGED")
+    return path, hashlib.sha256(raw).hexdigest()
+
+
+def _read_linux_poppler_receipt(config: RequiredPreviewConfig) -> tuple[Path, str, int]:
+    """Canonical equality against the exclusive receipt. Read-only."""
+
+    if config.context != "linux-poppler":
+        raise ValueError("PREVIEW_CONTEXT_INVALID")
+    _validate_required_preview_root(config)
+    path = config.root / _LINUX_POPPLER_RECEIPT_NAME
+    raw = path.read_bytes()
+    loaded = json.loads(raw)
+    if not isinstance(loaded, dict):
+        raise ValueError("PREVIEW_RECEIPT_INVALID")
+    oid = loaded.get("database_oid")
+    if type(oid) is not int:
+        raise ValueError("PREVIEW_RECEIPT_INVALID")
+    expected = linux_poppler_receipt(config, oid)
+    canonical = (json.dumps(expected, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    if raw != canonical:
+        raise ValueError("PREVIEW_RECEIPT_INVALID")
+    return path, hashlib.sha256(raw).hexdigest(), oid
+
+
+def _create_linux_poppler_database(config: RequiredPreviewConfig) -> int:
+    """Exactly one CREATE; a duplicate is fatal and is never turned into a lookup."""
+
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.pool import NullPool
+
+    if (
+        _LINUX_POPPLER_DATABASE.fullmatch(config.database) is None
+        or _PREVIEW_DATABASE.fullmatch(config.database) is not None
+        or _DEV0039_DATABASE.fullmatch(config.database) is not None
+        or len(config.database.encode()) > 63
+    ):
+        raise ValueError("PREVIEW_DATABASE_INVALID")
+    engine = create_engine(
+        config.database_url(admin=True, maintenance=True),
+        poolclass=NullPool,
+        isolation_level="AUTOCOMMIT",
+        connect_args={"connect_timeout": 10},
+    )
+    try:
+        with engine.connect() as connection:
+            connection.execute(text(f'CREATE DATABASE "{config.database}" TEMPLATE template0'))
+            oid = connection.execute(
+                text("SELECT oid FROM pg_catalog.pg_database WHERE datname=:name"),
+                {"name": config.database},
+            ).scalar_one()
+            linux_poppler_receipt(config, oid)
+            connection.execute(
+                text(f'GRANT CONNECT ON DATABASE "{config.database}" TO "{config.app_user}"')
+            )
+            return int(oid)
+    finally:
+        engine.dispose()
+
+
+def create_linux_poppler_database(config: RequiredPreviewConfig) -> tuple[Path, str]:
+    """Provision one owned database at revision 0038 and write its exclusive receipt."""
+
+    if config.context != "linux-poppler":
+        raise ValueError("PREVIEW_CONTEXT_INVALID")
+    _validate_required_preview_root(config)
+    subprocess.run(
+        [sys.executable, str(config.workspace / "scripts/check_migration_ceiling.py")],
+        check=True,
+        cwd=config.workspace,
+    )
+    _prepare_required_roles(config, create_missing=True)
+    oid = _create_linux_poppler_database(config)
+    os.environ["IDIS_DATABASE_ADMIN_URL"] = config.database_url(admin=True)
+    os.environ["IDIS_DATABASE_URL"] = config.database_url()
+    os.environ["IDIS_REQUIRE_POSTGRES"] = "1"
+    run_migrations(config.database_url(admin=True))
+    grant_schema_permissions(config.database_url(admin=True), config.app_user)
+    verify_tables_exist(config.database_url())
+    _verify_required_database(config, oid)
+    _prepare_required_roles(config, create_missing=False)
+    return write_linux_poppler_receipt(config, linux_poppler_receipt(config, oid))
+
+
+def revalidate_linux_poppler_database(config: RequiredPreviewConfig) -> None:
+    """Read-only revalidation of the owned database against its exclusive receipt."""
+
+    _receipt_path, _receipt_digest, oid = _read_linux_poppler_receipt(config)
+    _prepare_required_roles(config, create_missing=False)
+    _verify_required_database(config, oid)
+
+
+def create_linux_poppler_callers_database(config: RequiredPreviewConfig) -> None:
+    """Create database 2 by calling the existing required-preview worker."""
+
+    if config.context != "linux-poppler":
+        raise ValueError("PREVIEW_CONTEXT_INVALID")
+    _required_preview_worker(config)
+
+
+def revalidate_linux_poppler_callers_database(config: RequiredPreviewConfig) -> None:
+    """Read-only check of database 2 through the existing reader and verifier.
+
+    ``--linux-poppler-callers-revalidate`` calls this function. It reads the
+    mode-root receipt with ``_read_required_preview_receipt`` and calls
+    ``_verify_required_database``.
+    """
+    if config.context != "linux-poppler":
+        raise ValueError("PREVIEW_CONTEXT_INVALID")
+    bound, _receipt_path, _receipt_digest, oid = _read_required_preview_receipt(config)
+    _verify_required_database(bound, oid)
+
+
+def run_linux_poppler_closed_list() -> int:
+    """Own both databases, revalidate both, then run only the closed list."""
+
+    phase: _Phase = "linux-poppler"
+    try:
+        config = linux_poppler_config(os.environ)
+        create_required_preview_root(config)
+        result, cleanup_failed = _capture_linux_poppler(
+            config,
+            script_name="bootstrap-command.sh",
+            log_name="bootstrap.log",
+            arguments=[
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "--linux-poppler-worker",
+            ],
+            environment=required_preview_environment(config),
+        )
+        if result != 0:
+            print(
+                _preview_exit_line(
+                    "required_linux_poppler",
+                    "failed",
+                    result,
+                    cleanup_failed,
+                    config.root,
+                    phase,
+                )
+            )
+            return result
+        _read_linux_poppler_receipt(config)
+        callers = linux_poppler_callers_config(os.environ, owned=config)
+        result, cleanup_failed = _capture_linux_poppler_callers(callers)
+        if result != 0:
+            print(
+                _preview_exit_line(
+                    "required_linux_poppler",
+                    "failed",
+                    result,
+                    cleanup_failed,
+                    config.root,
+                    phase,
+                )
+            )
+            return result
+        checked, cleanup_failed = _capture_linux_poppler_revalidate(config)
+        if checked != 0:
+            print(
+                _preview_exit_line(
+                    "required_linux_poppler",
+                    "blocked",
+                    checked,
+                    cleanup_failed,
+                    config.root,
+                    phase,
+                )
+            )
+            return checked
+        checked, cleanup_failed = _capture_linux_poppler_callers_revalidate(callers)
+        if checked != 0:
+            print(
+                _preview_exit_line(
+                    "required_linux_poppler",
+                    "blocked",
+                    checked,
+                    cleanup_failed,
+                    config.root,
+                    phase,
+                )
+            )
+            return checked
+        preview_url, preview_receipt, preview_digest = linux_poppler_frozen_preview_values(callers)
+        print('{"required_linux_poppler":"ready"}')
+        full_ids = _linux_poppler_node_ids(config)
+        database_ids = _linux_poppler_node_ids(config, selection="database")
+        no_database_ids = _linux_poppler_node_ids(config, selection="no-database")
+        _require_linux_poppler_partition(full_ids, database_ids, no_database_ids)
+        no_database_result, no_database_cleanup = _capture_linux_poppler_pytest(
+            config,
+            no_database_ids,
+            preview_url=preview_url,
+            preview_receipt=preview_receipt,
+            preview_digest=preview_digest,
+        )
+        if no_database_result in {130, 143} or no_database_cleanup:
+            print(
+                _preview_exit_line(
+                    "required_linux_poppler",
+                    "interrupted",
+                    no_database_result,
+                    no_database_cleanup,
+                    config.root,
+                    phase,
+                )
+            )
+            return no_database_result
+        database_result, database_cleanup = _capture_linux_poppler_pytest(
+            config,
+            database_ids,
+            preview_url=preview_url,
+            preview_receipt=preview_receipt,
+            preview_digest=preview_digest,
+            database_class=True,
+        )
+        result = no_database_result if no_database_result > database_result else database_result
+        cleanup_failed = no_database_cleanup or database_cleanup
+        if no_database_result in {130, 143} or database_result in {130, 143} or cleanup_failed:
+            print(
+                _preview_exit_line(
+                    "required_linux_poppler",
+                    "interrupted",
+                    result,
+                    cleanup_failed,
+                    config.root,
+                    phase,
+                )
+            )
+            return result
+        for log_name in (_LINUX_POPPLER_TESTS_LOG, _LINUX_POPPLER_DATABASE_TESTS_LOG):
+            with (config.root / log_name).open("rb") as log:
+                shutil.copyfileobj(log, sys.stdout.buffer)
+        return result
+    except KeyboardInterrupt:
+        print(
+            json.dumps(
+                {
+                    "required_linux_poppler": "interrupted",
+                    "exit": 130,
+                    "cleanup_failed": False,
+                    "code": "PREVIEW_UNCLASSIFIED",
+                    "phase": "linux-poppler",
+                },
+                separators=(",", ":"),
+            )
+        )
+        return 130
+    except (Exception, SystemExit) as exc:
+        print(_preview_failure_line("required_linux_poppler", "blocked", exc, phase))
         return 1
 
 
@@ -1754,6 +2482,40 @@ if __name__ == "__main__":
         raise SystemExit(0)
     if sys.argv[1:] == ["--run-required-preview-postgres"]:
         raise SystemExit(run_required_preview_postgres())
+    if sys.argv[1:] == ["--linux-poppler-worker"]:
+        _config = linux_poppler_config(os.environ)
+
+        def _linux_poppler_worker() -> None:
+            create_linux_poppler_database(_config)
+
+        _call_preview_child(_config, _linux_poppler_worker)
+        raise SystemExit(0)
+    if sys.argv[1:] == ["--linux-poppler-revalidate"]:
+        _config = linux_poppler_config(os.environ)
+
+        def _linux_poppler_revalidate() -> None:
+            revalidate_linux_poppler_database(_config)
+
+        _call_preview_child(_config, _linux_poppler_revalidate)
+        raise SystemExit(0)
+    if sys.argv[1:] == ["--linux-poppler-callers-worker"]:
+        _config = linux_poppler_callers_config(os.environ)
+
+        def _linux_poppler_callers_worker() -> None:
+            create_linux_poppler_callers_database(_config)
+
+        _call_preview_child(_config, _linux_poppler_callers_worker)
+        raise SystemExit(0)
+    if sys.argv[1:] == ["--linux-poppler-callers-revalidate"]:
+        _config = linux_poppler_callers_config(os.environ)
+
+        def _linux_poppler_callers_revalidate() -> None:
+            revalidate_linux_poppler_callers_database(_config)
+
+        _call_preview_child(_config, _linux_poppler_callers_revalidate)
+        raise SystemExit(0)
+    if sys.argv[1:] == ["--run-linux-poppler-closed-list"]:
+        raise SystemExit(run_linux_poppler_closed_list())
     if sys.argv[1:] == ["--dev0039-restart-worker"]:
         _config = dev0039_restart_config(os.environ)
 

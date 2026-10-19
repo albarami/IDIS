@@ -13,6 +13,7 @@ from pdf2image import convert_from_bytes
 
 from idis.audit.sink import InMemoryAuditSink
 from idis.parsers.base import ParseError, ParseErrorCode, ParseResult
+from idis.parsers.poppler_runtime import resolve_pinned_poppler_runtime
 from idis.parsers.watermark_page_classifier import (
     WatermarkPageRuntimeConfig,
     classify_pre_ocr_runtime_watermark_candidate,
@@ -24,6 +25,7 @@ from idis.services.ingestion.no_substantive_content_attestation import (
 from idis.services.ingestion.service import IngestionContext, IngestionResult, IngestionService
 from idis.storage.compliant_store import ComplianceEnforcedStore
 from idis.storage.filesystem_store import FilesystemObjectStore
+from tests._linux_poppler_gate import requires_linux_governed_poppler
 from tests.slice100_task4.test_watermark_composition_root_red import (
     SIGNER_ID,
     SOURCE_TREE_FINGERPRINT,
@@ -51,6 +53,7 @@ def _verified_material() -> tuple[object, WatermarkPageRuntimeConfig]:
 
 
 def _runtime_candidate_pdf_page() -> object:
+    binding = resolve_pinned_poppler_runtime()
     pages = convert_from_bytes(
         _fixture_pdf(),
         first_page=1,
@@ -59,6 +62,7 @@ def _runtime_candidate_pdf_page() -> object:
         grayscale=True,
         fmt="png",
         thread_count=1,
+        poppler_path=str(binding.binary_dir),
     )
     assert len(pages) == 1
     return pages[0]
@@ -150,6 +154,7 @@ def _ingest_runtime_match(
     )
 
 
+@requires_linux_governed_poppler
 def test_ninth_company_one_classifier_page_fails_before_document_persistence(
     tmp_path: Path,
 ) -> None:
@@ -199,6 +204,7 @@ class _RestartRepository:
         self.create_calls += 1
 
 
+@requires_linux_governed_poppler
 def test_fresh_service_counts_durable_classifier_receipts_before_persistence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

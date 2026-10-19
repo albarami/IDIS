@@ -62,6 +62,8 @@ from idis.services.ingestion.service import (
 )
 from idis.storage.compliant_store import ComplianceEnforcedStore
 from idis.storage.filesystem_store import FilesystemObjectStore
+from tests._canonical_poppler_pin import requires_canonical_poppler_pin
+from tests._linux_poppler_gate import requires_linux_governed_poppler
 from tests.abac_seed import seed_deal_access
 
 CONFIGURED_DPI = 200
@@ -460,6 +462,7 @@ def operator_artifact() -> _OperatorArtifact:
     )
 
 
+@requires_canonical_poppler_pin
 def test_real_rounding_artifact_succeeds_through_file_backed_worker(
     operator_artifact: _OperatorArtifact,
 ) -> None:
@@ -583,6 +586,7 @@ def test_real_rounding_artifact_succeeds_through_api_upload_route(
     _BOUNDARY_CASES,
     ids=lambda value: f"{value.position}-{value.chosen_dpi}dpi",
 )
+@requires_canonical_poppler_pin
 def test_real_poppler_half_pixel_matrix_emits_exact_v2_render_provenance(
     tmp_path: Path,
     boundary: _BoundaryCase,
@@ -634,6 +638,7 @@ def test_real_poppler_half_pixel_matrix_emits_exact_v2_render_provenance(
     )
 
 
+@requires_linux_governed_poppler
 def test_half_pixel_fixture_persists_exact_v2_provenance_at_ingestion_root(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -680,6 +685,7 @@ def test_half_pixel_fixture_persists_exact_v2_provenance_at_ingestion_root(
         pytest.param(20_000_001, 1, id="actual-resource-overrun"),
     ],
 )
+@requires_canonical_poppler_pin
 def test_worker_rejects_expected_dimension_mismatch_and_actual_resource_overrun(
     tmp_path: Path,
     actual_width: int,

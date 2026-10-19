@@ -997,6 +997,19 @@ def _run_api(module: Any, args: argparse.Namespace, profile: StrictRuntimeProfil
 def _run_worker(module: Any, args: argparse.Namespace, profile: StrictRuntimeProfile) -> int:
     if args.poll_seconds <= 0:
         raise StrictLauncherError("WORKER_LEASE_CONFIG_INVALID")
+    if profile.generation == "acceptance-v1":
+        from idis.parsers.poppler_linux_runtime import PinnedLinuxPopplerRuntime
+        from idis.parsers.poppler_runtime import (
+            PopplerRuntimeBindingError,
+            resolve_pinned_poppler_runtime,
+        )
+
+        try:
+            governed_poppler = resolve_pinned_poppler_runtime()
+        except PopplerRuntimeBindingError:
+            governed_poppler = None
+        if type(governed_poppler) is PinnedLinuxPopplerRuntime:
+            raise StrictLauncherError("POPPLER_RUNTIME_NONCANONICAL")
 
     def poll() -> int:
         write_pid_file(args.pid_file)

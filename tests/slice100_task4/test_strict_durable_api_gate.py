@@ -258,6 +258,15 @@ def test_durable_gate_requires_task4_bootstrap_generation_and_hashes_profile_ide
 def test_local_ocr_media_and_real_inference_are_required_before_upload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from idis.parsers.poppler_runtime import PopplerRuntimeBindingError
+
+    def unavailable(*_args: object, **_kwargs: object) -> None:
+        raise PopplerRuntimeBindingError("POPPLER_RUNTIME_UNAVAILABLE")
+
+    monkeypatch.setattr(
+        "idis.parsers.poppler_runtime.resolve_pinned_poppler_runtime",
+        unavailable,
+    )
     monkeypatch.setattr(
         gate,
         "check_ocr_health",

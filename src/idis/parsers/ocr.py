@@ -9,6 +9,7 @@ import logging
 import math
 import multiprocessing as mp
 import os
+import platform
 import re
 import statistics
 import time
@@ -31,9 +32,17 @@ from pathlib import Path
 from queue import Empty
 from typing import Any, Protocol
 
+from idis.parsers.poppler_linux_runtime import (
+    PinnedLinuxPopplerRuntime,
+    install_poppler_child_environment,
+    mark_governed_worker_child,
+)
 from idis.parsers.poppler_runtime import (
+    GovernedPopplerRuntime,
     PinnedPopplerRuntime,
     PopplerRuntimeBindingError,
+    resolve_pinned_poppler_runtime,
+    verify_governed_poppler_runtime,
     verify_pinned_poppler_runtime,
 )
 
@@ -1047,7 +1056,7 @@ ImageWorkerTarget = Callable[[bytes, int, str, float, Any], None]
 
 def _bound_poppler_worker(
     target: Callable[..., None],
-    binding: PinnedPopplerRuntime | None,
+    binding: GovernedPopplerRuntime | None,
 ) -> Callable[..., None]:
     """Bind the admitted runtime without changing injected test-target arity."""
 
@@ -1057,14 +1066,23 @@ def _bound_poppler_worker(
 
 
 def _verified_poppler_path_kwargs(
-    binding: PinnedPopplerRuntime | None,
+    binding: GovernedPopplerRuntime | None,
 ) -> dict[str, str]:
     """Revalidate the bound executable/library pair before a worker renders."""
 
-    if binding is None:
+    if binding is None and platform.system() != "Linux":
         return {}
     try:
-        verify_pinned_poppler_runtime(binding)
+        if binding is None:
+            binding = resolve_pinned_poppler_runtime()
+            verify_governed_poppler_runtime(binding)
+            install_poppler_child_environment(binding, apply_to_process=True)
+        elif type(binding) is PinnedLinuxPopplerRuntime:
+            verify_governed_poppler_runtime(binding)
+        elif type(binding) is PinnedPopplerRuntime:
+            verify_pinned_poppler_runtime(binding)
+        else:
+            verify_governed_poppler_runtime(binding)
     except PopplerRuntimeBindingError as exc:
         raise OcrUnavailableError("OCR Poppler runtime binding failed verification") from exc
     return {"poppler_path": str(binding.binary_dir)}
@@ -1082,9 +1100,13 @@ class TesseractOcrAdapter:
         file_worker_target: PdfFileWorkerTarget | None = None,
         render_admission_file_worker_target: PdfRenderAdmissionFileWorkerTarget | None = None,
         image_worker_target: ImageWorkerTarget | None = None,
-        poppler_runtime: PinnedPopplerRuntime | None = None,
+        poppler_runtime: GovernedPopplerRuntime | None = None,
     ) -> None:
-        if poppler_runtime is not None and not isinstance(poppler_runtime, PinnedPopplerRuntime):
+        if (
+            poppler_runtime is not None
+            and type(poppler_runtime) is not PinnedPopplerRuntime
+            and (type(poppler_runtime) is not PinnedLinuxPopplerRuntime)
+        ):
             raise OcrError("OCR Poppler runtime binding is malformed")
         self._dpi = dpi
         self._language = language
@@ -1121,7 +1143,7 @@ class TesseractOcrAdapter:
         return self._language
 
     @property
-    def poppler_runtime(self) -> PinnedPopplerRuntime | None:
+    def poppler_runtime(self) -> GovernedPopplerRuntime | None:
         """Return the explicitly admitted Poppler authority, if configured."""
 
         return self._poppler_runtime
@@ -2217,9 +2239,10 @@ def _tesseract_pdf_file_ocr_worker(
     queue: Any,
     *,
     retain_accepted_pages: bool = False,
-    poppler_runtime: PinnedPopplerRuntime | None = None,
+    poppler_runtime: GovernedPopplerRuntime | None = None,
 ) -> None:
     """Render and OCR a caller-owned PDF path under one absolute deadline."""
+    mark_governed_worker_child()
     payload: dict[str, object] = {"status": "failed"}
     try:
         with _suppress_output(), _omp_thread_limit_one():
@@ -2288,7 +2311,7 @@ def _tesseract_pdf_file_ocr_worker_with_partial_results(
     deadline: float,
     queue: Any,
     *,
-    poppler_runtime: PinnedPopplerRuntime | None = None,
+    poppler_runtime: GovernedPopplerRuntime | None = None,
 ) -> None:
     """Production file worker variant used only with verified reviewed admissions."""
 
@@ -2357,7 +2380,7 @@ def _ocr_pdf_file_render_admission_batches(
     image_to_data: Any,
     output: Any,
     compute_page_content_sha256s: bool,
-    poppler_runtime: PinnedPopplerRuntime | None = None,
+    poppler_runtime: GovernedPopplerRuntime | None = None,
 ) -> list[dict[str, object]]:
     """Render only admitted pages, validating each image before Tesseract executes."""
 
@@ -2373,6 +2396,8 @@ def _ocr_pdf_file_render_admission_batches(
     ):
         raise OcrError("OCR Poppler runtime binding drifted from admission")
     poppler_kwargs = _verified_poppler_path_kwargs(poppler_runtime)
+    if poppler_runtime is not None:
+        install_poppler_child_environment(poppler_runtime, apply_to_process=True)
     executor = ThreadPoolExecutor(max_workers=_PDF_OCR_PAGE_WORKERS)
     executor_closed = False
     pages: list[dict[str, object]] = []
@@ -2450,10 +2475,11 @@ def _tesseract_pdf_file_ocr_worker_with_render_admissions(
     deadline: float,
     queue: Any,
     *,
-    poppler_runtime: PinnedPopplerRuntime | None = None,
+    poppler_runtime: GovernedPopplerRuntime | None = None,
 ) -> None:
     """Production worker for exact sparse, per-page render admissions."""
 
+    mark_governed_worker_child()
     payload: dict[str, object] = {"status": "failed"}
     try:
         render_admissions = _render_admissions_from_worker_payload(render_admission_payloads)
@@ -2526,11 +2552,13 @@ def _ocr_pdf_file_batches(
     image_to_data: Any,
     output: Any,
     compute_page_content_sha256s: bool = False,
-    poppler_runtime: PinnedPopplerRuntime | None = None,
+    poppler_runtime: GovernedPopplerRuntime | None = None,
 ) -> list[dict[str, object]]:
     """OCR ascending render batches while retaining at most eight page images."""
     _remaining_ocr_deadline_seconds(deadline)
     poppler_kwargs = _verified_poppler_path_kwargs(poppler_runtime)
+    if poppler_runtime is not None:
+        install_poppler_child_environment(poppler_runtime, apply_to_process=True)
     executor = ThreadPoolExecutor(max_workers=_PDF_OCR_PAGE_WORKERS)
     executor_closed = False
     pages: list[dict[str, object]] = []
@@ -3059,11 +3087,14 @@ def _tesseract_ocr_worker(
     timeout_seconds: float,
     queue: Any,
     *,
-    poppler_runtime: PinnedPopplerRuntime | None = None,
+    poppler_runtime: GovernedPopplerRuntime | None = None,
 ) -> None:
+    mark_governed_worker_child()
     deadline = time.monotonic() + timeout_seconds
     try:
         poppler_kwargs = _verified_poppler_path_kwargs(poppler_runtime)
+        if poppler_runtime is not None:
+            install_poppler_child_environment(poppler_runtime, apply_to_process=True)
         with _suppress_output():
             try:
                 from pdf2image import convert_from_bytes

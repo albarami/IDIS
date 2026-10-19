@@ -21,7 +21,9 @@ from reportlab.lib.utils import ImageReader  # type: ignore[import-untyped]
 from reportlab.pdfgen import canvas  # type: ignore[import-untyped]
 
 from idis.parsers import watermark_page_classifier as classifier
+from idis.parsers.poppler_runtime import resolve_pinned_poppler_runtime
 from idis.parsers.watermark_page_classifier import WatermarkPageEligibility
+from tests._linux_poppler_gate import requires_linux_governed_poppler
 from tests.slice100_task4.test_watermark_composition_root_red import (
     _fixture_pdf,
     _signed_manifest,
@@ -65,6 +67,7 @@ def _domain_separating_pdf() -> bytes:
 
 
 def _render_page(pdf_bytes: bytes) -> Image.Image:
+    binding = resolve_pinned_poppler_runtime()
     pages = convert_from_bytes(
         pdf_bytes,
         dpi=200,
@@ -72,6 +75,7 @@ def _render_page(pdf_bytes: bytes) -> Image.Image:
         last_page=1,
         fmt="png",
         thread_count=1,
+        poppler_path=str(binding.binary_dir),
     )
     assert len(pages) == 1
     return pages[0]
@@ -105,6 +109,7 @@ def _eligibility() -> WatermarkPageEligibility:
     )
 
 
+@requires_linux_governed_poppler
 def test_signed_canonical_mask_is_not_revalidated_as_a_full_resolution_faint_raster() -> None:
     """Canonical geometry may differ from source faintness without changing domains."""
 
@@ -137,6 +142,7 @@ def test_signed_canonical_mask_is_not_revalidated_as_a_full_resolution_faint_ras
     assert provenance["similarity_score"] == "1.000000"
 
 
+@requires_linux_governed_poppler
 def test_runtime_never_sends_signed_128x128_material_to_full_raster_preparation(
     monkeypatch: Any,
 ) -> None:
@@ -186,6 +192,7 @@ def test_runtime_never_sends_signed_128x128_material_to_full_raster_preparation(
         pytest.param(bytes(2049), id="one-byte-long"),
     ],
 )
+@requires_linux_governed_poppler
 def test_canonical_exemplar_domain_rejects_degenerate_or_wrong_geometry_mutations(
     mutated_bitmap: bytes,
 ) -> None:
@@ -207,6 +214,7 @@ def test_canonical_exemplar_domain_rejects_degenerate_or_wrong_geometry_mutation
     assert caught.value.code == "WATERMARK_PAGE_EXEMPLAR_INVALID"
 
 
+@requires_linux_governed_poppler
 def test_canonical_exemplar_reference_requires_an_integer_page_number() -> None:
     valid = _verified_runtime_config(_fixture_pdf())
     boolean_page_reference = replace(valid.exemplar_reference, page_number=True)

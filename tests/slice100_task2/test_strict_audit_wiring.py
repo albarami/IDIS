@@ -18,6 +18,7 @@ from idis.api.main import create_app
 from idis.api.middleware.audit import AuditMiddleware
 from idis.audit.postgres_sink import PostgresAuditSink
 from idis.audit.sink import InMemoryAuditSink, JsonlFileAuditSink
+from tests._linux_poppler_gate import requires_linux_governed_poppler
 
 _TENANT_ID = "10000000-0000-4000-8000-000000000002"
 _PERSISTENT_OBJECT_PATH = r"C:\IDIS_TASK2_HERMETIC_PERSISTENT_OBJECTS"
@@ -135,6 +136,7 @@ def test_strict_default_threads_one_postgres_sink_through_api_and_ingestion(
     assert audit_middleware.kwargs["postgres_sink"] is sink
 
 
+@requires_linux_governed_poppler
 def test_strict_app_uses_reviewed_database_after_ambient_environment_changes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

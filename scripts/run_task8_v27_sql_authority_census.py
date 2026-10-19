@@ -5805,7 +5805,7 @@ class _UnclassifiedDmlRejectingConnection:
     """Permit reads/DDL but reject every unclassified raw DML call site."""
 
     def __init__(self, connection: Any) -> None:
-        self._connection = connection
+        object.__setattr__(self, "_connection", connection)
 
     def observe_statement(self, statement: object) -> None:
         if _normalized_fixture_dml_statement(statement) is not None:
@@ -5820,6 +5820,12 @@ class _UnclassifiedDmlRejectingConnection:
 
     def __exit__(self, *exc_info: object) -> object:
         return self._connection.__exit__(*exc_info)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "_connection":
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self._connection, name, value)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._connection, name)

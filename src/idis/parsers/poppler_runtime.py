@@ -17,6 +17,12 @@ import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from typing import TypeAlias
+
+    from idis.parsers.poppler_linux_runtime import PinnedLinuxPopplerRuntime
 
 PINNED_POPPLER_VERSION = "25.12.0"
 POPPLER_RUNTIME_IDENTITY_SCHEMA_VERSION = "poppler-runtime-identity-v1"
@@ -149,6 +155,10 @@ class PinnedPopplerRuntime:
         }
 
 
+if TYPE_CHECKING:
+    GovernedPopplerRuntime: TypeAlias = PinnedPopplerRuntime | PinnedLinuxPopplerRuntime
+
+
 def _binary_names(platform_name: str) -> tuple[str, str]:
     if platform_name == _WINDOWS_PLATFORM_NAME:
         # ``shutil.which('pdftoppm')`` may prefer a .CMD shim on Windows.  The
@@ -172,6 +182,10 @@ def _canonical_file(path_value: str | Path, *, missing_code: str) -> Path:
 
 
 def _default_version_probe(executable: Path) -> str:
+    if platform.system() == "Linux":
+        from idis.parsers.poppler_linux_runtime import probe_linux_poppler_version
+
+        return probe_linux_poppler_version(executable)
     try:
         completed = subprocess.run(
             [str(executable), "-v"],
@@ -238,10 +252,20 @@ def resolve_pinned_poppler_runtime(
     version_probe: VersionProbe | None = None,
     file_hasher: FileHasher | None = None,
     platform_name: str | None = None,
-) -> PinnedPopplerRuntime:
+    linux_prefix: Path | None = None,
+) -> GovernedPopplerRuntime:
     """Resolve and admit the exact co-located Poppler 25.12.0 runtime."""
 
     admitted_platform = platform.system() if platform_name is None else platform_name
+    if admitted_platform == "Linux":
+        return _resolve_pinned_linux_poppler_runtime(
+            binary_resolver,
+            version_probe,
+            file_hasher,
+            linux_prefix,
+        )
+    if admitted_platform != _WINDOWS_PLATFORM_NAME:
+        raise PopplerRuntimeBindingError("POPPLER_RUNTIME_PLATFORM_UNSUPPORTED")
     pdftoppm_name, pdfinfo_name = _binary_names(admitted_platform)
     resolve = binary_resolver or _default_binary_resolver
     raw_pdftoppm = resolve(pdftoppm_name)
@@ -312,7 +336,7 @@ def verify_pinned_poppler_runtime(
 ) -> None:
     """Revalidate an admitted binding inside a child immediately before render."""
 
-    if not isinstance(binding, PinnedPopplerRuntime):
+    if type(binding) is not PinnedPopplerRuntime:
         raise PopplerRuntimeBindingError("POPPLER_RUNTIME_IDENTITY_INVALID")
     try:
         pdftoppm_path = _canonical_file(
@@ -366,11 +390,90 @@ def verify_pinned_poppler_runtime(
         raise PopplerRuntimeBindingError("POPPLER_RUNTIME_DRIFTED") from None
 
 
+def verify_governed_poppler_runtime(
+    binding: object,
+    *,
+    version_probe: VersionProbe | None = None,
+    file_hasher: FileHasher | None = None,
+    platform_name: str | None = None,
+) -> None:
+    """Revalidate one governed binding by exact type and host platform."""
+
+    from idis.parsers.poppler_linux_runtime import (
+        PinnedLinuxPopplerRuntime,
+        verify_pinned_linux_poppler_runtime,
+    )
+
+    host = platform.system() if platform_name is None else platform_name
+    if host == _WINDOWS_PLATFORM_NAME:
+        if type(binding) is not PinnedPopplerRuntime:
+            raise PopplerRuntimeBindingError("POPPLER_RUNTIME_IDENTITY_INVALID")
+        verify_pinned_poppler_runtime(
+            binding,
+            version_probe=version_probe,
+            file_hasher=file_hasher,
+        )
+        return
+    if host == "Linux":
+        if type(binding) is not PinnedLinuxPopplerRuntime:
+            raise PopplerRuntimeBindingError("POPPLER_RUNTIME_IDENTITY_INVALID")
+        verify_pinned_linux_poppler_runtime(
+            binding,
+            version_probe=version_probe,
+            file_hasher=file_hasher,
+        )
+        return
+    raise PopplerRuntimeBindingError("POPPLER_RUNTIME_PLATFORM_UNSUPPORTED")
+
+
+def _resolve_pinned_linux_poppler_runtime(
+    binary_resolver: BinaryResolver | None,
+    version_probe: VersionProbe | None,
+    file_hasher: FileHasher | None,
+    prefix_override: Path | None,
+) -> PinnedLinuxPopplerRuntime:
+    from idis.parsers.poppler_linux_runtime import (
+        PINNED_POPPLER_LINUX_PREFIX,
+        admit_linux_poppler_prefix,
+    )
+
+    prefix = Path(PINNED_POPPLER_LINUX_PREFIX if prefix_override is None else prefix_override)
+    if binary_resolver is not None:
+        raw = binary_resolver(_POSIX_PDFTOPPM_NAME)
+        if raw is not None:
+            try:
+                candidate = Path(raw).expanduser().resolve(strict=False)
+                allowed = prefix.expanduser().resolve(strict=False) / "bin" / "pdftoppm"
+            except (OSError, RuntimeError, ValueError):
+                raise PopplerRuntimeBindingError("POPPLER_RUNTIME_LAYOUT_UNLISTED") from None
+            if candidate != allowed:
+                raise PopplerRuntimeBindingError("POPPLER_RUNTIME_LAYOUT_UNLISTED")
+    return admit_linux_poppler_prefix(
+        prefix,
+        version_probe=version_probe,
+        file_hasher=file_hasher,
+    )
+
+
+def __getattr__(name: str) -> object:
+    """Resolve the Linux half of the union after both modules have finished loading."""
+
+    if name == "GovernedPopplerRuntime":
+        from idis.parsers.poppler_linux_runtime import PinnedLinuxPopplerRuntime
+
+        union = PinnedPopplerRuntime | PinnedLinuxPopplerRuntime
+        globals()["GovernedPopplerRuntime"] = union
+        return union
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
     "PINNED_POPPLER_VERSION",
     "POPPLER_RUNTIME_IDENTITY_SCHEMA_VERSION",
+    "GovernedPopplerRuntime",
     "PinnedPopplerRuntime",
     "PopplerRuntimeBindingError",
     "resolve_pinned_poppler_runtime",
+    "verify_governed_poppler_runtime",
     "verify_pinned_poppler_runtime",
 ]

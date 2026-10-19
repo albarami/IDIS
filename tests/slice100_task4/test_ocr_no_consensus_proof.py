@@ -19,6 +19,9 @@ from PIL import Image
 from idis.parsers import ocr
 from idis.parsers import pdf as pdf_parser
 from idis.parsers.base import ParseErrorCode
+from tests.slice100_task4.test_linux_poppler_parent_guard import (
+    inject_inline_governed_child_seam,
+)
 
 
 class _Output:
@@ -172,6 +175,7 @@ def test_file_worker_emits_only_complete_no_consensus_proof(
     monkeypatch.setitem(sys.modules, "pdf2image", pdf2image)
     monkeypatch.setitem(sys.modules, "pdf2image.exceptions", pdf2image_exceptions)
     monkeypatch.setitem(sys.modules, "pytesseract", pytesseract)
+    inject_inline_governed_child_seam(monkeypatch, ocr)
 
     queue = _CaptureQueue()
     ocr._tesseract_pdf_file_ocr_worker(

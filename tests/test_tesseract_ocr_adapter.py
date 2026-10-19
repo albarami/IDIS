@@ -21,6 +21,7 @@ from idis.parsers.ocr import (
     _image_within_resource_bounds,
 )
 from idis.parsers.pdf import parse_pdf
+from tests._linux_poppler_gate import requires_linux_governed_poppler
 
 try:
     from PIL import Image, ImageDraw, ImageFont
@@ -84,6 +85,7 @@ def test_tesseract_adapter_worker_failure_is_structured_and_safe() -> None:
     assert "SLICE33 OCR FAILURE" not in encoded
 
 
+@requires_linux_governed_poppler
 def test_tesseract_adapter_success_creates_deterministic_spans() -> None:
     adapter = TesseractOcrAdapter(dpi=220)
     pdf_bytes = _create_image_text_pdf("SLICE33 OCR 123")
@@ -228,6 +230,7 @@ def test_tesseract_adapter_respects_max_page_window_before_span_creation() -> No
     assert result.errors[0].details == {}
 
 
+@requires_linux_governed_poppler
 def test_private_gate_ocr_enabled_remains_aggregate_only(tmp_path: Path) -> None:
     root = tmp_path / "real_example"
     confidential_dir = root / "Confidential OCR Folder"
@@ -256,6 +259,7 @@ def test_private_gate_ocr_enabled_remains_aggregate_only(tmp_path: Path) -> None
     )
 
 
+@requires_linux_governed_poppler
 def test_private_gate_ocr_enabled_retries_prior_ocr_required_ledger_entry(
     tmp_path: Path,
 ) -> None:

@@ -73,7 +73,16 @@ def _sha256_json(value: object) -> str:
 def _canonical_bitmap(pdf_bytes: bytes) -> tuple[bytes, str]:
     from pdf2image import convert_from_bytes
 
-    pages = convert_from_bytes(pdf_bytes, dpi=200, first_page=1, last_page=1)
+    from idis.parsers.poppler_runtime import resolve_pinned_poppler_runtime
+
+    binding = resolve_pinned_poppler_runtime()
+    pages = convert_from_bytes(
+        pdf_bytes,
+        dpi=200,
+        first_page=1,
+        last_page=1,
+        poppler_path=str(binding.binary_dir),
+    )
     if len(pages) != 1:
         raise RuntimeError("WATERMARK_RENDER_PAGE_COUNT")
     policy = default_watermark_page_policy()

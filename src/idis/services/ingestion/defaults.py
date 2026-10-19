@@ -19,7 +19,7 @@ from idis.parsers.ocr import (
     build_trusted_image_only_page_admission_set,
 )
 from idis.parsers.poppler_runtime import (
-    PinnedPopplerRuntime,
+    GovernedPopplerRuntime,
     resolve_pinned_poppler_runtime,
 )
 from idis.parsers.watermark_page_classifier import (
@@ -125,7 +125,7 @@ def build_default_ocr_config(
     env: Mapping[str, str] | None = None,
     *,
     image_only_page_admissions: TrustedImageOnlyPageAdmissionSet | None = None,
-    poppler_runtime: PinnedPopplerRuntime | None = None,
+    poppler_runtime: GovernedPopplerRuntime | None = None,
 ) -> OcrConfig | None:
     """Build explicit OCR config from runtime environment."""
     values = os.environ if env is None else env

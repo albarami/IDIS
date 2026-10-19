@@ -11,7 +11,9 @@ from pathlib import Path
 
 import pytest
 
+from idis.pipeline.worker import load_worker_lease_config
 from tests import _operator_preconditions as gate
+from tests.slice100_task7._v19_environment import _module_environment
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _TASK7 = _REPO_ROOT / "tests" / "slice100_task7"
@@ -307,3 +309,18 @@ def test_no_collected_task7_module_skips_on_an_operator_database_url() -> None:
     modules = sorted({nodeid.split("::", 1)[0] for nodeid in nodeids})
     assert modules
     assert _operator_database_skip_messages([_REPO_ROOT / module for module in modules]) == []
+
+
+def test_v19_erasure_api_module_environment_is_strict_valid_worker_lease() -> None:
+    environment = _module_environment(
+        admin_url="postgresql://synthetic-admin/db",
+        app_url="postgresql://synthetic-app/db",
+        erasure_url="postgresql://synthetic-erasure/db",
+        object_store_base="synthetic-object-store",
+        api_keys_json="{}",
+    )
+    assert environment["IDIS_WORKER_LEASE_SECONDS"] == "60"
+    assert environment["IDIS_WORKER_HEARTBEAT_SECONDS"] == "20"
+    loaded = load_worker_lease_config(env=environment, strict=True)
+    assert loaded.lease_seconds == 60
+    assert loaded.heartbeat_seconds == 20

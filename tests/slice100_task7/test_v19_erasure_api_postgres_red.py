@@ -27,13 +27,13 @@ from tests._operator_preconditions import (
     requires_operator_postgres,
 )
 from tests.slice100_task2b._support import DisposablePostgres
+from tests.slice100_task7._v19_environment import _module_environment
 from tests.slice100_task7.test_v19_erasure_postgres_app_role_red import (
     _assert_app_role,
     _seed_request,
     _v19_database,
 )
 
-from idis.api.auth import IDIS_API_KEYS_ENV
 from idis.api.main import create_app
 from idis.audit.postgres_sink import PostgresAuditSink
 from idis.compliance.erasure import reset_erasure_executor
@@ -56,11 +56,16 @@ _INITIAL_USER_AGENT = "slice100-v19-api-initial"
 _CHANGED_USER_AGENT = "slice100-v19-api-retry-changed"
 
 _EXECUTE_PATH = f"/v1/erasure-requests/{_REQUEST_ID}/execute"
-_TASK7_TYPES = {
-    "task7.erasure.attempted",
-    "task7.erasure.failed",
-    "task7.erasure.succeeded",
+_TASK7_EVENT_RANK = {
+    "task7.erasure.attempted": 0,
+    "task7.erasure.failed": 1,
+    "task7.erasure.succeeded": 2,
 }
+_TASK7_TYPES = frozenset(_TASK7_EVENT_RANK)
+_TIE_ORDER_TEST = "test_task7_lineage_occurred_at_tie_orders_attempted_before_succeeded"
+_TIE_OCCURRED_AT = "2026-10-19T07:58:00.000000Z"
+_TIE_SUCCEEDED_EVENT_ID = "00000000-0000-4000-8000-000000000001"
+_TIE_ATTEMPTED_EVENT_ID = "ffffffff-ffff-4fff-8fff-ffffffffffff"
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,22 +124,19 @@ def v19_api_postgres_runtime(
     environment = pytest.MonkeyPatch()
     object_store_base = tmp_path_factory.mktemp("task7-v19-api-object-store")
     with _v19_database() as (database, executor_engine):
-        environment.setenv("IDIS_DATABASE_ADMIN_URL", _render_url(database.admin_engine))
-        environment.setenv("IDIS_DATABASE_URL", _render_url(database.app_engine))
-        environment.setenv("IDIS_ERASURE_DATABASE_URL", _render_url(executor_engine))
-        environment.setenv("IDIS_OBJECT_STORE_BACKEND", "filesystem")
-        environment.setenv("IDIS_OBJECT_STORE_BASE_DIR", str(object_store_base))
-        environment.setenv(
-            "IDIS_AUDIT_LOG_PATH",
-            str(object_store_base / "fallback-audit-never-selected.jsonl"),
-        )
-        environment.setenv("IDIS_REQUIRE_FULL_LIVE", "0")
+        for name, value in _module_environment(
+            admin_url=_render_url(database.admin_engine),
+            app_url=_render_url(database.app_engine),
+            erasure_url=_render_url(executor_engine),
+            object_store_base=str(object_store_base),
+            api_keys_json=json.dumps(_api_key_registry(), sort_keys=True),
+        ).items():
+            environment.setenv(name, value)
         environment.delenv("IDIS_STRICT_DOTENV_PATH", raising=False)
         # The execute route needs no Redis-backed capability.  Removing an
         # inherited strict-profile URL prevents this disposable proof from
         # reading or mutating any acceptance rate-limit namespace.
         environment.delenv("IDIS_REDIS_URL", raising=False)
-        environment.setenv(IDIS_API_KEYS_ENV, json.dumps(_api_key_registry(), sort_keys=True))
         reset_engines()
         try:
             yield _ApiPostgresRuntime(
@@ -147,11 +149,16 @@ def v19_api_postgres_runtime(
 
 
 @pytest.fixture(autouse=True)
-def _clean_api_postgres_state(
-    v19_api_postgres_runtime: _ApiPostgresRuntime | None,
-) -> Iterator[None]:
+def _clean_api_postgres_state(request: pytest.FixtureRequest) -> Iterator[None]:
     """Use admin only to reset the disposable fixture between app-role proofs."""
 
+    if request.node.name == _TIE_ORDER_TEST:
+        yield
+        return
+    v19_api_postgres_runtime = cast(
+        _ApiPostgresRuntime | None,
+        request.getfixturevalue("v19_api_postgres_runtime"),
+    )
     if v19_api_postgres_runtime is None:
         yield
         return
@@ -216,14 +223,41 @@ def _tenant_events(
                 SELECT event
                 FROM public.audit_events
                 WHERE tenant_id = CAST(:tenant_id AS uuid)
-                ORDER BY occurred_at, event_id
+                ORDER BY
+                  CASE
+                    WHEN event_type IN (
+                      'task7.erasure.attempted',
+                      'task7.erasure.failed',
+                      'task7.erasure.succeeded'
+                    ) THEN 1
+                    ELSE 0
+                  END,
+                  CASE
+                    WHEN event_type IN (
+                      'task7.erasure.attempted',
+                      'task7.erasure.failed',
+                      'task7.erasure.succeeded'
+                    ) THEN CAST(
+                      event->'payload'->'safe'->>'attempt_ordinal' AS integer
+                    )
+                    ELSE 0
+                  END,
+                  CASE event_type
+                    WHEN 'task7.erasure.attempted' THEN 0
+                    WHEN 'task7.erasure.failed' THEN 1
+                    WHEN 'task7.erasure.succeeded' THEN 2
+                    ELSE 0
+                  END,
+                  occurred_at,
+                  event_id
                 """
             ),
             {"tenant_id": tenant_id},
         ).scalars()
         values = tuple(rows)
     assert all(isinstance(value, Mapping) for value in values)
-    return tuple(dict(value) for value in values)
+    events = tuple(dict(value) for value in values)
+    return tuple(sorted(events, key=_audit_event_order_key))
 
 
 def _durable_snapshot(
@@ -332,6 +366,71 @@ def _assert_succeeded_semantics(
     assert isinstance(safe["counts"], Mapping)
 
 
+def _task7_attempt_ordinal(event: Mapping[str, Any]) -> int:
+    payload = event.get("payload")
+    safe = payload.get("safe") if isinstance(payload, Mapping) else None
+    ordinal = safe.get("attempt_ordinal") if isinstance(safe, Mapping) else None
+    if type(ordinal) is not int:
+        raise AssertionError("task7 lineage event requires integer attempt_ordinal")
+    return ordinal
+
+
+def _audit_event_order_key(event: Mapping[str, Any]) -> tuple[int, int, int, str, str]:
+    """Order key mirrored by the ``_tenant_events`` SQL.
+
+    Other audit rows keep occurred_at, event_id order and stay ahead of the
+    Task-7 lineage group. Lineage rows follow attempt_ordinal, then attempted,
+    failed, succeeded, then occurred_at, then event_id.
+    """
+
+    occurred_at = event.get("occurred_at")
+    event_id = event.get("event_id")
+    if not isinstance(occurred_at, str) or not isinstance(event_id, str):
+        raise AssertionError("audit event order requires string occurred_at and event_id")
+    event_type = event.get("event_type")
+    rank = _TASK7_EVENT_RANK.get(event_type) if isinstance(event_type, str) else None
+    if rank is None:
+        return (0, 0, 0, occurred_at, event_id)
+    return (1, _task7_attempt_ordinal(event), rank, occurred_at, event_id)
+
+
+def _synthetic_task7_lineage_event(
+    *,
+    event_type: str,
+    event_id: str,
+    occurred_at: str,
+    attempt_ordinal: int,
+) -> dict[str, Any]:
+    return {
+        "event_id": event_id,
+        "occurred_at": occurred_at,
+        "event_type": event_type,
+        "payload": {"safe": {"attempt_ordinal": attempt_ordinal}},
+    }
+
+
+def test_task7_lineage_occurred_at_tie_orders_attempted_before_succeeded() -> None:
+    """A shared occurred_at still orders attempted before succeeded."""
+
+    succeeded = _synthetic_task7_lineage_event(
+        event_type="task7.erasure.succeeded",
+        event_id=_TIE_SUCCEEDED_EVENT_ID,
+        occurred_at=_TIE_OCCURRED_AT,
+        attempt_ordinal=1,
+    )
+    attempted = _synthetic_task7_lineage_event(
+        event_type="task7.erasure.attempted",
+        event_id=_TIE_ATTEMPTED_EVENT_ID,
+        occurred_at=_TIE_OCCURRED_AT,
+        attempt_ordinal=1,
+    )
+    ordered = tuple(sorted((succeeded, attempted), key=_audit_event_order_key))
+    assert [event["event_type"] for event in ordered] == [
+        "task7.erasure.attempted",
+        "task7.erasure.succeeded",
+    ]
+
+
 @requires_operator_postgres(
     "IDIS_DATABASE_ADMIN_URL",
     "IDIS_ERASURE_DATABASE_URL",
@@ -414,6 +513,7 @@ def test_same_tenant_api_uses_only_dedicated_authority_and_persists_terminal_lin
         "task7.erasure.succeeded",
     ]
     attempted, succeeded = _task7_events(events)
+    assert attempted["occurred_at"] <= succeeded["occurred_at"]
     for event in (attempted, succeeded):
         actor = event["actor"]
         assert isinstance(actor, Mapping)
@@ -565,6 +665,7 @@ def test_post_function_crash_reconstructs_terminal_once_and_suppresses_only_same
         "task7.erasure.attempted",
         "task7.erasure.succeeded",
     ]
+    assert task7_events[0]["occurred_at"] <= task7_events[1]["occurred_at"]
     attempted_actor = task7_events[0]["actor"]
     assert isinstance(attempted_actor, Mapping)
     assert attempted_actor["ip"] == _CLIENT_IP

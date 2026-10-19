@@ -1522,3 +1522,250 @@ def test_v27_posix_quarantine_fifo_replacement_never_blocks(tmp_path: Path) -> N
     assert completed.returncode == 0
     assert completed.stdout.strip() == "FIFO_CANARY_PASS"
     assert completed.stderr == ""
+
+
+_STAGED_V27_ARTIFACT = (
+    REPO_ROOT
+    / ".local_reports"
+    / "slice100"
+    / "task8"
+    / "v27-candidate"
+    / "full_strict_v27_reviewed_preimage_v1.json"
+)
+_STAGED_V27_FIXTURE = (
+    REPO_ROOT
+    / ".local_reports"
+    / "slice100"
+    / "task8"
+    / "v27-candidate"
+    / "full_strict_v27_contract_hash_v1.json"
+)
+_POLICY_V2_PATH = REPO_ROOT / "contracts" / "fdd_formula_policy_v2.json"
+_REVIEWER_MAP_PATH = (
+    REPO_ROOT / "docs" / "plans" / "2026-07-25-slice100-task8-fdd-formula-policy-v2-review-map.md"
+)
+_PARENT_V21_PATH = REPO_ROOT / "contracts" / "full_strict_v21_reviewed_preimage_v1.json"
+_CANONICAL_V27_PATHS = (
+    REPO_ROOT / "contracts" / "full_strict_v27_reviewed_preimage_v1.json",
+    REPO_ROOT / "tests" / "slice100_task8" / "fixtures" / "full_strict_v27_contract_hash_v1.json",
+)
+_BINDING_CODE = "TASK8_V27_DASHBOARD_REQUIREMENT_BINDING_INVALID"
+_BINDING_MARKER = "POLICY_V2_DUPLICATE_REQUIREMENT_TUPLE"
+_SYNTHETIC_AUTHORITY_SHA256 = "11" * 32
+
+
+_OTHER_BINDING_CASE = "LEGACY_FOUR_FIELD_REQUIREMENT"
+_BOTH_BINDING_CASES = (_BINDING_MARKER, _OTHER_BINDING_CASE)
+
+
+def _assert_files_present(paths: tuple[Path, ...], *, label: str) -> None:
+    missing = [str(path) for path in paths if not path.is_file()]
+    assert not missing, f"{label}: " + "; ".join(missing)
+
+
+def _requirement(*, required: bool = True, extra_field: bool = False) -> dict[str, object]:
+    requirement: dict[str, object] = {
+        "formula_ordinal": 1,
+        "formula_type": "GROSS_MARGIN",
+        "required": required,
+        "scope": "income",
+    }
+    if extra_field:
+        requirement["note"] = "drift"
+    return requirement
+
+
+def _dashboard_sql(
+    *,
+    calc_type_count: int = 4,
+    formula_type_count: int = 5,
+    formula_ordinal_count: int = 2,
+) -> str:
+    return " ".join(
+        ["item->>'calc_type'"] * calc_type_count
+        + ["item->>'formula_type'"] * formula_type_count
+        + ["item->>'formula_ordinal'"] * formula_ordinal_count
+    )
+
+
+def _binding_requirements(
+    *,
+    required: bool = True,
+    extra_field: bool = False,
+) -> tuple[dict[str, object], ...]:
+    items = [_requirement() for _index in range(9)]
+    items.append(_requirement(required=required, extra_field=extra_field))
+    return tuple(items)
+
+
+def _binding_pair(
+    *,
+    dashboard_sql: str | None = None,
+    negative_cases: tuple[str, ...] = _BOTH_BINDING_CASES,
+    illegal_cases: tuple[str, ...] = _BOTH_BINDING_CASES,
+    requirements: tuple[dict[str, object], ...] | None = None,
+) -> tuple[bytes, bytes, str]:
+    body = _dashboard_sql() if dashboard_sql is None else dashboard_sql
+    requirement_rows = _binding_requirements() if requirements is None else requirements
+    artifact = {
+        "sql_authority_registry": {
+            "rows": [
+                {
+                    "authority_id": "dashboard-root-equation-v3",
+                    "expected_sha256": _SYNTHETIC_AUTHORITY_SHA256,
+                    "body_sql_utf8_hex_tuple": [body.encode("utf-8").hex()],
+                    "illegal_red_case_tuple": list(illegal_cases),
+                }
+            ]
+        },
+        "task8_fdd_contract": {
+            "dashboard_contract": {
+                "requirement_binding_contract": {"negative_case_tuple": list(negative_cases)}
+            }
+        },
+    }
+    policy = {
+        "workbook_row_registry": {"rows": [{"required_calculations": list(requirement_rows)}]}
+    }
+    return (
+        json.dumps(artifact, separators=(",", ":")).encode("utf-8"),
+        json.dumps(policy, separators=(",", ":")).encode("utf-8"),
+        body,
+    )
+
+
+def _patch_binding_pins(
+    monkeypatch: pytest.MonkeyPatch,
+    runner: ModuleType,
+    artifact_raw: bytes,
+    policy_raw: bytes,
+    dashboard_sql: str,
+) -> None:
+    monkeypatch.setattr(runner, "_ARTIFACT_SHA256", hashlib.sha256(artifact_raw).hexdigest())
+    monkeypatch.setattr(runner, "_POLICY_ARTIFACT_SHA256", hashlib.sha256(policy_raw).hexdigest())
+    monkeypatch.setattr(runner, "_DASHBOARD_AUTHORITY_SHA256", _SYNTHETIC_AUTHORITY_SHA256)
+    monkeypatch.setattr(
+        runner,
+        "_DASHBOARD_AUTHORITY_BODY_SHA256",
+        hashlib.sha256(dashboard_sql.encode("utf-8")).hexdigest(),
+    )
+
+
+def test_v27_dashboard_requirement_binding_accepts_staged_real_bytes() -> None:
+    runner = _load()
+    _assert_files_present(
+        (_STAGED_V27_ARTIFACT, _POLICY_V2_PATH),
+        label="missing dashboard requirement input",
+    )
+    runner.validate_v27_dashboard_requirement_assets(
+        artifact_raw=_STAGED_V27_ARTIFACT.read_bytes(),
+        policy_raw=_POLICY_V2_PATH.read_bytes(),
+    )
+
+
+def test_v27_dashboard_requirement_binding_rejects_each_synthetic_condition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = _load()
+    happy_artifact, happy_policy, happy_sql = _binding_pair()
+    _patch_binding_pins(monkeypatch, runner, happy_artifact, happy_policy, happy_sql)
+    runner.validate_v27_dashboard_requirement_assets(
+        artifact_raw=happy_artifact,
+        policy_raw=happy_policy,
+    )
+    other = (_OTHER_BINDING_CASE,)
+    rejections = (
+        (
+            "marker missing from negative_case_tuple",
+            _binding_pair(negative_cases=other, illegal_cases=_BOTH_BINDING_CASES),
+        ),
+        (
+            "marker missing from illegal_red_case_tuple",
+            _binding_pair(negative_cases=_BOTH_BINDING_CASES, illegal_cases=other),
+        ),
+        (
+            "wrong requirement field set",
+            _binding_pair(requirements=_binding_requirements(extra_field=True)),
+        ),
+        (
+            "required false",
+            _binding_pair(requirements=_binding_requirements(required=False)),
+        ),
+        (
+            "calc_type count off by one",
+            _binding_pair(dashboard_sql=_dashboard_sql(calc_type_count=5)),
+        ),
+        (
+            "formula_type count off by one",
+            _binding_pair(dashboard_sql=_dashboard_sql(formula_type_count=6)),
+        ),
+        (
+            "formula_ordinal count off by one",
+            _binding_pair(dashboard_sql=_dashboard_sql(formula_ordinal_count=3)),
+        ),
+    )
+    for name, (artifact_raw, policy_raw, dashboard_sql) in rejections:
+        _patch_binding_pins(monkeypatch, runner, artifact_raw, policy_raw, dashboard_sql)
+        rejected = False
+        try:
+            runner.validate_v27_dashboard_requirement_assets(
+                artifact_raw=artifact_raw,
+                policy_raw=policy_raw,
+            )
+        except runner.Task8V27SignedCensusError as exc:
+            rejected = True
+            assert exc.code == _BINDING_CODE, name
+        assert rejected, name
+
+
+def test_v27_cli_reaches_profile_boundary_on_staged_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runner = _load()
+    _assert_files_present(
+        (
+            _STAGED_V27_ARTIFACT,
+            _STAGED_V27_FIXTURE,
+            _POLICY_V2_PATH,
+            _REVIEWER_MAP_PATH,
+            _PARENT_V21_PATH,
+        ),
+        label="missing signed census input",
+    )
+    present = [str(path) for path in _CANONICAL_V27_PATHS if os.path.lexists(path)]
+    assert not present, "canonical input must stay absent: " + "; ".join(present)
+    report_root = tmp_path / ".local_reports" / "slice100" / "task8"
+    report_root.mkdir(parents=True)
+    output = report_root / "receipt.json"
+    runner.REPORT_ROOT = report_root
+    observed: list[dict[str, str]] = []
+
+    def record_profile(process_env: object) -> object:
+        assert isinstance(process_env, dict)
+        observed.append(dict(process_env))
+        raise runner.Task8V27SignedCensusError("TASK8_V27_SIGNED_CENSUS_PROFILE_INVALID")
+
+    monkeypatch.setattr(runner, "load_operator_material", record_profile)
+    exit_code = runner.main(
+        [
+            "--artifact",
+            str(_STAGED_V27_ARTIFACT),
+            "--fixture",
+            str(_STAGED_V27_FIXTURE),
+            "--output",
+            str(output),
+        ]
+    )
+    assert exit_code == 2
+    assert observed == [{"IDIS_STRICT_DOTENV_PATH": os.environ.get("IDIS_STRICT_DOTENV_PATH", "")}]
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {
+        "reason_code": "TASK8_V27_SIGNED_CENSUS_PROFILE_INVALID",
+        "result": "FAILED",
+        "schema_version": "task8-v27-signed-census-cli-result-v1",
+    }
+    assert "Traceback" not in captured.err
+    assert not output.exists()
+    assert list(report_root.glob("*.json")) == []

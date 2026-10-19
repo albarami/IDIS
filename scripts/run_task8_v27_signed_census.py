@@ -673,6 +673,16 @@ def validate_v27_dashboard_requirement_assets(*, artifact_raw: bytes, policy_raw
             for row in policy["workbook_row_registry"]["rows"]
             for requirement in row["required_calculations"]
         )
+        negative_case_tuple = artifact["task8_fdd_contract"]["dashboard_contract"][
+            "requirement_binding_contract"
+        ]["negative_case_tuple"]
+        illegal_red_case_tuple = authority["illegal_red_case_tuple"]
+        marker_in_negative_cases = any(
+            case == "POLICY_V2_DUPLICATE_REQUIREMENT_TUPLE" for case in negative_case_tuple
+        )
+        marker_in_illegal_cases = any(
+            case == "POLICY_V2_DUPLICATE_REQUIREMENT_TUPLE" for case in illegal_red_case_tuple
+        )
     except (KeyError, StopIteration, TypeError, UnicodeError, ValueError) as exc:
         raise Task8V27SignedCensusError(code) from exc
     if (
@@ -688,7 +698,8 @@ def validate_v27_dashboard_requirement_assets(*, artifact_raw: bytes, policy_raw
         or dashboard_sql.count("item->>'calc_type'") != 4
         or dashboard_sql.count("item->>'formula_type'") != 5
         or dashboard_sql.count("item->>'formula_ordinal'") != 2
-        or "POLICY_V2_DUPLICATE_REQUIREMENT_TUPLE" not in dashboard_sql
+        or not marker_in_negative_cases
+        or not marker_in_illegal_cases
     ):
         _fail(code)
 

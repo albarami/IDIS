@@ -14,7 +14,6 @@ or partially materialized authority.
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any, cast
@@ -23,6 +22,10 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import DBAPIError
+from tests._operator_preconditions import (
+    operator_postgres_fixture_blocked,
+    requires_operator_postgres,
+)
 from tests.slice100_task2b._support import DisposablePostgres
 from tests.slice100_task7.test_v19_erasure_postgres_app_role_red import (
     _assert_app_role,
@@ -70,10 +73,9 @@ def _render_url(engine: Engine) -> str:
     return engine.url.render_as_string(hide_password=False)
 
 
-def _operator_database_is_configured() -> bool:
-    return bool(os.environ.get("IDIS_DATABASE_ADMIN_URL", "").strip()) and bool(
-        os.environ.get("IDIS_ERASURE_DATABASE_URL", "").strip()
-    )
+_V19_OPERATOR_POSTGRES_FAILURE = (
+    "TASK7_V19_API_POSTGRES_CONFIGURATION_MISSING:IDIS_DATABASE_ADMIN_URL,IDIS_ERASURE_DATABASE_URL"
+)
 
 
 def _api_key_registry() -> dict[str, dict[str, object]]:
@@ -105,17 +107,14 @@ def _api_key_registry() -> dict[str, dict[str, object]]:
 @pytest.fixture(scope="module")
 def v19_api_postgres_runtime(
     tmp_path_factory: pytest.TempPathFactory,
-) -> Iterator[_ApiPostgresRuntime]:
-    if not _operator_database_is_configured():
-        if os.environ.get("IDIS_REQUIRE_POSTGRES") == "1":
-            pytest.fail(
-                "TASK7_V19_API_POSTGRES_CONFIGURATION_MISSING:"
-                "IDIS_DATABASE_ADMIN_URL,IDIS_ERASURE_DATABASE_URL",
-                pytrace=False,
-            )
-        pytest.skip(
-            "v19 API/PostgreSQL proof requires the operator database and erasure credential"
-        )
+) -> Iterator[_ApiPostgresRuntime | None]:
+    if operator_postgres_fixture_blocked(
+        "IDIS_DATABASE_ADMIN_URL",
+        "IDIS_ERASURE_DATABASE_URL",
+        failure_code=_V19_OPERATOR_POSTGRES_FAILURE,
+    ):
+        yield None
+        return
 
     environment = pytest.MonkeyPatch()
     object_store_base = tmp_path_factory.mktemp("task7-v19-api-object-store")
@@ -149,10 +148,13 @@ def v19_api_postgres_runtime(
 
 @pytest.fixture(autouse=True)
 def _clean_api_postgres_state(
-    v19_api_postgres_runtime: _ApiPostgresRuntime,
+    v19_api_postgres_runtime: _ApiPostgresRuntime | None,
 ) -> Iterator[None]:
     """Use admin only to reset the disposable fixture between app-role proofs."""
 
+    if v19_api_postgres_runtime is None:
+        yield
+        return
     reset_engines()
     reset_erasure_executor()
     reset_legal_hold_registry()
@@ -330,6 +332,11 @@ def _assert_succeeded_semantics(
     assert isinstance(safe["counts"], Mapping)
 
 
+@requires_operator_postgres(
+    "IDIS_DATABASE_ADMIN_URL",
+    "IDIS_ERASURE_DATABASE_URL",
+    failure_code=_V19_OPERATOR_POSTGRES_FAILURE,
+)
 def test_application_role_cannot_execute_the_dedicated_function(
     v19_api_postgres_runtime: _ApiPostgresRuntime,
 ) -> None:
@@ -365,6 +372,11 @@ def test_application_role_cannot_execute_the_dedicated_function(
     assert _durable_snapshot(v19_api_postgres_runtime) == before
 
 
+@requires_operator_postgres(
+    "IDIS_DATABASE_ADMIN_URL",
+    "IDIS_ERASURE_DATABASE_URL",
+    failure_code=_V19_OPERATOR_POSTGRES_FAILURE,
+)
 def test_same_tenant_api_uses_only_dedicated_authority_and_persists_terminal_lineage(
     v19_api_postgres_runtime: _ApiPostgresRuntime,
     monkeypatch: pytest.MonkeyPatch,
@@ -411,6 +423,11 @@ def test_same_tenant_api_uses_only_dedicated_authority_and_persists_terminal_lin
     assert _generic_success_events(events) == ()
 
 
+@requires_operator_postgres(
+    "IDIS_DATABASE_ADMIN_URL",
+    "IDIS_ERASURE_DATABASE_URL",
+    failure_code=_V19_OPERATOR_POSTGRES_FAILURE,
+)
 def test_cross_tenant_api_returns_non_enumerating_404_with_zero_mutation(
     v19_api_postgres_runtime: _ApiPostgresRuntime,
 ) -> None:
@@ -439,6 +456,11 @@ def test_cross_tenant_api_returns_non_enumerating_404_with_zero_mutation(
         "same-admin-changed-transport-keeps-generic",
         "cross-admin-keeps-generic",
     ),
+)
+@requires_operator_postgres(
+    "IDIS_DATABASE_ADMIN_URL",
+    "IDIS_ERASURE_DATABASE_URL",
+    failure_code=_V19_OPERATOR_POSTGRES_FAILURE,
 )
 def test_post_function_crash_reconstructs_terminal_once_and_suppresses_only_same_admin(
     v19_api_postgres_runtime: _ApiPostgresRuntime,

@@ -26,6 +26,7 @@ from sqlalchemy import Connection, Engine, bindparam, create_engine, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
+from tests._operator_preconditions import requires_operator_postgres
 from tests.slice100_task2b._support import (
     DisposablePostgres,
     disposable_postgres,
@@ -156,16 +157,20 @@ def _provision_setup_principals(database: DisposablePostgres) -> None:
         )
 
 
+_V21_OPERATOR_POSTGRES_FAILURE = (
+    "TASK7_V21_OPERATOR_DATABASE_CONFIGURATION_MISSING:IDIS_ERASURE_DATABASE_URL"
+)
+
+
 def _required_erasure_url() -> str:
     value = os.environ.get("IDIS_ERASURE_DATABASE_URL", "").strip()
     if value:
         return value
-    if os.environ.get("IDIS_REQUIRE_POSTGRES") == "1":
-        pytest.fail(
-            "TASK7_V21_OPERATOR_DATABASE_CONFIGURATION_MISSING:IDIS_ERASURE_DATABASE_URL",
-            pytrace=False,
-        )
-    pytest.skip("IDIS_ERASURE_DATABASE_URL is required for the operator-backed v21 proof")
+    if os.environ.get("IDIS_REQUIRE_POSTGRES") == "1" or (
+        os.environ.get("IDIS_REQUIRE_OPERATOR_POSTGRES") == "1"
+    ):
+        pytest.fail(_V21_OPERATOR_POSTGRES_FAILURE, pytrace=False)
+    raise AssertionError("operator postgres gate did not record IDIS_ERASURE_DATABASE_URL")
 
 
 def _executor_engine(database: DisposablePostgres) -> Engine:
@@ -838,6 +843,10 @@ def test_v21_upgrade_downgrade_upgrade_restores_exact_authority_as_app_role() ->
         assert restored == first
 
 
+@requires_operator_postgres(
+    "IDIS_ERASURE_DATABASE_URL",
+    failure_code=_V21_OPERATOR_POSTGRES_FAILURE,
+)
 def test_v21_owner_acl_and_readiness_are_catalog_proven_without_admin_assertions() -> None:
     artifact, _fixture = _require_frozen_v21_runtime()
     with _v19_database() as (database, executor):
@@ -931,6 +940,10 @@ def test_v21_owner_acl_and_readiness_are_catalog_proven_without_admin_assertions
         assert result.code is None
 
 
+@requires_operator_postgres(
+    "IDIS_ERASURE_DATABASE_URL",
+    failure_code=_V21_OPERATOR_POSTGRES_FAILURE,
+)
 def test_v21_function_precondition_atomic_terminal_and_crash_open_state() -> None:
     artifact, _fixture = _require_frozen_v21_runtime()
     contract = tuple(_erasure_row(artifact)["object_reconciliation_contract_tuple"])

@@ -6,20 +6,30 @@ import os
 
 import pytest
 from sqlalchemy import create_engine
+from tests._operator_preconditions import requires_operator_postgres
 
 from idis.runtime.dependency_probes import collect_erasure_executor_facts
 from idis.runtime.dependency_readiness import check_erasure_executor_readiness
+
+_OPERATOR_POSTGRES_FAILURE = "TASK7_OPERATOR_DATABASE_CONFIGURATION_MISSING:{name}"
 
 
 def _required_database_url(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if value:
         return value
-    if os.environ.get("IDIS_REQUIRE_POSTGRES") == "1":
-        pytest.fail(f"TASK7_OPERATOR_DATABASE_CONFIGURATION_MISSING:{name}", pytrace=False)
-    pytest.skip(f"{name} is required only for the operator-backed PostgreSQL proof")
+    if os.environ.get("IDIS_REQUIRE_POSTGRES") == "1" or (
+        os.environ.get("IDIS_REQUIRE_OPERATOR_POSTGRES") == "1"
+    ):
+        pytest.fail(_OPERATOR_POSTGRES_FAILURE.replace("{name}", name), pytrace=False)
+    raise AssertionError(f"operator postgres gate did not record {name}")
 
 
+@requires_operator_postgres(
+    "IDIS_DATABASE_URL",
+    "IDIS_ERASURE_DATABASE_URL",
+    failure_code=_OPERATOR_POSTGRES_FAILURE,
+)
 def test_dedicated_erasure_credential_passes_the_real_catalog_readiness_contract() -> None:
     app_url = _required_database_url("IDIS_DATABASE_URL")
     erasure_url = _required_database_url("IDIS_ERASURE_DATABASE_URL")

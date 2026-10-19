@@ -134,8 +134,7 @@ def test_migration_0038_is_the_database_enforcement_boundary() -> None:
 
 @pytest.fixture(scope="module")
 def task7_database() -> Iterator[DisposablePostgres]:
-    if not _MIGRATION_0038.is_file():
-        pytest.skip("migration 0038 is intentionally absent while this suite is RED")
+    assert _MIGRATION_0038.is_file()
     with disposable_postgres() as database:
         with database.admin_engine.begin() as connection:
             provision_exact_erasure_principals(connection)

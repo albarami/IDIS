@@ -93,6 +93,12 @@ _DIMENSION_TO_TOPIC: dict[str, str] = {
 _MAX_SCORECARD_CLAIM_REFS_PER_FACT = 4
 _MAX_SCORECARD_CALC_REFS_PER_FACT = 2
 
+
+def _withheld_statement_text(count: int) -> str:
+    """Return the non-factual notice for statements left out of factual sections."""
+    return f"{count} analysis statements withheld: no statement-level evidence references"
+
+
 # Defense-in-depth: the Layer-2 visibility whitelist independently re-checks the shape of
 # every id/category it surfaces, so free text can never ride into a deliverable even if an
 # upstream sanitizer is bypassed. Bounded identifier tokens (finding ids / histogram
@@ -414,8 +420,10 @@ class DeliverablesGenerator:
     ) -> list[dict[str, Any]]:
         """Extract facts from an agent report's analysis_sections.
 
-        Bridges AgentReport.analysis_sections → DeliverableFact-compatible dicts.
-        Each section entry with text becomes a fact grounded to the report's refs.
+        Bridges AgentReport.analysis_sections to DeliverableFact-compatible dicts.
+        A statement carries only the claim_refs and calc_refs written on that
+        statement. A bare string, and a dict that omits a ref key, carries an
+        empty list for each missing key.
         """
         facts: list[dict[str, Any]] = []
         sections = report.analysis_sections
@@ -427,8 +435,8 @@ class DeliverablesGenerator:
                     facts.append(
                         {
                             "text": value.strip(),
-                            "claim_refs": list(report.supported_claim_ids),
-                            "calc_refs": list(report.supported_calc_ids),
+                            "claim_refs": [],
+                            "calc_refs": [],
                         }
                     )
                 elif isinstance(value, list):
@@ -437,8 +445,8 @@ class DeliverablesGenerator:
                             facts.append(
                                 {
                                     "text": item.strip(),
-                                    "claim_refs": list(report.supported_claim_ids),
-                                    "calc_refs": list(report.supported_calc_ids),
+                                    "claim_refs": [],
+                                    "calc_refs": [],
                                 }
                             )
                         elif isinstance(item, dict):
@@ -448,14 +456,8 @@ class DeliverablesGenerator:
                             facts.append(
                                 {
                                     "text": item_text,
-                                    "claim_refs": item.get(
-                                        "claim_refs",
-                                        list(report.supported_claim_ids),
-                                    ),
-                                    "calc_refs": item.get(
-                                        "calc_refs",
-                                        list(report.supported_calc_ids),
-                                    ),
+                                    "claim_refs": item.get("claim_refs", []),
+                                    "calc_refs": item.get("calc_refs", []),
                                     "sanad_grade": item.get("sanad_grade"),
                                     "confidence": item.get("confidence"),
                                 }
@@ -466,14 +468,8 @@ class DeliverablesGenerator:
                         facts.append(
                             {
                                 "text": value_text,
-                                "claim_refs": value.get(
-                                    "claim_refs",
-                                    list(report.supported_claim_ids),
-                                ),
-                                "calc_refs": value.get(
-                                    "calc_refs",
-                                    list(report.supported_calc_ids),
-                                ),
+                                "claim_refs": value.get("claim_refs", []),
+                                "calc_refs": value.get("calc_refs", []),
                                 "sanad_grade": value.get("sanad_grade"),
                                 "confidence": value.get("confidence"),
                             }
@@ -509,6 +505,7 @@ class DeliverablesGenerator:
             generated_at=generated_at,
         )
 
+        withheld_count = 0
         for agent_type in sorted(reports_by_type.keys()):
             report = reports_by_type[agent_type]
             section = _AGENT_TYPE_TO_SNAPSHOT_SECTION.get(agent_type, "summary")
@@ -518,6 +515,8 @@ class DeliverablesGenerator:
                 if not self._fact_has_refs(fact):
                     if self._is_missing_evidence_fact(fact):
                         builder.add_missing_info(text=fact["text"])
+                    else:
+                        withheld_count += 1
                     continue
                 if section == "metrics":
                     builder.add_metric_fact(**fact)
@@ -525,6 +524,9 @@ class DeliverablesGenerator:
                     builder.add_red_flag_fact(**fact)
                 else:
                     builder.add_summary_fact(**fact)
+
+        if withheld_count:
+            builder.add_missing_info(text=_withheld_statement_text(withheld_count))
 
         builder.add_missing_info(
             text=f"Composite score: {scorecard.composite_score:.1f} ({scorecard.score_band.value})",
@@ -558,6 +560,7 @@ class DeliverablesGenerator:
             generated_at=generated_at,
         )
 
+        withheld_count = 0
         for agent_type in sorted(reports_by_type.keys()):
             report = reports_by_type[agent_type]
             section = _AGENT_TYPE_TO_MEMO_SECTION.get(agent_type, "company_overview")
@@ -565,6 +568,7 @@ class DeliverablesGenerator:
 
             for fact in facts:
                 if not self._fact_has_refs(fact):
+                    withheld_count += 1
                     continue
                 kwargs = {
                     "text": fact["text"],
@@ -594,6 +598,20 @@ class DeliverablesGenerator:
                     claim_refs=list(risk.claim_ids),
                     calc_refs=list(risk.calc_ids),
                 )
+
+        if withheld_count:
+            builder.add_section(
+                section_id=f"{deliverable_id}-withheld-statements",
+                title="Withheld analysis statements",
+                facts=[
+                    {
+                        "text": _withheld_statement_text(withheld_count),
+                        "is_factual": False,
+                        "is_subjective": True,
+                    }
+                ],
+                is_subjective=True,
+            )
 
         # Additive: feed deterministic calc-derived financial facts alongside the LLM bridge.
         for row in build_financial_table(ctx.calc_registry).rows:

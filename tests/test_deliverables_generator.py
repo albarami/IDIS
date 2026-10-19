@@ -1040,3 +1040,102 @@ class TestDeliverablesGeneratorStructural:
             "All deliverable code must live in src/idis/deliverables/ "
             "and src/idis/models/deliverables.py"
         )
+
+
+def _report_with_sections(sections: dict[str, Any]) -> AgentReport:
+    """Report whose supported ids must not be copied onto bare statements."""
+    return _make_report("financial_agent").model_copy(
+        update={
+            "supported_claim_ids": ["claim-report-b", "claim-report-a"],
+            "supported_calc_ids": ["calc-report"],
+            "analysis_sections": sections,
+        }
+    )
+
+
+def _extracted_facts(sections: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract facts from one report without generating a deliverable bundle."""
+    report = _report_with_sections(sections)
+    generator = DeliverablesGenerator(audit_sink=InMemoryAuditSink())
+    return generator._extract_facts_from_report(report)
+
+
+class TestStatementSpecificFactRefs:
+    """A statement carries only the refs written on that statement."""
+
+    def test_string_section_yields_fact_with_empty_refs(self) -> None:
+        """A string section does not inherit the report's supported ids."""
+        facts = _extracted_facts({"summary": "Revenue reached one million."})
+
+        assert facts == [
+            {
+                "text": "Revenue reached one million.",
+                "claim_refs": [],
+                "calc_refs": [],
+            }
+        ]
+
+    def test_string_item_yields_fact_with_empty_refs(self) -> None:
+        """A string item inside a list does not inherit the report's supported ids."""
+        facts = _extracted_facts({"findings": ["Customer count is twelve."]})
+
+        assert facts == [
+            {
+                "text": "Customer count is twelve.",
+                "claim_refs": [],
+                "calc_refs": [],
+            }
+        ]
+
+    def test_dict_item_without_claim_refs_yields_empty_refs(self) -> None:
+        """A dict item that omits ref keys yields empty ref lists."""
+        facts = _extracted_facts({"findings": [{"text": "Burn is one hundred thousand."}]})
+
+        assert len(facts) == 1
+        assert facts[0]["text"] == "Burn is one hundred thousand."
+        assert facts[0]["claim_refs"] == []
+        assert facts[0]["calc_refs"] == []
+
+    def test_dict_section_without_claim_refs_yields_empty_refs(self) -> None:
+        """A dict section that omits ref keys yields empty ref lists."""
+        facts = _extracted_facts({"revenue": {"content": "ARR is one million."}})
+
+        assert len(facts) == 1
+        assert facts[0]["text"] == "ARR is one million."
+        assert facts[0]["claim_refs"] == []
+        assert facts[0]["calc_refs"] == []
+
+    def test_dict_item_keeps_exactly_its_own_claim_refs(self) -> None:
+        """Own claim_refs are kept, and a missing calc_refs key stays empty."""
+        facts = _extracted_facts(
+            {
+                "findings": [
+                    {
+                        "text": "Own statement.",
+                        "claim_refs": ["claim-own"],
+                    }
+                ]
+            }
+        )
+
+        assert len(facts) == 1
+        assert facts[0]["claim_refs"] == ["claim-own"]
+        assert facts[0]["calc_refs"] == []
+
+    def test_dict_item_keeps_exactly_both_own_ref_lists(self) -> None:
+        """A dict item that supplies both ref lists keeps those lists only."""
+        facts = _extracted_facts(
+            {
+                "findings": [
+                    {
+                        "text": "Fully linked statement.",
+                        "claim_refs": ["claim-own-b", "claim-own-a"],
+                        "calc_refs": ["calc-own"],
+                    }
+                ]
+            }
+        )
+
+        assert len(facts) == 1
+        assert facts[0]["claim_refs"] == ["claim-own-b", "claim-own-a"]
+        assert facts[0]["calc_refs"] == ["calc-own"]

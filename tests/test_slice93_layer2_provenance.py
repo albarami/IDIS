@@ -160,6 +160,7 @@ def test_layer2_provenance_surfaced_in_result_non_strict() -> None:
         debate_summary={"debate_id": RUN_ID, "muhasabah_passed": True, "stop_reason": "consensus"},
         created_claim_ids=[CLAIM_ID],
         calc_ids=[CALC_ID],
+        deal_metadata={"stage": "seed"},
     )
     provenance = result["layer2_provenance"]
     # Non-strict default path: no live runners were constructed.

@@ -32,6 +32,8 @@ from idis.api.routes.runs import (
 )
 from idis.models.debate import ArbiterDecision, DebateState, StopReason
 
+_DEAL_STAGE = "Series B"
+
 _LEAK = (
     "sk-ant-LEAK",
     "sk-LEAK123",
@@ -273,7 +275,7 @@ def test_scoring_step_summary_includes_provenance() -> None:
             tenant_id="t",
             deal_id="d",
             analysis_bundle=object(),
-            analysis_context=object(),
+            analysis_context=SimpleNamespace(stage=_DEAL_STAGE),
         )
     assert summary["composite_score"] == 68.5  # existing fields unchanged
     assert summary["band"] == "MEDIUM"

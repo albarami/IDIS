@@ -99,12 +99,18 @@ def test_durable_layer2_repos_exist_and_step_path_is_wired() -> None:
     assert "0022" in numbers  # 0022 present in the chain (not pinned as head; later slices append)
     assert list(_MIGRATIONS_DIR.glob("0022_layer2_ic_challenge_durability.py"))
     # The LAYER2 step path persists through the repository (Task 3): the route fn selects
-    # the repository and fails closed, and steps.py binds db_conn to it.
+    # the repository and fails closed, and steps.py binds db_conn and deal_metadata.
     runs_src = _RUNS_ROUTE.read_text(encoding="utf-8")
     assert "get_layer2_challenge_repository" in runs_src
     assert "LAYER2_PERSISTENCE_FAILED" in runs_src
     steps_src = Path("src/idis/services/runs/steps.py").read_text(encoding="utf-8")
-    assert "partial(_run_full_layer2_ic_challenge, db_conn=db_conn)" in steps_src
+    assert (
+        "partial(\n"
+        "                _run_full_layer2_ic_challenge,\n"
+        "                db_conn=db_conn,\n"
+        "                deal_metadata=deal_metadata,\n"
+        "            )"
+    ) in steps_src
 
 
 # --- 3. G3 closed (Task 5): Layer-2 provenance exists; strict clears on proven execution ---

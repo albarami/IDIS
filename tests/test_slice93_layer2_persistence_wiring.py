@@ -36,6 +36,7 @@ DEAL_ID = "33333333-3333-3333-3333-333333333333"
 RUN_ID = "22222222-2222-2222-2222-222222222222"
 CLAIM_ID = "claim_mth_0123456789abcdef01234567"
 CALC_ID = "calc-1"
+_DEAL_STAGE = "series_a"
 
 _DEBATE_SUMMARY = {
     "debate_id": RUN_ID,
@@ -65,6 +66,7 @@ def _call(**overrides: Any) -> dict[str, Any]:
         "debate_summary": dict(_DEBATE_SUMMARY),
         "created_claim_ids": [CLAIM_ID],
         "calc_ids": [CALC_ID],
+        "deal_metadata": {"stage": _DEAL_STAGE},
     }
     kwargs.update(overrides)
     return _run_full_layer2_ic_challenge(**kwargs)
@@ -164,6 +166,7 @@ def test_write_failure_fails_closed_with_reason_code() -> None:
 def test_no_rows_when_layer2_blocked() -> None:
     blocked = dict(_DEBATE_SUMMARY)
     blocked["muhasabah_passed"] = False
+    # Stage maps. The step still blocks on the failed debate gate and writes nothing.
     with pytest.raises(Layer2ICChallengeBlockedError) as exc_info:
         _call(debate_summary=blocked)
     assert str(exc_info.value) == "LAYER1_DEBATE_MISSING"
@@ -357,10 +360,13 @@ def test_strict_over_length_severity_collapses_to_column_safe_default() -> None:
     assert len(row.severity) <= 40  # fits severity VARCHAR(40) on both twins
 
 
-# --- Production binding: steps.py binds db_conn to the Layer-2 fn ---
+# --- Production binding: steps.py binds db_conn and deal_metadata ---
 
 
 def test_steps_builder_binds_db_conn_to_layer2_fn() -> None:
     steps_src = Path("src/idis/services/runs/steps.py").read_text(encoding="utf-8")
     compact = steps_src.replace("\n", "").replace(" ", "")
-    assert "partial(_run_full_layer2_ic_challenge,db_conn=db_conn)" in compact
+    assert (
+        "partial(_run_full_layer2_ic_challenge,db_conn=db_conn,deal_metadata=deal_metadata,)"
+        in compact
+    )

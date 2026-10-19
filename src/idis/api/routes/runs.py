@@ -15,7 +15,7 @@ import asyncio
 import logging
 import os
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -75,6 +75,9 @@ from idis.services.webhooks.safe_payload import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Characters of raw stage text included in a STAGE_UNKNOWN step message.
+_STAGE_UNKNOWN_MESSAGE_LIMIT = 120
 
 router = APIRouter(prefix="/v1", tags=["Runs"])
 
@@ -1984,12 +1987,17 @@ def _run_full_layer2_ic_challenge(
     graph_evidence: dict[str, Any] | None = None,
     rag_evidence: dict[str, Any] | None = None,
     enrichment_refs: dict[str, Any] | None = None,
+    deal_metadata: Mapping[str, Any] | None = None,
     vep_package_ids: list[str] | None = None,
     db_conn: Any = None,
     challenge_repository: Any = None,
     defer_persistence: bool = False,
 ) -> dict[str, Any]:
     """Run the distinct Layer 2 IC challenge for a FULL pipeline run.
+
+    ``deal_metadata`` is the admitted-deal snapshot the analysis step copies onto
+    the analysis context. An unmapped or blank stage blocks this step before any
+    challenger or arbiter runner is built.
 
     ``vep_package_ids`` (Slice92) carries the durable Layer-1 VEP candidate ids
     persisted by the METHODOLOGY_VALIDATED_EVIDENCE_PACKAGE step; they are surfaced
@@ -2001,6 +2009,19 @@ def _run_full_layer2_ic_challenge(
     Postgres/InMemory twin selector; a write failure fails the step closed with a
     static ``LAYER2_PERSISTENCE_FAILED`` reason.
     """
+    from idis.analysis.scoring.models import resolve_stage
+    from idis.services.runs.orchestrator import RunStepBlockedError
+
+    raw_stage = _deal_metadata_stage_text(deal_metadata)
+    resolved_stage = resolve_stage(raw_stage)
+    if resolved_stage is None:
+        visible = raw_stage if raw_stage is not None else ""
+        raise RunStepBlockedError(
+            "STAGE_UNKNOWN",
+            f"layer2 stage did not map: {visible[:_STAGE_UNKNOWN_MESSAGE_LIMIT]}",
+            result_summary={"outcome": "STAGE_UNKNOWN", "stage_text": visible},
+        )
+
     from idis.services.runs.layer2_ic_challenge import (
         Layer2ICChallengeBlockedError,
         RunLayer2ICChallengeService,
@@ -2047,6 +2068,15 @@ def _run_full_layer2_ic_challenge(
         enrichment_refs=enrichment_refs,
     )
 
+    # LAYER2_IC_CHALLENGE runs before SCORING, so the scorecard does not exist yet.
+    # resolved_stage was taken from deal_metadata above, the same snapshot the
+    # analysis step copies onto the analysis context.
+    if resolved_stage is not None:
+        record = record.model_copy(update={"stage": resolved_stage})
+        result["stage_emphasis"] = record.to_run_step_summary(stage=resolved_stage)[
+            "stage_emphasis"
+        ]
+
     # Persist the durable safe rows (Slice93). Deterministic ids -> idempotent upserts;
     # the InMemory twin keeps non-database runs green. Fail closed with a static,
     # ledger-safe reason (no raw exception text; cause chained for logs).
@@ -2065,7 +2095,9 @@ def _run_full_layer2_ic_challenge(
 
         repository = challenge_repository or get_layer2_challenge_repository(db_conn, tenant_id)
         try:
-            repository.upsert_challenge(Layer2ChallengeRow.from_record(record))
+            repository.upsert_challenge(
+                Layer2ChallengeRow.from_record(record, stage=resolved_stage)
+            )
             for finding in record.findings:
                 repository.upsert_finding(
                     Layer2FindingRow.from_finding(
@@ -2352,6 +2384,26 @@ def _calc_input_claim_ids(inputs: Any) -> list[str]:
     return []
 
 
+def _analysis_context_stage_text(analysis_context: Any) -> str | None:
+    """Return the analysis context stage text, or None when it is not text."""
+    raw = getattr(analysis_context, "stage", None)
+    if isinstance(raw, str):
+        return raw
+    return None
+
+
+def _deal_metadata_stage_text(deal_metadata: Mapping[str, Any] | None) -> str | None:
+    """Return the deal snapshot's stage text, or None when it is not text.
+
+    Same rule as ``_analysis_context_stage_text``: only a string is visible.
+    ``resolve_stage`` collapses whitespace for the lookup.
+    """
+    raw = (deal_metadata or {}).get("stage")
+    if isinstance(raw, str):
+        return raw
+    return None
+
+
 def _run_full_scoring(
     *,
     run_id: str,
@@ -2366,7 +2418,8 @@ def _run_full_scoring(
     """Run scoring engine for a FULL pipeline run.
 
     Builds LLM client (using IDIS_DEBATE_BACKEND), constructs ScoringEngine,
-    and scores the analysis bundle. Defaults to SEED stage.
+    and scores the analysis bundle with the stage resolved from the analysis
+    context. An unmapped stage blocks the step before any scoring call.
 
     Args:
         run_id: Pipeline run UUID.
@@ -2376,12 +2429,27 @@ def _run_full_scoring(
         analysis_context: AnalysisContext from analysis step.
 
     Returns:
-        Dict with composite_score, band, routing, and internal state
+        Dict with composite_score, band, routing, stage, and internal state
         (_scorecard) for downstream steps.
+
+    Raises:
+        RunStepBlockedError: When the analysis context stage does not map.
     """
+    from idis.analysis.scoring.models import resolve_stage
+    from idis.services.runs.orchestrator import RunStepBlockedError
+
+    raw_stage = _analysis_context_stage_text(analysis_context)
+    stage = resolve_stage(raw_stage)
+    if stage is None:
+        visible = raw_stage if raw_stage is not None else ""
+        raise RunStepBlockedError(
+            "STAGE_UNKNOWN",
+            f"scoring stage did not map: {visible[:_STAGE_UNKNOWN_MESSAGE_LIMIT]}",
+            result_summary={"outcome": "STAGE_UNKNOWN", "stage_text": visible},
+        )
+
     from idis.analysis.scoring.engine import ScoringEngine
     from idis.analysis.scoring.llm_scorecard_runner import LLMScorecardRunner
-    from idis.analysis.scoring.models import Stage
 
     llm_client = _build_scoring_llm_client(
         scoring_client_factory=scoring_client_factory,
@@ -2392,13 +2460,13 @@ def _run_full_scoring(
     effective_audit_sink = _resolve_run_audit_sink(audit_sink)
     engine = ScoringEngine(runner=runner, audit_sink=effective_audit_sink)
 
-    stage = Stage.SEED
     scorecard = engine.score(analysis_context, analysis_bundle, stage)
 
     return {
         "composite_score": scorecard.composite_score,
         "band": scorecard.score_band.value,
         "routing": scorecard.routing.value,
+        "stage": stage.value,
         "scoring_provenance": _build_scoring_provenance(
             selection=_resolve_scoring_selection(),
             strict_live_debate_backend_required=strict_live_debate_backend_required,

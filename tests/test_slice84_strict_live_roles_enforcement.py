@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import inspect
 import os
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
@@ -41,6 +42,8 @@ from idis.services.extraction.extractors.llm_client import (
     DeterministicAnalysisLLMClient,
     DeterministicScoringLLMClient,
 )
+
+_DEAL_STAGE = "pre_seed"
 
 _LEAK_MARKERS = (
     "sk-LEAK123",
@@ -325,7 +328,7 @@ def test_full_steps_forward_strict_flag_to_builders() -> None:
             tenant_id="t",
             deal_id="d",
             analysis_bundle=object(),
-            analysis_context=object(),
+            analysis_context=SimpleNamespace(stage=_DEAL_STAGE),
             strict_live_debate_backend_required=True,
         )
     assert captured == {"analysis": True, "debate": True, "scoring": True}

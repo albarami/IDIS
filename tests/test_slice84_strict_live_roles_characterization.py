@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import inspect
 import os
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -46,6 +47,7 @@ from idis.services.runs.layer2_ic_challenge import Layer2ICChallengeBlockedError
 
 # Same fake unit-test key shape used by the existing test_llm_backend_selection.py (no real key).
 _FAKE_KEY = "sk-ant-test-fake-key-for-unit-test"
+_DEAL_STAGE = "growth"
 
 
 def _env_without(*keys: str) -> dict[str, str]:
@@ -211,7 +213,7 @@ def test_scoring_summary_carries_additive_provenance() -> None:
             tenant_id="tenant-1",
             deal_id="deal-1",
             analysis_bundle=object(),
-            analysis_context=object(),
+            analysis_context=SimpleNamespace(stage=_DEAL_STAGE),
         )
     # Existing fields unchanged; provenance is additive.
     assert summary["composite_score"] == 68.5

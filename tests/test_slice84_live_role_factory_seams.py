@@ -13,6 +13,7 @@ from __future__ import annotations
 import dataclasses
 import inspect
 import os
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
@@ -39,6 +40,7 @@ from idis.services.extraction.extractors.llm_client import (
 )
 
 _FAKE_KEY = "sk-ant-test-fake-key-for-unit-test"
+_DEAL_STAGE = "series_a"
 
 
 def _env_without(*keys: str) -> dict[str, str]:
@@ -256,7 +258,7 @@ def test_run_full_scoring_forwards_factory() -> None:
             tenant_id="t",
             deal_id="d",
             analysis_bundle=object(),
-            analysis_context=object(),
+            analysis_context=SimpleNamespace(stage=_DEAL_STAGE),
             scoring_client_factory=sentinel,
         )
     assert captured["f"] is sentinel

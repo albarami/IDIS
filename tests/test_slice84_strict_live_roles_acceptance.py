@@ -54,6 +54,8 @@ from idis.services.extraction.extractors.llm_client import (
     DeterministicScoringLLMClient,
 )
 
+_DEAL_STAGE = "seed"
+
 _LEAK = (
     "sk-ant-LEAK",
     "sk-LEAK123",
@@ -287,7 +289,7 @@ def test_acceptance_step_summaries_carry_safe_provenance() -> None:
                 tenant_id="t",
                 deal_id="d",
                 analysis_bundle=object(),
-                analysis_context=object(),
+                analysis_context=SimpleNamespace(stage=_DEAL_STAGE),
             )
 
     a_prov = analysis["analysis_provenance"]

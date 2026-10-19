@@ -28,6 +28,52 @@ class Stage(StrEnum):
     GROWTH = "GROWTH"
 
 
+def _stage_lookup_key(text: str) -> str:
+    """Normalize deal stage text for the closed spelling table."""
+    return " ".join(text.casefold().split())
+
+
+# Enum names plus the plain spellings a deal record is likely to carry.
+# Keys are already normalized by ``_stage_lookup_key``.
+STAGE_SPELLINGS: dict[str, Stage] = {
+    "pre_seed": Stage.PRE_SEED,
+    "pre-seed": Stage.PRE_SEED,
+    "pre seed": Stage.PRE_SEED,
+    "preseed": Stage.PRE_SEED,
+    "seed": Stage.SEED,
+    "series_a": Stage.SERIES_A,
+    "series a": Stage.SERIES_A,
+    "series-a": Stage.SERIES_A,
+    "a": Stage.SERIES_A,
+    "series_b": Stage.SERIES_B,
+    "series b": Stage.SERIES_B,
+    "series-b": Stage.SERIES_B,
+    "b": Stage.SERIES_B,
+    "growth": Stage.GROWTH,
+}
+
+
+def resolve_stage(text: str | None) -> Stage | None:
+    """Map deal stage text onto the closed Stage enum.
+
+    Comparison is case-insensitive and collapses surrounding and repeated
+    whitespace. Known spellings are the keys of ``STAGE_SPELLINGS``. Blank
+    text and anything outside that table return None. There is no default.
+
+    Args:
+        text: Raw stage text from a deal record or analysis context.
+
+    Returns:
+        The matching Stage, or None when the text is blank or unmapped.
+    """
+    if not isinstance(text, str):
+        return None
+    key = _stage_lookup_key(text)
+    if not key:
+        return None
+    return STAGE_SPELLINGS.get(key)
+
+
 class ScoreDimension(StrEnum):
     """VC Investment Scorecard dimensions (8 dimensions)."""
 

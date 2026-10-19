@@ -163,6 +163,7 @@ def test_layer2_ic_challenge_accepts_vep_reference() -> None:
         "graph_evidence",
         "rag_evidence",
         "enrichment_refs",
+        "deal_metadata",
         "vep_package_ids",
         # Slice93 Task 3 added durable persistence seams to the same route fn; the VEP
         # reference (vep_package_ids) it must still accept stays present above.

@@ -232,19 +232,9 @@ def test_policy_v2_fails_closed_when_any_pinned_v1_input_is_missing_or_mutated(
         )
 
 
-@requires_operator_workbook
-def test_policy_v2_artifact_fixture_and_reviewer_map_are_exact() -> None:
+def test_policy_v2_fixture_identity_does_not_require_the_operator_workbook() -> None:
     policy = _load_object(V2_ARTIFACT, "TASK8_POLICY_V2_ARTIFACT_NOT_IMPLEMENTED")
     fixture = _load_object(V2_FIXTURE, "TASK8_POLICY_V2_FIXTURE_NOT_IMPLEMENTED")
-    materializer = _load_module(V2_MATERIALIZER, "_task8_policy_v2_exact_red")
-    bundle = materializer.build_policy_publication_bundle(_operator_workbook())
-
-    if bundle["policy_artifact_raw"] != V2_ARTIFACT.read_bytes():
-        raise AssertionError("TASK8_POLICY_V2_ARTIFACT_DRIFT")
-    if bundle["policy_fixture_raw"] != V2_FIXTURE.read_bytes():
-        raise AssertionError("TASK8_POLICY_V2_FIXTURE_DRIFT")
-    if bundle["policy_review_map_raw"] != V2_REVIEW_MAP.read_bytes():
-        raise AssertionError("TASK8_POLICY_V2_REVIEW_MAP_DRIFT")
     if fixture["artifact_schema"] != "fdd-formula-policy-v2-hash-fixture-v1":
         raise AssertionError("TASK8_POLICY_V2_FIXTURE_SCHEMA_INVALID")
     if fixture["policy_id"] != "fdd-formula-policy-v2":
@@ -258,6 +248,19 @@ def test_policy_v2_artifact_fixture_and_reviewer_map_are_exact() -> None:
         != (policy["digest_recipe_registry"]["fdd_formula_policy_v2_sha256"])
     ):
         raise AssertionError("TASK8_POLICY_V2_FIXTURE_POLICY_HASH_INVALID")
+
+
+@requires_operator_workbook
+def test_policy_v2_artifact_fixture_and_reviewer_map_are_exact() -> None:
+    materializer = _load_module(V2_MATERIALIZER, "_task8_policy_v2_exact_red")
+    bundle = materializer.build_policy_publication_bundle(_operator_workbook())
+
+    if bundle["policy_artifact_raw"] != V2_ARTIFACT.read_bytes():
+        raise AssertionError("TASK8_POLICY_V2_ARTIFACT_DRIFT")
+    if bundle["policy_fixture_raw"] != V2_FIXTURE.read_bytes():
+        raise AssertionError("TASK8_POLICY_V2_FIXTURE_DRIFT")
+    if bundle["policy_review_map_raw"] != V2_REVIEW_MAP.read_bytes():
+        raise AssertionError("TASK8_POLICY_V2_REVIEW_MAP_DRIFT")
 
 
 def test_policy_v2_publication_targets_are_disjoint_from_v1_archive() -> None:

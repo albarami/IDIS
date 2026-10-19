@@ -1723,7 +1723,7 @@ jobs:
                       "docker",
                       "run",
                       "--rm",
-                      "--name", "idis-ci-admission-codes",
+                      "--name", f"idis-ci-admission-codes-{run}",
                       "--user", "1000",
                       "--network", "container:" + holder,
                       "--read-only",
@@ -1798,7 +1798,7 @@ jobs:
 
           unlink_file(secret_root / "datastore.env", "datastore.env remains")
           unlink_file(secret_root / "redis.conf", "redis.conf remains")
-          for container in (*(f"idis-h1b-{name}-{run}" for name in ("api", "pg", "redis", "netns")), "idis-ci-admission-codes"):
+          for container in (*(f"idis-h1b-{name}-{run}" for name in ("api", "pg", "redis", "netns")), f"idis-ci-admission-codes-{run}"):
               inspect = subprocess.run(
                   ["docker", "container", "inspect", container],
                   stdout=subprocess.DEVNULL,

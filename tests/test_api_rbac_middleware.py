@@ -152,8 +152,13 @@ def _seed_run_row(
     tenant_id: str,
     deal_id: str,
     status: str,
-    resume_state: str | None = "RESUMABLE",
+    resume_state: str | None = None,
 ) -> None:
+    """Insert one in-memory run.
+
+    An omitted ``resume_state`` stamps no identity fields. Callers that need
+    the v21 admission tuple pass ``resume_state="RESUMABLE"``.
+    """
     run = {
         "run_id": run_id,
         "tenant_id": tenant_id,
@@ -513,12 +518,27 @@ class TestRunLifecycleDealScopedPolicy:
             ),
         )
         monkeypatch.setenv("IDIS_REQUIRE_FULL_LIVE", "0")
-        _seed_run_row(
-            run_id=run_id,
-            tenant_id=tenant_id,
-            deal_id=deal_id,
-            status=initial_status,
-        )
+        if action in {"retry", "resume"}:
+            _seed_run_row(
+                run_id=run_id,
+                tenant_id=tenant_id,
+                deal_id=deal_id,
+                status=initial_status,
+                resume_state="RESUMABLE",
+            )
+        else:
+            _seed_run_row(
+                run_id=run_id,
+                tenant_id=tenant_id,
+                deal_id=deal_id,
+                status=initial_status,
+            )
+        if action == "cancel":
+            stored = _in_memory_runs_store[run_id]
+            assert "pipeline_contract_version" not in stored
+            assert "pipeline_contract_hash" not in stored
+            assert "pipeline_resume_state" not in stored
+            assert "pipeline_resume_error_code" not in stored
 
         app = create_app(audit_sink=InMemoryAuditSink(), service_region="us-east-1")
         client = TestClient(app, raise_server_exceptions=False)

@@ -48,9 +48,9 @@ def test_independent_oracle_is_self_consistent_before_materialization() -> None:
     validate_policy(expected_policy())
 
 
-@requires_operator_workbook
-def test_policy_artifact_exists_as_exact_frozen_utf8_lf_bytes() -> None:
-    policy = _policy()
+def test_policy_artifact_canonical_bytes_without_workbook() -> None:
+    """Frozen artifact bytes do not read the operator workbook."""
+    policy = load_policy()
     raw = POLICY_ARTIFACT.read_bytes()
 
     expected = (json.dumps(policy, ensure_ascii=False, allow_nan=False, indent=2) + "\n").encode(
@@ -65,13 +65,17 @@ def test_policy_artifact_exists_as_exact_frozen_utf8_lf_bytes() -> None:
 
 
 @requires_operator_workbook
-def test_policy_matches_the_independent_complete_oracle() -> None:
+def test_policy_artifact_exists_as_exact_frozen_utf8_lf_bytes() -> None:
     _policy()
 
 
 @requires_operator_workbook
-def test_policy_has_exact_79_row_ten_anchor_requirement_transition() -> None:
-    policy = _policy()
+def test_policy_matches_the_independent_complete_oracle() -> None:
+    _policy()
+
+
+def test_policy_row_anchor_transition_without_workbook() -> None:
+    policy = load_policy()
     rows = policy["workbook_row_registry"]["rows"]
     required_rows = [row for row in rows if row["required_calculations"]]
 
@@ -103,8 +107,12 @@ def test_policy_has_exact_79_row_ten_anchor_requirement_transition() -> None:
 
 
 @requires_operator_workbook
-def test_all_expanded_bindings_and_parent_dag_are_literal_and_complete() -> None:
-    policy = _policy()
+def test_policy_has_exact_79_row_ten_anchor_requirement_transition() -> None:
+    _policy()
+
+
+def test_expanded_bindings_and_parent_dag_without_workbook() -> None:
+    policy = load_policy()
     validate_derived_counts(policy)
 
     formulas = policy["formula_registry"]["rows"]
@@ -124,8 +132,12 @@ def test_all_expanded_bindings_and_parent_dag_are_literal_and_complete() -> None
 
 
 @requires_operator_workbook
-def test_debt_and_off_balance_scope_exclusions_are_deliberate_and_non_silent() -> None:
-    policy = _policy()
+def test_all_expanded_bindings_and_parent_dag_are_literal_and_complete() -> None:
+    _policy()
+
+
+def test_debt_scope_exclusions_without_workbook() -> None:
+    policy = load_policy()
     scope_rows = {row["scope_id"]: row for row in policy["debt_scope_exclusions"]["rows"]}
 
     debt = scope_rows["fdd-debt-roll-forward-balance-scope-v1"]
@@ -160,8 +172,12 @@ def test_debt_and_off_balance_scope_exclusions_are_deliberate_and_non_silent() -
 
 
 @requires_operator_workbook
-def test_completeness_facts_require_cited_documentary_basis_and_natural_not_found() -> None:
-    policy = _policy()
+def test_debt_and_off_balance_scope_exclusions_are_deliberate_and_non_silent() -> None:
+    _policy()
+
+
+def test_completeness_facts_without_workbook() -> None:
+    policy = load_policy()
     registry = policy["completeness_request_registry"]
 
     assert registry == expected_completeness_registry()
@@ -178,8 +194,12 @@ def test_completeness_facts_require_cited_documentary_basis_and_natural_not_foun
 
 
 @requires_operator_workbook
-def test_every_direct_signed_mapping_resolves_one_pinned_convention() -> None:
-    policy = _policy()
+def test_completeness_facts_require_cited_documentary_basis_and_natural_not_found() -> None:
+    _policy()
+
+
+def test_direct_signed_mappings_without_workbook() -> None:
+    policy = load_policy()
     registry = policy["direct_signed_convention_registry"]
     assert registry == expected_direct_signed_registry()
     assert len(registry["rows"]) == len(DIRECT_SIGNED_CONVENTIONS) == 17
@@ -215,8 +235,12 @@ def test_every_direct_signed_mapping_resolves_one_pinned_convention() -> None:
 
 
 @requires_operator_workbook
-def test_incomplete_binding_failure_schema_enumerates_the_complete_safe_diagnostic() -> None:
-    policy = _policy()
+def test_every_direct_signed_mapping_resolves_one_pinned_convention() -> None:
+    _policy()
+
+
+def test_incomplete_binding_schema_without_workbook() -> None:
+    policy = load_policy()
     failure = policy["incomplete_binding_failure_schema"]
 
     assert failure["schema_version"] == "methodology-calculation-incomplete-v1"
@@ -248,8 +272,12 @@ def test_incomplete_binding_failure_schema_enumerates_the_complete_safe_diagnost
 
 
 @requires_operator_workbook
-def test_formula_hash_binds_every_governed_semantic_field() -> None:
-    policy = _policy()
+def test_incomplete_binding_failure_schema_enumerates_the_complete_safe_diagnostic() -> None:
+    _policy()
+
+
+def test_formula_hash_preimage_without_workbook() -> None:
+    policy = load_policy()
     fields = policy["formula_registry"]["formula_hash_preimage_field_tuple"]
     first = policy["formula_registry"]["rows"][0]
     original = first["formula_sha256"]
@@ -270,24 +298,35 @@ def test_formula_hash_binds_every_governed_semantic_field() -> None:
         assert formula_sha256(changed) != original, field
 
 
+@requires_operator_workbook
+def test_formula_hash_binds_every_governed_semantic_field() -> None:
+    _policy()
+
+
+@pytest.mark.parametrize("section", HASHED_COMPONENTS)
+def test_governed_section_hash_changes_without_workbook(section: str) -> None:
+    policy = load_policy()
+    original = policy["digest_recipe_registry"]["fdd_formula_policy_v1_sha256"]
+    changed = copy.deepcopy(policy)
+    changed[section]["__corruption__"] = True
+
+    assert recompute_policy_hash(changed) != original
+
+
 @pytest.mark.parametrize("section", HASHED_COMPONENTS)
 @requires_operator_workbook
 def test_every_governed_artifact_section_changes_the_final_policy_hash(
     section: str,
 ) -> None:
     policy = _policy()
-    original = policy["digest_recipe_registry"]["fdd_formula_policy_v1_sha256"]
     changed = copy.deepcopy(policy)
     changed[section]["__corruption__"] = True
-
-    assert recompute_policy_hash(changed) != original
     with pytest.raises(OracleError):
         validate_policy(changed)
 
 
-@requires_operator_workbook
-def test_hash_fixture_binds_raw_artifact_policy_components_and_review_map() -> None:
-    policy = _policy()
+def test_hash_fixture_binding_without_workbook() -> None:
+    policy = load_policy()
     fixture = load_fixture()
     review_map = require_review_map()
     component_hashes = recompute_component_hashes(policy)
@@ -318,8 +357,12 @@ def test_hash_fixture_binds_raw_artifact_policy_components_and_review_map() -> N
 
 
 @requires_operator_workbook
-def test_policy_hash_is_domain_separated_while_raw_hash_is_fixture_only() -> None:
-    policy = _policy()
+def test_hash_fixture_binds_raw_artifact_policy_components_and_review_map() -> None:
+    _policy()
+
+
+def test_policy_hash_domain_separation_without_workbook() -> None:
+    policy = load_policy()
     fixture = load_fixture()
     policy_hash = recompute_policy_hash(policy)
 
@@ -329,3 +372,8 @@ def test_policy_hash_is_domain_separated_while_raw_hash_is_fixture_only() -> Non
     assert "artifact_sha256" not in policy
     assert "artifact_sha256" not in policy["metadata"]
     assert "artifact_sha256" not in policy["digest_recipe_registry"]
+
+
+@requires_operator_workbook
+def test_policy_hash_is_domain_separated_while_raw_hash_is_fixture_only() -> None:
+    _policy()

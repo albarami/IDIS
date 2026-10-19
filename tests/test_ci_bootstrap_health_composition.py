@@ -775,7 +775,7 @@ def _outside_tmp(path: Path, tmp_path: Path) -> Path | None:
 
 
 _CI_HEALTH_ROOT = Path("/var/lib/idis-ci-health")
-_ADMISSION_CONTAINER_NAME = "idis-ci-admission-codes"
+_ADMISSION_CONTAINER_EXPR = 'f"idis-ci-admission-codes-{run}"'
 _ADMISSION_DOCKER_TIMEOUT_SECONDS = 480
 _ADMISSION_CODES = frozenset(
     {
@@ -1339,6 +1339,26 @@ def test_admission_postgres_extra_key_is_closed(tmp_path: Path) -> None:
     assert _INJECTED_REVISION not in output
 
 
+def test_admission_extra_top_level_key_is_closed(tmp_path: Path) -> None:
+    """An extra top-level key is closed by the host issubset check.
+
+    ``.github/workflows/ci.yml`` line 1758: ``set(payload).issubset`` of
+    ``{"checks", "phase", "postgres"}`` calls ``_unavailable()``, which prints
+    ``DIAGNOSTIC_UNAVAILABLE``. The extra key is not echoed.
+    """
+    payload = {
+        "phase": "admission",
+        "checks": [["postgres", "DATABASE_UNAVAILABLE"]],
+        "unlisted_top_level": "must-not-echo",
+    }
+    completed, _state = _execute_admission(tmp_path, payload=payload)
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, output
+    assert completed.stdout.strip() == _DIAGNOSTIC_UNAVAILABLE
+    assert "must-not-echo" not in output
+    assert "unlisted_top_level" not in output
+
+
 @pytest.mark.parametrize(
     "exit_document",
     [
@@ -1392,14 +1412,14 @@ def test_admission_unknown_component_or_extra_check_key_is_closed(
 
 
 def test_admission_step_names_the_container_and_times_out(tmp_path: Path) -> None:
-    """Step 23 is bounded, named, and Cleanup removes that fixed container name."""
+    """Step 23 is bounded and names the probe with the run id Cleanup removes."""
     step = _by_id("admission-codes")
     assert step.get("timeout-minutes") == 10
     host = _admission_host()
     assert f"timeout={_ADMISSION_DOCKER_TIMEOUT_SECONDS}" in host
-    assert f'"--name", "{_ADMISSION_CONTAINER_NAME}"' in host
+    assert f'"--name", {_ADMISSION_CONTAINER_EXPR}' in host
     cleanup = _h1b_body(_by_id("cleanup")["run"])
-    assert f'"{_ADMISSION_CONTAINER_NAME}"' in cleanup
+    assert _ADMISSION_CONTAINER_EXPR in cleanup
     assert '"rm", "-f"' in cleanup
     completed, state = _execute_admission(
         tmp_path,
@@ -1413,7 +1433,10 @@ def test_admission_step_names_the_container_and_times_out(tmp_path: Path) -> Non
     args = json.loads((state / "argv.json").read_text(encoding="utf-8"))
     assert args[0] == "run"
     assert "--name" in args
-    assert args[args.index("--name") + 1] == _ADMISSION_CONTAINER_NAME
+    network = args[args.index("--network") + 1]
+    assert network.startswith("container:idis-h1b-netns-")
+    run_id = network.removeprefix("container:idis-h1b-netns-")
+    assert args[args.index("--name") + 1] == f"idis-ci-admission-codes-{run_id}"
 
 
 _INNER_PRELUDE = r"""

@@ -859,13 +859,22 @@ def test_numeric_counts_reads_pytest_footer_whatever_equals_padding(bridge, raw,
 
 
 def test_numeric_counts_ignores_framed_lines_in_64kb_tail(bridge):
-    """Only the session footer inside the captured tail contributes counts."""
+    """A footer longer than 80 columns still counts inside a 64 KiB tail.
+
+    The tail also contains the short-summary header and FAILED rows. Those
+    lines are not the session footer and do not merge into the counts.
+    """
     footer = (
         b"= 123 failed, 11837 passed, 1137 skipped, 2241 warnings, "
         b"6 errors, 42 subtests passed in 4027.85s (1:07:07) =\n"
     )
+    assert len(footer.strip()) > 80
     framed = (
-        b"=== short test summary info ===\n=== 4 xfailed, 9 deselected ===\n= something else =\n"
+        b"=== short test summary info ===\n"
+        b"FAILED tests/test_ci_private_inputs.py::test_row - AssertionError\n"
+        b"FAILED tests/test_ci_private_inputs.py::test_other - 3 failed, 10 passed in 1.23s\n"
+        b"=== 4 xfailed, 9 deselected ===\n"
+        b"= something else =\n"
     )
     captured_log_tail_bytes = 65_536
     assert len(framed) + len(footer) < captured_log_tail_bytes

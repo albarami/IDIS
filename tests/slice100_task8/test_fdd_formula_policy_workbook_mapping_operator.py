@@ -57,6 +57,10 @@ def test_current_sheet_wide_fallback_is_captured_only_as_the_legacy_negative_con
         "P&L": ("GROSS_MARGIN", False, 29),
         "Cash Flow": ("BURN_RATE", False, 13),
     }
+
+
+def test_legacy_sheet_fallback_record_does_not_require_the_operator_workbook() -> None:
+    policy = load_policy()
     assert policy["methodology_transition"]["legacy_sheet_fallbacks"] == [
         {
             "source_sheet": "P&L",
@@ -82,14 +86,16 @@ def test_all_79_artifact_rows_join_byte_exactly_to_the_pinned_workbook() -> None
 
     if actual != expected:
         raise AssertionError("TASK8_FDD_WORKBOOK_LITERAL_JOIN_FAILED")
+
+
+def test_artifact_row_identity_counts_do_not_require_the_operator_workbook() -> None:
+    actual = load_policy()["workbook_row_registry"]["rows"]
     assert len({row["methodology_question_id"] for row in actual}) == 79
     assert len({row["source_row_sha256"] for row in actual}) == 79
 
 
-@requires_operator_workbook
-def test_review_map_is_the_exact_deterministic_projection_of_ten_anchors_and_107_bindings() -> None:
+def test_review_map_projection_does_not_require_the_operator_workbook() -> None:
     policy = load_policy()
-    validate_policy(policy)
     observed = require_review_map()
     expected = render_review_map(policy)
 
@@ -106,9 +112,12 @@ def test_review_map_is_the_exact_deterministic_projection_of_ten_anchors_and_107
 
 
 @requires_operator_workbook
-def test_review_map_contains_no_independent_authority_or_runtime_activation_claim() -> None:
+def test_review_map_is_the_exact_deterministic_projection_of_ten_anchors_and_107_bindings() -> None:
+    validate_policy(load_policy())
+
+
+def test_review_map_authority_claims_do_not_require_the_operator_workbook() -> None:
     policy = load_policy()
-    validate_policy(policy)
     review_map = require_review_map().decode("utf-8")
 
     if policy["metadata"]["policy_id"] != POLICY_ID:
@@ -120,3 +129,8 @@ def test_review_map_contains_no_independent_authority_or_runtime_activation_clai
         raise AssertionError("TASK8_FDD_REVIEW_MAP_RUNTIME_AUTHORITY_FORBIDDEN")
     if "migration consumable" in lowered:
         raise AssertionError("TASK8_FDD_REVIEW_MAP_MIGRATION_AUTHORITY_FORBIDDEN")
+
+
+@requires_operator_workbook
+def test_review_map_contains_no_independent_authority_or_runtime_activation_claim() -> None:
+    validate_policy(load_policy())

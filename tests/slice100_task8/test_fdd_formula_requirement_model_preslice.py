@@ -518,12 +518,15 @@ def test_required_calculation_shapes_are_homogeneous_and_exact_version_bound() -
         )
 
 
-@requires_operator_workbook
-def test_actual_frozen_task5_question_and_rehydration_bytes_are_unchanged() -> None:
+def test_frozen_commercial_dd_task5_bytes_do_not_require_the_operator_workbook() -> None:
     _assert_frozen_task5_bytes(
         import_cdd_template(CDD_TEMPLATE),
         FROZEN_TASK5_BYTES["commercial_dd"],
     )
+
+
+@requires_operator_workbook
+def test_actual_frozen_task5_question_and_rehydration_bytes_are_unchanged() -> None:
     _assert_frozen_task5_bytes(
         import_fdd_workbook(_operator_workbook()),
         FROZEN_TASK5_BYTES["financial_dd"],
@@ -910,6 +913,22 @@ def test_operator_roundtrip_run_seed_uses_the_exact_current_0038_coordinate() ->
     assert "**run_coordinate" in proof_source
 
 
+def test_source_contract_hashes_do_not_require_the_operator_workbook() -> None:
+    from idis.api.routes.methodology_versions import _source_contract_hash
+    from idis.methodology.models import MethodologyType
+
+    _assert_safe_value_equal(
+        _source_contract_hash(MethodologyType.FINANCIAL_DD),
+        "ed191040179c85ee2298b9d53df024600e069a8a66ba758b7ec50ddb76d1612e",
+        code="TASK8_FDD_SOURCE_CONTRACT_HASH_DRIFT",
+    )
+    _assert_safe_value_equal(
+        _source_contract_hash(MethodologyType.COMMERCIAL_DD),
+        "e42ae90f9f8b34657ba022c056cb3a0d4ef20006b89cc71cd1dfbe82b56b9b9a",
+        code="TASK8_CDD_SOURCE_CONTRACT_HASH_DRIFT",
+    )
+
+
 @requires_operator_workbook
 def test_policy_v2_import_freeze_reload_preserves_four_fields_in_production_repository() -> None:
     """Operator-backed proof; setup is admin, all repository behavior is app-role."""
@@ -931,16 +950,6 @@ def test_policy_v2_import_freeze_reload_preserves_four_fields_in_production_repo
     run_coordinate = _current_0038_run_coordinate()
     source_contract_hash = _source_contract_hash(MethodologyType.FINANCIAL_DD)
     cdd_source_contract_hash = _source_contract_hash(MethodologyType.COMMERCIAL_DD)
-    _assert_safe_value_equal(
-        source_contract_hash,
-        "ed191040179c85ee2298b9d53df024600e069a8a66ba758b7ec50ddb76d1612e",
-        code="TASK8_FDD_SOURCE_CONTRACT_HASH_DRIFT",
-    )
-    _assert_safe_value_equal(
-        cdd_source_contract_hash,
-        "e42ae90f9f8b34657ba022c056cb3a0d4ef20006b89cc71cd1dfbe82b56b9b9a",
-        code="TASK8_CDD_SOURCE_CONTRACT_HASH_DRIFT",
-    )
 
     with disposable_postgres() as database:
         migrate(database.admin_engine, "0038")

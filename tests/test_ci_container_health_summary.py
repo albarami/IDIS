@@ -62,7 +62,10 @@ _PRESERVED_STEP_NAMES = (
     "Upload release manifest artifact",
     SUMMARY_STEP_NAME,
 )
-# Digests of f99595ef053883807f58b703252de25a24e91edb via sort_keys canonical JSON.
+# Job digests from _canonical_digest (sort_keys JSON). Values are unchanged.
+# check: reviewed checkpoint 16 (4563316f); unchanged at checkpoint 17.
+# Every other job in this table: reviewed checkpoint 07
+# (f99595ef053883807f58b703252de25a24e91edb).
 _F99595EF_JOB_DIGESTS = {
     "backup-restore-drill": "152593732bb006b84ac1c26fe3a178d27f5d200ca69a2a2c7c48f720d87d70d3",
     "check": "6dc86cde933106f39b7eda71332029a7ca4bc94c08fec9a0f65e57cecc0e20f1",
@@ -928,7 +931,7 @@ def test_admission_codes_snippet_filters_unlisted_codes_and_hides_dsn(
     assert args[args.index("--tmpfs") + 1] == "/tmp:rw,nosuid,size=2147483648"
     assert args[args.index("-e") + 1] == "IDIS_STRICT_DOTENV_PATH"
     assert "-d" not in args
-    assert args[args.index("--name") + 1] == "idis-ci-admission-codes"
+    assert args[args.index("--name") + 1] == f"idis-ci-admission-codes-{run_root.name}"
     assert 'load_profile_then_import_runtime(command="api")' in script
     assert "task4_ingestion_scope=True" in script
     image = "idis:ci-" + ("d" * 40)

@@ -410,6 +410,7 @@ def build_run_context(
             partial(
                 _run_full_debate,
                 db_conn=db_conn,
+                deal_metadata=deal_metadata,
                 debate_role_runners_factory=debate_role_runners_factory,
                 strict_live_debate_backend_required=strict_live_debate_backend_required,
             )

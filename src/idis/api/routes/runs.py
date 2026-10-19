@@ -1627,6 +1627,7 @@ def _run_full_debate(
     created_claim_ids: list[str],
     calc_ids: list[str],
     rag_retrieval: dict[str, Any] | None = None,
+    deal_metadata: dict[str, Any] | None = None,
     db_conn: Any = None,
     debate_role_runners_factory: DebateRoleRunnersFactory | None = None,
     strict_live_debate_backend_required: bool = False,
@@ -1644,6 +1645,8 @@ def _run_full_debate(
         calc_ids: Calc IDs from calculation step.
         rag_retrieval: Safe probe-retrieval summary from the RAG_EVIDENCE step
             (Slice91); whitelist-converted to an IDs/scores-only context section.
+        deal_metadata: Deal record fields for identity. None keeps the prior
+            literal deal name, sector, and stage.
         db_conn: SQLAlchemy connection (None for in-memory fallback).
 
     Returns:
@@ -1656,22 +1659,56 @@ def _run_full_debate(
     from idis.models.debate import DebateConfig, DebateState
 
     debate_claims = _retrieve_claims_for_debate(tenant_id, created_claim_ids, db_conn=db_conn)
+    if deal_metadata is None:
+        deal_name = deal_id
+        deal_sector = "Unknown"
+        deal_stage = "Unknown"
+        deal_summary = ""
+    else:
+        deal_name = str(deal_metadata.get("company_name") or "") or deal_id
+        deal_sector = str(deal_metadata.get("sector") or "") or "Unknown"
+        deal_stage = str(deal_metadata.get("stage") or "") or "Unknown"
+        raw_summary = deal_metadata.get("description") or deal_metadata.get("summary") or ""
+        deal_summary = str(raw_summary)
+
+    calc_registry = _build_analysis_calc_registry(
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        calc_ids=calc_ids,
+        db_conn=db_conn,
+    )
+    calc_results: list[dict[str, Any]] = []
+    for calc_id in calc_ids:
+        reference = calc_registry.get(calc_id)
+        if reference is None:
+            calc_results.append(
+                {
+                    "calc_id": calc_id,
+                    "calc_name": "",
+                    "result_value": "",
+                    "input_claim_ids": [],
+                    "missing": True,
+                }
+            )
+            continue
+        calc_results.append(
+            {
+                "calc_id": calc_id,
+                "calc_name": reference.calc_type,
+                "result_value": reference.output_summary,
+                "input_claim_ids": list(reference.input_claim_ids),
+                "calc_grade": reference.calc_grade or "",
+                "formula_version": reference.formula_version or "",
+            }
+        )
 
     context = DebateContext(
-        deal_name=deal_id,
-        deal_sector="Unknown",
-        deal_stage="Unknown",
-        deal_summary="",
+        deal_name=deal_name,
+        deal_sector=deal_sector,
+        deal_stage=deal_stage,
+        deal_summary=deal_summary,
         claims=debate_claims,
-        calc_results=[
-            {
-                "calc_id": cid,
-                "calc_name": "",
-                "result_value": "",
-                "input_claim_ids": [],
-            }
-            for cid in calc_ids
-        ],
+        calc_results=calc_results,
         conflicts=[],
         rag_evidence=AnalysisRagEvidence.from_retrieval_summary(rag_retrieval).to_payload_section(),
     )

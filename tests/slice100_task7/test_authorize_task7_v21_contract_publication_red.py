@@ -14,6 +14,7 @@ from types import ModuleType
 from typing import Any, cast
 
 import pytest
+from tests._private_artifacts import requires_private_artifact
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _AUTHORIZER = _REPO_ROOT / "scripts" / "authorize_task7_v21_contract_publication.py"
@@ -131,10 +132,6 @@ def _artifact() -> dict[str, Any]:
 
 
 def _operator_backed_inputs() -> tuple[bytes, bytes, bytes]:
-    if not _SIGNED_RECEIPT.is_file():
-        pytest.skip("the operator-backed v21 signed receipt is not available")
-    if not _TRUSTED_PUBLIC_KEY.is_file():
-        pytest.skip("the operator-backed governance public key is not available")
     artifact_raw = _candidate_raw()
     receipt_raw = _SIGNED_RECEIPT.read_bytes()
     public_key_raw = _TRUSTED_PUBLIC_KEY.read_bytes()
@@ -190,6 +187,7 @@ def test_v21_authorizer_finalizes_exact_census_and_trust_root_pins() -> None:
     assert authorizer._PUBLICATION_INPUT_PINS_FINALIZED is True
 
 
+@requires_private_artifact("task7_v21_current_guard_postgres_census_receipt.json")
 def test_real_v21_receipt_verifies_and_authorizes_exact_fixture() -> None:
     authorizer = _load("_task7_v21_authorizer_real_receipt_red")
     artifact_raw, receipt_raw, public_key_raw = _operator_backed_inputs()
@@ -250,6 +248,7 @@ def test_v21_runner_pin_drift_fails_before_runner_import(
         authorizer._runner()
 
 
+@requires_private_artifact("task7_v21_current_guard_postgres_census_receipt.json")
 def test_v21_receipt_pin_drift_fails_before_signature_verification(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -268,6 +267,7 @@ def test_v21_receipt_pin_drift_fails_before_signature_verification(
         )
 
 
+@requires_private_artifact("task7_v21_current_guard_postgres_census_receipt.json")
 def test_v21_source_manifest_pin_drift_rejects_the_real_receipt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -297,6 +297,7 @@ def test_v21_source_manifest_pin_drift_rejects_the_real_receipt(
         )
 
 
+@requires_private_artifact("task7_v21_current_guard_postgres_census_receipt.json")
 def test_v21_untrusted_public_key_cannot_verify_the_real_receipt() -> None:
     authorizer = _load("_task7_v21_authorizer_public_key_drift_red")
     artifact_raw, receipt_raw, _public_key_raw = _operator_backed_inputs()

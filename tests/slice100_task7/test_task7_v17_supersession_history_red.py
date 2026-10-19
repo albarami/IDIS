@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from tests._private_artifacts import requires_private_artifact
 from tests.slice100_task7 import _void_contract_hash_evidence as void_evidence
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -105,6 +106,7 @@ def test_v16_supersession_is_append_only_not_void_and_never_runtime_selectable()
     }.isdisjoint(void_evidence.VOID_CONTRACT_HASHES)
 
 
+@requires_private_artifact("task7_contract_materialization_history_v2_v16.safe.json")
 def test_v17_successor_history_is_separate_and_preserves_v16_history_bytes() -> None:
     assert _sha256(_V16_HISTORY) == _V16_HISTORY_SHA256
     assert _V17_HISTORY.is_file(), (

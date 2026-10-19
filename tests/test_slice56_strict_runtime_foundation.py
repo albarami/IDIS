@@ -2,26 +2,40 @@
 
 from __future__ import annotations
 
+import hashlib
+import io
 import json
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
+import idis.api.routes.runs as runs_route
 from idis.api.auth import IDIS_API_KEYS_ENV
 from idis.api.main import create_app
 from idis.api.routes.deals import clear_deals_store
+from idis.api.routes.documents import clear_document_store
 from idis.api.routes.runs import clear_runs_store
 from idis.audit.sink import InMemoryAuditSink
 from idis.evaluation.real_example_run_harness import (
     RealExampleFullRunHarnessOptions,
     run_real_example_full_run_harness,
 )
+from idis.persistence import db
 from idis.persistence.repositories.run_steps import clear_run_steps_store
+from idis.persistence.repositories.runs import InMemoryRunsRepository
+from idis.services.runs.execution import RunExecutionResult
 from idis.services.runs.strict_full_live import (
     REQUIRED_STRICT_COMPONENTS,
     build_strict_full_live_readiness_report,
+)
+from tests._cir04c3_required_frozen_preview import (
+    RequiredFrozenPreview,
+    required_frozen_preview,
 )
 from tests.abac_seed import seed_deal_access
 
@@ -525,32 +539,115 @@ def test_private_harness_strict_summary_buckets_private_unknown_suffixes(
     assert "customer-secret-extension" not in encoded
 
 
-def test_non_strict_api_run_still_reaches_execution_service(monkeypatch: Any) -> None:
-    monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(_api_keys()))
-    monkeypatch.delenv("IDIS_REQUIRE_FULL_LIVE", raising=False)
+def test_non_strict_api_run_still_reaches_execution_service(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _unset_non_strict_runtime(monkeypatch)
+    with required_frozen_preview(monkeypatch) as preview:
+        client, tenant_id = _non_strict_postgres_client(
+            tmp_path=tmp_path, monkeypatch=monkeypatch, preview=preview
+        )
+        try:
+            deal_id = _create_deal(client, tenant_id)
+            upload = _upload_parsed_pdf(client, deal_id)
+            uploaded_id = str(upload["document_id"])
+            posted_manifest_sha256 = _remember_posted_manifest_sha256(client)
+            package_id = preview.package_public_uploads(
+                client,
+                api_key=API_KEY,
+                tenant_id=tenant_id,
+                deal_id=deal_id,
+                uploads=[upload],
+                seal=False,
+            )
+            assert len(posted_manifest_sha256) == 1
+            _assert_package_open_unbound(preview, tenant_id, deal_id, package_id)
+            run_ids, corpora = _install_capturing_execution(monkeypatch)
+            admission_calls = _strict_admission_calls(monkeypatch)
+            run_resp = client.post(
+                f"/v1/deals/{deal_id}/runs",
+                json=_full_run_request(),
+                headers={"X-IDIS-API-Key": API_KEY},
+            )
+            assert run_resp.status_code == 202, run_resp.text
+            body = run_resp.json()
+            assert body["run_id"]
+            assert run_ids == [body["run_id"]]
+            assert corpora == [[uploaded_id]]
+            assert admission_calls == []
+            rows = preview.package_rows(tenant_id, deal_id, package_id)
+            assert rows
+            assert all(
+                row["status"] == "SEALED"
+                and row["source_binding_state"] == "BOUND"
+                and row["file_binding"] == "BOUND"
+                and row["document_binding"] == "BOUND"
+                and row["parse_attempt_id"] is not None
+                for row in rows
+            )
+            assert _manifest_sha256(rows[0]["package_row"]) == posted_manifest_sha256[0]
+        finally:
+            client.close()
 
+
+def test_non_strict_api_run_without_source_package_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _unset_non_strict_runtime(monkeypatch)
+    for name in (
+        "IDIS_DATABASE_URL",
+        "IDIS_DATABASE_ADMIN_URL",
+        "IDIS_DATABASE_ERASURE_URL",
+        "IDIS_ERASURE_DATABASE_URL",
+        "IDIS_REQUIRE_POSTGRES",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(_api_keys()))
+    run_ids, _corpora = _install_capturing_execution(monkeypatch)
     app = create_app(audit_sink=InMemoryAuditSink(), service_region="me-south-1")
     app.state.deal_documents = {}
-    client = TestClient(app)
+    client = TestClient(app, raise_server_exceptions=False)
+    try:
+        deal_id = _create_deal(client, TENANT_ID)
+        app.state.deal_documents[deal_id] = [_preflight_doc(deal_id=deal_id)]
+        run_resp = client.post(
+            f"/v1/deals/{deal_id}/runs",
+            json=_full_run_request(),
+            headers={"X-IDIS-API-Key": API_KEY},
+        )
+        _assert_source_package_refused(run_resp)
+        assert run_ids == []
+        stored, _cursor = InMemoryRunsRepository(TENANT_ID).list_by_deal(deal_id=deal_id, limit=10)
+        assert stored == []
+    finally:
+        client.close()
 
-    create_resp = client.post(
-        "/v1/deals",
-        json={"name": "Non Strict Deal", "company_name": "NonStrictCo"},
-        headers={"X-IDIS-API-Key": API_KEY},
-    )
-    assert create_resp.status_code == 201
-    deal_id = create_resp.json()["deal_id"]
-    seed_deal_access(TENANT_ID, deal_id, "slice56-actor")
-    app.state.deal_documents[deal_id] = [_preflight_doc(deal_id=deal_id)]
 
-    run_resp = client.post(
-        f"/v1/deals/{deal_id}/runs",
-        json=_full_run_request(),
-        headers={"X-IDIS-API-Key": API_KEY},
-    )
-
-    assert run_resp.status_code == 202
-    assert run_resp.json()["run_id"]
+def test_non_strict_api_run_with_unpackaged_document_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _unset_non_strict_runtime(monkeypatch)
+    with required_frozen_preview(monkeypatch) as preview:
+        client, tenant_id = _non_strict_postgres_client(
+            tmp_path=tmp_path, monkeypatch=monkeypatch, preview=preview
+        )
+        try:
+            deal_id = _create_deal(client, tenant_id)
+            upload = _upload_parsed_pdf(client, deal_id)
+            run_ids, _corpora = _install_capturing_execution(monkeypatch)
+            run_resp = client.post(
+                f"/v1/deals/{deal_id}/runs",
+                json=_full_run_request(),
+                headers={"X-IDIS-API-Key": API_KEY},
+            )
+            _assert_source_package_refused(run_resp)
+            assert run_ids == []
+            assert _deal_run_count(preview, tenant_id, deal_id) == 0
+            assert _document_binding(preview, tenant_id, str(upload["document_id"])) == "UNBOUND"
+        finally:
+            client.close()
 
 
 def test_non_strict_private_harness_keeps_existing_extension_summary(tmp_path: Path) -> None:
@@ -569,10 +666,202 @@ def test_non_strict_private_harness_keeps_existing_extension_summary(tmp_path: P
     assert summary["counts_by_extension"] == {".pdf": 1}
 
 
-def _api_keys() -> dict[str, dict[str, Any]]:
+def _unset_non_strict_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("IDIS_REQUIRE_FULL_LIVE", raising=False)
+    monkeypatch.delenv("IDIS_STRICT_DOTENV_PATH", raising=False)
+
+
+def _non_strict_postgres_client(
+    *,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    preview: RequiredFrozenPreview,
+) -> tuple[TestClient, str]:
+    tenant_id = str(uuid.uuid4())
+    preview.add_tenant(tenant_id, "me-south-1")
+    monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(_api_keys(tenant_id)))
+    monkeypatch.setenv("IDIS_OBJECT_STORE_BASE_DIR", str(tmp_path / "objects"))
+    clear_deals_store()
+    clear_document_store()
+    app = create_app(audit_sink=InMemoryAuditSink(), service_region="me-south-1")
+    return TestClient(app, raise_server_exceptions=False), tenant_id
+
+
+def _create_deal(client: TestClient, tenant_id: str) -> str:
+    response = client.post(
+        "/v1/deals",
+        json={"name": "Non Strict Deal", "company_name": "NonStrictCo"},
+        headers={"X-IDIS-API-Key": API_KEY},
+    )
+    assert response.status_code == 201, response.text
+    deal_id = str(response.json()["deal_id"])
+    seed_deal_access(tenant_id, deal_id, "slice56-actor")
+    return deal_id
+
+
+def _upload_parsed_pdf(client: TestClient, deal_id: str) -> dict[str, Any]:
+    pdf = _public_pdf_bytes()
+    response = client.post(
+        f"/v1/deals/{deal_id}/documents/upload",
+        headers={
+            "X-IDIS-API-Key": API_KEY,
+            "Content-Type": "application/octet-stream",
+        },
+        params={
+            "filename": "company-999-document-00001.pdf",
+            "doc_type": "DATA_ROOM_FILE",
+            "sha256": hashlib.sha256(pdf).hexdigest(),
+            "source_system": "api-upload",
+        },
+        content=pdf,
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["parse_status"] == "PARSED"
+    uuid.UUID(str(body["document_id"]))
+    return body
+
+
+def _public_pdf_bytes() -> bytes:
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.pdfgen import canvas
+    except ImportError:
+        pytest.fail("Required public PDF fixture dependency is unavailable")
+    buffer = io.BytesIO()
+    pdf_canvas = canvas.Canvas(buffer, pagesize=letter)
+    pdf_canvas.drawString(72, 750, "PUBLIC SYNTHETIC CALLER PREVIEW")
+    pdf_canvas.drawString(72, 735, "Revenue was $5M in 2024.")
+    pdf_canvas.save()
+    return buffer.getvalue()
+
+
+def _remember_posted_manifest_sha256(client: TestClient) -> list[str]:
+    posted: list[str] = []
+    original_post = client.post
+
+    def post(url: str, *args: Any, **kwargs: Any) -> Any:
+        payload = kwargs.get("json")
+        if isinstance(payload, dict):
+            manifest = payload.get("source_manifest")
+            if isinstance(manifest, dict) and "manifest_sha256" in manifest:
+                posted.append(str(manifest["manifest_sha256"]))
+        return original_post(url, *args, **kwargs)
+
+    client.post = post  # type: ignore[method-assign]
+    return posted
+
+
+def _install_capturing_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[list[str], list[list[str]]]:
+    run_ids: list[str] = []
+    corpora: list[list[str]] = []
+
+    class CapturingRunExecutionService:
+        def __init__(self, **kwargs: object) -> None:
+            self.audit_sink = kwargs["audit_sink"]
+
+        def execute(self, ctx: object) -> RunExecutionResult:
+            run_ids.append(str(ctx.run_id))  # type: ignore[attr-defined]
+            corpus = ctx.preflight_corpus  # type: ignore[attr-defined]
+            corpora.append([str(document["document_id"]) for document in corpus])
+            return RunExecutionResult(
+                claimed=True,
+                status="SUCCEEDED",
+                finished_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            )
+
+    monkeypatch.setattr(runs_route, "RunExecutionService", CapturingRunExecutionService)
+    return run_ids, corpora
+
+
+def _strict_admission_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+    original = runs_route.build_strict_full_live_admission_report
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        calls.append({"args": args, "kwargs": kwargs})
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(runs_route, "build_strict_full_live_admission_report", spy)
+    return calls
+
+
+def _assert_package_open_unbound(
+    preview: RequiredFrozenPreview,
+    tenant_id: str,
+    deal_id: str,
+    package_id: str,
+) -> None:
+    with preview.engine.begin() as conn:
+        db.set_tenant_local(conn, tenant_id)
+        status, binding = conn.execute(
+            text(
+                "SELECT status, source_binding_state FROM data_room_packages "
+                "WHERE package_id = CAST(:package AS uuid) "
+                "AND deal_id = CAST(:deal AS uuid)"
+            ),
+            {"package": package_id, "deal": deal_id},
+        ).one()
+    assert status == "OPEN"
+    assert binding == "UNBOUND"
+
+
+def _deal_run_count(preview: RequiredFrozenPreview, tenant_id: str, deal_id: str) -> int:
+    with preview.engine.begin() as conn:
+        db.set_tenant_local(conn, tenant_id)
+        count = conn.execute(
+            text("SELECT count(*) FROM runs WHERE deal_id = CAST(:deal AS uuid)"),
+            {"deal": deal_id},
+        ).scalar_one()
+    return int(count)
+
+
+def _document_binding(preview: RequiredFrozenPreview, tenant_id: str, document_id: str) -> str:
+    with preview.engine.begin() as conn:
+        db.set_tenant_local(conn, tenant_id)
+        binding = conn.execute(
+            text(
+                "SELECT source_binding_state FROM documents "
+                "WHERE document_id = CAST(:document AS uuid)"
+            ),
+            {"document": document_id},
+        ).scalar_one()
+    return str(binding)
+
+
+def _manifest_sha256(package_row: object) -> str:
+    row: object = json.loads(package_row) if isinstance(package_row, str) else package_row
+    if not isinstance(row, dict):
+        raise AssertionError("stored package row is not an object")
+    metadata = row["metadata"]
+    if isinstance(metadata, str):
+        metadata = json.loads(metadata)
+    if not isinstance(metadata, dict):
+        raise AssertionError("stored package metadata is not an object")
+    manifest = metadata["source_manifest"]
+    if isinstance(manifest, str):
+        manifest = json.loads(manifest)
+    if not isinstance(manifest, dict):
+        raise AssertionError("stored source manifest is not an object")
+    return str(manifest["manifest_sha256"])
+
+
+def _assert_source_package_refused(response: Any) -> None:
+    assert response.status_code == 409, response.text
+    body = response.json()
+    assert body["code"] == "SOURCE_PACKAGE_REQUIRED"
+    assert body["message"] == (
+        "Frozen source preparation or strict proof did not authorize this run"
+    )
+    assert body["details"] is None
+
+
+def _api_keys(tenant_id: str = TENANT_ID) -> dict[str, dict[str, Any]]:
     return {
         API_KEY: {
-            "tenant_id": TENANT_ID,
+            "tenant_id": tenant_id,
             "actor_id": "slice56-actor",
             "name": "Slice 56 Tenant",
             "timezone": "UTC",

@@ -65,6 +65,10 @@ _INDEPENDENT_VERIFIER_SHA256: Final = (
     "670707256e98ef6b285b8fe74558c1b4c1c9b5e113733d6e60f974b3d8c32ef1"
 )
 _APPROVED_SQL_RUNNER_SHA256: Final = (
+    "812bfeb229f37b15fe8670339b46c98831b301a895cf6add2227913ec1e9dd4c"
+)
+# Names the pre-hardening runner whose bytes are not in this repository; retained as historical evidence (owner decision R5 option B, 2026-10-19).  # noqa: E501
+_SUPERSEDED_SQL_RUNNER_SHA256_2026_10_18: Final = (
     "d12ea370927706fb969fed3bc586e39d8cc212e25e484eae32e4df52c3f9814b"
 )
 _FULL_STRICT_CONTRACT_HASH: Final = (

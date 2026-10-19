@@ -2980,10 +2980,23 @@ def test_v27_every_observation_uses_shared_least_privilege_posture_attestation()
 
 def test_v27_database_lifecycle_drops_only_a_database_created_by_this_run(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     runner = _sql()
+    root = _materialize_historical_internal_sources(
+        tmp_path / "lifecycle-historical-internal-sources"
+    )
+    historical_snapshot = runner._capture_migration_source_snapshot(internal_source_root=root)
+    assert historical_snapshot.expected_sha256 == EXPECTED_MIGRATION_EXECUTION_SOURCE_SHA256
     events: list[str] = []
 
+    def record_migration_snapshot(*args: object, **kwargs: object) -> object:
+        assert args == ()
+        assert kwargs == {}
+        events.append("CAPTURE")
+        return historical_snapshot
+
+    monkeypatch.setattr(runner, "_capture_migration_source_snapshot", record_migration_snapshot)
     monkeypatch.setattr(runner, "_create_disposable_database", lambda *_: events.append("CREATE"))
     monkeypatch.setattr(runner, "_setup_disposable_schema", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(runner, "_run_database_execution", lambda *_args, **_kwargs: {})
@@ -3001,7 +3014,7 @@ def test_v27_database_lifecycle_drops_only_a_database_created_by_this_run(
         REVIEWER_MAP.read_bytes(),
         b"operator-workbook-held-by-test-double",
     )
-    assert events == ["CREATE", "DROP"]
+    assert events == ["CAPTURE", "CREATE", "DROP"]
     assert receipt["disposable_database_dropped"] is True
 
     events.clear()
@@ -3027,7 +3040,7 @@ def test_v27_database_lifecycle_drops_only_a_database_created_by_this_run(
         )
     assert caught.value.__cause__ is None
     assert caught.value.__context__ is None
-    assert events == []
+    assert events == ["CAPTURE"]
 
 
 def test_v27_public_runner_sanitizes_exceptions_and_suppresses_bytecode(

@@ -13,6 +13,7 @@ from types import ModuleType
 from typing import Any, cast
 
 import pytest
+from tests._private_artifacts import requires_private_artifact
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _AUTHORIZER = _REPO_ROOT / "scripts" / "authorize_task7_v20_contract_publication.py"
@@ -113,10 +114,6 @@ def _artifact() -> dict[str, Any]:
 
 
 def _operator_backed_inputs() -> tuple[bytes, bytes, bytes]:
-    if not _SIGNED_RECEIPT.is_file():
-        pytest.skip("the operator-backed v20 signed receipt is not available")
-    if not _TRUSTED_PUBLIC_KEY.is_file():
-        pytest.skip("the operator-backed governance public key is not available")
     artifact_raw = _candidate_raw()
     receipt_raw = _SIGNED_RECEIPT.read_bytes()
     public_key_raw = _TRUSTED_PUBLIC_KEY.read_bytes()
@@ -182,6 +179,7 @@ def test_v20_authorizer_pins_exact_candidate_materializer_generator_and_v18_base
     assert authorizer._V18_AUTHORIZER_SHA256 == _V18_AUTHORIZER_SHA256
 
 
+@requires_private_artifact("task7_v20_current_guard_postgres_census_receipt.json")
 def test_v20_authorizer_finalizes_exact_census_runner_source_and_receipt_pins() -> None:
     authorizer = _load("_task7_v20_authorizer_final_pins_red")
 
@@ -208,6 +206,7 @@ def test_v20_authorizer_never_selects_the_void_v19_candidate() -> None:
         authorizer._validated_candidate(void_v19)
 
 
+@requires_private_artifact("task7_v20_current_guard_postgres_census_receipt.json")
 def test_real_v20_receipt_verifies_31_field_projection_and_authorizes_fixture(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -268,6 +267,7 @@ def test_v20_runner_pin_drift_fails_before_runner_import(
         authorizer._runner()
 
 
+@requires_private_artifact("task7_v20_current_guard_postgres_census_receipt.json")
 def test_v20_receipt_pin_drift_fails_before_signature_verification(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -286,6 +286,7 @@ def test_v20_receipt_pin_drift_fails_before_signature_verification(
         )
 
 
+@requires_private_artifact("task7_v20_current_guard_postgres_census_receipt.json")
 def test_v20_source_manifest_pin_drift_rejects_the_real_receipt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -304,6 +305,7 @@ def test_v20_source_manifest_pin_drift_rejects_the_real_receipt(
         )
 
 
+@requires_private_artifact("task7_v20_current_guard_postgres_census_receipt.json")
 def test_v20_signed_payload_drift_cannot_authorize_fixture(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -329,6 +331,7 @@ def test_v20_signed_payload_drift_cannot_authorize_fixture(
         )
 
 
+@requires_private_artifact("task7_v20_current_guard_postgres_census_receipt.json")
 def test_v20_untrusted_public_key_cannot_verify_the_real_receipt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

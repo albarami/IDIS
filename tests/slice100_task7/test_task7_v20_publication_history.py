@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from tests._private_artifacts import requires_private_artifact
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _RECONCILIATION = (
     _REPO_ROOT / ".local_reports" / "slice100" / "task7_contract_reconciliation_log.jsonl"
@@ -59,6 +61,9 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+@requires_private_artifact(
+    "task7_v20_current_guard_postgres_census_receipt.rejected-null-proof-projection.json"
+)
 def test_rejected_and_accepted_receipts_are_distinct_append_only_evidence() -> None:
     records = _records(_RECONCILIATION)
     events = [record["event"] for record in records]

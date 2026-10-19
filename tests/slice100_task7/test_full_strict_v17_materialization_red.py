@@ -11,6 +11,8 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+from tests._private_artifacts import requires_private_artifact
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _V16_ARTIFACT = _REPO_ROOT / "contracts" / "full_strict_v16_reviewed_preimage_v1.json"
 _V16_FIXTURE = (
@@ -139,6 +141,7 @@ def _candidate_bytes(materializer: ModuleType, artifact: dict[str, Any]) -> byte
     return materializer._render(candidate)
 
 
+@requires_private_artifact("task7_v16_current_guard_postgres_census_receipt.json")
 def test_v16_frozen_authority_remains_byte_immutable_before_v17_materialization() -> None:
     raw = _V16_ARTIFACT.read_bytes()
     artifact = _load_json(_V16_ARTIFACT)

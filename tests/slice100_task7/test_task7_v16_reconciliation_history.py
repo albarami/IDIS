@@ -6,6 +6,8 @@ import hashlib
 import json
 from pathlib import Path
 
+from tests._private_artifacts import requires_private_artifact
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _LOG = _REPO_ROOT / ".local_reports" / "slice100" / "task7_contract_reconciliation_log.jsonl"
 _RECEIPT = (
@@ -21,6 +23,7 @@ def _records() -> list[dict[str, object]]:
     return [json.loads(line) for line in _LOG.read_text("utf-8").splitlines() if line.strip()]
 
 
+@requires_private_artifact("task7_v16_current_guard_postgres_census_receipt.json")
 def test_v16_source_supersession_signed_census_and_freeze_are_append_only() -> None:
     records = _records()
     assert len(records) >= 29

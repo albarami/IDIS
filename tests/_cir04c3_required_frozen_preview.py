@@ -252,6 +252,7 @@ class RequiredFrozenPreview:
         tenant_id: str,
         deal_id: str,
         uploads: Sequence[Mapping[str, Any]],
+        seal: bool = True,
     ) -> str:
         # Existing public manifest contract: opaque fixture-domain declarations,
         # not production preview/path provenance or acceptance producer identity.
@@ -316,7 +317,8 @@ class RequiredFrozenPreview:
         )
         assert response.status_code == 201
         package_id = str(response.json()["package_id"])
-        self.freeze(tenant_id, deal_id, package_id)
+        if seal:
+            self.freeze(tenant_id, deal_id, package_id)
         return package_id
 
 

@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from tests._private_artifacts import requires_private_artifact
 from tests.slice100_task8 import _task8_void_contract_hash_evidence as void_evidence
 from tests.slice100_task8 import conftest as task8_conftest
 from tests.slice100_task8.test_task8_historical_candidate_collection_boundary import (
@@ -212,6 +213,10 @@ def _write_candidate_pair(root: Path, *, version: int) -> tuple[Path, Path]:
     return artifact, fixture
 
 
+@requires_private_artifact(
+    "task8/v26-candidate/full_strict_v26_reviewed_preimage_v1.json",
+    "task8/v26-candidate/full_strict_v26_contract_hash_v1.json",
+)
 def test_v26_rendered_candidate_identities_are_void_but_equation_v3_hashes_are_reusable() -> None:
     assert _rendered_v26_identifiers() == _V26_IDENTIFIERS
     assert tuple(getattr(void_evidence, name, None) for name in _V26_CONSTANT_NAMES) == (
@@ -228,6 +233,10 @@ def test_v26_rendered_candidate_identities_are_void_but_equation_v3_hashes_are_r
     assert not (set(_V26_INHERITED_SEMANTIC_IDENTIFIERS) & active_blocklist)
 
 
+@requires_private_artifact(
+    "task8/v26-candidate/full_strict_v26_reviewed_preimage_v1.json",
+    "task8/v26-candidate/full_strict_v26_contract_hash_v1.json",
+)
 def test_v26_sources_execution_suites_and_staged_candidate_are_byte_frozen() -> None:
     recorded = dict(getattr(void_evidence, "VOID_V26_FROZEN_FILE_SHA256_BY_PATH", ()))
     assert recorded == _V26_FROZEN_FILE_SHA256_BY_PATH

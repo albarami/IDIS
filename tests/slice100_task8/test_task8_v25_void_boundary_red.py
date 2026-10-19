@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from tests._private_artifacts import requires_private_artifact
 from tests.slice100_task8 import _task8_void_contract_hash_evidence as void_evidence
 from tests.slice100_task8 import conftest as task8_conftest
 from tests.slice100_task8.test_task8_historical_candidate_collection_boundary import (
@@ -165,6 +166,7 @@ def test_v25_candidate_identities_are_blocklisted_but_approved_sql_hashes_are_re
     assert not (set(_V25_INHERITED_SEMANTIC_IDENTIFIERS) & active_blocklist)
 
 
+@requires_private_artifact("task8/v25-candidate/v25_independent_fixture_red.txt")
 def test_v25_materializer_verifier_oracles_tests_and_golden_are_byte_frozen() -> None:
     recorded = dict(getattr(void_evidence, "VOID_V25_FROZEN_FILE_SHA256_BY_PATH", ()))
     assert recorded == _V25_FROZEN_FILE_SHA256_BY_PATH
@@ -176,6 +178,7 @@ def test_v25_materializer_verifier_oracles_tests_and_golden_are_byte_frozen() ->
     assert hashlib.sha256(red_evidence.read_bytes()).hexdigest() == _V25_RED_EVIDENCE_SHA256
 
 
+@requires_private_artifact("task8/v25-candidate/v25_independent_fixture_red.txt")
 def test_v25_canonical_outputs_locks_receipts_and_contract_lock_entries_are_absent() -> None:
     assert not _V25_ARTIFACT.exists(), "TASK8_VOID_V25_CANONICAL_ARTIFACT_PRESENT"
     assert not _V25_FIXTURE.exists(), "TASK8_VOID_V25_CANONICAL_FIXTURE_PRESENT"

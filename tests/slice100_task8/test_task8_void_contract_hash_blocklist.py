@@ -33,6 +33,10 @@ _COMMON_HISTORICAL_EVIDENCE_PATHS = frozenset(
 _V22_EVIDENCE_PATHS = _COMMON_HISTORICAL_EVIDENCE_PATHS | frozenset(
     {
         "contracts/full_strict_v22_reviewed_preimage_v1.json",
+        # J ruling 2026-10-19: GL-01 recovery identity record, admitted and not edited.
+        "docs/go-live/BASELINE_MANIFEST.md",
+        # J ruling 2026-10-19: GL-01 recovery identity record, admitted and not edited.
+        "docs/go-live/VERIFICATION_AND_RUNBOOKS.md",
         "tests/slice100_task8/_v23_oracle.py",
         "tests/slice100_task8/_v25_independent_oracle.py",
         "tests/slice100_task8/fixtures/full_strict_v22_contract_hash_v1.json",
@@ -41,6 +45,8 @@ _V22_EVIDENCE_PATHS = _COMMON_HISTORICAL_EVIDENCE_PATHS | frozenset(
 _V23_EVIDENCE_PATHS = _COMMON_HISTORICAL_EVIDENCE_PATHS | frozenset(
     {
         "contracts/full_strict_v23_reviewed_preimage_v1.json",
+        # J ruling 2026-10-19: GL-01 recovery identity record, admitted and not edited.
+        "docs/go-live/BASELINE_MANIFEST.md",
         "tests/slice100_task8/_v24_structural_oracle.py",
         "tests/slice100_task8/_v25_independent_oracle.py",
         "tests/slice100_task8/fixtures/full_strict_v23_contract_hash_v1.json",
@@ -51,6 +57,8 @@ _V23_EVIDENCE_PATHS = _COMMON_HISTORICAL_EVIDENCE_PATHS | frozenset(
 _V24_EVIDENCE_PATHS = _COMMON_HISTORICAL_EVIDENCE_PATHS | frozenset(
     {
         "contracts/full_strict_v24_reviewed_preimage_v1.json",
+        # J ruling 2026-10-19: GL-01 recovery identity record, admitted and not edited.
+        "docs/go-live/BASELINE_MANIFEST.md",
         "scripts/materialize_full_strict_v24_preimage.py",
         "scripts/run_task8_v24_signed_census.py",
         "scripts/run_task8_v24_sql_authority_census.py",
@@ -309,3 +317,36 @@ def test_v23_rejected_draft_bytes_are_preserved_but_never_admitted() -> None:
     assert not any(
         identifier in {key[0] for key in observed} for identifier in _VOID_V23_IDENTIFIERS
     )
+
+
+_GL01_BASELINE_MANIFEST = "docs/go-live/BASELINE_MANIFEST.md"
+_GL01_VERIFICATION_RUNBOOK = "docs/go-live/VERIFICATION_AND_RUNBOOKS.md"
+_GL01_RECOVERY_IDENTITY_ROW_COUNT = 7
+
+
+def test_gl01_recovery_identity_records_match_the_ruled_evidence_sets() -> None:
+    # J ruling 2026-10-19: pin the seven GL-01 recovery identity rows.
+    baseline = _GL01_BASELINE_MANIFEST
+    runbook = _GL01_VERIFICATION_RUNBOOK
+    assert baseline in _V22_EVIDENCE_PATHS
+    assert baseline in _V23_EVIDENCE_PATHS
+    assert baseline in _V24_EVIDENCE_PATHS
+    assert runbook in _V22_EVIDENCE_PATHS
+    assert runbook not in _V23_EVIDENCE_PATHS
+    assert runbook not in _V24_EVIDENCE_PATHS
+    for path in (baseline, runbook):
+        assert path not in _COMMON_HISTORICAL_EVIDENCE_PATHS
+        assert path not in _V25_EVIDENCE_PATHS
+        assert path not in _V26_EVIDENCE_PATHS
+    expected = {
+        (void_evidence.VOID_V22_ARTIFACT_SHA256, baseline, _RAW): 1,
+        (void_evidence.VOID_V22_FIXTURE_SHA256, baseline, _RAW): 1,
+        (void_evidence.VOID_V23_ARTIFACT_SHA256, baseline, _RAW): 1,
+        (void_evidence.VOID_V23_FIXTURE_SHA256, baseline, _RAW): 1,
+        (void_evidence.VOID_V24_ARTIFACT_SHA256, baseline, _RAW): 1,
+        (void_evidence.VOID_V24_FIXTURE_SHA256, baseline, _RAW): 1,
+        (void_evidence.VOID_V22_FIXTURE_SHA256, runbook, _RAW): 1,
+    }
+    observed = _occurrences([_REPO_ROOT / path for path in (baseline, runbook)])
+    assert len(expected) == _GL01_RECOVERY_IDENTITY_ROW_COUNT
+    assert observed == expected

@@ -112,7 +112,28 @@ def _bounded_response(body: bytes) -> BoundedProbeResponse:
     )
 
 
-def test_fixture_flows_through_actual_builder_bounded_transport_and_normalizer() -> None:
+class _AdvancingClock:
+    def __init__(self, start: float = 99.5, increment: float = 0.5) -> None:
+        self._value = start
+        self._increment = increment
+
+    def __call__(self) -> float:
+        self._value += self._increment
+        return self._value
+
+
+def test_fixture_flows_through_actual_builder_bounded_transport_and_normalizer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import idis.services.enrichment.connectors.perplexity as perplexity_module
+
+    # fetch_selected builds its own transport; freeze its clock so the remaining
+    # shared budget at the first send is exactly the pinned 15 s.
+    monkeypatch.setattr(
+        perplexity_module,
+        "BoundedProbeTransport",
+        lambda http_client: BoundedProbeTransport(http_client, monotonic=lambda: 100.0),
+    )
     calls: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -157,6 +178,43 @@ def test_fixture_flows_through_actual_builder_bounded_transport_and_normalizer()
     assert "answer" not in result.normalized
     assert "facts" not in result.normalized
     assert _API_KEY not in repr(result)
+
+
+def test_fixture_first_request_carries_remaining_shared_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import idis.services.enrichment.connectors.perplexity as perplexity_module
+
+    monkeypatch.setattr(
+        perplexity_module,
+        "BoundedProbeTransport",
+        lambda http_client: BoundedProbeTransport(
+            http_client, monotonic=_AdvancingClock(start=99.5, increment=0.5)
+        ),
+    )
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            content=_FIXTURE,
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = PerplexityConnector(client, now=lambda: _NOW).fetch_selected(
+            _selector(), _context()
+        )
+
+    assert len(calls) == 1
+    assert calls[0].extensions["timeout"] == {
+        "connect": 14.5,
+        "read": 14.5,
+        "write": 14.5,
+        "pool": 14.5,
+    }
+    assert result.status is EnrichmentStatus.HIT
 
 
 def test_probe_request_is_exactly_the_runtime_builder_for_the_pinned_public_query() -> None:

@@ -64,9 +64,19 @@ def test_real_sdk_serializes_legacy_request_without_changing_sampling(
     }
 
 
-@pytest.mark.parametrize("status", [429, 503])
+@pytest.mark.parametrize(
+    ("status", "code", "attempts", "expected_backoffs"),
+    [
+        (429, "LLM_PROVIDER_RATE_LIMITED", 3, [1.0, 2.0]),
+        (503, "LLM_PROVIDER_OUTCOME_UNKNOWN", 1, []),
+    ],
+)
 def test_real_sdk_transient_response_preserves_client_retry_budget(
-    monkeypatch: pytest.MonkeyPatch, status: int
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    code: str,
+    attempts: int,
+    expected_backoffs: list[float],
 ) -> None:
     calls = 0
     backoffs: list[float] = []
@@ -74,7 +84,11 @@ def test_real_sdk_transient_response_preserves_client_retry_budget(
     def handle(request: httpx.Request | httpx2.Request) -> httpx.Response | httpx2.Response:
         nonlocal calls
         calls += 1
-        return _http.Response(status, json={"type": "error", "error": {"message": "offline"}})
+        return _http.Response(
+            status,
+            json={"type": "error", "error": {"message": "gl05-body-marker"}},
+            headers={"request-id": "req_cir01_status"},
+        )
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "cir01-offline-test-key")
     monkeypatch.setattr(anthropic_client.time, "sleep", backoffs.append)
@@ -86,11 +100,16 @@ def test_real_sdk_transient_response_preserves_client_retry_budget(
         max_retries=0,
     ) as sdk_client:
         client._client = sdk_client
-        with pytest.raises(RuntimeError, match="failed after 3 attempts"):
+        with pytest.raises(RuntimeError) as caught:
             client.call("Synthetic request only")
 
-    assert calls == anthropic_client.MAX_RETRIES + 1 == 3
-    assert backoffs == [1.0, 2.0, 4.0]
+    exc = caught.value
+    assert calls == attempts
+    assert backoffs == expected_backoffs
+    assert getattr(exc, "code", None) == code
+    assert str(exc) == f"{code} {status}"
+    assert getattr(exc, "request_id", None) == "req_cir01_status"
+    assert "gl05-body-marker" not in str(exc)
 
 
 def test_real_sdk_non_retryable_response_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -99,7 +118,11 @@ def test_real_sdk_non_retryable_response_is_not_retried(monkeypatch: pytest.Monk
     def handle(request: httpx.Request | httpx2.Request) -> httpx.Response | httpx2.Response:
         nonlocal calls
         calls += 1
-        return _http.Response(400, json={"type": "error", "error": {"message": "offline"}})
+        return _http.Response(
+            400,
+            json={"type": "error", "error": {"message": "gl05-body-marker"}},
+            headers={"request-id": "req_cir01_rejected"},
+        )
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "cir01-offline-test-key")
     client = anthropic_client.AnthropicLLMClient(model="cir01-test-model")
@@ -110,9 +133,13 @@ def test_real_sdk_non_retryable_response_is_not_retried(monkeypatch: pytest.Monk
         max_retries=0,
     ) as sdk_client:
         client._client = sdk_client
-        with pytest.raises(RuntimeError, match="non-retryable.*400"):
+        with pytest.raises(RuntimeError, match="LLM_PROVIDER_REQUEST_REJECTED 400") as caught:
             client.call("Synthetic request only")
+    exc = caught.value
     assert calls == 1
+    assert getattr(exc, "code", None) == "LLM_PROVIDER_REQUEST_REJECTED"
+    assert getattr(exc, "request_id", None) == "req_cir01_rejected"
+    assert "gl05-body-marker" not in str(exc)
 
 
 def test_real_sdk_accepts_exact_frozen_methodology_wire_request() -> None:

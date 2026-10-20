@@ -30,6 +30,7 @@ from idis.models.source_package_manifest import (
     canonical_source_manifest_sha256,
 )
 from idis.persistence import db
+from idis.persistence.repositories import webhook_outbox
 from idis.persistence.repositories.documents import PostgresDocumentsRepository
 from idis.persistence.repositories.task7_source_freeze import freeze_source_package
 from idis.services.ingestion import IngestionContext
@@ -339,6 +340,7 @@ def required_frozen_preview(monkeypatch: pytest.MonkeyPatch) -> Iterator[Require
             # The default assignment store is lazy and otherwise survives a
             # PG→memory fixture boundary even after the engine/URL is restored.
             scoped.setattr(abac, "_default_store", None)
+            scoped.setattr(webhook_outbox, "_DEFAULT_OUTBOX", None)
             scoped.setenv(db.IDIS_DATABASE_URL_ENV, os.environ[URL_ENV])
             scoped.delenv(db.IDIS_DATABASE_ADMIN_URL_ENV, raising=False)
             scoped.delenv(db.IDIS_ERASURE_DATABASE_URL_ENV, raising=False)

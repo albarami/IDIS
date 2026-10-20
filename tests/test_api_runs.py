@@ -633,6 +633,11 @@ def test_required_preview_database_restores_environment_engines_and_assignment_s
 ) -> None:
     from idis.api import abac
     from idis.persistence import db
+    from idis.persistence.repositories import webhook_outbox
+    from idis.persistence.repositories.webhook_outbox import (
+        InMemoryWebhookOutboxRepository,
+        PostgresWebhookOutboxRepository,
+    )
 
     names = (
         "IDIS_DATABASE_URL",
@@ -643,14 +648,45 @@ def test_required_preview_database_restores_environment_engines_and_assignment_s
     before_env = {name: os.environ.get(name) for name in names}
     before_engines = (db._app_engine, db._admin_engine, db._erasure_engine)
     before_store = abac._default_store
+    stale_outbox = InMemoryWebhookOutboxRepository()
+    monkeypatch.setattr(webhook_outbox, "_DEFAULT_OUTBOX", stale_outbox)
     with required_frozen_preview(monkeypatch) as target:
         assert db.get_app_engine() is target.engine
         assert db.is_postgres_configured()
         assert abac._default_store is None
         assert abac.get_deal_assignment_store().__class__ is abac.PostgresDealAssignmentStore
+        assert isinstance(webhook_outbox.default_webhook_outbox(), PostgresWebhookOutboxRepository)
     assert {name: os.environ.get(name) for name in names} == before_env
     assert (db._app_engine, db._admin_engine, db._erasure_engine) == before_engines
     assert abac._default_store is before_store
+    assert webhook_outbox._DEFAULT_OUTBOX is stale_outbox
+
+
+def test_required_preview_drops_stale_webhook_outbox_without_a_database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Scope the cached outbox through the real helper without qualifying a database."""
+    import tests._cir04c3_required_frozen_preview as helper
+    from idis.persistence.repositories import webhook_outbox
+    from idis.persistence.repositories.webhook_outbox import (
+        InMemoryWebhookOutboxRepository,
+        PostgresWebhookOutboxRepository,
+    )
+
+    class _DisposableEngine:
+        def dispose(self) -> None:
+            return None
+
+    monkeypatch.setattr(helper, "qualify_required_database", lambda _env: _DisposableEngine())
+    monkeypatch.setenv(
+        helper.URL_ENV,
+        "postgresql+psycopg2://fixture@127.0.0.1:9/idis_scope_unit",
+    )
+    stale_outbox = InMemoryWebhookOutboxRepository()
+    monkeypatch.setattr(webhook_outbox, "_DEFAULT_OUTBOX", stale_outbox)
+    with helper.required_frozen_preview(monkeypatch):
+        assert isinstance(webhook_outbox.default_webhook_outbox(), PostgresWebhookOutboxRepository)
+    assert webhook_outbox._DEFAULT_OUTBOX is stale_outbox
 
 
 @pytest.mark.parametrize(

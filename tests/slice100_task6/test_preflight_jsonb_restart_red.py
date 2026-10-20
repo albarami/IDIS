@@ -17,7 +17,15 @@ from tests.slice100_task2b._support import (
     grant_application_access,
     migrate,
 )
-from tests.slice100_task6._support import DEAL_ID, RUN_ID, TENANT_ID
+from tests.slice100_task6._support import (
+    DEAL_ID,
+    RUN_CONTRACT_COLUMN_SQL,
+    RUN_CONTRACT_VALUE_SQL,
+    RUN_ID,
+    TASK6_SCHEMA_HEAD,
+    TENANT_ID,
+    task6_head_seed_params,
+)
 from tests.slice100_task6.test_genuine_preflight_admission_red import (
     _document,
     _durable_service,
@@ -114,12 +122,12 @@ class _JsonbRoundTripTasks:
 def test_postgres_jsonb_preflight_envelope_resumes_into_strict_planning() -> None:
     original, live_spans = _mixed_supported_and_excluded_envelope()
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         with database.admin_engine.begin() as connection:
             connection.execute(
                 text(
-                    """
+                    f"""
                     INSERT INTO tenants (tenant_id, name)
                     VALUES (CAST(:tenant_id AS uuid), 'JSONB preflight tenant');
                     INSERT INTO deals (deal_id, tenant_id, name, created_at)
@@ -128,14 +136,21 @@ def test_postgres_jsonb_preflight_envelope_resumes_into_strict_planning() -> Non
                         'Fictional JSONB resume deal', now()
                     );
                     INSERT INTO runs (
-                        run_id, tenant_id, deal_id, mode, status, created_at
+                        run_id, tenant_id, deal_id, mode, status, created_at,
+                        {RUN_CONTRACT_COLUMN_SQL}
                     ) VALUES (
                         CAST(:run_id AS uuid), CAST(:tenant_id AS uuid),
-                        CAST(:deal_id AS uuid), 'FULL', 'QUEUED', now()
+                        CAST(:deal_id AS uuid), 'FULL', 'QUEUED', now(),
+                        {RUN_CONTRACT_VALUE_SQL}
                     )
                     """
                 ),
-                {"tenant_id": TENANT_ID, "deal_id": DEAL_ID, "run_id": RUN_ID},
+                {
+                    "tenant_id": TENANT_ID,
+                    "deal_id": DEAL_ID,
+                    "run_id": RUN_ID,
+                    **task6_head_seed_params(mode="FULL"),
+                },
             )
 
         completed_preflight = RunStep(

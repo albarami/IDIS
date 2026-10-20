@@ -26,6 +26,7 @@ from tests.slice100_task2b._support import (
     grant_application_access,
     migrate,
 )
+from tests.slice100_task6._support import TASK6_SCHEMA_HEAD, set_seed_tenant
 from tests.slice100_task6.test_coverage_projections_postgres_red import (
     DEAL_ID,
     LEASE_OWNER_ID,
@@ -162,7 +163,7 @@ def _add_statement_capture(engine: Engine, statements: list[str]) -> Any:
 
 def test_production_step10_uow_sets_repeatable_read_write_as_exact_first_sql() -> None:
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         _seeded, staged, sink = _prepare_step10(database)
         statements: list[str] = []
@@ -180,7 +181,7 @@ def test_production_step10_uow_sets_repeatable_read_write_as_exact_first_sql() -
 
 def test_step10_snapshot_conflict_is_40001_and_rolls_back_whole_boundary() -> None:
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         seeded, staged, sink = _prepare_step10(database)
         with database.admin_engine.connect() as connection:
@@ -250,6 +251,7 @@ def test_step10_snapshot_conflict_is_40001_and_rolls_back_whole_boundary() -> No
             )
             try:
                 with database.admin_engine.begin() as connection:
+                    set_seed_tenant(connection, TENANT_ID)
                     connection.exec_driver_sql("SET LOCAL lock_timeout = '3s'")
                     changed = connection.execute(
                         text(

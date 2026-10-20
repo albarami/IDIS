@@ -6,9 +6,11 @@ use the candidate shape. This module does not activate either candidate.
 
 from __future__ import annotations
 
+import builtins
 import importlib
 import importlib.util
 import inspect
+import io
 import json
 import os
 from collections.abc import Mapping
@@ -508,15 +510,10 @@ def test_environment_template_filter_reports_sample_and_nested_templates(
         folder.mkdir()
         (folder / ".env.sample").write_text("MODEL=claude-opus-5-5\n", encoding="utf-8")
 
-    reads: list[str] = []
-    original = Path.read_text
-
-    def tracking(self: Path, *args: Any, **kwargs: Any) -> str:
-        reads.append(self.resolve().as_posix())
-        return original(self, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "read_text", tracking)
+    tracker = _ScanReadTracker()
+    tracker.install(monkeypatch)
     hits = _candidate_id_hits(tmp_path)
+    reads = tracker.paths()
     assert hits == [".env.sample", "infra/app/.env.example"]
     sealed_resolved = {path.resolve().as_posix() for path in sealed}
     assert sealed_resolved.isdisjoint(reads)
@@ -598,15 +595,10 @@ def test_environment_template_allow_list_reports_templates_and_never_opens_seale
             path.write_text(_CANDIDATE_ENV_LINE, encoding="utf-8")
             sealed_paths.append(path)
 
-    reads: list[str] = []
-    original = Path.read_text
-
-    def tracking(self: Path, *args: Any, **kwargs: Any) -> str:
-        reads.append(self.resolve().as_posix())
-        return original(self, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "read_text", tracking)
+    tracker = _ScanReadTracker()
+    tracker.install(monkeypatch)
     hits = _candidate_id_hits(tmp_path)
+    reads = tracker.paths()
     expected = sorted(path.relative_to(tmp_path).as_posix() for path in template_paths)
     assert hits == expected
     sealed_resolved = {path.resolve().as_posix() for path in sealed_paths}
@@ -639,15 +631,10 @@ def test_infrastructure_walks_never_open_sealed_names(
     template = tmp_path / "infra" / ".env.example"
     template.write_text(model_id, encoding="utf-8")
 
-    reads: list[str] = []
-    original = Path.read_text
-
-    def tracking(self: Path, *args: Any, **kwargs: Any) -> str:
-        reads.append(self.resolve().as_posix())
-        return original(self, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "read_text", tracking)
+    tracker = _ScanReadTracker()
+    tracker.install(monkeypatch)
     hits = _candidate_id_hits(tmp_path)
+    reads = tracker.paths()
     listed = _widened_candidate_paths(tmp_path)
     opened = sorted(
         path.relative_to(tmp_path).as_posix()
@@ -664,7 +651,142 @@ def test_infrastructure_walks_never_open_sealed_names(
     assert listed_sealed == []
 
 
+def test_sealed_path_read_through_each_route_is_tracked(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A planted reader is caught on read_text, read_bytes, Path.open, and both opens."""
+    sealed = tmp_path / "credentials.json"
+    sealed.write_text("sealed", encoding="utf-8")
+    tracker = _ScanReadTracker()
+    tracker.install(monkeypatch)
+    _read_sealed_path_through_each_route(sealed)
+    caught = tracker.routes_for(sealed)
+    assert caught == {"read_text", "read_bytes", "path_open", "builtins_open", "io_open"}
+
+
+def test_refused_src_file_fails_the_scan_and_a_refused_non_src_file_does_not(
+    tmp_path: Path,
+) -> None:
+    """A sealed src file fails the scan. The same kind of file outside src does not."""
+    src_root = tmp_path / "src_tree"
+    refused_paths = (
+        src_root / "src" / "idis" / "credentials.py",
+        src_root / "src" / "keys" / "server.pem",
+        src_root / "src" / ".env",
+    )
+    for path in refused_paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("MODEL=claude-sonnet-5-5\n", encoding="utf-8")
+    with pytest.raises(AssertionError, match="refused src file") as caught:
+        _candidate_id_hits(src_root)
+    message = str(caught.value)
+    assert "cannot prove that this file names no candidate id" in message
+    for path in refused_paths:
+        assert path.relative_to(src_root).as_posix() in message
+
+    other = tmp_path / "other_tree"
+    sealed_paths = (
+        other / "infra" / "credentials.json",
+        other / "infra" / "server.pem",
+        other / ".env",
+    )
+    for path in sealed_paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("MODEL=claude-sonnet-5-5\n", encoding="utf-8")
+        assert _may_open(path) is False
+    assert _candidate_id_hits(other) == []
+    listed = {path.relative_to(other).as_posix() for path in _widened_candidate_paths(other)}
+    assert listed.isdisjoint(path.relative_to(other).as_posix() for path in sealed_paths)
+
+
+def _read_sealed_path_through_each_route(path: Path) -> None:
+    """Read one sealed path through every route the scan tracker watches."""
+    path.read_text(encoding="utf-8")
+    path.read_bytes()
+    with path.open(encoding="utf-8"):
+        pass
+    with builtins.open(path, encoding="utf-8"):
+        pass
+    with io.open(path, encoding="utf-8"):  # noqa: UP020
+        pass
+
+
+class _ScanReadTracker:
+    """Record reads through the routes the candidate-id scan might use."""
+
+    def __init__(self) -> None:
+        self.reads: list[tuple[str, str]] = []
+
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Wrap the five read routes for the rest of this test."""
+        original_read_text = Path.read_text
+        original_read_bytes = Path.read_bytes
+        original_path_open = Path.open
+        original_builtin_open = builtins.open
+        original_io_open = io.open
+
+        def note(route: str, file: object) -> None:
+            candidate = _path_of_open_target(file)
+            if candidate is None:
+                return
+            self.reads.append((route, candidate.resolve().as_posix()))
+
+        def tracking_read_text(self_path: Path, *args: Any, **kwargs: Any) -> str:
+            note("read_text", self_path)
+            return original_read_text(self_path, *args, **kwargs)
+
+        def tracking_read_bytes(self_path: Path, *args: Any, **kwargs: Any) -> bytes:
+            note("read_bytes", self_path)
+            return original_read_bytes(self_path, *args, **kwargs)
+
+        def tracking_path_open(self_path: Path, *args: Any, **kwargs: Any) -> Any:
+            note("path_open", self_path)
+            return original_path_open(self_path, *args, **kwargs)
+
+        def tracking_builtin_open(file: object, *args: Any, **kwargs: Any) -> Any:
+            note("builtins_open", file)
+            return original_builtin_open(file, *args, **kwargs)
+
+        def tracking_io_open(file: object, *args: Any, **kwargs: Any) -> Any:
+            note("io_open", file)
+            return original_io_open(file, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", tracking_read_text)
+        monkeypatch.setattr(Path, "read_bytes", tracking_read_bytes)
+        monkeypatch.setattr(Path, "open", tracking_path_open)
+        monkeypatch.setattr(builtins, "open", tracking_builtin_open)
+        monkeypatch.setattr(io, "open", tracking_io_open)
+
+    def paths(self) -> list[str]:
+        """Return the resolved paths recorded so far, including repeated reads."""
+        return [seen for _route, seen in self.reads]
+
+    def routes_for(self, path: Path) -> set[str]:
+        """Return the route names that read ``path``."""
+        resolved = path.resolve().as_posix()
+        return {route for route, seen in self.reads if seen == resolved}
+
+
+def _path_of_open_target(file: object) -> Path | None:
+    if isinstance(file, Path):
+        return file
+    if isinstance(file, str):
+        return Path(file)
+    if isinstance(file, bytes):
+        return Path(os.fsdecode(file))
+    return None
+
+
+_REFUSED_SRC_SCAN_MESSAGE = (
+    "refused src file: the scan cannot prove that this file names no candidate id"
+)
+
+
 def _candidate_id_hits(root: Path) -> list[str]:
+    refused = _refused_src_paths(root)
+    if refused:
+        raise AssertionError(f"{_REFUSED_SRC_SCAN_MESSAGE}: {', '.join(refused)}")
     hits: list[str] = []
     src = root / "src"
     allowed = {(src / "idis" / "providers" / "anthropic_capabilities.py").resolve()}
@@ -740,6 +862,22 @@ def _environment_templates(root: Path) -> list[Path]:
 def _is_environment_template_name(name: str) -> bool:
     folded = name.casefold()
     return ".env" in folded and folded.endswith(_ENV_TEMPLATE_ENDINGS)
+
+
+def _refused_src_paths(root: Path) -> list[str]:
+    """Return src files the gate refuses, relative to ``root``.
+
+    A refused src file cannot be proved free of a candidate id, so the scan
+    names it and fails. Files outside ``src`` are not in this list.
+    """
+    src = root / "src"
+    if not src.is_dir():
+        return []
+    refused: list[str] = []
+    for path in src.rglob("*"):
+        if path.is_file() and not _may_open(path):
+            refused.append(path.relative_to(root).as_posix())
+    return sorted(refused)
 
 
 def _may_open(path: Path) -> bool:

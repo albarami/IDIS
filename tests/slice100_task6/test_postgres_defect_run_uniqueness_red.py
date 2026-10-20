@@ -27,6 +27,14 @@ from tests.slice100_task2b._support import (
     migrate,
     set_tenant_context,
 )
+from tests.slice100_task6._support import (
+    RUN_CONTRACT_COLUMN_SQL,
+    RUN_CONTRACT_VALUE_SQL,
+    STEP_CONTRACT_COLUMN_SQL,
+    TASK6_SCHEMA_HEAD,
+    legacy_run_contract_params,
+    set_seed_tenant,
+)
 from tests.slice100_task6.test_postgres_0037_red import (
     CANONICAL_FACTUAL_OUTPUT,
     CLAIM_CANONICAL_KEY_SHA256,
@@ -118,7 +126,7 @@ SECOND_LOCATOR_SET_SHA256 = hashlib.sha256(
 
 
 def _prepare_base_graph(database: DisposablePostgres, *, include_links: bool) -> None:
-    migrate(database.admin_engine, "0037")
+    migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
     grant_application_access(database)
     _seed_task6_dependencies(database)
     _insert_task6_graph(database, include_links=include_links)
@@ -343,6 +351,7 @@ def _defect_link_count(database: DisposablePostgres, run_id: str = RUN_ID) -> in
 
 def _insert_second_run_with_same_canonical_defect(database: DisposablePostgres) -> None:
     with database.admin_engine.begin() as connection:
+        set_seed_tenant(connection, TENANT_A)
         connection.execute(
             text(
                 """
@@ -367,21 +376,25 @@ def _insert_second_run_with_same_canonical_defect(database: DisposablePostgres) 
         )
         connection.execute(
             text(
-                """
+                f"""
                 INSERT INTO runs (
                     run_id, tenant_id, deal_id, mode, status,
                     lease_owner_id, lease_fencing_token,
-                    lease_expires_at, last_heartbeat_at
+                    lease_expires_at, last_heartbeat_at,
+                    {RUN_CONTRACT_COLUMN_SQL}
                 ) VALUES (
                     CAST(:run_id AS uuid), CAST(:tenant_id AS uuid),
                     CAST(:deal_id AS uuid), 'FULL', 'RUNNING',
                     CAST(:lease_owner_id AS uuid), 7,
-                    now() + interval '1 hour', now()
+                    now() + interval '1 hour', now(),
+                    {RUN_CONTRACT_VALUE_SQL}
                 );
                 INSERT INTO run_steps (
-                    step_id, tenant_id, run_id, step_name, step_order, status
+                    step_id, tenant_id, run_id, step_name, step_order, status,
+                    {STEP_CONTRACT_COLUMN_SQL}
                 ) SELECT CAST(:step_id AS uuid), tenant_id, CAST(:run_id AS uuid),
-                         step_name, step_order, 'RUNNING'
+                         step_name, step_order, 'RUNNING',
+                         {STEP_CONTRACT_COLUMN_SQL}
                   FROM run_steps
                  WHERE tenant_id = CAST(:tenant_id AS uuid)
                    AND run_id = CAST(:source_run_id AS uuid)
@@ -435,6 +448,7 @@ def _insert_second_run_with_same_canonical_defect(database: DisposablePostgres) 
                 "source_selection_id": SELECTION_ID,
                 "coverage_record_id": SECOND_RUN_COVERAGE_ID,
                 "source_coverage_record_id": COVERAGE_ID,
+                **legacy_run_contract_params(mode="FULL"),
             },
         )
 

@@ -50,6 +50,18 @@ from tests.slice100_task2b._support import (
     migrate,
 )
 from tests.slice100_task5.test_durable_selection_coverage_red import _registry
+from tests.slice100_task6._support import (
+    RUN_CONTRACT_COLUMN_SQL,
+    RUN_CONTRACT_VALUE_SQL,
+    SOURCE_BINDING_COLUMN_SQL,
+    SOURCE_BINDING_VALUE_SQL,
+    TASK6_SCHEMA_HEAD,
+    bind_frozen_run_source,
+    corrupt_durable_rows_out_of_band,
+    insert_list_suffix,
+    set_seed_tenant,
+    task6_head_seed_params,
+)
 
 TENANT_ID = "11111111-1111-4111-8111-111111111111"
 DEAL_ID = "22222222-2222-4222-8222-222222222222"
@@ -65,6 +77,12 @@ EXACT_QUESTION = (
 )
 EXACT_SOURCE = " \tFictional admitted source — café.\r\n\r\nSecond line Ω. \r\n"
 SECOND_EXACT_SOURCE = "Fictional admitted source on page two."
+
+
+def _frozen_document_rows() -> list[dict[str, str]]:
+    """Return the document id stored on the frozen run source."""
+
+    return [{"document_id": DOCUMENT_ID}]
 
 
 class _UnitOfWork:
@@ -116,7 +134,13 @@ def _seed_real_durable_plan(
     fdd = _financial_registry_with_physical_workbook_trace()
     source_hash = hashlib.sha256(EXACT_SOURCE.encode("utf-8")).hexdigest()
     second_source_hash = hashlib.sha256(SECOND_EXACT_SOURCE.encode("utf-8")).hexdigest()
+    binding_columns = insert_list_suffix(SOURCE_BINDING_COLUMN_SQL, required=True)
+    binding_values = insert_list_suffix(SOURCE_BINDING_VALUE_SQL, required=True)
+    run_columns = insert_list_suffix(RUN_CONTRACT_COLUMN_SQL, required=True)
+    run_values = insert_list_suffix(RUN_CONTRACT_VALUE_SQL, required=True)
+    head_params = task6_head_seed_params(mode="FULL")
     with database.admin_engine.begin() as connection:
+        set_seed_tenant(connection, TENANT_ID)
         connection.execute(
             text(
                 "INSERT INTO tenants (tenant_id,name) VALUES "
@@ -126,31 +150,31 @@ def _seed_real_durable_plan(
         )
         connection.execute(
             text(
-                """
+                f"""
                 INSERT INTO deals (deal_id,tenant_id,name,created_at)
                 VALUES (CAST(:deal AS uuid),CAST(:tenant AS uuid),'Fictional deal',now());
-                INSERT INTO runs (run_id,tenant_id,deal_id,mode,status,created_at)
+                INSERT INTO runs (run_id,tenant_id,deal_id,mode,status,created_at{run_columns})
                 VALUES (CAST(:run AS uuid),CAST(:tenant AS uuid),CAST(:deal AS uuid),
-                        'FULL','QUEUED',now());
+                        'FULL','QUEUED',now(){run_values});
                 INSERT INTO document_artifacts (
-                    doc_id,tenant_id,deal_id,doc_type,title,source_system,version_id,sha256
+                    doc_id,tenant_id,deal_id,doc_type,title,source_system,version_id,sha256{binding_columns}
                 ) VALUES (
                     CAST(:artifact AS uuid),CAST(:tenant AS uuid),CAST(:deal AS uuid),
-                    'DATA_ROOM_FILE','Fictional','fixture','v1',:source_hash
+                    'DATA_ROOM_FILE','Fictional','fixture','v1',:source_hash{binding_values}
                 );
                 INSERT INTO documents (
-                    document_id,tenant_id,deal_id,doc_id,doc_type,parse_status
+                    document_id,tenant_id,deal_id,doc_id,doc_type,parse_status{binding_columns}
                 ) VALUES (
                     CAST(:document AS uuid),CAST(:tenant AS uuid),CAST(:deal AS uuid),
-                    CAST(:artifact AS uuid),'PDF','PARSED'
+                    CAST(:artifact AS uuid),'PDF','PARSED'{binding_values}
                 );
                 INSERT INTO document_spans (
                     span_id,tenant_id,deal_id,document_id,span_type,
-                    locator,text_excerpt,content_hash
+                    locator,text_excerpt,content_hash{binding_columns}
                 ) VALUES (
                     CAST(:span AS uuid),CAST(:tenant AS uuid),CAST(:deal AS uuid),
                     CAST(:document AS uuid),'PAGE_TEXT',
-                    jsonb_build_object('page',1),:source_text,:source_hash
+                    jsonb_build_object('page',1,'line',1),:source_text,:source_hash{binding_values}
                 )
                 """
             ),
@@ -163,19 +187,20 @@ def _seed_real_durable_plan(
                 "span": SPAN_ID,
                 "source_text": EXACT_SOURCE,
                 "source_hash": source_hash,
+                **head_params,
             },
         )
         if include_second_span:
             connection.execute(
                 text(
-                    """
+                    f"""
                     INSERT INTO document_spans (
                         span_id,tenant_id,deal_id,document_id,span_type,
-                        locator,text_excerpt,content_hash
+                        locator,text_excerpt,content_hash{binding_columns}
                     ) VALUES (
                         CAST(:span AS uuid),CAST(:tenant AS uuid),CAST(:deal AS uuid),
                         CAST(:document AS uuid),'PAGE_TEXT',
-                        jsonb_build_object('page',2),:source_text,:source_hash
+                        jsonb_build_object('page',2,'line',1),:source_text,:source_hash{binding_values}
                     )
                     """
                 ),
@@ -186,6 +211,7 @@ def _seed_real_durable_plan(
                     "span": SECOND_SPAN_ID,
                     "source_text": SECOND_EXACT_SOURCE,
                     "source_hash": second_source_hash,
+                    **head_params,
                 },
             )
 
@@ -249,7 +275,7 @@ def _seed_real_durable_plan(
         span = SourceSpanReference(
             document_id=DOCUMENT_ID,
             span_id=SPAN_ID,
-            locator={"page": 1},
+            locator={"page": 1, "line": 1},
             span_type="PAGE_TEXT",
             content_hash=source_hash,
             text_excerpt=EXACT_SOURCE,
@@ -260,7 +286,7 @@ def _seed_real_durable_plan(
                 SourceSpanReference(
                     document_id=DOCUMENT_ID,
                     span_id=SECOND_SPAN_ID,
-                    locator={"page": 2},
+                    locator={"page": 2, "line": 1},
                     span_type="PAGE_TEXT",
                     content_hash=second_source_hash,
                     text_excerpt=SECOND_EXACT_SOURCE,
@@ -300,6 +326,13 @@ def _seed_real_durable_plan(
                     validation_requirements=list(question.validation_requirements),
                 )
             )
+        bind_frozen_run_source(
+            connection,
+            tenant_id=TENANT_ID,
+            deal_id=DEAL_ID,
+            run_id=RUN_ID,
+            document_ids=(DOCUMENT_ID,),
+        )
         PostgresMethodologyExtractionRepository(connection, TENANT_ID).persist_planned_tasks(
             deal_id=DEAL_ID,
             run_id=RUN_ID,
@@ -339,7 +372,7 @@ def _checked_in_prompt() -> MethodologyPromptArtifact:
 
 def test_durable_repository_boundary_and_provider_wire_preserve_frozen_question_bytes() -> None:
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         tasks, exact_question_id = _seed_real_durable_plan(database)
         assert all(not hasattr(task, "required_calculations") for task in tasks)
@@ -354,7 +387,7 @@ def test_durable_repository_boundary_and_provider_wire_preserve_frozen_question_
             deal_id=DEAL_ID,
             run_id=RUN_ID,
             tasks=tasks,
-            documents=[],
+            documents=_frozen_document_rows(),
         )
         execution_input = next(
             item for item in inputs if item.request.methodology_question_id == exact_question_id
@@ -385,18 +418,17 @@ def test_durable_repository_boundary_and_provider_wire_preserve_frozen_question_
 
 def test_durable_source_text_hash_mismatch_fails_before_hermetic_transport() -> None:
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         tasks, _exact_question_id = _seed_real_durable_plan(database)
         with database.admin_engine.begin() as connection:
-            connection.execute(
-                text(
-                    """
-                    UPDATE document_spans
-                    SET content_hash = :mismatched_hash
-                    WHERE span_id = CAST(:span_id AS uuid)
-                    """
-                ),
+            corrupt_durable_rows_out_of_band(
+                connection,
+                """
+                UPDATE document_spans
+                SET content_hash = :mismatched_hash
+                WHERE span_id = CAST(:span_id AS uuid)
+                """,
                 {"mismatched_hash": "9" * 64, "span_id": SPAN_ID},
             )
 
@@ -420,7 +452,7 @@ def test_durable_source_text_hash_mismatch_fails_before_hermetic_transport() -> 
                 deal_id=DEAL_ID,
                 run_id=RUN_ID,
                 tasks=tasks,
-                documents=[],
+                documents=_frozen_document_rows(),
             )
             extractor.extract(inputs[0].request)
 
@@ -432,30 +464,28 @@ def test_live_source_text_or_locator_drift_uses_source_locator_code_before_trans
     mutation: str,
 ) -> None:
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         tasks, _exact_question_id = _seed_real_durable_plan(database)
         with database.admin_engine.begin() as connection:
             if mutation == "text_excerpt":
-                connection.execute(
-                    text(
-                        """
-                        UPDATE document_spans
-                        SET text_excerpt = :drifted_text
-                        WHERE span_id = CAST(:span_id AS uuid)
-                        """
-                    ),
+                corrupt_durable_rows_out_of_band(
+                    connection,
+                    """
+                    UPDATE document_spans
+                    SET text_excerpt = :drifted_text
+                    WHERE span_id = CAST(:span_id AS uuid)
+                    """,
                     {"drifted_text": "Drifted fictional source", "span_id": SPAN_ID},
                 )
             else:
-                connection.execute(
-                    text(
-                        """
-                        UPDATE document_spans
-                        SET locator = jsonb_build_object('page', 2)
-                        WHERE span_id = CAST(:span_id AS uuid)
-                        """
-                    ),
+                corrupt_durable_rows_out_of_band(
+                    connection,
+                    """
+                    UPDATE document_spans
+                    SET locator = jsonb_build_object('page', 2)
+                    WHERE span_id = CAST(:span_id AS uuid)
+                    """,
                     {"span_id": SPAN_ID},
                 )
 
@@ -479,7 +509,7 @@ def test_live_source_text_or_locator_drift_uses_source_locator_code_before_trans
                 deal_id=DEAL_ID,
                 run_id=RUN_ID,
                 tasks=tasks,
-                documents=[],
+                documents=_frozen_document_rows(),
             )
             extractor.extract(inputs[0].request)
 
@@ -488,7 +518,7 @@ def test_live_source_text_or_locator_drift_uses_source_locator_code_before_trans
 
 def test_all_durable_span_rows_are_validated_before_any_live_source_identity() -> None:
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         tasks, _exact_question_id = _seed_real_durable_plan(
             database,
@@ -516,26 +546,24 @@ def test_all_durable_span_rows_are_validated_before_any_live_source_identity() -
                 ),
                 {"tenant_id": TENANT_ID, "deal_id": DEAL_ID, "run_id": RUN_ID},
             ).scalar_one()
-            connection.execute(text("SET LOCAL session_replication_role = replica"))
-            connection.execute(
-                text(
-                    """
-                    UPDATE document_spans
-                    SET content_hash = :mismatched_hash
-                    WHERE span_id = CAST(:span_id AS uuid)
-                    """
-                ),
+            corrupt_durable_rows_out_of_band(
+                connection,
+                """
+                UPDATE document_spans
+                SET content_hash = :mismatched_hash
+                WHERE span_id = CAST(:span_id AS uuid)
+                """,
                 {"mismatched_hash": "9" * 64, "span_id": SPAN_ID},
             )
-            connection.execute(
-                text(
-                    """
-                    UPDATE methodology_extraction_task_spans
-                    SET span_ordinal = 3
-                    WHERE task_span_record_id = CAST(:task_span_record_id AS uuid)
-                    """
-                ),
+            corrupt_durable_rows_out_of_band(
+                connection,
+                """
+                UPDATE methodology_extraction_task_spans
+                SET span_ordinal = 3
+                WHERE task_span_record_id = CAST(:task_span_record_id AS uuid)
+                """,
                 {"task_span_record_id": str(later_span_record_id)},
+                table="methodology_extraction_task_spans",
             )
 
         boundary = object.__new__(PostgresMethodologyExecutionBoundary)
@@ -558,7 +586,7 @@ def test_all_durable_span_rows_are_validated_before_any_live_source_identity() -
                 deal_id=DEAL_ID,
                 run_id=RUN_ID,
                 tasks=tasks,
-                documents=[],
+                documents=_frozen_document_rows(),
             )
             extractor.extract(inputs[0].request)
 

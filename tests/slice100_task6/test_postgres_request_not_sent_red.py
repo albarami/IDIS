@@ -29,6 +29,7 @@ from tests.slice100_task2b._support import (
     grant_application_access,
     migrate,
 )
+from tests.slice100_task6._support import TASK6_SCHEMA_HEAD
 from tests.slice100_task6.test_postgres_0037_red import (
     DEAL_ID,
     POLICY_HASH,
@@ -132,7 +133,7 @@ def test_request_not_sent_refunds_and_second_run_does_not_dispatch() -> None:
     )
 
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         _seed_task6_dependencies(database)
         _insert_policy(

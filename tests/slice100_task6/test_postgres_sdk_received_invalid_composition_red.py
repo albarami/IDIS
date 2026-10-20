@@ -47,7 +47,7 @@ from tests.slice100_task2b._support import (
     grant_application_access,
     migrate,
 )
-from tests.slice100_task6._support import CDD_SOURCE_SHA256
+from tests.slice100_task6._support import CDD_SOURCE_SHA256, TASK6_SCHEMA_HEAD
 from tests.slice100_task6.test_postgres_0037_red import (
     DEAL_ID,
     DOCUMENT_ID,
@@ -353,7 +353,7 @@ def test_postgres_admission_rejects_injected_sdk_before_client_call_and_retains_
     )
 
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         _seed_task6_dependencies(database)
         _insert_policy(database.admin_engine, tenant_id=TENANT_A, policy_hash=POLICY_HASH)

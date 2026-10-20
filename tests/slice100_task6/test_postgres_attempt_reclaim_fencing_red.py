@@ -13,6 +13,7 @@ from tests.slice100_task2b._support import (
     migrate,
     set_tenant_context,
 )
+from tests.slice100_task6._support import TASK6_SCHEMA_HEAD
 from tests.slice100_task6.test_postgres_0037_red import (
     ATTEMPT_ID,
     DEAL_ID,
@@ -31,7 +32,7 @@ MUTATED_LEASE_OWNER_ID = "68686868-6868-4868-8868-686868686868"
 
 
 def _prepare_started_attempt(database: DisposablePostgres) -> None:
-    migrate(database.admin_engine, "0037")
+    migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
     grant_application_access(database)
     _seed_task6_dependencies(database)
     _insert_task6_graph(database, started_attempt_only=True)

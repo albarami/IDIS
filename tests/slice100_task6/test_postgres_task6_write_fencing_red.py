@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from typing import Any
 
 import pytest
 from sqlalchemy import text
@@ -34,6 +35,17 @@ from tests.slice100_task2b._support import (
     disposable_postgres,
     grant_application_access,
     migrate,
+)
+from tests.slice100_task6._support import (
+    SOURCE_BINDING_COLUMN_SQL,
+    SOURCE_BINDING_VALUE_SQL,
+    TASK6_SCHEMA_HEAD,
+    bind_frozen_run_source,
+    insert_bound_extra_span,
+    insert_list_suffix,
+    schema_head_installed,
+    set_seed_tenant,
+    unbound_source_binding_params,
 )
 from tests.slice100_task6.test_coverage_projections_postgres_red import (
     DEAL_ID,
@@ -76,22 +88,29 @@ ORDERING_SPAN_SHA256 = hashlib.sha256(ORDERING_SPAN_TEXT.encode("utf-8")).hexdig
 
 def _prepare_planning_database(
     database: DisposablePostgres,
+    *,
+    schema_revision: str = TASK6_SCHEMA_HEAD,
 ) -> tuple[str, tuple[object, ...]]:
-    migrate(database.admin_engine, "0037")
+    migrate(database.admin_engine, schema_revision)
     grant_application_access(database)
     selection_id = _seed_selected_coverage(database)
+    at_head = schema_revision == TASK6_SCHEMA_HEAD
+    binding_columns = insert_list_suffix(SOURCE_BINDING_COLUMN_SQL, required=at_head)
+    binding_values = insert_list_suffix(SOURCE_BINDING_VALUE_SQL, required=at_head)
+    binding_params = unbound_source_binding_params() if at_head else {}
     with database.admin_engine.begin() as connection:
+        set_seed_tenant(connection, TENANT_ID)
         connection.execute(
             text(
-                """
+                f"""
                 INSERT INTO document_artifacts (
                     doc_id, tenant_id, deal_id, doc_type, title,
-                    source_system, version_id, sha256
+                    source_system, version_id, sha256{binding_columns}
                 ) VALUES
                 (gen_random_uuid(), CAST(:tenant_id AS uuid), CAST(:deal_id AS uuid),
-                 'DATA_ROOM_FILE', 'Fictional CDD', 'fixture', 'v1', :hash_a),
+                 'DATA_ROOM_FILE', 'Fictional CDD', 'fixture', 'v1', :hash_a{binding_values}),
                 (gen_random_uuid(), CAST(:tenant_id AS uuid), CAST(:deal_id AS uuid),
-                 'DATA_ROOM_FILE', 'Fictional FDD', 'fixture', 'v1', :hash_b)
+                 'DATA_ROOM_FILE', 'Fictional FDD', 'fixture', 'v1', :hash_b{binding_values})
                 RETURNING doc_id
                 """
             ),
@@ -100,6 +119,7 @@ def _prepare_planning_database(
                 "deal_id": DEAL_ID,
                 "hash_a": HASH_A,
                 "hash_b": HASH_B,
+                **binding_params,
             },
         ).fetchall()
         artifact_rows = connection.execute(
@@ -119,25 +139,28 @@ def _prepare_planning_database(
         fdd_artifact_id = str(artifact_rows[1].doc_id)
         connection.execute(
             text(
-                """
+                f"""
                 INSERT INTO documents (
-                    document_id, tenant_id, deal_id, doc_id, doc_type, parse_status
+                    document_id, tenant_id, deal_id, doc_id, doc_type, parse_status{binding_columns}
                 ) VALUES
                 (CAST(:cdd_document AS uuid), CAST(:tenant_id AS uuid),
-                 CAST(:deal_id AS uuid), CAST(:cdd_artifact AS uuid), 'PDF', 'PARSED'),
+                 CAST(:deal_id AS uuid), CAST(:cdd_artifact AS uuid),
+                 'PDF', 'PARSED'{binding_values}),
                 (CAST(:fdd_document AS uuid), CAST(:tenant_id AS uuid),
-                 CAST(:deal_id AS uuid), CAST(:fdd_artifact AS uuid), 'XLSX', 'PARSED');
+                 CAST(:deal_id AS uuid), CAST(:fdd_artifact AS uuid),
+                 'XLSX', 'PARSED'{binding_values});
                 INSERT INTO document_spans (
                     span_id, tenant_id, deal_id, document_id, span_type,
-                    locator, text_excerpt, content_hash
+                    locator, text_excerpt, content_hash{binding_columns}
                 ) VALUES
                 (CAST(:cdd_span AS uuid), CAST(:tenant_id AS uuid),
                  CAST(:deal_id AS uuid), CAST(:cdd_document AS uuid), 'PAGE_TEXT',
-                 jsonb_build_object('page', 1), :cdd_text, :cdd_source_sha256),
+                 jsonb_build_object('page', 1, 'line', 1),
+                 :cdd_text, :cdd_source_sha256{binding_values}),
                 (CAST(:fdd_span AS uuid), CAST(:tenant_id AS uuid),
                  CAST(:deal_id AS uuid), CAST(:fdd_document AS uuid), 'CELL',
-                 jsonb_build_object('sheet', 'P&L', 'cell', 'A1'),
-                 :fdd_text, :fdd_source_sha256)
+                 jsonb_build_object('sheet', 'P&L', 'cell', 'A1', 'row', 1, 'col', 1),
+                 :fdd_text, :fdd_source_sha256{binding_values})
                 """
             ),
             {
@@ -153,6 +176,7 @@ def _prepare_planning_database(
                 "fdd_text": FDD_SOURCE_TEXT,
                 "cdd_source_sha256": CDD_SOURCE_SHA256,
                 "fdd_source_sha256": FDD_SOURCE_SHA256,
+                **binding_params,
             },
         )
 
@@ -187,7 +211,11 @@ def _prepare_planning_database(
                 document_id=document_id,
                 span_id=CDD_SPAN_ID if is_cdd else FDD_SPAN_ID,
                 evidence_tags=[],
-                locator={"page": 1} if is_cdd else {"sheet": "P&L", "cell": "A1"},
+                locator=(
+                    {"page": 1, "line": 1}
+                    if is_cdd
+                    else {"sheet": "P&L", "cell": "A1", "row": 1, "col": 1}
+                ),
                 span_type="PAGE_TEXT" if is_cdd else "CELL",
                 content_hash=CDD_SOURCE_SHA256 if is_cdd else FDD_SOURCE_SHA256,
                 text_excerpt=CDD_SOURCE_TEXT if is_cdd else FDD_SOURCE_TEXT,
@@ -271,12 +299,27 @@ def _task6_write_counts(database: DisposablePostgres) -> tuple[int, ...]:
         )
 
 
+def _bind_planned_documents(connection: Any) -> None:
+    """Freeze CDD and FDD once the last span exists. Skip below schema head."""
+
+    if not schema_head_installed(connection):
+        return
+    bind_frozen_run_source(
+        connection,
+        tenant_id=TENANT_ID,
+        deal_id=DEAL_ID,
+        run_id=RUN_ID,
+        document_ids=(CDD_DOCUMENT_ID, FDD_DOCUMENT_ID),
+    )
+
+
 def _persist_planned_graph(
     database: DisposablePostgres,
     selection_id: str,
     tasks: tuple[object, ...],
 ) -> None:
     with database.app_engine.begin() as connection:
+        _bind_planned_documents(connection)
         _staged_write(selection_id, tasks).persist(
             db_conn=connection,
             lease_owner_id=LEASE_OWNER_ID,
@@ -541,52 +584,62 @@ def _inject_planned_graph_corruption(
                 {"task_record_id": task_record_id},
             )
         elif corruption == "extra_span":
-            live = (
-                connection.execute(
-                    text(
-                        """
-                    SELECT tenant_id, deal_id, document_id, span_type,
-                           locator, text_excerpt, content_hash
-                    FROM document_spans
-                    WHERE document_id=CAST(:document_id AS uuid)
-                    ORDER BY span_id
-                    LIMIT 1
-                    """
-                    ),
-                    {"document_id": str(first["document_id"])},
-                )
-                .mappings()
-                .one()
+            connection.execute(text("SET LOCAL session_replication_role = origin"))
+            insert_bound_extra_span(
+                connection,
+                document_id=str(first["document_id"]),
+                span_id=EXTRA_SPAN_ID,
             )
             connection.execute(
                 text(
                     """
-                    INSERT INTO document_spans (
-                        span_id, tenant_id, deal_id, document_id, span_type,
-                        locator, text_excerpt, content_hash
-                    ) VALUES (
-                        CAST(:span_id AS uuid), :tenant_id, :deal_id, :document_id,
-                        :span_type, CAST(:locator AS jsonb), :text_excerpt, :content_hash
-                    );
+                    SELECT set_config(
+                               'idis.worker_lease_tenant_id', run.tenant_id::text, true
+                           ),
+                           set_config('idis.worker_lease_deal_id', run.deal_id::text, true),
+                           set_config('idis.worker_lease_run_id', run.run_id::text, true),
+                           set_config(
+                               'idis.worker_lease_owner_id', run.lease_owner_id::text, true
+                           ),
+                           set_config(
+                               'idis.worker_lease_fencing_token',
+                               run.lease_fencing_token::text,
+                               true
+                           )
+                    FROM methodology_extraction_tasks AS task
+                    JOIN runs AS run
+                      ON run.tenant_id = task.tenant_id
+                     AND run.run_id = task.run_id
+                    WHERE task.task_record_id = CAST(:task_record_id AS uuid)
+                    """
+                ),
+                {"task_record_id": task_record_id},
+            )
+            connection.execute(
+                text(
+                    """
                     INSERT INTO methodology_extraction_task_spans (
                         task_span_record_id, tenant_id, deal_id, run_id,
                         task_record_id, document_id, span_id, span_ordinal,
                         content_sha256, locator_sha256
                     )
-                    SELECT CAST(:task_span_record_id AS uuid), tenant_id, deal_id,
-                           run_id, task_record_id, CAST(:document_id AS uuid),
-                           CAST(:span_id AS uuid), 2, :content_hash,
+                    SELECT CAST(:task_span_record_id AS uuid), task.tenant_id,
+                           task.deal_id, task.run_id, task.task_record_id,
+                           span.document_id, span.span_id, 2, span.content_hash,
                            :locator_sha256
-                    FROM methodology_extraction_tasks
-                    WHERE task_record_id=CAST(:task_record_id AS uuid)
+                    FROM methodology_extraction_tasks AS task
+                    JOIN document_spans AS span
+                      ON span.tenant_id = task.tenant_id
+                     AND span.deal_id = task.deal_id
+                     AND span.document_id = task.document_id
+                     AND span.span_id = CAST(:span_id AS uuid)
+                    WHERE task.task_record_id = CAST(:task_record_id AS uuid)
                     """
                 ),
                 {
-                    **dict(live),
-                    "span_id": EXTRA_SPAN_ID,
                     "task_span_record_id": EXTRA_TASK_SPAN_RECORD_ID,
                     "task_record_id": task_record_id,
-                    "locator": json.dumps(live["locator"]),
+                    "span_id": EXTRA_SPAN_ID,
                     "locator_sha256": "7" * 64,
                 },
             )
@@ -752,7 +805,7 @@ _RAW_SPAN_INSERT = """
 @pytest.mark.parametrize("row_kind", ("task", "span"))
 def test_task_or_span_insert_without_validated_lease_context_fails(row_kind: str) -> None:
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         selection_id = _seed_selected_coverage(database)
         params = _raw_task_params(database, selection_id)
@@ -828,6 +881,7 @@ def test_valid_step6_staged_boundary_persists_complete_task_and_span_set() -> No
         assert _task6_write_counts(database) == (0,) * 9
 
         with database.app_engine.begin() as connection:
+            _bind_planned_documents(connection)
             _staged_write(selection_id, tasks).persist(
                 db_conn=connection,
                 lease_owner_id=LEASE_OWNER_ID,
@@ -1152,11 +1206,17 @@ def test_planned_task_payload_and_span_ordinals_share_one_canonical_order() -> N
         selection_id, raw_tasks = _prepare_planning_database(database)
         first = ExtractionTask.model_validate(raw_tasks[0])
         original = first.source_spans[0]
+        if original.span_type == "CELL":
+            extra_locator: dict[str, object] = {"sheet": "P&L", "cell": "B2", "row": 2, "col": 2}
+            extra_span_type = "CELL"
+        else:
+            extra_locator = {"page": 2, "line": 1}
+            extra_span_type = "PAGE_TEXT"
         second = SourceSpanReference(
             document_id=str(first.document_id),
             span_id=EXTRA_SPAN_ID,
-            locator={"page": 2},
-            span_type="PAGE_TEXT",
+            locator=extra_locator,
+            span_type=extra_span_type,
             content_hash=ORDERING_SPAN_SHA256,
             text_excerpt=ORDERING_SPAN_TEXT,
         )
@@ -1178,12 +1238,14 @@ def test_planned_task_payload_and_span_ordinals_share_one_canonical_order() -> N
                     """
                     INSERT INTO document_spans (
                         span_id, tenant_id, deal_id, document_id, span_type,
-                        locator, text_excerpt, content_hash
+                        locator, text_excerpt, content_hash,
+                        source_binding_state, source_lineage_object_id,
+                        source_corpus_receipt_id
                     ) VALUES (
                         CAST(:span_id AS uuid), CAST(:tenant_id AS uuid),
                         CAST(:deal_id AS uuid), CAST(:document_id AS uuid),
                         :span_type, CAST(:locator AS jsonb), :text_excerpt,
-                        :content_hash
+                        :content_hash, :source_binding_state, NULL, NULL
                     )
                     """
                 ),
@@ -1192,10 +1254,11 @@ def test_planned_task_payload_and_span_ordinals_share_one_canonical_order() -> N
                     "tenant_id": TENANT_ID,
                     "deal_id": DEAL_ID,
                     "document_id": first.document_id,
-                    "span_type": "PAGE_TEXT",
+                    "span_type": second.span_type,
                     "locator": json.dumps(second.locator),
                     "text_excerpt": ORDERING_SPAN_TEXT,
                     "content_hash": ORDERING_SPAN_SHA256,
+                    **unbound_source_binding_params(),
                 },
             )
 

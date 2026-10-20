@@ -6,7 +6,7 @@ import hashlib
 import json
 import uuid
 from collections import Counter
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -51,6 +51,15 @@ from tests.slice100_task2b._support import (
     disposable_postgres,
     grant_application_access,
     migrate,
+)
+from tests.slice100_task6._support import (
+    RUN_CONTRACT_COLUMN_SQL,
+    RUN_CONTRACT_VALUE_SQL,
+    TASK6_SCHEMA_HEAD,
+    bind_frozen_run_source,
+    corrupt_durable_rows_out_of_band,
+    set_seed_tenant,
+    task6_head_seed_params,
 )
 from tests.slice100_task8._artifact_oracle import requires_operator_workbook
 
@@ -326,9 +335,10 @@ def _seed_scope(database: DisposablePostgres, *, fdd_path: Path) -> _Scope:
     run_id = str(uuid.uuid4())
     lease_owner_id = str(uuid.uuid4())
     with database.admin_engine.begin() as connection:
+        set_seed_tenant(connection, tenant_id)
         connection.execute(
             text(
-                """
+                f"""
                 INSERT INTO tenants (tenant_id, name) VALUES
                     (CAST(:tenant_id AS uuid), 'Fictional Unit3 tenant'),
                     (CAST(:foreign_tenant_id AS uuid), 'Fictional foreign tenant');
@@ -338,10 +348,12 @@ def _seed_scope(database: DisposablePostgres, *, fdd_path: Path) -> _Scope:
                     'Fictional genuine composition deal', now()
                 );
                 INSERT INTO runs (
-                    run_id, tenant_id, deal_id, mode, status, started_at, created_at
+                    run_id, tenant_id, deal_id, mode, status, started_at, created_at,
+                    {RUN_CONTRACT_COLUMN_SQL}
                 ) VALUES (
                     CAST(:run_id AS uuid), CAST(:tenant_id AS uuid),
-                    CAST(:deal_id AS uuid), 'FULL', 'QUEUED', now(), now()
+                    CAST(:deal_id AS uuid), 'FULL', 'QUEUED', now(), now(),
+                    {RUN_CONTRACT_VALUE_SQL}
                 )
                 """
             ),
@@ -350,6 +362,7 @@ def _seed_scope(database: DisposablePostgres, *, fdd_path: Path) -> _Scope:
                 "foreign_tenant_id": foreign_tenant_id,
                 "deal_id": deal_id,
                 "run_id": run_id,
+                **task6_head_seed_params(mode="FULL"),
             },
         )
 
@@ -384,16 +397,21 @@ def _seed_scope(database: DisposablePostgres, *, fdd_path: Path) -> _Scope:
                     "parse_warning_codes": [],
                 },
             )
+            if fixture.document_type == "XLSX":
+                span_type = "CELL"
+                locator = {"sheet": "Fictional", "cell": "A1", "row": 1, "col": 1}
+            elif fixture.document_type == "DOCX":
+                span_type = "PARAGRAPH"
+                locator = {"paragraph": 0}
+            else:
+                span_type = "PAGE_TEXT"
+                locator = {"page": 1, "line": 1}
             documents.create_document_span(
                 span_id=fixture.span_id,
                 deal_id=deal_id,
                 document_id=fixture.document_id,
-                span_type="CELL" if fixture.document_type == "XLSX" else "PAGE_TEXT",
-                locator=(
-                    {"sheet": "Fictional", "cell": "A1"}
-                    if fixture.document_type == "XLSX"
-                    else {"page": 1}
-                ),
+                span_type=span_type,
+                locator=locator,
                 text_excerpt=fixture.text,
                 content_hash=content_sha256,
             )
@@ -695,6 +713,52 @@ def _graph_digest(database: DisposablePostgres, scope: _Scope) -> str:
     return _sha256_json(snapshot)
 
 
+def _execute_corruption_statement(
+    connection: Any,
+    statement: str,
+    params: Mapping[str, Any],
+    *,
+    suspend_triggers: bool,
+) -> Any:
+    """Run one corruption statement without leaving a pending trigger event.
+
+    Disabling one named trigger and re-enabling it after the write fails at
+    0038: a deferred exact-one constraint trigger on the same table queues an event,
+    and ``ALTER TABLE ... ENABLE TRIGGER`` then raises ``ObjectInUse``.
+    ``SET LOCAL session_replication_role = replica`` suppresses every trigger
+    for the statement, including that deferred census, and is set back to
+    ``origin`` before the transaction commits. The following production call
+    uses a new transaction, so its triggers fire.
+    """
+
+    if suspend_triggers:
+        connection.execute(text("SET LOCAL session_replication_role = replica"))
+    result = connection.execute(text(statement), params)
+    if suspend_triggers:
+        connection.execute(text("SET LOCAL session_replication_role = origin"))
+    return result
+
+
+def _set_corruption_tenant(connection: Any, params: Mapping[str, Any]) -> None:
+    """Give the deferred receipt guard the tenant that owns this mutation.
+
+    Admin SQL sees the row without a tenant setting. The definer-owned receipt
+    trigger does not, so the setting is applied before the write and again
+    before the restore.
+    """
+
+    if "run_id" in params:
+        statement = "SELECT tenant_id::text FROM runs WHERE run_id = CAST(:run_id AS uuid)"
+    elif "step_id" in params:
+        statement = "SELECT tenant_id::text FROM run_steps WHERE step_id = CAST(:step_id AS uuid)"
+    elif "deal_id" in params:
+        statement = "SELECT tenant_id::text FROM deals WHERE deal_id = CAST(:deal_id AS uuid)"
+    else:
+        return
+    tenant_id = connection.execute(text(statement), params).scalar_one()
+    set_seed_tenant(connection, str(tenant_id))
+
+
 @contextmanager
 def _committed_corruption(
     database: DisposablePostgres,
@@ -707,35 +771,28 @@ def _committed_corruption(
     params: dict[str, Any],
 ) -> Iterator[None]:
     old: Any
+    suspend_triggers = trigger_name is not None and trigger_table is not None
     with database.admin_engine.begin() as connection:
+        _set_corruption_tenant(connection, params)
         old = connection.execute(text(select_sql), params).scalar_one()
-        if trigger_name is not None and trigger_table is not None:
-            connection.exec_driver_sql(
-                f"ALTER TABLE {trigger_table} DISABLE TRIGGER {trigger_name}"
-            )
-        try:
-            connection.execute(text(mutate_sql), params)
-        finally:
-            if trigger_name is not None and trigger_table is not None:
-                connection.exec_driver_sql(
-                    f"ALTER TABLE {trigger_table} ENABLE TRIGGER {trigger_name}"
-                )
+        _execute_corruption_statement(
+            connection,
+            mutate_sql,
+            params,
+            suspend_triggers=suspend_triggers,
+        )
     try:
         yield
     finally:
         restore_value = json.dumps(old) if isinstance(old, (dict, list)) else old
         with database.admin_engine.begin() as connection:
-            if trigger_name is not None and trigger_table is not None:
-                connection.exec_driver_sql(
-                    f"ALTER TABLE {trigger_table} DISABLE TRIGGER {trigger_name}"
-                )
-            try:
-                connection.execute(text(restore_sql), {**params, "old": restore_value})
-            finally:
-                if trigger_name is not None and trigger_table is not None:
-                    connection.exec_driver_sql(
-                        f"ALTER TABLE {trigger_table} ENABLE TRIGGER {trigger_name}"
-                    )
+            _set_corruption_tenant(connection, params)
+            _execute_corruption_statement(
+                connection,
+                restore_sql,
+                {**params, "old": restore_value},
+                suspend_triggers=suspend_triggers,
+            )
 
 
 def _assert_restart_fails_without_repair(
@@ -756,7 +813,7 @@ def test_graph_digest_covers_every_restart_input_surface(
     """A full-row mutation on any restart input must change the graph digest."""
     fdd_path = _operator_fdd_path(record_property)
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         scope = _seed_scope(database, fdd_path=fdd_path)
         baseline_digest = _graph_digest(database, scope)
@@ -872,9 +929,17 @@ def test_genuine_selected_pair_composes_112_tasks_and_restarts_from_recomputed_s
     )
 
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         scope = _seed_scope(database, fdd_path=fdd_path)
+        with database.app_engine.begin() as connection:
+            bind_frozen_run_source(
+                connection,
+                tenant_id=scope.tenant_id,
+                deal_id=scope.deal_id,
+                run_id=scope.run_id,
+                document_ids=tuple(item.document_id for item in _document_fixtures()),
+            )
         callbacks = build_postgres_methodology_extraction_callbacks(
             connection_factory=database.app_engine.begin,
             tenant_id=scope.tenant_id,
@@ -1255,20 +1320,26 @@ def test_genuine_selected_pair_composes_112_tasks_and_restarts_from_recomputed_s
                 if item["cdd_category"] == "business_plan_assumptions"
             )
             financial["secondary_cdd_categories"].remove("management_team")
-            connection.execute(
-                text(
+            corrupt_durable_rows_out_of_band(
+                connection,
+                (
                     "UPDATE run_steps SET result_summary=CAST(:summary AS jsonb) "
                     "WHERE step_id=CAST(:step_id AS uuid)"
                 ),
-                {"step_id": scope.preflight_step_id, "summary": json.dumps(preflight_summary)},
+                {
+                    "step_id": scope.preflight_step_id,
+                    "summary": json.dumps(preflight_summary),
+                },
+                table="run_steps",
             )
         try:
             assert _graph_digest(database, scope) != baseline_digest
             _assert_restart_fails_without_repair(database, scope, rehydrate)
         finally:
             with database.admin_engine.begin() as connection:
-                connection.execute(
-                    text(
+                corrupt_durable_rows_out_of_band(
+                    connection,
+                    (
                         "UPDATE run_steps SET result_summary=CAST(:summary AS jsonb) "
                         "WHERE step_id=CAST(:step_id AS uuid)"
                     ),
@@ -1276,6 +1347,7 @@ def test_genuine_selected_pair_composes_112_tasks_and_restarts_from_recomputed_s
                         "step_id": scope.preflight_step_id,
                         "summary": json.dumps(original_preflight_summary),
                     },
+                    table="run_steps",
                 )
         assert _graph_digest(database, scope) == baseline_digest
 
@@ -1288,8 +1360,9 @@ def test_genuine_selected_pair_composes_112_tasks_and_restarts_from_recomputed_s
             corrupted_planning_summary["task_ids"] = list(
                 reversed(corrupted_planning_summary["task_ids"])
             )
-            connection.execute(
-                text(
+            corrupt_durable_rows_out_of_band(
+                connection,
+                (
                     "UPDATE run_steps SET result_summary=CAST(:summary AS jsonb) "
                     "WHERE step_id=CAST(:step_id AS uuid)"
                 ),
@@ -1297,14 +1370,16 @@ def test_genuine_selected_pair_composes_112_tasks_and_restarts_from_recomputed_s
                     "step_id": scope.planning_step_id,
                     "summary": json.dumps(corrupted_planning_summary),
                 },
+                table="run_steps",
             )
         try:
             assert _graph_digest(database, scope) != baseline_digest
             _assert_restart_fails_without_repair(database, scope, rehydrate)
         finally:
             with database.admin_engine.begin() as connection:
-                connection.execute(
-                    text(
+                corrupt_durable_rows_out_of_band(
+                    connection,
+                    (
                         "UPDATE run_steps SET result_summary=CAST(:summary AS jsonb) "
                         "WHERE step_id=CAST(:step_id AS uuid)"
                     ),
@@ -1312,6 +1387,7 @@ def test_genuine_selected_pair_composes_112_tasks_and_restarts_from_recomputed_s
                         "step_id": scope.planning_step_id,
                         "summary": json.dumps(original_planning_summary),
                     },
+                    table="run_steps",
                 )
         assert _graph_digest(database, scope) == baseline_digest
 

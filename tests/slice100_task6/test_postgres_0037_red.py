@@ -29,6 +29,21 @@ from tests.slice100_task2b._support import (
     tenant_catalog_snapshot,
     tenant_table_inventory,
 )
+from tests.slice100_task6._support import (
+    RUN_CONTRACT_COLUMN_SQL,
+    RUN_CONTRACT_VALUE_SQL,
+    SOURCE_BINDING_COLUMN_SQL,
+    SOURCE_BINDING_VALUE_SQL,
+    STEP_CONTRACT_COLUMN_SQL,
+    STEP_CONTRACT_VALUE_SQL,
+    TASK6_SCHEMA_HEAD,
+    bind_frozen_run_source,
+    insert_list_suffix,
+    schema_head_installed,
+    set_seed_tenant,
+    task6_head_seed_params,
+    unbound_source_binding_params,
+)
 from tests.slice100_task6.test_migration_0037_red import (
     EXPECTED_TENANT_TABLES,
     TASK6_TABLES,
@@ -63,8 +78,8 @@ SECOND_SOURCE_TEXT = "Second fictional span"
 SECOND_SOURCE_CONTENT_SHA256 = hashlib.sha256(SECOND_SOURCE_TEXT.encode("utf-8")).hexdigest()
 OTHER_SOURCE_TEXT = "Other"
 OTHER_SOURCE_CONTENT_SHA256 = hashlib.sha256(OTHER_SOURCE_TEXT.encode("utf-8")).hexdigest()
-LOCATOR_HASH = hashlib.sha256(b'{"page":1}').hexdigest()
-SECOND_LOCATOR_HASH = hashlib.sha256(b'{"page":2}').hexdigest()
+LOCATOR_HASH = hashlib.sha256(b'{"line":1,"page":1}').hexdigest()
+SECOND_LOCATOR_HASH = hashlib.sha256(b'{"line":1,"page":2}').hexdigest()
 SECOND_COVERAGE_ID = "mc_" + "b" * 24
 SECOND_QUESTION_RECORD_ID = "28282828-2828-4282-8282-282828282828"
 
@@ -170,6 +185,16 @@ def _seed_task6_dependencies(database: DisposablePostgres) -> None:
         "artifact_id": "18181818-1818-4181-8181-181818181818",
     }
     with database.admin_engine.begin() as connection:
+        set_seed_tenant(connection, TENANT_A)
+        at_head = schema_head_installed(connection)
+        binding_columns = insert_list_suffix(SOURCE_BINDING_COLUMN_SQL, required=at_head)
+        binding_values = insert_list_suffix(SOURCE_BINDING_VALUE_SQL, required=at_head)
+        run_columns = insert_list_suffix(RUN_CONTRACT_COLUMN_SQL, required=at_head)
+        run_values = insert_list_suffix(RUN_CONTRACT_VALUE_SQL, required=at_head)
+        step_columns = insert_list_suffix(STEP_CONTRACT_COLUMN_SQL, required=at_head)
+        step_values = insert_list_suffix(STEP_CONTRACT_VALUE_SQL, required=at_head)
+        if at_head:
+            params.update(task6_head_seed_params(mode="FULL", include_step=True))
         connection.execute(
             text(
                 "INSERT INTO tenants (tenant_id, name) VALUES "
@@ -190,30 +215,30 @@ def _seed_task6_dependencies(database: DisposablePostgres) -> None:
         )
         connection.execute(
             text(
-                """
+                f"""
                 INSERT INTO document_artifacts (
                     doc_id, tenant_id, deal_id, doc_type, title,
-                    source_system, version_id, sha256
+                    source_system, version_id, sha256{binding_columns}
                 ) VALUES (
                     CAST(:artifact_id AS uuid), CAST(:tenant_a AS uuid),
                     CAST(:deal_id AS uuid), 'DATA_ROOM_FILE', 'Fictional',
-                    'fixture', 'v1', :hash_a
+                    'fixture', 'v1', :hash_a{binding_values}
                 );
                 INSERT INTO documents (
-                    document_id, tenant_id, deal_id, doc_id, doc_type, parse_status
+                    document_id, tenant_id, deal_id, doc_id, doc_type, parse_status{binding_columns}
                 ) VALUES (
                     CAST(:document_id AS uuid), CAST(:tenant_a AS uuid),
                     CAST(:deal_id AS uuid), CAST(:artifact_id AS uuid),
-                    'PDF', 'PARSED'
+                    'PDF', 'PARSED'{binding_values}
                 );
                 INSERT INTO document_spans (
                     span_id, tenant_id, deal_id, document_id, span_type,
-                    locator, text_excerpt, content_hash
+                    locator, text_excerpt, content_hash{binding_columns}
                 ) VALUES (
                     CAST(:span_id AS uuid), CAST(:tenant_a AS uuid),
                     CAST(:deal_id AS uuid), CAST(:document_id AS uuid),
-                    'PAGE_TEXT', jsonb_build_object('page', 1),
-                    :source_text, :source_content_sha256
+                    'PAGE_TEXT', jsonb_build_object('page', 1, 'line', 1),
+                    :source_text, :source_content_sha256{binding_values}
                 )
                 """
             ),
@@ -221,21 +246,21 @@ def _seed_task6_dependencies(database: DisposablePostgres) -> None:
         )
         connection.execute(
             text(
-                """
+                f"""
                 INSERT INTO runs (
                     run_id, tenant_id, deal_id, mode, status,
                     lease_owner_id, lease_fencing_token,
-                    lease_expires_at, last_heartbeat_at
+                    lease_expires_at, last_heartbeat_at{run_columns}
                 ) VALUES (
                     CAST(:run_id AS uuid), CAST(:tenant_a AS uuid),
                     CAST(:deal_id AS uuid), 'FULL', 'RUNNING',
-                    CAST(:lease_owner_id AS uuid), 7, now() + interval '1 hour', now()
+                    CAST(:lease_owner_id AS uuid), 7, now() + interval '1 hour', now(){run_values}
                 );
                 INSERT INTO run_steps (
-                    step_id, tenant_id, run_id, step_name, step_order, status
+                    step_id, tenant_id, run_id, step_name, step_order, status{step_columns}
                 ) VALUES (
                     CAST(:step_id AS uuid), CAST(:tenant_a AS uuid),
-                    CAST(:run_id AS uuid), :step_name, :step_order, 'RUNNING'
+                    CAST(:run_id AS uuid), :step_name, :step_order, 'RUNNING'{step_values}
                 )
                 """
             ),
@@ -338,6 +363,20 @@ def _seed_task6_dependencies(database: DisposablePostgres) -> None:
         )
 
 
+def _freeze_seeded_source(connection: Connection, *, enabled: bool) -> None:
+    """Freeze the shared PDF after its last span exists, and only at schema head."""
+
+    if not enabled or not schema_head_installed(connection):
+        return
+    bind_frozen_run_source(
+        connection,
+        tenant_id=TENANT_A,
+        deal_id=DEAL_ID,
+        run_id=RUN_ID,
+        document_ids=(DOCUMENT_ID,),
+    )
+
+
 def _insert_task6_graph(
     database: DisposablePostgres,
     *,
@@ -345,6 +384,8 @@ def _insert_task6_graph(
     live_attempt: bool = False,
     include_links: bool = True,
     run_step_id: str = STEP_ID,
+    freeze_source: bool = True,
+    suspend_attempt_guard: bool = False,
 ) -> None:
     params = {
         "tenant": TENANT_A,
@@ -413,9 +454,15 @@ def _insert_task6_graph(
         "reserved_usd": "0.00798000" if live_attempt else "0.00000000",
         "budget_terminal_state": "RESERVED" if live_attempt else "NOT_BILLABLE",
     }
-    with database.app_engine.begin() as connection:
+    engine = database.admin_engine if suspend_attempt_guard else database.app_engine
+    with engine.begin() as connection:
         set_tenant_context(connection, TENANT_A)
         _set_active_task6_write_context(connection)
+        if suspend_attempt_guard:
+            connection.exec_driver_sql(
+                "ALTER TABLE methodology_extraction_attempts "
+                "DISABLE TRIGGER trg_methodology_extraction_attempts_lifecycle"
+            )
         connection.execute(
             text(
                 """
@@ -482,7 +529,13 @@ def _insert_task6_graph(
             ),
             params,
         )
+        if suspend_attempt_guard:
+            connection.exec_driver_sql(
+                "ALTER TABLE methodology_extraction_attempts "
+                "ENABLE TRIGGER trg_methodology_extraction_attempts_lifecycle"
+            )
         if started_attempt_only:
+            _freeze_seeded_source(connection, enabled=freeze_source)
             return
         connection.execute(
             text(
@@ -567,6 +620,7 @@ def _insert_task6_graph(
             params,
         )
         if not include_links:
+            _freeze_seeded_source(connection, enabled=freeze_source)
             return
         connection.execute(
             text(
@@ -618,10 +672,12 @@ def _insert_task6_graph(
             ),
             params,
         )
+        _freeze_seeded_source(connection, enabled=freeze_source)
 
 
 def _insert_second_coverage_record(database: DisposablePostgres) -> None:
     with database.admin_engine.begin() as connection:
+        set_seed_tenant(connection, TENANT_A)
         connection.execute(
             text(
                 "ALTER TABLE methodology_questions "
@@ -705,12 +761,15 @@ def _insert_second_admitted_span(
                 """
                 INSERT INTO document_spans (
                     span_id, tenant_id, deal_id, document_id, span_type,
-                    locator, text_excerpt, content_hash
+                    locator, text_excerpt, content_hash,
+                    source_binding_state, source_lineage_object_id,
+                    source_corpus_receipt_id
                 ) VALUES (
                     CAST(:span_id AS uuid), CAST(:tenant_id AS uuid),
                     CAST(:deal_id AS uuid), CAST(:document_id AS uuid),
-                    'PAGE_TEXT', jsonb_build_object('page', :locator_page),
-                    :source_text, :content_sha256
+                    'PAGE_TEXT', jsonb_build_object('page', :locator_page, 'line', 1),
+                    :source_text, :content_sha256,
+                    :source_binding_state, NULL, NULL
                 );
                 INSERT INTO methodology_extraction_task_spans (
                     task_span_record_id, tenant_id, deal_id, run_id,
@@ -736,6 +795,7 @@ def _insert_second_admitted_span(
                 "content_sha256": SECOND_SOURCE_CONTENT_SHA256,
                 "locator_page": locator_page,
                 "locator_sha256": locator_sha256,
+                **unbound_source_binding_params(),
             },
         )
 
@@ -798,6 +858,7 @@ def _insert_ready_task_without_attempt(database: DisposablePostgres) -> None:
                 "hash_b": HASH_B,
             },
         )
+        _freeze_seeded_source(connection, enabled=True)
 
 
 def test_0037_upgrade_downgrade_upgrade_is_exact_on_empty_postgres() -> None:
@@ -1051,7 +1112,7 @@ def test_task6_fence_expires_against_wall_clock_inside_a_long_transaction() -> N
     )
 
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         _seed_task6_dependencies(database)
         _insert_task6_graph(database, started_attempt_only=True)
@@ -1303,7 +1364,7 @@ def test_live_attempt_admission_binds_verified_policy_and_exact_catalog_row(
     catalog_row = resolve_anthropic_standard_price(model_id="claude-sonnet-4-20250514")
 
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         _seed_task6_dependencies(database)
         _insert_ready_task_without_attempt(database)
@@ -1560,7 +1621,7 @@ def test_received_invalid_terminalization_rejects_catalog_row_hash_drift(
     catalog_row = resolve_anthropic_standard_price(model_id="claude-sonnet-4-20250514")
 
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         _seed_task6_dependencies(database)
         _insert_ready_task_without_attempt(database)
@@ -1678,15 +1739,23 @@ def test_repository_terminal_transaction_binds_shared_receipt_and_typed_result(
     )
 
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         _seed_task6_dependencies(database)
-        _insert_task6_graph(database, started_attempt_only=True)
+        _insert_task6_graph(database, started_attempt_only=True, freeze_source=False)
         _insert_second_admitted_span(
             database,
             locator_page=second_locator_page,
             locator_sha256=second_locator_hash,
         )
+        with database.app_engine.begin() as connection:
+            bind_frozen_run_source(
+                connection,
+                tenant_id=TENANT_A,
+                deal_id=DEAL_ID,
+                run_id=RUN_ID,
+                document_ids=(DOCUMENT_ID,),
+            )
         candidate_spans = (
             MethodologyCandidateSpan(
                 document_id=DOCUMENT_ID,
@@ -1877,7 +1946,7 @@ def test_failure_terminalization_rejects_budget_policy_swap() -> None:
     )
 
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         _seed_task6_dependencies(database)
         _insert_task6_graph(database, started_attempt_only=True)
@@ -1936,7 +2005,7 @@ def test_received_invalid_response_is_failed_consumed_with_durable_provenance() 
     )
 
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         _seed_task6_dependencies(database)
         _insert_task6_graph(database, started_attempt_only=True, live_attempt=True)
@@ -2030,7 +2099,7 @@ def test_canonical_claim_convergence_rejects_arbitrary_uuid_winner() -> None:
     )
 
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         _seed_task6_dependencies(database)
         _insert_task6_graph(database)

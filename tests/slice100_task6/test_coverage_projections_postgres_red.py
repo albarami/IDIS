@@ -43,6 +43,20 @@ from tests.slice100_task2b._support import (
     migrate,
 )
 from tests.slice100_task5.test_durable_selection_coverage_red import _registry
+from tests.slice100_task6._support import (
+    RUN_CONTRACT_COLUMN_SQL,
+    RUN_CONTRACT_VALUE_SQL,
+    SOURCE_BINDING_COLUMN_SQL,
+    SOURCE_BINDING_VALUE_SQL,
+    STEP_CONTRACT_COLUMN_SQL,
+    STEP_CONTRACT_VALUE_SQL,
+    TASK6_SCHEMA_HEAD,
+    insert_list_suffix,
+    legacy_step_contract_params,
+    schema_head_installed,
+    task6_head_seed_params,
+    unbound_source_binding_params,
+)
 
 TENANT_ID = "11111111-1111-4111-8111-111111111111"
 DEAL_ID = "22222222-2222-4222-8222-222222222222"
@@ -82,6 +96,12 @@ def _seed_selected_coverage(database: DisposablePostgres) -> str:
     cdd = _registry(MethodologyType.COMMERCIAL_DD, 21)
     fdd = _registry(MethodologyType.FINANCIAL_DD, 79)
     with database.admin_engine.begin() as connection:
+        at_head = schema_head_installed(connection)
+        run_columns = insert_list_suffix(RUN_CONTRACT_COLUMN_SQL, required=at_head)
+        run_values = insert_list_suffix(RUN_CONTRACT_VALUE_SQL, required=at_head)
+        binding_columns = insert_list_suffix(SOURCE_BINDING_COLUMN_SQL, required=at_head)
+        binding_values = insert_list_suffix(SOURCE_BINDING_VALUE_SQL, required=at_head)
+        head_params = task6_head_seed_params(mode="FULL") if at_head else {}
         connection.execute(
             text(
                 "INSERT INTO tenants (tenant_id,name) VALUES "
@@ -98,37 +118,38 @@ def _seed_selected_coverage(database: DisposablePostgres) -> str:
         )
         connection.execute(
             text(
-                "INSERT INTO runs (run_id,tenant_id,deal_id,mode,status,created_at) "
+                "INSERT INTO runs (run_id,tenant_id,deal_id,mode,status,created_at"
+                f"{run_columns}) "
                 "VALUES (CAST(:run AS uuid),CAST(:tenant AS uuid),CAST(:deal AS uuid),"
-                "'FULL','QUEUED',now())"
+                f"'FULL','QUEUED',now(){run_values})"
             ),
-            {"tenant": TENANT_ID, "deal": DEAL_ID, "run": RUN_ID},
+            {"tenant": TENANT_ID, "deal": DEAL_ID, "run": RUN_ID, **head_params},
         )
         connection.execute(
             text(
-                """
+                f"""
                 INSERT INTO document_artifacts (
                     doc_id, tenant_id, deal_id, doc_type, title,
-                    source_system, version_id, sha256
+                    source_system, version_id, sha256{binding_columns}
                 ) VALUES (
                     CAST(:artifact AS uuid), CAST(:tenant AS uuid),
                     CAST(:deal AS uuid), 'DATA_ROOM_FILE', 'Fictional fixture',
-                    'fixture', 'v1', :hash
+                    'fixture', 'v1', :hash{binding_values}
                 );
                 INSERT INTO documents (
-                    document_id, tenant_id, deal_id, doc_id, doc_type, parse_status
+                    document_id, tenant_id, deal_id, doc_id, doc_type, parse_status{binding_columns}
                 ) VALUES (
                     CAST(:document AS uuid), CAST(:tenant AS uuid),
-                    CAST(:deal AS uuid), CAST(:artifact AS uuid), 'PDF', 'PARSED'
+                    CAST(:deal AS uuid), CAST(:artifact AS uuid), 'PDF', 'PARSED'{binding_values}
                 );
                 INSERT INTO document_spans (
                     span_id, tenant_id, deal_id, document_id, span_type,
-                    locator, text_excerpt, content_hash
+                    locator, text_excerpt, content_hash{binding_columns}
                 ) VALUES (
                     CAST(:span AS uuid), CAST(:tenant AS uuid), CAST(:deal AS uuid),
                     CAST(:document AS uuid), 'PAGE_TEXT',
-                    jsonb_build_object('page', 1),
-                    :source_text, :source_content_sha256
+                    jsonb_build_object('page', 1, 'line', 1),
+                    :source_text, :source_content_sha256{binding_values}
                 )
                 """
             ),
@@ -141,6 +162,7 @@ def _seed_selected_coverage(database: DisposablePostgres) -> str:
                 "hash": HASH_A,
                 "source_text": SOURCE_TEXT,
                 "source_content_sha256": SOURCE_CONTENT_SHA256,
+                **head_params,
             },
         )
 
@@ -190,14 +212,18 @@ def _seed_selected_coverage(database: DisposablePostgres) -> str:
             tenant_id=TENANT_ID, deal_id=DEAL_ID, run_id=RUN_ID
         )
         assert len(records) == 100
+        step_at_head = schema_head_installed(connection)
+        step_columns = insert_list_suffix(STEP_CONTRACT_COLUMN_SQL, required=step_at_head)
+        step_values = insert_list_suffix(STEP_CONTRACT_VALUE_SQL, required=step_at_head)
+        step_contract = legacy_step_contract_params() if step_at_head else {}
         connection.execute(
             text(
-                """
+                f"""
                 INSERT INTO run_steps (
-                    step_id, tenant_id, run_id, step_name, step_order, status
+                    step_id, tenant_id, run_id, step_name, step_order, status{step_columns}
                 ) VALUES (
                     CAST(:step AS uuid), CAST(:tenant AS uuid), CAST(:run AS uuid),
-                    :step_name, :step_order, 'RUNNING'
+                    :step_name, :step_order, 'RUNNING'{step_values}
                 )
                 """
             ),
@@ -207,16 +233,17 @@ def _seed_selected_coverage(database: DisposablePostgres) -> str:
                 "run": RUN_ID,
                 "step_name": StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION.value,
                 "step_order": STEP_ORDER[StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION],
+                **step_contract,
             },
         )
         connection.execute(
             text(
-                """
+                f"""
                 INSERT INTO run_steps (
-                    step_id, tenant_id, run_id, step_name, step_order, status
+                    step_id, tenant_id, run_id, step_name, step_order, status{step_columns}
                 ) VALUES (
                     CAST(:step AS uuid), CAST(:tenant AS uuid), CAST(:run AS uuid),
-                    :step_name, :step_order, 'RUNNING'
+                    :step_name, :step_order, 'RUNNING'{step_values}
                 )
                 """
             ),
@@ -226,6 +253,7 @@ def _seed_selected_coverage(database: DisposablePostgres) -> str:
                 "run": RUN_ID,
                 "step_name": StepName.METHODOLOGY_SANAD_CREATION_LINKING_GRADING.value,
                 "step_order": STEP_ORDER[StepName.METHODOLOGY_SANAD_CREATION_LINKING_GRADING],
+                **step_contract,
             },
         )
     return selection.selection_id
@@ -313,31 +341,35 @@ def _seed_terminal_tasks(
             mixed_artifact = _record_id("mixed-artifact", 1)
             mixed_document = _record_id("mixed-document", 1)
             mixed_span = _record_id("mixed-span", 1)
+            binding_columns = insert_list_suffix(SOURCE_BINDING_COLUMN_SQL, required=True)
+            binding_values = insert_list_suffix(SOURCE_BINDING_VALUE_SQL, required=True)
             connection.execute(
                 text(
-                    """
+                    f"""
                     INSERT INTO document_artifacts (
                         doc_id, tenant_id, deal_id, doc_type, title,
-                        source_system, version_id, sha256
+                        source_system, version_id, sha256{binding_columns}
                     ) VALUES (
                         CAST(:artifact AS uuid), CAST(:tenant AS uuid),
                         CAST(:deal AS uuid), 'DATA_ROOM_FILE',
-                        'Second fictional fixture', 'fixture', 'v1', :hash
+                        'Second fictional fixture', 'fixture', 'v1', :hash{binding_values}
                     );
                     INSERT INTO documents (
-                        document_id, tenant_id, deal_id, doc_id, doc_type, parse_status
+                        document_id, tenant_id, deal_id, doc_id, doc_type,
+                        parse_status{binding_columns}
                     ) VALUES (
                         CAST(:document AS uuid), CAST(:tenant AS uuid),
-                        CAST(:deal AS uuid), CAST(:artifact AS uuid), 'PDF', 'PARSED'
+                        CAST(:deal AS uuid), CAST(:artifact AS uuid),
+                        'PDF', 'PARSED'{binding_values}
                     );
                     INSERT INTO document_spans (
                         span_id, tenant_id, deal_id, document_id, span_type,
-                        locator, text_excerpt, content_hash
+                        locator, text_excerpt, content_hash{binding_columns}
                     ) VALUES (
                         CAST(:span AS uuid), CAST(:tenant AS uuid), CAST(:deal AS uuid),
                         CAST(:document AS uuid), 'PAGE_TEXT',
-                        jsonb_build_object('page', 1),
-                        :source_text, :source_content_sha256
+                        jsonb_build_object('page', 1, 'line', 1),
+                        :source_text, :source_content_sha256{binding_values}
                     )
                     """
                 ),
@@ -350,6 +382,7 @@ def _seed_terminal_tasks(
                     "hash": HASH_B,
                     "source_text": SECOND_SOURCE_TEXT,
                     "source_content_sha256": SECOND_SOURCE_CONTENT_SHA256,
+                    **unbound_source_binding_params(),
                 },
             )
             task_params.append(
@@ -758,31 +791,34 @@ def _insert_extra_unattempted_task(connection: Any, seeded: _SeededRun) -> None:
         "source_text": EXTRA_SOURCE_TEXT,
         "source_content_sha256": EXTRA_SOURCE_CONTENT_SHA256,
     }
+    binding_columns = insert_list_suffix(SOURCE_BINDING_COLUMN_SQL, required=True)
+    binding_values = insert_list_suffix(SOURCE_BINDING_VALUE_SQL, required=True)
+    params.update(unbound_source_binding_params())
     connection.execute(
         text(
-            """
+            f"""
             INSERT INTO document_artifacts (
                 doc_id, tenant_id, deal_id, doc_type, title,
-                source_system, version_id, sha256
+                source_system, version_id, sha256{binding_columns}
             ) VALUES (
                 CAST(:artifact AS uuid), CAST(:tenant AS uuid),
                 CAST(:deal AS uuid), 'DATA_ROOM_FILE', 'Extra fictional fixture',
-                'fixture', 'v1', :hash_a
+                'fixture', 'v1', :hash_a{binding_values}
             );
             INSERT INTO documents (
-                document_id, tenant_id, deal_id, doc_id, doc_type, parse_status
+                document_id, tenant_id, deal_id, doc_id, doc_type, parse_status{binding_columns}
             ) VALUES (
                 CAST(:document AS uuid), CAST(:tenant AS uuid),
-                CAST(:deal AS uuid), CAST(:artifact AS uuid), 'PDF', 'PARSED'
+                CAST(:deal AS uuid), CAST(:artifact AS uuid), 'PDF', 'PARSED'{binding_values}
             );
             INSERT INTO document_spans (
                 span_id, tenant_id, deal_id, document_id, span_type,
-                locator, text_excerpt, content_hash
+                locator, text_excerpt, content_hash{binding_columns}
             ) VALUES (
                 CAST(:span AS uuid), CAST(:tenant AS uuid), CAST(:deal AS uuid),
                 CAST(:document AS uuid), 'PAGE_TEXT',
-                jsonb_build_object('page', 1),
-                :source_text, :source_content_sha256
+                jsonb_build_object('page', 1, 'line', 1),
+                :source_text, :source_content_sha256{binding_values}
             );
             INSERT INTO methodology_extraction_tasks (
                 task_record_id, tenant_id, deal_id, run_id, selection_id,
@@ -800,7 +836,7 @@ def _insert_extra_unattempted_task(connection: Any, seeded: _SeededRun) -> None:
                 CAST(:question_record AS uuid), :question_id, :methodology_type,
                 :extraction_task_id, CAST(:document AS uuid), 'dc_extra_fixture',
                 :hash_a, 'selected-pair-planner-v1',
-                'methodology-extraction-task-v1', '{"task":"extra"}'::jsonb,
+                'methodology-extraction-task-v1', '{{"task":"extra"}}'::jsonb,
                 :hash_b, :hash_b, 'READY'
             );
             INSERT INTO methodology_extraction_task_spans (
@@ -821,7 +857,7 @@ def _insert_extra_unattempted_task(connection: Any, seeded: _SeededRun) -> None:
 
 def test_step7_exact_set_atomically_projects_all_100_coverage_rows() -> None:
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         selection_id = _seed_selected_coverage(database)
         seeded = _seed_terminal_tasks(database, selection_id)
@@ -935,7 +971,7 @@ def test_step7_exact_set_atomically_projects_all_100_coverage_rows() -> None:
 
 def test_step7_exact_set_rejects_trigger_bypassed_cross_wired_results() -> None:
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         selection_id = _seed_selected_coverage(database)
         seeded = _seed_terminal_tasks(database, selection_id)
@@ -959,7 +995,7 @@ def test_step7_exact_set_rejects_trigger_bypassed_cross_wired_results() -> None:
 
 def test_restart_join_excludes_trigger_bypassed_cross_wired_results() -> None:
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         selection_id = _seed_selected_coverage(database)
         _seed_terminal_tasks(database, selection_id)
@@ -979,7 +1015,7 @@ def test_restart_join_excludes_trigger_bypassed_cross_wired_results() -> None:
 
 def test_step7_real_postgres_projects_mixed_multi_task_question() -> None:
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         selection_id = _seed_selected_coverage(database)
         seeded = _seed_terminal_tasks(
@@ -1050,7 +1086,7 @@ def test_step7_real_postgres_projects_mixed_multi_task_question() -> None:
 
 def test_step10_projects_exact_canonical_lineage_and_keeps_gaps_missing() -> None:
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         selection_id = _seed_selected_coverage(database)
         seeded = _seed_terminal_tasks(database, selection_id, found_count=1)
@@ -1184,7 +1220,7 @@ def test_step10_projects_exact_canonical_lineage_and_keeps_gaps_missing() -> Non
 
 def test_step7_projection_rolls_back_and_a_stale_fence_mutates_nothing() -> None:
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         selection_id = _seed_selected_coverage(database)
         seeded = _seed_terminal_tasks(database, selection_id)
@@ -1260,7 +1296,7 @@ def test_step10_staged_sanad_boundary_commits_coverage_in_same_transaction(
     from idis.services.runs import methodology_postgres_materialization_runtime as runtime
 
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         selection_id = _seed_selected_coverage(database)
         seeded = _seed_terminal_tasks(database, selection_id, found_count=1)
@@ -1332,7 +1368,7 @@ def test_step10_audit_failure_rolls_back_the_final_coverage_projection(
         pass
 
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         selection_id = _seed_selected_coverage(database)
         seeded = _seed_terminal_tasks(database, selection_id, found_count=1)

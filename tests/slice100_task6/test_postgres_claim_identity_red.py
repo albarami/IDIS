@@ -24,6 +24,7 @@ from tests.slice100_task2b._support import (
     set_tenant_context,
 )
 from tests.slice100_task6 import test_postgres_0037_red as pg
+from tests.slice100_task6._support import TASK6_SCHEMA_HEAD
 
 
 def _claim_link_record(
@@ -219,7 +220,7 @@ def test_fresh_claim_rejects_caller_identity_drift_without_mutation(
     payload[field] = replacement
 
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         pg._seed_task6_dependencies(database)
 
@@ -250,7 +251,7 @@ def test_fresh_valid_claim_inserts_once_then_reuses_exact_winner() -> None:
 
     _output, payload, identity = _fresh_claim_payload()
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         pg._seed_task6_dependencies(database)
 
@@ -290,7 +291,7 @@ def test_claim_link_recomputes_durable_claim_identity_before_insert(mutation: st
 
     _output, payload, identity = _fresh_claim_payload()
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         pg._seed_task6_dependencies(database)
         pg._insert_task6_graph(database, include_links=False)
@@ -423,7 +424,7 @@ def test_restart_snapshot_rejects_bypassed_canonical_identity_corruption(
 
     output, payload, identity = _fresh_claim_payload()
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         pg._seed_task6_dependencies(database)
         pg._insert_task6_graph(database, include_links=False)

@@ -33,6 +33,11 @@ from tests.slice100_task2b._support import (
     migrate,
 )
 from tests.slice100_task6 import test_coverage_projections_postgres_red as coverage_pg
+from tests.slice100_task6._support import (
+    TASK6_SCHEMA_HEAD,
+    bind_frozen_run_source,
+    canonical_locator_sha256,
+)
 
 
 def _persist(database: DisposablePostgres, staged: Any) -> None:
@@ -62,7 +67,8 @@ def _install_production_factual_output(
 ) -> None:
     """Replace the helper's seeded JSON with the production typed constructor."""
 
-    locator_sha256 = hashlib.sha256(b'{"page":1}').hexdigest()
+    locator = {"page": 1, "line": 1}
+    locator_sha256 = canonical_locator_sha256(locator)
     output = MethodologyFactualOutput.model_validate(
         {
             "subject": "Fictional",
@@ -130,7 +136,7 @@ def _install_production_factual_output(
 
 def test_runtime_boundary_persists_all_four_exact_typed_link_contracts() -> None:
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         selection_id = coverage_pg._seed_selected_coverage(database)
         seeded = coverage_pg._seed_terminal_tasks(database, selection_id, found_count=1)
@@ -162,6 +168,14 @@ def test_runtime_boundary_persists_all_four_exact_typed_link_contracts() -> None
             "run_step_id": coverage_pg.SANAD_STEP_ID,
         }
 
+        with database.app_engine.begin() as connection:
+            bind_frozen_run_source(
+                connection,
+                tenant_id=coverage_pg.TENANT_ID,
+                deal_id=coverage_pg.DEAL_ID,
+                run_id=coverage_pg.RUN_ID,
+                document_ids=(coverage_pg.DOCUMENT_ID,),
+            )
         _claim_result, _claims, staged_claims = boundary.prepare_claim_materialization(**scope)
         _persist(database, staged_claims)
         _evidence_result, _evidence, staged_evidence = boundary.prepare_evidence_materialization(

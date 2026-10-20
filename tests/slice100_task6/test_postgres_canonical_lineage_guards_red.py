@@ -17,6 +17,14 @@ from tests.slice100_task2b._support import (
     migrate,
     set_tenant_context,
 )
+from tests.slice100_task6._support import (
+    SOURCE_BINDING_COLUMN_SQL,
+    SOURCE_BINDING_VALUE_SQL,
+    TASK6_SCHEMA_HEAD,
+    bind_frozen_run_source,
+    set_seed_tenant,
+    unbound_source_binding_params,
+)
 from tests.slice100_task6.test_postgres_0037_red import (
     CLAIM_CANONICAL_KEY_SHA256,
     CLAIM_ID,
@@ -67,22 +75,25 @@ WRONG_LINEAGE_CLAIM_LINK_ID = "47474747-4747-4747-8747-474747474747"
 
 
 def _prepare_unlinked_graph(database: DisposablePostgres) -> None:
-    migrate(database.admin_engine, "0037")
+    migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
     grant_application_access(database)
     _seed_task6_dependencies(database)
-    _insert_task6_graph(database, include_links=False)
+    _insert_task6_graph(database, include_links=False, freeze_source=False)
     with database.admin_engine.begin() as connection:
+        set_seed_tenant(connection, TENANT_A)
         connection.execute(
             text(
-                """
+                f"""
                 INSERT INTO document_spans (
                     span_id, tenant_id, deal_id, document_id, span_type,
-                    locator, text_excerpt, content_hash
+                    locator, text_excerpt, content_hash,
+                    {SOURCE_BINDING_COLUMN_SQL}
                 ) VALUES (
                     CAST(:second_span_id AS uuid), CAST(:tenant_id AS uuid),
                     CAST(:deal_id AS uuid), CAST(:document_id AS uuid),
-                    'PAGE_TEXT', jsonb_build_object('page', 1),
-                    'Second fictional span', :second_content_sha256
+                    'PAGE_TEXT', jsonb_build_object('page', 1, 'line', 1),
+                    'Second fictional span', :second_content_sha256,
+                    {SOURCE_BINDING_VALUE_SQL}
                 );
                 INSERT INTO claims (
                     claim_id, tenant_id, deal_id, claim_class, claim_text,
@@ -92,7 +103,7 @@ def _prepare_unlinked_graph(database: DisposablePostgres) -> None:
                 ) VALUES (
                     CAST(:second_claim_id AS uuid), CAST(:tenant_id AS uuid),
                     CAST(:deal_id AS uuid), 'FACT', 'Second fictional claim',
-                    'second_fictional', '{"type":"text"}'::jsonb, now(),
+                    'second_fictional', '{{"type":"text"}}'::jsonb, now(),
                     'claim-normalization-v1', 'second_fictional',
                     'second fictional', 'none', 'text', :hash_b
                 );
@@ -104,15 +115,15 @@ def _prepare_unlinked_graph(database: DisposablePostgres) -> None:
                 (CAST(:wrong_claim_evidence_id AS uuid), CAST(:tenant_id AS uuid),
                  CAST(:deal_id AS uuid), CAST(:second_claim_id AS uuid),
                  CAST(:span_id AS uuid), 'B', 'fixture', 'wrong-claim', now(),
-                 'UNVERIFIED', '{}'::jsonb, now()),
+                 'UNVERIFIED', '{{}}'::jsonb, now()),
                 (CAST(:wrong_span_evidence_id AS uuid), CAST(:tenant_id AS uuid),
                  CAST(:deal_id AS uuid), CAST(:claim_id AS uuid),
                  CAST(:second_span_id AS uuid), 'B', 'fixture', 'wrong-span', now(),
-                 'UNVERIFIED', '{}'::jsonb, now()),
+                 'UNVERIFIED', '{{}}'::jsonb, now()),
                 (CAST(:second_valid_claim_evidence_id AS uuid), CAST(:tenant_id AS uuid),
                  CAST(:deal_id AS uuid), CAST(:claim_id AS uuid),
                  CAST(:second_span_id AS uuid), 'B', 'fixture', 'second-valid', now(),
-                 'UNVERIFIED', '{}'::jsonb, now());
+                 'UNVERIFIED', '{{}}'::jsonb, now());
                 INSERT INTO sanads (
                     sanad_id, tenant_id, claim_id, deal_id, primary_evidence_id,
                     created_at
@@ -150,7 +161,15 @@ def _prepare_unlinked_graph(database: DisposablePostgres) -> None:
                 "wrong_claim_defect_id": WRONG_CLAIM_DEFECT_ID,
                 "hash_b": HASH_B,
                 "second_content_sha256": SECOND_SOURCE_CONTENT_SHA256,
+                **unbound_source_binding_params(),
             },
+        )
+        bind_frozen_run_source(
+            connection,
+            tenant_id=TENANT_A,
+            deal_id=DEAL_ID,
+            run_id=RUN_ID,
+            document_ids=(DOCUMENT_ID,),
         )
     _insert_claim_link(database)
 
@@ -196,7 +215,7 @@ def _insert_claim_link(database: DisposablePostgres) -> None:
 
 def _prepare_two_valid_task_lineages(database: DisposablePostgres) -> None:
     """Seed two valid coverage/task tuples sharing one frozen run selection."""
-    migrate(database.admin_engine, "0037")
+    migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
     grant_application_access(database)
     _seed_task6_dependencies(database)
     _insert_second_coverage_record(database)
@@ -969,7 +988,7 @@ def test_valid_typed_canonical_lineage_still_loads_after_restart() -> None:
     )
 
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         _seed_task6_dependencies(database)
         _insert_task6_graph(database)

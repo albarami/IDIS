@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Any
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.engine import Connection, CursorResult
 from sqlalchemy.exc import DBAPIError
 
 from idis.models.methodology_extraction import (
@@ -30,6 +32,14 @@ from tests.slice100_task2b._support import (
 )
 from tests.slice100_task6 import test_coverage_projections_postgres_red as coverage
 from tests.slice100_task6 import test_postgres_0037_red as pg
+from tests.slice100_task6._out_of_band import corrupt_durable_rows_out_of_band
+from tests.slice100_task6._support import (
+    STEP_CONTRACT_COLUMN_SQL,
+    STEP_CONTRACT_VALUE_SQL,
+    TASK6_SCHEMA_HEAD,
+    legacy_step_contract_params,
+    set_seed_tenant,
+)
 
 UNRELATED_STEP_ID = "31313131-3131-4313-8313-313131313131"
 STEP_CONDITIONS = (
@@ -52,6 +62,27 @@ def _canonical_step_values() -> tuple[str, int]:
     return name.value, STEP_ORDER[name]
 
 
+def _corrupt_canonical_step(
+    connection: Connection,
+    statement: str,
+    params: Mapping[str, Any],
+) -> CursorResult[Any]:
+    """Rewrite the canonical step with both ``run_steps`` guards disabled.
+
+    The helper disables ``ctrg_task7_run_steps_receipt_complete`` and
+    ``trg_task7_run_steps_contract_immutable`` before the statement and
+    enables them again in reverse. The receipt trigger is deferrable, so
+    leaving it enabled would queue an event and make the re-enable fail.
+    """
+
+    return corrupt_durable_rows_out_of_band(
+        connection,
+        statement,
+        params,
+        table="run_steps",
+    )
+
+
 def _apply_step_condition(
     database: DisposablePostgres,
     condition: str,
@@ -61,6 +92,7 @@ def _apply_step_condition(
     canonical_step_id: str,
 ) -> str:
     with database.admin_engine.begin() as connection:
+        set_seed_tenant(connection, tenant_id)
         if condition == "canonical_completed":
             changed = connection.execute(
                 text(
@@ -79,12 +111,14 @@ def _apply_step_condition(
         if condition == "unrelated_running_step_id":
             connection.execute(
                 text(
-                    """
+                    f"""
                     INSERT INTO run_steps (
-                        step_id, tenant_id, run_id, step_name, step_order, status
+                        step_id, tenant_id, run_id, step_name, step_order, status,
+                        {STEP_CONTRACT_COLUMN_SQL}
                     ) VALUES (
                         CAST(:step_id AS uuid), CAST(:tenant_id AS uuid),
-                        CAST(:run_id AS uuid), :step_name, :step_order, 'RUNNING'
+                        CAST(:run_id AS uuid), :step_name, :step_order, 'RUNNING',
+                        {STEP_CONTRACT_VALUE_SQL}
                     ) ON CONFLICT (step_id) DO NOTHING
                     """
                 ),
@@ -94,20 +128,20 @@ def _apply_step_condition(
                     "run_id": run_id,
                     "step_name": StepName.METHODOLOGY_CLAIM_MATERIALIZATION.value,
                     "step_order": STEP_ORDER[StepName.METHODOLOGY_CLAIM_MATERIALIZATION],
+                    **legacy_step_contract_params(),
                 },
             )
             return UNRELATED_STEP_ID
         if condition == "wrong_name_order":
-            changed = connection.execute(
-                text(
-                    """
-                    UPDATE run_steps
-                    SET step_name = :step_name, step_order = :step_order
-                    WHERE tenant_id = CAST(:tenant_id AS uuid)
-                      AND run_id = CAST(:run_id AS uuid)
-                      AND step_id = CAST(:step_id AS uuid)
-                    """
-                ),
+            changed = _corrupt_canonical_step(
+                connection,
+                """
+                UPDATE run_steps
+                SET step_name = :step_name, step_order = :step_order
+                WHERE tenant_id = CAST(:tenant_id AS uuid)
+                  AND run_id = CAST(:run_id AS uuid)
+                  AND step_id = CAST(:step_id AS uuid)
+                """,
                 {
                     "tenant_id": tenant_id,
                     "run_id": run_id,
@@ -130,18 +164,18 @@ def _restore_canonical_step(
 ) -> None:
     step_name, step_order = _canonical_step_values()
     with database.admin_engine.begin() as connection:
-        changed = connection.execute(
-            text(
-                """
-                UPDATE run_steps
-                SET step_name = :step_name, step_order = :step_order,
-                    status = 'RUNNING', finished_at = NULL,
-                    error_code = NULL, error_message = NULL
-                WHERE tenant_id = CAST(:tenant_id AS uuid)
-                  AND run_id = CAST(:run_id AS uuid)
-                  AND step_id = CAST(:step_id AS uuid)
-                """
-            ),
+        set_seed_tenant(connection, tenant_id)
+        changed = _corrupt_canonical_step(
+            connection,
+            """
+            UPDATE run_steps
+            SET step_name = :step_name, step_order = :step_order,
+                status = 'RUNNING', finished_at = NULL,
+                error_code = NULL, error_message = NULL
+            WHERE tenant_id = CAST(:tenant_id AS uuid)
+              AND run_id = CAST(:run_id AS uuid)
+              AND step_id = CAST(:step_id AS uuid)
+            """,
             {
                 "tenant_id": tenant_id,
                 "run_id": run_id,
@@ -405,7 +439,7 @@ def test_every_attempt_result_boundary_requires_the_exact_running_canonical_step
     condition: str,
 ) -> None:
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         if boundary == "complete_exact_set":
             selection_id = coverage._seed_selected_coverage(database)
@@ -466,7 +500,7 @@ def test_every_attempt_result_boundary_requires_the_exact_running_canonical_step
 @pytest.mark.parametrize("condition", STEP_CONDITIONS)
 def test_attempt_guard_rejects_direct_insert_for_noncanonical_step(condition: str) -> None:
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         pg._seed_task6_dependencies(database)
         run_step_id = _apply_step_condition(
@@ -495,7 +529,7 @@ def test_attempt_guard_rejects_direct_terminal_update_for_noncanonical_step(
     condition: str,
 ) -> None:
     with disposable_postgres() as database:
-        migrate(database.admin_engine, "0037")
+        migrate(database.admin_engine, TASK6_SCHEMA_HEAD)
         grant_application_access(database)
         pg._seed_task6_dependencies(database)
         pg._insert_task6_graph(database, started_attempt_only=True)

@@ -173,7 +173,10 @@ def _assert_0037_and_all_task6_tables(connection: Connection) -> None:
 
 def test_populated_planning_graph_refuses_downgrade_without_any_mutation() -> None:
     with disposable_postgres() as database:
-        selection_id, planned_tasks = _prepare_planning_database(database)
+        selection_id, planned_tasks = _prepare_planning_database(
+            database,
+            schema_revision="0037",
+        )
         _persist_planned_graph(database, selection_id, planned_tasks)
         assert _task6_write_counts(database) == (100, 100, 0, 0, 0, 0, 0, 0, 0)
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import ast
 import shutil
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -119,6 +119,36 @@ def test_scanner_records_local_imports_and_import_call_literals(tmp_path: Path) 
     }
 
 
+def test_scanner_records_dynamic_calls_that_can_spell_the_runs_route(tmp_path: Path) -> None:
+    """F-string and concatenation calls are recorded only when they can name the route."""
+    package = tmp_path / "src" / "idis" / "services"
+    package.mkdir(parents=True)
+    source = (
+        "def nested(name: str, base: str, other: str) -> None:\n"
+        '    import_module(f"idis.api.routes.{name}")\n'
+        '    import_module("idis.api.routes." + name)\n'
+        '    import_module(f"{base}.runs")\n'
+        '    __import__(f"idis.api.routes.{name}")\n'
+        '    __import__("idis.api.routes." + name)\n'
+        '    import_module(f"idis.services.{other}")\n'
+        '    import_module("idis.services." + other)\n'
+        '    import_module("idis.api.routes.runs")\n'
+        '    __import__("idis.api.routes.runs")\n'
+    )
+    (package / "dynamic.py").write_text(source, encoding="utf-8")
+    relative = "src/idis/services/dynamic.py"
+    found = collect_runs_route_imports_from_source(relative, source)
+    assert found == {
+        (relative, "nested", "import_module_fstring", 0),
+        (relative, "nested", "import_module_concat", 0),
+        (relative, "nested", "import_module_fstring", 1),
+        (relative, "nested", "__import___fstring", 0),
+        (relative, "nested", "__import___concat", 0),
+        (relative, "nested", "import_module", 0),
+        (relative, "nested", "__import__", 0),
+    }
+
+
 def _copy_scoped_trees(copy_root: Path) -> None:
     for relative in _SCOPED_RELATIVES:
         source = REPO_ROOT / relative
@@ -205,12 +235,7 @@ def _consider(
                 pending.append((scope, "import"))
         return
     if isinstance(node, ast.Call):
-        kind = _import_call_kind(node)
-        if kind is None:
-            return
-        literal = _string_argument(node)
-        if literal is not None and _names_runs_route(literal):
-            pending.append((scope, kind))
+        _record_import_call(node, scope, pending)
 
 
 def _names_runs_route(module: str) -> bool:
@@ -233,6 +258,140 @@ def _string_argument(node: ast.Call) -> str | None:
     if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
         return argument.value
     return None
+
+
+def _record_import_call(
+    node: ast.Call,
+    scope: str,
+    pending: list[tuple[str, str]],
+) -> None:
+    """Record a literal or a dynamic call that can name the runs route."""
+    kind = _import_call_kind(node)
+    if kind is None:
+        return
+    literal = _string_argument(node)
+    if literal is not None:
+        if _names_runs_route(literal):
+            pending.append((scope, kind))
+        return
+    dynamic = _dynamic_argument_form(node)
+    if dynamic is None or not node.args:
+        return
+    if _dynamic_argument_names_runs_route(node.args[0]):
+        pending.append((scope, f"{kind}_{dynamic}"))
+
+
+def _dynamic_argument_form(node: ast.Call) -> str | None:
+    """Return ``fstring`` or ``concat`` for a dynamic import argument."""
+    if not node.args:
+        return None
+    argument = node.args[0]
+    if isinstance(argument, ast.JoinedStr):
+        return "fstring"
+    if isinstance(argument, ast.BinOp) and isinstance(argument.op, ast.Add):
+        return "concat"
+    return None
+
+
+def _dynamic_argument_names_runs_route(argument: ast.AST) -> bool:
+    """Return whether the argument's constant pieces can spell the runs route."""
+    parts = _string_pattern(argument)
+    if not parts:
+        return False
+    return _pattern_names_runs_route(parts)
+
+
+def _string_pattern(node: ast.AST) -> list[str | None] | None:
+    """Flatten a string expression into literals and wildcards.
+
+    A list entry of ``None`` may stand for any text, including empty text.
+    ``None`` as the return value means the expression cannot produce a string.
+    """
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, str):
+            return [node.value]
+        return None
+    if isinstance(node, ast.JoinedStr):
+        return _joined_string_pattern(node)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _operand_pattern(node.left)
+        right = _operand_pattern(node.right)
+        if left is None or right is None:
+            return None
+        return left + right
+    return None
+
+
+def _joined_string_pattern(node: ast.JoinedStr) -> list[str | None] | None:
+    parts: list[str | None] = []
+    for value in node.values:
+        if isinstance(value, ast.FormattedValue):
+            parts.append(None)
+            continue
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            parts.append(value.value)
+            continue
+        return None
+    return parts
+
+
+def _operand_pattern(node: ast.AST) -> list[str | None] | None:
+    """Return parts for one ``+`` operand. A non-string constant cannot be used."""
+    if isinstance(node, ast.Constant) and not isinstance(node.value, str):
+        return None
+    if isinstance(node, ast.JoinedStr | ast.Constant):
+        return _string_pattern(node)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _string_pattern(node)
+    return [None]
+
+
+def _pattern_names_runs_route(parts: list[str | None]) -> bool:
+    target = _RUNS_ROUTE_MODULE
+    if _pattern_can_produce(parts, target, exact=True):
+        return True
+    return _pattern_can_produce(parts, f"{target}.", exact=False)
+
+
+def _pattern_can_produce(parts: list[str | None], needed: str, *, exact: bool) -> bool:
+    """Return whether wildcards can make the pattern produce ``needed``.
+
+    When ``exact`` is false, any continuation after ``needed`` is allowed.
+    """
+    memo: dict[tuple[int, int], bool] = {}
+
+    def match(index: int, cursor: int) -> bool:
+        key = (index, cursor)
+        if key in memo:
+            return memo[key]
+        if cursor == len(needed):
+            found = all(part in (None, "") for part in parts[index:]) if exact else True
+        elif index == len(parts):
+            found = False
+        else:
+            found = _match_pattern_part(parts, needed, index, cursor, exact, match)
+        memo[key] = found
+        return found
+
+    return match(0, 0)
+
+
+def _match_pattern_part(
+    parts: list[str | None],
+    needed: str,
+    index: int,
+    cursor: int,
+    exact: bool,
+    match: Callable[[int, int], bool],
+) -> bool:
+    part = parts[index]
+    if part is None:
+        remaining = len(needed) - cursor
+        return any(match(index + 1, cursor + consumed) for consumed in range(remaining + 1))
+    rest = needed[cursor:]
+    if rest.startswith(part):
+        return match(index + 1, cursor + len(part))
+    return not exact and part.startswith(rest)
 
 
 def _resolved_module(relative: str, node: ast.ImportFrom) -> str:

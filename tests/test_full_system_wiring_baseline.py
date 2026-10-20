@@ -988,8 +988,8 @@ def _live_route_private_import_count() -> int:
     return _count_build_run_context_route_imports(tree)
 
 
-def test_run_pipeline_composition_root_stays_partial_while_route_helpers_remain() -> None:
-    """The composition root is PARTIAL and reports the live steps.py import count."""
+def test_run_pipeline_composition_root_is_wired_when_route_imports_are_gone() -> None:
+    """The composition root is WIRED when the live route-private import count is zero."""
     from scripts.audit_full_system_wiring import (
         _load_relevant_files,
         _run_pipeline_composition_root,
@@ -1002,10 +1002,11 @@ def test_run_pipeline_composition_root_stays_partial_while_route_helpers_remain(
         f"{expected_count} route-private imports"
     )
 
-    assert item.status == "PARTIAL"
+    assert expected_count == 0
+    assert item.status == "WIRED"
     assert item.metadata["route_private_import_count"] == expected_count
     assert evidence in item.evidence
-    assert _COMPOSITION_ROOT_GAP in item.gaps
+    assert _COMPOSITION_ROOT_GAP not in item.gaps
 
     files = _load_relevant_files(REPO_ROOT)
     steps_key = "src/idis/services/runs/steps.py"
@@ -1013,10 +1014,17 @@ def test_run_pipeline_composition_root_stays_partial_while_route_helpers_remain(
         _run_pipeline_composition_root(files).metadata["route_private_import_count"]
         == expected_count
     )
-    files[steps_key] = files[steps_key].replace("        _run_full_rag_evidence,\n", "", 1)
-    shrunk = _run_pipeline_composition_root(files)
-    assert shrunk.status == "PARTIAL"
-    assert shrunk.metadata["route_private_import_count"] == expected_count - 1
+    files[steps_key] = files[steps_key].replace(
+        '    is_full = mode == "FULL"\n',
+        "    from idis.api.routes.runs import _planted_route_private_helper\n"
+        '    is_full = mode == "FULL"\n',
+        1,
+    )
+    planted = _run_pipeline_composition_root(files)
+    assert planted.status == "PARTIAL"
+    assert planted.metadata["route_private_import_count"] == 1
+    assert "1 route-private imports" in planted.evidence[0]
+    assert _COMPOSITION_ROOT_GAP in planted.gaps
 
 
 def test_rag_full_run_wiring_present_rejects_reexport_without_definition() -> None:
@@ -1031,6 +1039,11 @@ def test_rag_full_run_wiring_present_rejects_reexport_without_definition() -> No
 
     reexport_only = dict(files)
     reexport_only[_RUNS_TEXT_KEY] = _RAG_REEXPORT_LINE
+    evidence_key = f"{_STEP_RUNTIME_TEXT_PREFIX}evidence.py"
+    reexport_only[evidence_key] = reexport_only.get(evidence_key, "").replace(
+        "def _run_full_rag_evidence(",
+        "def _rag_evidence_definition_absent(",
+    )
     assert _rag_full_run_wiring_present(reexport_only) is False
 
 
@@ -1043,7 +1056,9 @@ def test_rag_full_run_wiring_present_accepts_definition_in_runs_or_step_runtime(
 
     files = _load_relevant_files(REPO_ROOT)
     runs_text = files[_RUNS_TEXT_KEY]
-    assert any(line.lstrip().startswith(_RAG_DEFINITION_PREFIX) for line in runs_text.splitlines())
+    evidence_text = files.get(f"{_STEP_RUNTIME_TEXT_PREFIX}evidence.py", "")
+    definition_lines = runs_text.splitlines() + evidence_text.splitlines()
+    assert any(line.lstrip().startswith(_RAG_DEFINITION_PREFIX) for line in definition_lines)
     assert _rag_full_run_wiring_present(files) is True
 
     moved = dict(files)

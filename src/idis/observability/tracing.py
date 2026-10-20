@@ -232,7 +232,7 @@ def instrument_fastapi(app: Any) -> None:
 
 
 _DB_TRACER_NAME = "idis.db"
-_DB_SPAN_STACK: contextvars.ContextVar[tuple[Any, ...]] = contextvars.ContextVar(
+_DB_SPAN_STACK: contextvars.ContextVar[tuple[tuple[Any, Any], ...]] = contextvars.ContextVar(
     "idis_db_span_stack"
 )
 _INSTRUMENTED_ENGINES: weakref.WeakSet[Any] = weakref.WeakSet()
@@ -262,40 +262,27 @@ def _sql_operation(statement: str) -> str:
     return "OTHER"
 
 
-def _push_db_span(span: Any) -> None:
-    _DB_SPAN_STACK.set((*_DB_SPAN_STACK.get(()), span))
+def _statement_key(context: Any, cursor: Any) -> Any:
+    if context is not None:
+        return context
+    return cursor
 
 
-def _pop_db_span() -> Any:
+def _push_db_entry(key: Any, span: Any) -> None:
+    _DB_SPAN_STACK.set((*_DB_SPAN_STACK.get(()), (key, span)))
+
+
+def _close_db_entry(key: Any, error_name: str | None) -> None:
     current = _DB_SPAN_STACK.get(())
-    if not current:
-        return None
-    _DB_SPAN_STACK.set(current[:-1])
-    return current[-1]
-
-
-def _run_listener(callback: Any, /, *args: Any) -> None:
-    try:
-        callback(*args)
-    except Exception as exc:
-        logger.debug(_LISTENER_FAILURE, type(exc).__name__)
-
-
-def _open_db_span(conn: Any, statement: str) -> None:
-    from opentelemetry import trace
-
-    operation = _sql_operation(statement)
-    system = str(conn.engine.dialect.name).lower()
-    span = trace.get_tracer(_DB_TRACER_NAME).start_span(
-        operation,
-        kind=trace.SpanKind.CLIENT,
-        attributes={"db.system": system, "db.operation": operation},
-    )
-    _push_db_span(span)
-
-
-def _close_db_span(error_name: str | None) -> None:
-    span = _pop_db_span()
+    match_index = -1
+    for index in range(len(current) - 1, -1, -1):
+        if current[index][0] is key:
+            match_index = index
+            break
+    if match_index < 0:
+        return
+    span = current[match_index][1]
+    _DB_SPAN_STACK.set(current[:match_index] + current[match_index + 1 :])
     if span is None:
         return
     try:
@@ -307,24 +294,59 @@ def _close_db_span(error_name: str | None) -> None:
         span.end()
 
 
+def _run_listener(callback: Any, /, *args: Any) -> None:
+    try:
+        callback(*args)
+    except Exception as exc:
+        logger.debug(_LISTENER_FAILURE, type(exc).__name__)
+
+
+def _start_db_span(conn: Any, statement: str) -> Any:
+    from opentelemetry import trace
+
+    operation = _sql_operation(statement)
+    system = str(conn.engine.dialect.name).lower()
+    return trace.get_tracer(_DB_TRACER_NAME).start_span(
+        operation,
+        kind=trace.SpanKind.CLIENT,
+        attributes={"db.system": system, "db.operation": operation},
+    )
+
+
 def _before_cursor_execute(
     conn: Any, cursor: Any, statement: str, parameters: Any, context: Any, executemany: bool
 ) -> None:
-    _run_listener(_open_db_span, conn, statement if isinstance(statement, str) else "")
+    def open_statement() -> None:
+        key = _statement_key(context, cursor)
+        span: Any = None
+        try:
+            span = _start_db_span(conn, statement if isinstance(statement, str) else "")
+        finally:
+            _push_db_entry(key, span)
+
+    _run_listener(open_statement)
 
 
 def _after_cursor_execute(
     conn: Any, cursor: Any, statement: str, parameters: Any, context: Any, executemany: bool
 ) -> None:
-    _run_listener(_close_db_span, None)
+    _run_listener(_close_db_entry, _statement_key(context, cursor), None)
 
 
 def _handle_db_error(exception_context: Any) -> None:
     def close_failed_statement() -> None:
         if exception_context.connection is None:
             return
+        execution_context = exception_context.execution_context
+        if execution_context is not None:
+            key = execution_context
+        else:
+            # SQLAlchemy 2.1.4 accepts a cursor argument but does not assign the slot.
+            key = getattr(exception_context, "cursor", None)
+            if key is None:
+                return
         caught = exception_context.sqlalchemy_exception or exception_context.original_exception
-        _close_db_span(type(caught).__name__)
+        _close_db_entry(key, type(caught).__name__)
 
     _run_listener(close_failed_statement)
 

@@ -195,7 +195,7 @@ def test_run_full_analysis_forwards_factory() -> None:
         raise _StopForTest
 
     with (
-        patch("idis.api.routes.runs._build_analysis_llm_client", fake_build),
+        patch("idis.services.runs.step_runtime.analysis._build_analysis_llm_client", fake_build),
         pytest.raises(_StopForTest),
     ):
         _run_full_analysis(
@@ -224,7 +224,7 @@ def test_run_full_debate_forwards_factory() -> None:
         raise _StopForTest
 
     with (
-        patch("idis.api.routes.runs._build_debate_role_runners", fake_build),
+        patch("idis.services.runs.step_runtime.analysis._build_debate_role_runners", fake_build),
         pytest.raises(_StopForTest),
     ):
         _run_full_debate(
@@ -250,7 +250,7 @@ def test_run_full_scoring_forwards_factory() -> None:
         raise _StopForTest
 
     with (
-        patch("idis.api.routes.runs._build_scoring_llm_client", fake_build),
+        patch("idis.services.runs.step_runtime.analysis._build_scoring_llm_client", fake_build),
         pytest.raises(_StopForTest),
     ):
         _run_full_scoring(

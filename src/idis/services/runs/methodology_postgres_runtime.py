@@ -48,7 +48,9 @@ from idis.providers.budget import (
 from idis.runtime.governance_envelopes import BUDGET_SCHEMA_VERSION, verify_envelope
 from idis.runtime.secure_files import secure_read_integrity_file
 from idis.services.extraction.methodology_task_extractor import (
+    METHODOLOGY_REQUEST_NOT_SENT_PROOFS,
     MethodologyProviderRequestNotAccepted,
+    MethodologyRequestNotSent,
     validate_step7_exact_terminal_set,
 )
 from idis.validators.audit_event_validator import validate_audit_event
@@ -404,6 +406,67 @@ class PostgresMethodologyExecutionBoundary:
                     "budget_terminal_state": "REFUNDED",
                     "nonacceptance_proof_kind": nonacceptance.proof_kind,
                     "provider_status_code": nonacceptance.provider_status_code,
+                },
+            )
+
+    def fail_request_not_sent(
+        self,
+        *,
+        tenant_id: str,
+        deal_id: str,
+        run_id: str,
+        run_step_id: str,
+        prepared: Any,
+        admission: MethodologyCallAdmissionProof,
+        request_not_sent: MethodologyRequestNotSent,
+        **_: Any,
+    ) -> None:
+        """Atomically refund a request proved not to have been sent."""
+        _require_scope(tenant_id, self._tenant_id)
+        if (
+            admission.prepared_call_sha256 != prepared.prepared_call_sha256
+            or admission.budget_reservation_id != prepared.budget_reservation_id
+            or admission.budget_policy_id != prepared.budget_policy_id
+            or request_not_sent.proof_kind != "PRE_SEND_LOCAL_FAILURE"
+            or (request_not_sent.code, request_not_sent.reason)
+            not in METHODOLOGY_REQUEST_NOT_SENT_PROOFS
+        ):
+            raise MethodologyPostgresRuntimeError("METHODOLOGY_ATTEMPT_OUTCOME_UNKNOWN")
+        with self._connection_factory() as connection:
+            set_tenant_local(connection, tenant_id)
+            vector = self._budget_vector(
+                policy_hash=admission.budget_policy_id,
+                reservation_id=prepared.budget_reservation_id,
+                reservation=prepared.reservation,
+            )
+            self._budget_store().refund_in_tx(connection, **vector)
+            PostgresMethodologyExtractionRepository(connection, tenant_id).finalize_attempt_failure(
+                deal_id=deal_id,
+                run_id=run_id,
+                attempt_id=admission.attempt_id,
+                run_step_id=run_step_id,
+                budget_reservation_id=prepared.budget_reservation_id,
+                budget_policy_id=admission.budget_policy_id,
+                safe_failure_code="METHODOLOGY_REQUEST_NOT_SENT",
+                lease_owner_id=self._lease_owner_id,
+                lease_fencing_token=self._lease_fencing_token,
+            )
+            _emit_methodology_audit_in_tx(
+                connection=connection,
+                audit_sink=self._audit_sink,
+                tenant_id=tenant_id,
+                deal_id=deal_id,
+                run_id=run_id,
+                event_type="deal.run.methodology_attempt.request_not_sent",
+                summary="Methodology request was not sent",
+                status_code=409,
+                safe={
+                    "attempt_id": admission.attempt_id,
+                    "run_step_id": run_step_id,
+                    "code": "METHODOLOGY_REQUEST_NOT_SENT",
+                    "budget_terminal_state": "REFUNDED",
+                    "request_not_sent_reason": request_not_sent.reason,
+                    "request_not_sent_proof_kind": request_not_sent.proof_kind,
                 },
             )
 

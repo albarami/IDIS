@@ -868,7 +868,7 @@ class SnapshotOutputComposition:
         return draft
 
     def _extract(self, **kwargs: Any) -> dict[str, Any]:
-        from idis.api.routes.runs import _run_snapshot_extraction
+        from idis.services.runs.step_runtime.snapshot import _run_snapshot_extraction
 
         self._require_producer_scope(kwargs)
         if kwargs["documents"] != self._context.documents:
@@ -886,7 +886,7 @@ class SnapshotOutputComposition:
         return summary
 
     def _grade(self, **kwargs: Any) -> dict[str, Any]:
-        from idis.api.routes.runs import _run_snapshot_auto_grade
+        from idis.services.runs.step_runtime.snapshot import _run_snapshot_auto_grade
 
         self._require_producer_scope(kwargs)
         d = self.begin_step(
@@ -905,7 +905,7 @@ class SnapshotOutputComposition:
         return summary
 
     def _calc(self, **kwargs: Any) -> dict[str, Any]:
-        from idis.api.routes.runs import _run_snapshot_calc
+        from idis.services.runs.step_runtime.snapshot import _run_snapshot_calc
 
         self._require_producer_scope(kwargs)
         d = self.begin_step(

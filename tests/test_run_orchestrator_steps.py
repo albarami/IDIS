@@ -1605,7 +1605,10 @@ class TestStartRunPreflightCorpusBehavior:
                 captured_documents.extend(kwargs["documents"])
                 return _stub_extract(**kwargs)
 
-            monkeypatch.setattr("idis.api.routes.runs._run_snapshot_extraction", capture_extract)
+            monkeypatch.setattr(
+                "idis.services.runs.step_runtime.snapshot._run_snapshot_extraction",
+                capture_extract,
+            )
             audit_sink = InMemoryAuditSink()
             app = create_app(
                 audit_sink=CapturingRequiredPostgresAuditSink(audit_sink),

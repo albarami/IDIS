@@ -285,7 +285,14 @@ def test_run_full_enrichment_strict_raises_on_missing_byol_without_leak() -> Non
             "idis.services.enrichment.service._build_default_registry",
             _fake_byol_only_registry,
         ),
-        patch("idis.api.routes.runs.is_strict_full_live_required", return_value=True),
+        patch(
+            "idis.services.runs.step_runtime.enrichment.is_strict_full_live_required",
+            return_value=True,
+        ) as enrichment_strict,
+        patch(
+            "idis.services.runs.step_runtime.common.is_strict_full_live_required",
+            return_value=True,
+        ) as common_strict,
         pytest.raises(RuntimeError) as exc_info,
     ):
         _run_full_enrichment(
@@ -298,6 +305,8 @@ def test_run_full_enrichment_strict_raises_on_missing_byol_without_leak() -> Non
             audit_sink=RecordingPostgresAuditSink(),
             deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
         )
+    assert enrichment_strict.called
+    assert common_strict.called
     # Note: with env markers present, the strict execution path bootstraps them into the
     # (in-memory) repo, so the block is the rights/credential outcome for the fake provider;
     # the exception must carry only the provider id, never a credential value.

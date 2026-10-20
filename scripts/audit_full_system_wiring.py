@@ -823,9 +823,27 @@ def _full_steps(files: dict[str, str]) -> WiringItem:
 
 
 def _run_pipeline_composition_root(files: dict[str, str]) -> WiringItem:
-    """Report the service composition root that still imports route-private helpers."""
+    """Report the live count of route-private imports in the composition root."""
     steps_text = files.get("src/idis/services/runs/steps.py", "")
     route_private_import_count = _count_build_run_context_route_private_imports(steps_text)
+    evidence = (
+        "steps.build_run_context function-local import block names "
+        f"{route_private_import_count} route-private imports"
+    )
+    if route_private_import_count == 0:
+        return WiringItem(
+            key="run_pipeline_composition_root",
+            label="Run pipeline composition root",
+            status="WIRED",
+            summary=(
+                "steps.build_run_context composes the run pipeline without "
+                "importing route-private helpers."
+            ),
+            evidence=[evidence],
+            gaps=[],
+            phase_2_action="Phase 2.1",
+            metadata={"route_private_import_count": route_private_import_count},
+        )
     return WiringItem(
         key="run_pipeline_composition_root",
         label="Run pipeline composition root",
@@ -834,12 +852,7 @@ def _run_pipeline_composition_root(files: dict[str, str]) -> WiringItem:
             "steps.build_run_context still composes the run pipeline by importing "
             "route-private helpers."
         ),
-        evidence=[
-            (
-                "steps.build_run_context function-local import block names "
-                f"{route_private_import_count} route-private imports"
-            ),
-        ],
+        evidence=[evidence],
         gaps=[
             "service-layer composition root still imports route-private helpers (Phase 2.1)",
         ],

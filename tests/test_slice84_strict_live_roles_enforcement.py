@@ -293,7 +293,7 @@ def test_full_steps_forward_strict_flag_to_builders() -> None:
         raise _StopForTest
 
     with (
-        patch("idis.api.routes.runs._build_analysis_llm_client", fake_analysis),
+        patch("idis.services.runs.step_runtime.analysis._build_analysis_llm_client", fake_analysis),
         pytest.raises(_StopForTest),
     ):
         _run_full_analysis(
@@ -307,7 +307,7 @@ def test_full_steps_forward_strict_flag_to_builders() -> None:
             strict_live_debate_backend_required=True,
         )
     with (
-        patch("idis.api.routes.runs._build_debate_role_runners", fake_debate),
+        patch("idis.services.runs.step_runtime.analysis._build_debate_role_runners", fake_debate),
         pytest.raises(_StopForTest),
     ):
         _run_full_debate(
@@ -320,7 +320,7 @@ def test_full_steps_forward_strict_flag_to_builders() -> None:
             strict_live_debate_backend_required=True,
         )
     with (
-        patch("idis.api.routes.runs._build_scoring_llm_client", fake_scoring),
+        patch("idis.services.runs.step_runtime.analysis._build_scoring_llm_client", fake_scoring),
         pytest.raises(_StopForTest),
     ):
         _run_full_scoring(

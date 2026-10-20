@@ -15,7 +15,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Protocol, cast, runtime_checkable
+from typing import Any, Final, Literal, Protocol, cast, runtime_checkable
 
 import yaml
 from jsonschema import Draft202012Validator
@@ -66,6 +66,32 @@ _PROMPT_METADATA_PATH = "prompts/methodology_question_extraction/1.0.0/metadata.
 _PROMPT_INPUT_SCHEMA_PATH = "schemas/extraction/methodology_question_extraction_input.json"
 _PROMPT_OUTPUT_SCHEMA_PATH = "schemas/extraction/methodology_question_extraction_output.json"
 _CONFIRMED_NONACCEPTANCE_HTTP_STATUSES = frozenset({400, 401, 402, 403, 404, 409, 413, 422, 429})
+_SDK_LOCAL_STREAMING_GUARD_PREFIX = (
+    "Streaming is required for operations that may take longer than 10 minutes"
+)
+
+MethodologyRequestNotSentCode = Literal[
+    "METHODOLOGY_HIDDEN_RETRY_FORBIDDEN",
+    "METHODOLOGY_UNPRICED_REQUEST_MODE",
+    "METHODOLOGY_CLIENT_UNAVAILABLE",
+    "METHODOLOGY_SDK_LOCAL_GUARD",
+]
+MethodologyRequestNotSentReason = Literal[
+    "HIDDEN_RETRY_FORBIDDEN",
+    "UNPRICED_BATCH_OR_CACHE",
+    "UNPRICED_WIRE_REQUEST",
+    "CLIENT_UNAVAILABLE",
+    "SDK_LOCAL_GUARD",
+]
+METHODOLOGY_REQUEST_NOT_SENT_PROOFS: Final[frozenset[tuple[str, str]]] = frozenset(
+    {
+        ("METHODOLOGY_HIDDEN_RETRY_FORBIDDEN", "HIDDEN_RETRY_FORBIDDEN"),
+        ("METHODOLOGY_UNPRICED_REQUEST_MODE", "UNPRICED_BATCH_OR_CACHE"),
+        ("METHODOLOGY_UNPRICED_REQUEST_MODE", "UNPRICED_WIRE_REQUEST"),
+        ("METHODOLOGY_CLIENT_UNAVAILABLE", "CLIENT_UNAVAILABLE"),
+        ("METHODOLOGY_SDK_LOCAL_GUARD", "SDK_LOCAL_GUARD"),
+    }
+)
 
 
 class MethodologyExtractionValidationError(ValueError):
@@ -100,6 +126,24 @@ class MethodologyProviderRequestNotAccepted(RuntimeError):
             raise ValueError("provider status does not prove request nonacceptance")
         self.provider_status_code = provider_status_code
         super().__init__(self.code)
+
+
+class MethodologyRequestNotSent(MethodologyExtractorConfigurationError):
+    """Typed proof that a methodology request was rejected before any send."""
+
+    proof_kind: Literal["PRE_SEND_LOCAL_FAILURE"] = "PRE_SEND_LOCAL_FAILURE"
+
+    def __init__(
+        self,
+        *,
+        code: MethodologyRequestNotSentCode,
+        reason: MethodologyRequestNotSentReason,
+    ) -> None:
+        if (code, reason) not in METHODOLOGY_REQUEST_NOT_SENT_PROOFS:
+            raise ValueError("request-not-sent proof is outside the closed set")
+        super().__init__(code, code)
+        self.reason = reason
+        self.args = (code,)
 
 
 @runtime_checkable
@@ -224,25 +268,52 @@ class AnthropicSDKMethodologyTransport:
         retries = kwargs.pop("retries", None)
         batch_mode = kwargs.pop("batch_mode", None)
         if retries != 0:
-            raise MethodologyExtractorConfigurationError(
-                "METHODOLOGY_HIDDEN_RETRY_FORBIDDEN", "Anthropic retries must equal zero"
+            hidden_retry = MethodologyRequestNotSent(
+                code="METHODOLOGY_HIDDEN_RETRY_FORBIDDEN",
+                reason="HIDDEN_RETRY_FORBIDDEN",
             )
+            raise hidden_retry from None
         if batch_mode is not False or "cache_control" in kwargs:
-            raise MethodologyExtractorConfigurationError(
-                "METHODOLOGY_UNPRICED_REQUEST_MODE",
-                "batch and prompt-cache request modes are not admitted by Task 6",
+            unpriced_mode = MethodologyRequestNotSent(
+                code="METHODOLOGY_UNPRICED_REQUEST_MODE",
+                reason="UNPRICED_BATCH_OR_CACHE",
             )
+            raise unpriced_mode from None
         try:
             wire_request = AnthropicMethodologyWireRequest.model_validate(kwargs)
-        except ValueError as exc:
-            raise MethodologyExtractorConfigurationError(
-                "METHODOLOGY_UNPRICED_REQUEST_MODE",
-                "transport arguments differ from the governed Anthropic wire request",
-            ) from exc
+        except ValueError:
+            wire_not_sent: MethodologyRequestNotSent | None = MethodologyRequestNotSent(
+                code="METHODOLOGY_UNPRICED_REQUEST_MODE",
+                reason="UNPRICED_WIRE_REQUEST",
+            )
+        else:
+            wire_not_sent = None
+        if wire_not_sent is not None:
+            raise wire_not_sent from None
         sdk_kwargs = wire_request.as_sdk_kwargs()
         started_ns = time.monotonic_ns()
         try:
-            response = self._client().messages.create(**sdk_kwargs)
+            client = self._client()
+        except Exception:
+            client_not_sent: MethodologyRequestNotSent | None = MethodologyRequestNotSent(
+                code="METHODOLOGY_CLIENT_UNAVAILABLE",
+                reason="CLIENT_UNAVAILABLE",
+            )
+        else:
+            client_not_sent = None
+        if client_not_sent is not None:
+            raise client_not_sent from None
+        local_guard: MethodologyRequestNotSent | None = None
+        try:
+            response = client.messages.create(**sdk_kwargs)
+        except ValueError as exc:
+            if type(exc) is ValueError and str(exc).startswith(_SDK_LOCAL_STREAMING_GUARD_PREFIX):
+                local_guard = MethodologyRequestNotSent(
+                    code="METHODOLOGY_SDK_LOCAL_GUARD",
+                    reason="SDK_LOCAL_GUARD",
+                )
+            else:
+                raise
         except Exception as exc:
             import anthropic
 
@@ -256,6 +327,8 @@ class AnthropicSDKMethodologyTransport:
                     provider_status_code=status_code
                 ) from exc
             raise
+        if local_guard is not None:
+            raise local_guard from None
         elapsed_ns = max(0, time.monotonic_ns() - started_ns)
         raw = response.model_dump(mode="json")
         blocks = raw.get("content")

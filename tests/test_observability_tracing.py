@@ -297,6 +297,103 @@ def _engine_listener_count(engine: Any) -> int:
     )
 
 
+class _SpanEndRecord:
+    """Counts end() calls on one database span."""
+
+    def __init__(self, span: Any) -> None:
+        self.span = span
+        self.ends = 0
+
+
+class _FakeDialect:
+    name = "sqlite"
+
+
+class _FakeEngine:
+    dialect = _FakeDialect()
+
+
+class _FakeConnection:
+    engine = _FakeEngine()
+
+
+class _FakeExceptionContext:
+    """Small stand-in for a SQLAlchemy ExceptionContext."""
+
+    def __init__(
+        self,
+        connection: Any,
+        execution_context: Any,
+        cursor: Any,
+        exception: BaseException,
+    ) -> None:
+        self.connection = connection
+        self.execution_context = execution_context
+        self.cursor = cursor
+        self.sqlalchemy_exception = exception
+        self.original_exception = exception
+
+
+def _configured_db_capture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Enable in-memory span capture without registering an engine."""
+    monkeypatch.setenv("IDIS_OTEL_ENABLED", "1")
+    monkeypatch.setenv("IDIS_OTEL_TEST_CAPTURE", "1")
+
+    from idis.observability.tracing import clear_test_spans, configure_tracing
+
+    configure_tracing()
+    clear_test_spans()
+
+
+def _record_db_spans(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    fail_on_idis_db_call: int | None = None,
+) -> list[_SpanEndRecord]:
+    """Wrap idis.db span creation and count each span's end() calls."""
+    from opentelemetry import trace
+
+    real_get_tracer = trace.get_tracer
+    records: list[_SpanEndRecord] = []
+    state = {"calls": 0, "wrapped": False}
+
+    def get_tracer(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "idis.db":
+            state["calls"] += 1
+            if fail_on_idis_db_call is not None and state["calls"] == fail_on_idis_db_call:
+                raise RuntimeError("span creation failed")
+        tracer = real_get_tracer(name, *args, **kwargs)
+        if name != "idis.db" or state["wrapped"]:
+            return tracer
+        state["wrapped"] = True
+        real_start = tracer.start_span
+
+        def start_span(*span_args: Any, **span_kwargs: Any) -> Any:
+            span = real_start(*span_args, **span_kwargs)
+            record = _SpanEndRecord(span)
+            original_end = span.end
+
+            def end(*end_args: Any, **end_kwargs: Any) -> None:
+                record.ends += 1
+                original_end(*end_args, **end_kwargs)
+
+            monkeypatch.setattr(span, "end", end)
+            records.append(record)
+            return span
+
+        monkeypatch.setattr(tracer, "start_span", start_span)
+        return tracer
+
+    monkeypatch.setattr(trace, "get_tracer", get_tracer)
+    return records
+
+
+def _direct_db_spans(monkeypatch: pytest.MonkeyPatch) -> list[_SpanEndRecord]:
+    """Configure capture and record spans created by direct listener calls."""
+    _configured_db_capture(monkeypatch)
+    return _record_db_spans(monkeypatch)
+
+
 class TestDBInstrumentation:
     """Tests for SQLAlchemy DB instrumentation."""
 
@@ -613,6 +710,256 @@ class TestDBInstrumentation:
         attributes = dict(db_spans[0].attributes or {})
         assert attributes["db.operation"] == operation
         assert db_spans[0].name == operation
+
+
+class TestDBSpanPairing:
+    """Keyed pairing of database spans across nested executes and errors."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_db_span_stack(self) -> Any:
+        from idis.observability.tracing import _DB_SPAN_STACK
+
+        _DB_SPAN_STACK.set(())
+        yield
+        _DB_SPAN_STACK.set(())
+
+    def test_inner_tracer_failure_does_not_end_the_outer_span(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed inner span stays absent and the outer span ends on its own after."""
+        from opentelemetry.trace import StatusCode
+        from sqlalchemy import event, text
+
+        from idis.observability.tracing import get_test_spans
+
+        engine = _instrumented_sqlite_engine(monkeypatch)
+        records = _record_db_spans(monkeypatch, fail_on_idis_db_call=2)
+        during: dict[str, Any] = {}
+
+        def run_inner_statement(
+            conn: Any,
+            cursor: Any,
+            statement: str,
+            parameters: Any,
+            context: Any,
+            executemany: bool,
+        ) -> None:
+            if statement != "SELECT 1":
+                return
+            with engine.connect() as inner_conn:
+                inner_conn.execute(text("SELECT 2"))
+            during["ends"] = [record.ends for record in records]
+            during["finished"] = len(_spans_with_db_system(get_test_spans()))
+
+        event.listen(engine, "before_cursor_execute", run_inner_statement)
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+
+        assert during["ends"] == [0]
+        assert during["finished"] == 0
+        assert [record.ends for record in records] == [1]
+        finished = _spans_with_db_system(get_test_spans())
+        assert len(finished) == 1
+        assert finished[0].name == "SELECT"
+        assert finished[0].status.status_code != StatusCode.ERROR
+
+    def test_raising_inner_after_listener_does_not_end_the_outer_span(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """handle_error after the inner after leaves the outer span open until its own after."""
+        from opentelemetry.trace import StatusCode
+        from sqlalchemy import event, text
+
+        engine = _instrumented_sqlite_engine(monkeypatch)
+        records = _record_db_spans(monkeypatch)
+        during: dict[str, list[int]] = {}
+
+        def run_inner_statement(
+            conn: Any,
+            cursor: Any,
+            statement: str,
+            parameters: Any,
+            context: Any,
+            executemany: bool,
+        ) -> None:
+            if statement != "SELECT 1":
+                return
+            with engine.connect() as inner_conn, contextlib.suppress(RuntimeError):
+                inner_conn.execute(text("SELECT 2"))
+            during["ends"] = [record.ends for record in records]
+
+        def raise_for_inner_statement(
+            conn: Any,
+            cursor: Any,
+            statement: str,
+            parameters: Any,
+            context: Any,
+            executemany: bool,
+        ) -> None:
+            if statement == "SELECT 2":
+                raise RuntimeError("after listener failed")
+
+        event.listen(engine, "before_cursor_execute", run_inner_statement)
+        event.listen(engine, "after_cursor_execute", raise_for_inner_statement)
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+
+        assert during["ends"] == [0, 1]
+        assert [record.ends for record in records] == [1, 1]
+        assert records[0].span.status.status_code != StatusCode.ERROR
+        assert records[1].span.status.status_code != StatusCode.ERROR
+        assert records[1].span.status.description in (None, "")
+
+    def test_handle_error_for_unmatched_key_leaves_stack_unchanged(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An error whose key has no entry does not close another statement."""
+        from idis.observability.tracing import (
+            _DB_SPAN_STACK,
+            _before_cursor_execute,
+            _handle_db_error,
+        )
+
+        records = _direct_db_spans(monkeypatch)
+        context = object()
+        connection = _FakeConnection()
+        _before_cursor_execute(connection, object(), "SELECT 1", None, context, False)
+        stack_before = _DB_SPAN_STACK.get(())
+
+        _handle_db_error(
+            _FakeExceptionContext(
+                connection=object(),
+                execution_context=object(),
+                cursor=object(),
+                exception=RuntimeError("unmatched"),
+            )
+        )
+
+        assert records[0].ends == 0
+        assert _DB_SPAN_STACK.get(()) is stack_before
+
+    def test_handle_error_without_connection_leaves_stack_unchanged(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """handle_error with connection None does not close the open statement."""
+        from idis.observability.tracing import (
+            _DB_SPAN_STACK,
+            _before_cursor_execute,
+            _handle_db_error,
+        )
+
+        records = _direct_db_spans(monkeypatch)
+        context = object()
+        cursor = object()
+        connection = _FakeConnection()
+        _before_cursor_execute(connection, cursor, "SELECT 1", None, context, False)
+        stack_before = _DB_SPAN_STACK.get(())
+
+        _handle_db_error(
+            _FakeExceptionContext(
+                connection=None,
+                execution_context=context,
+                cursor=cursor,
+                exception=RuntimeError("no connection"),
+            )
+        )
+
+        assert records[0].ends == 0
+        assert _DB_SPAN_STACK.get(()) is stack_before
+
+    def test_handle_error_without_context_or_cursor_leaves_stack_unchanged(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """handle_error does nothing when both the context and the cursor are None."""
+        from idis.observability.tracing import (
+            _DB_SPAN_STACK,
+            _before_cursor_execute,
+            _handle_db_error,
+        )
+
+        records = _direct_db_spans(monkeypatch)
+        connection = _FakeConnection()
+        _before_cursor_execute(connection, None, "SELECT 1", None, None, False)
+        stack_before = _DB_SPAN_STACK.get(())
+
+        _handle_db_error(
+            _FakeExceptionContext(
+                connection=connection,
+                execution_context=None,
+                cursor=None,
+                exception=RuntimeError("no key"),
+            )
+        )
+
+        assert records[0].ends == 0
+        assert _DB_SPAN_STACK.get(()) is stack_before
+
+    def test_after_pairs_by_cursor_when_execution_context_is_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A missing execution context pairs the after event by cursor identity."""
+        from opentelemetry.trace import StatusCode
+
+        from idis.observability.tracing import (
+            _DB_SPAN_STACK,
+            _after_cursor_execute,
+            _before_cursor_execute,
+        )
+
+        records = _direct_db_spans(monkeypatch)
+        cursor = object()
+        other_cursor = object()
+        connection = _FakeConnection()
+        _before_cursor_execute(connection, cursor, "SELECT 1", None, None, False)
+        _after_cursor_execute(connection, other_cursor, "SELECT 1", None, None, False)
+
+        assert records[0].ends == 0
+        stack = _DB_SPAN_STACK.get(())
+        assert len(stack) == 1
+        assert stack[0][0] is cursor
+
+        _after_cursor_execute(connection, cursor, "SELECT 1", None, None, False)
+        assert records[0].ends == 1
+        assert records[0].span.status.status_code != StatusCode.ERROR
+        assert _DB_SPAN_STACK.get(()) == ()
+
+        _after_cursor_execute(connection, cursor, "SELECT 1", None, None, False)
+        assert records[0].ends == 1
+
+    def test_handle_error_pairs_by_cursor_when_execution_context_is_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A missing execution context closes only the entry with the same cursor."""
+        from opentelemetry.trace import StatusCode
+
+        from idis.observability.tracing import (
+            _DB_SPAN_STACK,
+            _before_cursor_execute,
+            _handle_db_error,
+        )
+
+        records = _direct_db_spans(monkeypatch)
+        cursor_a = object()
+        cursor_b = object()
+        connection = _FakeConnection()
+        _before_cursor_execute(connection, cursor_a, "SELECT 1", None, None, False)
+        _before_cursor_execute(connection, cursor_b, "SELECT 2", None, None, False)
+
+        _handle_db_error(
+            _FakeExceptionContext(
+                connection=connection,
+                execution_context=None,
+                cursor=cursor_a,
+                exception=RuntimeError("cursor fault"),
+            )
+        )
+
+        assert [record.ends for record in records] == [1, 0]
+        assert records[0].span.status.status_code == StatusCode.ERROR
+        assert records[0].span.status.description == "RuntimeError"
+        stack = _DB_SPAN_STACK.get(())
+        assert len(stack) == 1
+        assert stack[0][0] is cursor_b
 
 
 class TestWebhookDeliverySpans:

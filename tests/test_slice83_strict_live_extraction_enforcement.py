@@ -200,7 +200,10 @@ def test_run_snapshot_extraction_forwards_strict_flag_to_builder() -> None:
         raise _StopForTest
 
     with (
-        patch("idis.api.routes.runs._build_extraction_llm_client", fake_build),
+        patch(
+            "idis.services.runs.step_runtime.snapshot._build_extraction_llm_client",
+            fake_build,
+        ),
         pytest.raises(_StopForTest),
     ):
         _run_snapshot_extraction(

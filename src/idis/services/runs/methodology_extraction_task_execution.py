@@ -29,12 +29,14 @@ from idis.models.methodology_extraction import (
 )
 from idis.services.extraction.methodology_task_extractor import (
     MethodologyProviderRequestNotAccepted,
+    MethodologyRequestNotSent,
 )
 from idis.services.extraction.service import Extractor
 from idis.services.extraction.task_executor import InMemoryMethodologyExtractionTaskExecutor
 
 METHODOLOGY_ATTEMPT_OUTCOME_UNKNOWN = "METHODOLOGY_ATTEMPT_OUTCOME_UNKNOWN"
 METHODOLOGY_PROVIDER_REQUEST_NOT_ACCEPTED = "METHODOLOGY_PROVIDER_REQUEST_NOT_ACCEPTED"
+METHODOLOGY_REQUEST_NOT_SENT = "METHODOLOGY_REQUEST_NOT_SENT"
 METHODOLOGY_TASK_COVERAGE_INCOMPLETE = "METHODOLOGY_TASK_COVERAGE_INCOMPLETE"
 
 
@@ -325,6 +327,32 @@ class DurableRunMethodologyExtractionTaskExecutionService:
                 )
                 raise DurableMethodologyExtractionExecutionError(
                     METHODOLOGY_PROVIDER_REQUEST_NOT_ACCEPTED
+                ) from exc
+            except MethodologyRequestNotSent as exc:
+                fail_request_not_sent = getattr(  # noqa: B009
+                    self._boundary,
+                    "fail_request_not_sent",
+                    None,
+                )
+                if callable(fail_request_not_sent):
+                    fail_request_not_sent(
+                        **scope,
+                        execution_input=execution_input,
+                        prepared=prepared,
+                        admission=admission,
+                        request_not_sent=exc,
+                    )
+                    raise DurableMethodologyExtractionExecutionError(
+                        METHODOLOGY_REQUEST_NOT_SENT
+                    ) from exc
+                self._boundary.mark_admitted_call_outcome_unknown(
+                    **scope,
+                    execution_input=execution_input,
+                    prepared=prepared,
+                    admission=admission,
+                )
+                raise DurableMethodologyExtractionExecutionError(
+                    METHODOLOGY_ATTEMPT_OUTCOME_UNKNOWN
                 ) from exc
             except Exception as exc:
                 self._boundary.mark_admitted_call_outcome_unknown(

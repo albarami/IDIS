@@ -536,7 +536,10 @@ def test_projection_repository_exceptions_are_sanitized(
     def raising_graph_claims(**_kwargs: Any) -> list[dict[str, Any]]:
         raise RuntimeError("Neo4j projection repo failed for neo4j+s://secret-host private_user")
 
-    monkeypatch.setattr("idis.api.routes.runs._graph_claims", raising_graph_claims)
+    monkeypatch.setattr(
+        "idis.services.runs.step_runtime.evidence._graph_claims",
+        raising_graph_claims,
+    )
 
     summary = _run_full_graph_evidence(
         run_id=RUN_ID,

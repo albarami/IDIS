@@ -53,6 +53,25 @@ from idis.services.runs.methodology_validated_evidence_package import (
 
 _PERSISTENCE_DIR = Path("src/idis/persistence")
 _MIGRATIONS_DIR = _PERSISTENCE_DIR / "migrations" / "versions"
+_STEP_RUNTIME_DIR = Path("src/idis/services/runs/step_runtime")
+
+
+def _step_runtime_sources() -> tuple[str, ...]:
+    return tuple(
+        path.read_text(encoding="utf-8") for path in sorted(_STEP_RUNTIME_DIR.glob("*.py"))
+    )
+
+
+def _route_and_step_runtime_text(runs_text: str, step_runtime_texts: tuple[str, ...]) -> str:
+    return "\n".join((runs_text, *step_runtime_texts))
+
+
+def _layer1_evidence_absent(runs_text: str, step_runtime_texts: tuple[str, ...]) -> bool:
+    return "layer1_evidence" not in _route_and_step_runtime_text(runs_text, step_runtime_texts)
+
+
+def _debate_sessions_absent(runs_text: str, step_runtime_texts: tuple[str, ...]) -> bool:
+    return "debate_sessions" not in _route_and_step_runtime_text(runs_text, step_runtime_texts)
 
 
 def _persistence_sources() -> str:
@@ -101,7 +120,8 @@ def test_durable_repos_exist_and_step_path_is_wired() -> None:
     assert "METHODOLOGY_LAYER1_PERSISTENCE_FAILED" in orchestrator_src
     steps_src = Path("src/idis/services/runs/steps.py").read_text(encoding="utf-8")
     assert "get_layer1_evidence_repository" in steps_src
-    assert "layer1_evidence" not in Path(runs_mod.__file__).read_text(encoding="utf-8")
+    runs_text = Path(runs_mod.__file__).read_text(encoding="utf-8")
+    assert _layer1_evidence_absent(runs_text, _step_runtime_sources())
 
 
 # --- 3. G1/DEC-A closed (Task 2): migration 0021 adds the Layer-1 durability tables ---
@@ -125,7 +145,7 @@ def test_muhasabah_persistence_exists_and_debate_sessions_stays_api_only() -> No
     # The durable debate_sessions table (migration 0009) is an API-route surface only:
     # the FULL pipeline path never writes it.
     runs_src = Path(runs_mod.__file__).read_text(encoding="utf-8")
-    assert "debate_sessions" not in runs_src
+    assert _debate_sessions_absent(runs_src, _step_runtime_sources())
     debate_route_src = Path("src/idis/api/routes/debate.py").read_text(encoding="utf-8")
     assert "debate_sessions" in debate_route_src
 
@@ -194,3 +214,11 @@ def test_product_bundle_has_safe_vep_package() -> None:
     # The bundle still never touches the court/claim internals directly.
     assert "trust_court" not in bundle_src
     assert "claim_text" not in bundle_src
+
+
+def test_route_layer_negative_checks_see_tokens_planted_in_step_runtime_text() -> None:
+    """A token planted only in synthetic step_runtime text fails the negative check."""
+    assert _layer1_evidence_absent("route", ())
+    assert not _layer1_evidence_absent("route", ("layer1_evidence = 1\n",))
+    assert _debate_sessions_absent("route", ())
+    assert not _debate_sessions_absent("route", ("debate_sessions = 1\n",))

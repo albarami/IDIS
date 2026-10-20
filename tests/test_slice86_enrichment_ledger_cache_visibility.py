@@ -84,48 +84,55 @@ def _request() -> EnrichmentRequest:
 
 
 def _run_step(*, strict: bool, registry_factory: Any = None, service: Any = None) -> dict[str, Any]:
+    from contextlib import ExitStack
+
     from idis.api.routes.runs import _run_full_enrichment
 
     env = _env_without("IDIS_REQUIRE_FULL_LIVE", "IDIS_STRICT_DOTENV_PATH")
-    patches = [patch.dict(os.environ, env, clear=True)]
-    if registry_factory is not None:
-        patches.append(
-            patch("idis.services.enrichment.service._build_default_registry", registry_factory)
-        )
-    if service is not None:
-        patches.append(
-            patch(
-                "idis.services.enrichment.service.create_default_enrichment_service",
-                lambda **_kw: service,
+    with ExitStack() as stack:
+        stack.enter_context(patch.dict(os.environ, env, clear=True))
+        if registry_factory is not None:
+            stack.enter_context(
+                patch("idis.services.enrichment.service._build_default_registry", registry_factory)
             )
-        )
-    if strict:
-        patches.append(
-            patch("idis.api.routes.runs.is_strict_full_live_required", return_value=True)
-        )
-    with patches[0], patches[1]:
-        if len(patches) == 3:
-            with patches[2]:
-                return _run_full_enrichment(
-                    run_id="run-1",
-                    tenant_id=TENANT_ID,
-                    deal_id="deal-1",
-                    created_claim_ids=[],
-                    calc_ids=[],
-                    db_conn=None,
-                    audit_sink=RecordingPostgresAuditSink(),
-                    deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
+        if service is not None:
+            stack.enter_context(
+                patch(
+                    "idis.services.enrichment.service.create_default_enrichment_service",
+                    lambda **_kw: service,
                 )
-        return _run_full_enrichment(
-            run_id="run-1",
-            tenant_id=TENANT_ID,
-            deal_id="deal-1",
-            created_claim_ids=[],
-            calc_ids=[],
-            db_conn=None,
-            audit_sink=RecordingPostgresAuditSink(),
-            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
-        )
+            )
+        enrichment_strict = None
+        common_strict = None
+        if strict:
+            enrichment_strict = stack.enter_context(
+                patch(
+                    "idis.services.runs.step_runtime.enrichment.is_strict_full_live_required",
+                    return_value=True,
+                )
+            )
+            common_strict = stack.enter_context(
+                patch(
+                    "idis.services.runs.step_runtime.common.is_strict_full_live_required",
+                    return_value=True,
+                )
+            )
+        try:
+            summary = _run_full_enrichment(
+                run_id="run-1",
+                tenant_id=TENANT_ID,
+                deal_id="deal-1",
+                created_claim_ids=[],
+                calc_ids=[],
+                db_conn=None,
+                audit_sink=RecordingPostgresAuditSink(),
+                deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
+            )
+        finally:
+            if strict:
+                assert enrichment_strict is not None and enrichment_strict.called
+                assert common_strict is not None and common_strict.called
+        return summary
 
 
 # --- from_cache: additive field, set ONLY on cache-hit results ---

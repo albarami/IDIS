@@ -169,7 +169,11 @@ def test_build_run_context_threads_same_sink_to_every_strict_run_helper(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Behavioral recorders prove the canonical context does not discard its supplied sink."""
-    import idis.api.routes.runs as runs_module
+    import idis.services.runs.step_runtime.analysis as analysis_module
+    import idis.services.runs.step_runtime.deliverables as deliverables_module
+    import idis.services.runs.step_runtime.enrichment as enrichment_module
+    import idis.services.runs.step_runtime.evidence as evidence_module
+    import idis.services.runs.step_runtime.snapshot as snapshot_module
     from idis.services.runs.steps import build_run_context
 
     monkeypatch.delenv("IDIS_OBJECT_STORE_BACKEND", raising=False)
@@ -191,8 +195,16 @@ def test_build_run_context_threads_same_sink_to_every_strict_run_helper(
         "scoring_fn": "_run_full_scoring",
         "deliverables_fn": "_run_full_deliverables",
     }
+    defining_module = {
+        "_run_snapshot_extraction": snapshot_module,
+        "_run_full_graph_evidence": evidence_module,
+        "_run_full_enrichment": enrichment_module,
+        "_run_full_analysis": analysis_module,
+        "_run_full_scoring": analysis_module,
+        "_run_full_deliverables": deliverables_module,
+    }
     for context_field, helper_name in helper_by_context_field.items():
-        monkeypatch.setattr(runs_module, helper_name, recorder(context_field))
+        monkeypatch.setattr(defining_module[helper_name], helper_name, recorder(context_field))
 
     sink = PostgresAuditSink()
     context = build_run_context(
@@ -223,6 +235,7 @@ def test_graph_projection_factory_receives_strict_postgres_sink(
     """The graph helper must not construct an unaudited GraphProjectionService."""
     import idis.api.routes.runs as runs_module
     import idis.persistence.graph_consistency as graph_module
+    import idis.services.runs.step_runtime.evidence as evidence_module
 
     constructed_with: list[Any] = []
 
@@ -233,12 +246,37 @@ def test_graph_projection_factory_receives_strict_postgres_sink(
         def project_deal(self, **_kwargs: Any) -> Any:
             return SimpleNamespace(status=graph_module.ProjectionStatus.SUCCESS)
 
+    used: list[str] = []
+
+    def _recording(name: str, value: Any) -> Callable[..., Any]:
+        def fake(**_kwargs: Any) -> Any:
+            used.append(name)
+            return value
+
+        return fake
+
     monkeypatch.setattr(graph_module, "GraphProjectionService", ProjectionService)
-    monkeypatch.setattr(runs_module, "_graph_calculations_by_claim", lambda **_kwargs: {})
-    monkeypatch.setattr(runs_module, "_graph_transmission_nodes_by_claim", lambda **_kwargs: {})
-    monkeypatch.setattr(runs_module, "_graph_defects_by_claim", lambda **_kwargs: {})
-    monkeypatch.setattr(runs_module, "_graph_claims", lambda **_kwargs: [])
-    monkeypatch.setattr(runs_module, "_graph_evidence_by_claim", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        evidence_module,
+        "_graph_calculations_by_claim",
+        _recording("_graph_calculations_by_claim", {}),
+    )
+    monkeypatch.setattr(
+        evidence_module,
+        "_graph_transmission_nodes_by_claim",
+        _recording("_graph_transmission_nodes_by_claim", {}),
+    )
+    monkeypatch.setattr(
+        evidence_module,
+        "_graph_defects_by_claim",
+        _recording("_graph_defects_by_claim", {}),
+    )
+    monkeypatch.setattr(evidence_module, "_graph_claims", _recording("_graph_claims", []))
+    monkeypatch.setattr(
+        evidence_module,
+        "_graph_evidence_by_claim",
+        _recording("_graph_evidence_by_claim", {}),
+    )
     sink = PostgresAuditSink()
 
     result = runs_module._project_graph_evidence(
@@ -252,6 +290,13 @@ def test_graph_projection_factory_receives_strict_postgres_sink(
 
     assert result["status"] == "projected"
     assert constructed_with == [sink]
+    assert used == [
+        "_graph_calculations_by_claim",
+        "_graph_transmission_nodes_by_claim",
+        "_graph_defects_by_claim",
+        "_graph_claims",
+        "_graph_evidence_by_claim",
+    ]
 
 
 def test_prompt_governance_cannot_create_memory_sink_in_strict_mode(

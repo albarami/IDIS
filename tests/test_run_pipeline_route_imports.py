@@ -104,68 +104,6 @@ FROZEN_ROUTE_IMPORTS: frozenset[RouteImport] = frozenset(
             0,  # was line 23
         ),
         (
-            "src/idis/services/runs/snapshot_postgres_output_staging.py",
-            "SnapshotOutputComposition._extract",
-            "idis.api.routes.runs",
-            ("_run_snapshot_extraction",),
-            0,  # was line 871
-        ),
-        (
-            "src/idis/services/runs/snapshot_postgres_output_staging.py",
-            "SnapshotOutputComposition._grade",
-            "idis.api.routes.runs",
-            ("_run_snapshot_auto_grade",),
-            0,  # was line 889
-        ),
-        (
-            "src/idis/services/runs/snapshot_postgres_output_staging.py",
-            "SnapshotOutputComposition._calc",
-            "idis.api.routes.runs",
-            ("_run_snapshot_calc",),
-            0,  # was line 908
-        ),
-        (
-            "src/idis/services/runs/steps.py",
-            "build_run_context",
-            "idis.api.routes.runs",
-            (
-                "_run_full_analysis",
-                "_run_full_debate",
-                "_run_full_deliverables",
-                "_run_full_enrichment",
-                "_run_full_graph_evidence",
-                "_run_full_layer2_ic_challenge",
-                "_run_full_methodology_deterministic_calculation",
-                "_run_full_rag_evidence",
-                "_run_full_scoring",
-                "_run_snapshot_auto_grade",
-                "_run_snapshot_calc",
-                "_run_snapshot_extraction",
-            ),
-            0,  # was line 328
-        ),
-        (
-            "src/idis/services/runs/strict_full_live.py",
-            "_layer2_ic_challenge_code_path_wired",
-            "idis.api.routes.runs",
-            _NO_IMPORTED_NAMES,
-            0,  # was line 2505
-        ),
-        (
-            "src/idis/services/runs/strict_full_live.py",
-            "_layer2_live_runner_construction_wired",
-            "idis.api.routes.runs",
-            _NO_IMPORTED_NAMES,
-            0,  # was line 2542
-        ),
-        (
-            "src/idis/services/runs/strict_full_live.py",
-            "_rag_code_path_wired",
-            "idis.api.routes.runs",
-            _NO_IMPORTED_NAMES,
-            0,  # was line 2599
-        ),
-        (
             "src/idis/services/runs/strict_full_live.py",
             "_ui_api_download_code_path_wired",
             "idis.api.routes.deliverables",
@@ -263,6 +201,79 @@ def test_moving_import_into_another_function_reports_vanished_and_new_records() 
     after = collect_route_imports_from_source(_SCOPE_PROBE_RELATIVE, _SCOPE_AFTER)
     with pytest.raises(AssertionError, match="(?s)New offender.*disappeared"):
         assert_route_imports_match(after, before)
+
+
+_ROUTES_PACKAGE_PROBE_RELATIVE = "src/idis/services/runs/routes_package_probe.py"
+_ROUTES_PACKAGE_IMPORT = "def probe():\n    from idis.api import routes\n"
+_ROUTES_PACKAGE_ALIAS = "def probe():\n    from idis.api import routes as alias\n"
+_FORMATTED_IMPORT_PROBE_RELATIVE = "src/idis/services/runs/formatted_import_probe.py"
+_FORMATTED_IMPORT_CALLS = (
+    "def probe(name, suffix):\n"
+    '    import_module(f"idis.api.routes.runs.{name}")\n'
+    '    __import__(f"idis.api.routes.{suffix}")\n'
+    '    import_module(f"{name}idis.api.routes")\n'
+)
+
+
+def test_from_import_of_routes_package_is_recorded() -> None:
+    """``from idis.api import routes`` is a route import even though the module is ``idis.api``."""
+    found = collect_route_imports_from_source(
+        _ROUTES_PACKAGE_PROBE_RELATIVE,
+        _ROUTES_PACKAGE_IMPORT,
+    )
+    expected = {
+        (
+            _ROUTES_PACKAGE_PROBE_RELATIVE,
+            "probe",
+            "idis.api.routes",
+            _NO_IMPORTED_NAMES,
+            0,
+        )
+    }
+    assert found == expected
+
+
+def test_from_import_of_routes_package_alias_is_recorded() -> None:
+    """``from idis.api import routes as alias`` matches ``module + '.' + alias.name``."""
+    found = collect_route_imports_from_source(
+        _ROUTES_PACKAGE_PROBE_RELATIVE,
+        _ROUTES_PACKAGE_ALIAS,
+    )
+    expected = {
+        (
+            _ROUTES_PACKAGE_PROBE_RELATIVE,
+            "probe",
+            "idis.api.routes",
+            _NO_IMPORTED_NAMES,
+            0,
+        )
+    }
+    assert found == expected
+
+
+def test_formatted_import_module_call_is_recorded_from_its_leading_literal() -> None:
+    """An f-string whose leading literal starts with the route prefix is a route import."""
+    found = collect_route_imports_from_source(
+        _FORMATTED_IMPORT_PROBE_RELATIVE,
+        _FORMATTED_IMPORT_CALLS,
+    )
+    expected = {
+        (
+            _FORMATTED_IMPORT_PROBE_RELATIVE,
+            "probe",
+            "idis.api.routes.runs.",
+            _NO_IMPORTED_NAMES,
+            0,
+        ),
+        (
+            _FORMATTED_IMPORT_PROBE_RELATIVE,
+            "probe",
+            "idis.api.routes.",
+            _NO_IMPORTED_NAMES,
+            0,
+        ),
+    }
+    assert found == expected
 
 
 def test_identical_import_module_calls_stay_distinct_by_ordinal() -> None:
@@ -369,6 +380,11 @@ def _consider_route_import(
         if imported.startswith(_ROUTE_MODULE_PREFIX):
             names = tuple(alias.name for alias in node.names)
             pending.append((scope, imported, names))
+            return
+        for alias in node.names:
+            candidate = f"{imported}.{alias.name}" if imported else alias.name
+            if candidate.startswith(_ROUTE_MODULE_PREFIX):
+                pending.append((scope, candidate, _NO_IMPORTED_NAMES))
         return
     if isinstance(node, ast.Import):
         for alias in node.names:
@@ -425,7 +441,15 @@ def _is_import_module_call(node: ast.Call) -> bool:
 def _constant_call_argument(node: ast.Call) -> str | None:
     if not node.args:
         return None
-    argument = node.args[0]
+    return _route_import_argument_text(node.args[0])
+
+
+def _route_import_argument_text(argument: ast.AST) -> str | None:
+    """Return a constant module string, or an f-string's leading literal."""
     if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
         return argument.value
+    if isinstance(argument, ast.JoinedStr) and argument.values:
+        first = argument.values[0]
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            return first.value
     return None

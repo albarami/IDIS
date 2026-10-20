@@ -115,7 +115,7 @@ def get_app_engine() -> Engine:
 
     if _app_engine is None:
         url = get_database_url(admin=False)
-        _app_engine = create_engine(
+        engine = create_engine(
             url,
             pool_size=5,
             max_overflow=10,
@@ -127,9 +127,14 @@ def get_app_engine() -> Engine:
         try:
             from idis.observability.tracing import instrument_sqlalchemy
 
-            instrument_sqlalchemy(_app_engine)
+            instrument_sqlalchemy(engine)
         except ImportError:
             pass
+        except Exception:
+            engine.dispose()
+            raise
+
+        _app_engine = engine
 
     return _app_engine
 

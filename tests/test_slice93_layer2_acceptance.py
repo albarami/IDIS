@@ -122,16 +122,23 @@ def _routed_stage_emphasis(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         monkeypatch.setenv(key, value)
     monkeypatch.setenv("IDIS_REQUIRE_FULL_LIVE", "true")
 
+    clients: list[object] = []
+
     def _build(**_kwargs: Any) -> tuple[Layer2ICLLMRunner, Layer2ICLLMRunner]:
         return challenger, arbiter
+
+    def _client(**_kwargs: Any) -> object:
+        client = object()
+        clients.append(client)
+        return client
 
     monkeypatch.setattr(
         "idis.services.runs.layer2_ic_challenge.build_live_layer2_ic_runners",
         _build,
     )
     monkeypatch.setattr(
-        "idis.api.routes.runs._new_budgeted_llm_client",
-        lambda **_kwargs: object(),
+        "idis.services.runs.step_runtime.layer2._new_budgeted_llm_client",
+        _client,
     )
     clear_in_memory_layer2_challenge_store()
     result = _run_full_layer2_ic_challenge(
@@ -146,6 +153,7 @@ def _routed_stage_emphasis(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         enrichment_refs={"enrich-ref-1": {"provider_id": "companies_house"}},
         deal_metadata={"stage": FIXTURE_STAGE.value},
     )
+    assert len(clients) == 2
     return result["stage_emphasis"]
 
 

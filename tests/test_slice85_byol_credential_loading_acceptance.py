@@ -245,7 +245,14 @@ def test_acceptance_execution_backstop_fails_closed_in_strict_without_leak() -> 
             "idis.services.enrichment.service._build_default_registry",
             _fake_byol_only_registry,
         ),
-        patch("idis.api.routes.runs.is_strict_full_live_required", return_value=True),
+        patch(
+            "idis.services.runs.step_runtime.enrichment.is_strict_full_live_required",
+            return_value=True,
+        ) as enrichment_strict,
+        patch(
+            "idis.services.runs.step_runtime.common.is_strict_full_live_required",
+            return_value=True,
+        ) as common_strict,
         pytest.raises(RuntimeError) as exc_info,
     ):
         _run_full_enrichment(
@@ -258,6 +265,8 @@ def test_acceptance_execution_backstop_fails_closed_in_strict_without_leak() -> 
             audit_sink=RecordingPostgresAuditSink(),
             deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
         )
+    assert enrichment_strict.called
+    assert common_strict.called
     surfaced = f"{exc_info.value!s}|{exc_info.value!r}"
     assert "fake_byol" in surfaced  # provider id only
     for marker in _ALL_MARKERS:

@@ -174,7 +174,10 @@ def _strict_layer2_fakes(
         "idis.services.runs.layer2_ic_challenge.build_live_layer2_ic_runners",
         _build,
     )
-    monkeypatch.setattr("idis.api.routes.runs._new_budgeted_llm_client", _client)
+    monkeypatch.setattr(
+        "idis.services.runs.step_runtime.layer2._new_budgeted_llm_client",
+        _client,
+    )
     return challenger, arbiter, built
 
 

@@ -73,19 +73,33 @@ def _run_step(*, strict: bool, registry_factory: Any = None, service: Any = None
                     lambda **_kw: service,
                 )
             )
-        stack.enter_context(
-            patch("idis.api.routes.runs.is_strict_full_live_required", return_value=strict)
+        enrichment_strict = stack.enter_context(
+            patch(
+                "idis.services.runs.step_runtime.enrichment.is_strict_full_live_required",
+                return_value=strict,
+            )
         )
-        return _run_full_enrichment(
-            run_id="run-1",
-            tenant_id=TENANT_ID,
-            deal_id="deal-1",
-            created_claim_ids=[],
-            calc_ids=[],
-            db_conn=None,
-            audit_sink=RecordingPostgresAuditSink(),
-            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
+        common_strict = stack.enter_context(
+            patch(
+                "idis.services.runs.step_runtime.common.is_strict_full_live_required",
+                return_value=strict,
+            )
         )
+        try:
+            summary = _run_full_enrichment(
+                run_id="run-1",
+                tenant_id=TENANT_ID,
+                deal_id="deal-1",
+                created_claim_ids=[],
+                calc_ids=[],
+                db_conn=None,
+                audit_sink=RecordingPostgresAuditSink(),
+                deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
+            )
+        finally:
+            assert enrichment_strict.called
+            assert common_strict.called
+        return summary
 
 
 # === A. Bullet 1: fatal in strict unless policy says optional ===

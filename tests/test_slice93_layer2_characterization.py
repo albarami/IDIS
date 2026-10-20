@@ -53,7 +53,8 @@ from idis.services.runs.layer2_ic_challenge import RunLayer2ICChallengeService
 
 _PERSISTENCE_DIR = Path("src/idis/persistence")
 _MIGRATIONS_DIR = _PERSISTENCE_DIR / "migrations" / "versions"
-_RUNS_ROUTE = Path("src/idis/api/routes/runs.py")
+_ROLES_MODULE = Path("src/idis/services/runs/step_runtime/roles.py")
+_LAYER2_STEP = Path("src/idis/services/runs/step_runtime/layer2.py")
 _STRICT = Path("src/idis/services/runs/strict_full_live.py")
 _LAYER2_SERVICE = Path("src/idis/services/runs/layer2_ic_challenge.py")
 _MEMO = Path("src/idis/deliverables/memo.py")
@@ -100,9 +101,9 @@ def test_durable_layer2_repos_exist_and_step_path_is_wired() -> None:
     assert list(_MIGRATIONS_DIR.glob("0022_layer2_ic_challenge_durability.py"))
     # The LAYER2 step path persists through the repository (Task 3): the route fn selects
     # the repository and fails closed, and steps.py binds db_conn and deal_metadata.
-    runs_src = _RUNS_ROUTE.read_text(encoding="utf-8")
-    assert "get_layer2_challenge_repository" in runs_src
-    assert "LAYER2_PERSISTENCE_FAILED" in runs_src
+    layer2_src = _LAYER2_STEP.read_text(encoding="utf-8")
+    assert "get_layer2_challenge_repository" in layer2_src
+    assert "LAYER2_PERSISTENCE_FAILED" in layer2_src
     steps_src = Path("src/idis/services/runs/steps.py").read_text(encoding="utf-8")
     assert (
         "partial(\n"
@@ -117,12 +118,14 @@ def test_durable_layer2_repos_exist_and_step_path_is_wired() -> None:
 
 
 def test_layer2_provenance_exists_and_strict_clears_on_proven_execution() -> None:
-    runs_src = _RUNS_ROUTE.read_text(encoding="utf-8")
-    assert "_build_debate_provenance" in runs_src
-    assert "_build_analysis_provenance" in runs_src
+    roles_src = _ROLES_MODULE.read_text(encoding="utf-8")
+    assert "_build_debate_provenance" in roles_src
+    assert "_build_analysis_provenance" in roles_src
     # Task 5: a Layer-2 provenance builder now exists and is surfaced in the result.
-    assert "_build_layer2_provenance" in runs_src
-    assert "layer2_provenance" in runs_src
+    assert "_build_layer2_provenance" in roles_src
+    assert "layer2_provenance" in roles_src
+    layer2_src = _LAYER2_STEP.read_text(encoding="utf-8")
+    assert "layer2_provenance" in layer2_src
     strict_src = _STRICT.read_text(encoding="utf-8")
     # The component still blocks on runtime proof when configured-but-not-yet-proven...
     assert "runtime proof that challenger and arbiter model calls executed" in strict_src

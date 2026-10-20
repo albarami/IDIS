@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-import idis.api.routes.runs as runs_mod
+import idis.services.runs.step_runtime.analysis as analysis_mod
 from idis.api.routes.runs import _run_full_debate
 from idis.calc.engine import CalcEngine, InputGradeInfo
 from idis.calc.formulas.core import register_core_formulas
@@ -45,7 +45,7 @@ def _capture_context(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         captured["context"] = context
         raise _StopAfterContext
 
-    monkeypatch.setattr(runs_mod, "_build_debate_role_runners", _capture)
+    monkeypatch.setattr(analysis_mod, "_build_debate_role_runners", _capture)
     return captured
 
 

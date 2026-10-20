@@ -72,20 +72,29 @@ def _run_step(registry_factory: Any, *, strict: bool = False) -> dict[str, Any]:
         patch.dict(os.environ, env, clear=True),
         patch("idis.services.enrichment.service._build_default_registry", registry_factory),
         patch(
-            "idis.api.routes.runs.is_strict_full_live_required",
+            "idis.services.runs.step_runtime.enrichment.is_strict_full_live_required",
             return_value=strict,
-        ),
+        ) as enrichment_strict,
+        patch(
+            "idis.services.runs.step_runtime.common.is_strict_full_live_required",
+            return_value=strict,
+        ) as common_strict,
     ):
-        return _run_full_enrichment(
-            run_id="run-1",
-            tenant_id=TENANT_ID,
-            deal_id="deal-1",
-            created_claim_ids=[],
-            calc_ids=[],
-            db_conn=None,
-            audit_sink=RecordingPostgresAuditSink(),
-            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
-        )
+        try:
+            summary = _run_full_enrichment(
+                run_id="run-1",
+                tenant_id=TENANT_ID,
+                deal_id="deal-1",
+                created_claim_ids=[],
+                calc_ids=[],
+                db_conn=None,
+                audit_sink=RecordingPostgresAuditSink(),
+                deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
+            )
+        finally:
+            assert enrichment_strict.called
+            assert common_strict.called
+        return summary
 
 
 # --- the pure comparator ---

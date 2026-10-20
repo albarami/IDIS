@@ -425,6 +425,7 @@ def _sentinel_config() -> RoleModelConfig:
 
 def test_builders_pass_resolver_model_and_max_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
     from idis.api.routes import runs as runs_module
+    from idis.services.runs.step_runtime import roles as roles_module
 
     sentinel = _sentinel_config()
     calls: list[tuple[str | None, int]] = []
@@ -438,8 +439,9 @@ def test_builders_pass_resolver_model_and_max_tokens(monkeypatch: pytest.MonkeyP
         calls.append((model, max_tokens))
         return object()
 
-    monkeypatch.setattr(runs_module, "resolve_role_config", _resolve)
-    monkeypatch.setattr(runs_module, "_new_budgeted_llm_client", _client)
+    # The builders now resolve these names in the roles module.
+    monkeypatch.setattr(roles_module, "resolve_role_config", _resolve)
+    monkeypatch.setattr(roles_module, "_new_budgeted_llm_client", _client)
     monkeypatch.setenv("IDIS_EXTRACT_BACKEND", "anthropic")
     monkeypatch.setenv("IDIS_DEBATE_BACKEND", "anthropic")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sentinel-not-used")
@@ -459,6 +461,7 @@ class _StopAfterRunners(Exception):
 
 def test_ic_route_passes_resolver_model_and_max_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
     from idis.api.routes import runs as runs_module
+    from idis.services.runs.step_runtime import layer2 as layer2_module
 
     sentinel = _sentinel_config()
     calls: list[tuple[str | None, int]] = []
@@ -476,9 +479,9 @@ def test_ic_route_passes_resolver_model_and_max_tokens(monkeypatch: pytest.Monke
         del challenger_client, arbiter_client
         raise _StopAfterRunners()
 
-    monkeypatch.setattr(runs_module, "resolve_role_config", _resolve)
-    monkeypatch.setattr(runs_module, "_new_budgeted_llm_client", _client)
-    monkeypatch.setattr(runs_module, "is_strict_full_live_required", lambda **_kwargs: True)
+    monkeypatch.setattr(layer2_module, "resolve_role_config", _resolve)
+    monkeypatch.setattr(layer2_module, "_new_budgeted_llm_client", _client)
+    monkeypatch.setattr(layer2_module, "is_strict_full_live_required", lambda **_kwargs: True)
     monkeypatch.setattr(
         "idis.services.runs.layer2_ic_challenge.build_live_layer2_ic_runners",
         _build,

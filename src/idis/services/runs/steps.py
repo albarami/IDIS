@@ -322,19 +322,22 @@ def build_run_context(
 ) -> RunContext:
     """Build a RunContext with the canonical step callables.
 
-    The callables still delegate to the existing route helper implementations
-    until Phase 2.1 finishes extracting all route-local wiring.
+    The callables delegate to the step implementations in idis.services.runs.step_runtime.
     """
-    from idis.api.routes.runs import (
+    from idis.services.runs.step_runtime.analysis import (
         _run_full_analysis,
         _run_full_debate,
-        _run_full_deliverables,
-        _run_full_enrichment,
-        _run_full_graph_evidence,
-        _run_full_layer2_ic_challenge,
-        _run_full_methodology_deterministic_calculation,
-        _run_full_rag_evidence,
         _run_full_scoring,
+    )
+    from idis.services.runs.step_runtime.deliverables import _run_full_deliverables
+    from idis.services.runs.step_runtime.enrichment import _run_full_enrichment
+    from idis.services.runs.step_runtime.evidence import (
+        _run_full_graph_evidence,
+        _run_full_rag_evidence,
+    )
+    from idis.services.runs.step_runtime.layer2 import _run_full_layer2_ic_challenge
+    from idis.services.runs.step_runtime.snapshot import (
+        _run_full_methodology_deterministic_calculation,
         _run_snapshot_auto_grade,
         _run_snapshot_calc,
         _run_snapshot_extraction,

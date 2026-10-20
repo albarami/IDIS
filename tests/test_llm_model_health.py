@@ -286,6 +286,17 @@ def test_roles_checked_independently(
 # --- 12. no network by default (client_factory not called unless run_probe) ---
 
 
+def test_production_probe_client_disables_sdk_retries() -> None:
+    """The billable probe constructs a client with no SDK retries and sends nothing."""
+    from idis.services.llm_model_health import _default_anthropic_client_factory
+
+    client = _default_anthropic_client_factory(_API_KEY)
+    try:
+        assert client.max_retries == 0
+    finally:
+        client.close()
+
+
 def test_no_network_by_default_client_factory_unused() -> None:
     # A factory that raises if called proves the default path never constructs a client.
     result = check_llm_model_health(

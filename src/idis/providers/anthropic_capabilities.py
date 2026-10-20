@@ -51,6 +51,17 @@ class QualificationStatus(StrEnum):
     UNKNOWN_ID_LEGACY_BOUND = "UNKNOWN_ID_LEGACY_BOUND"
 
 
+class RequestTransport(StrEnum):
+    """SDK helper that sends one resolved row.
+
+    ``create`` is ``messages.create``. ``stream`` is ``messages.stream``.
+    The streaming helper adds ``stream: true`` to the encoded body.
+    """
+
+    CREATE = "create"
+    STREAM = "stream"
+
+
 class RequestShapeReason(StrEnum):
     """Closed reasons for ``LLM_REQUEST_SHAPE_REJECTED``."""
 
@@ -88,7 +99,8 @@ class ModelCapability:
     ``thinking.type=between_tools``. That value is still only accepted at
     efforts low, medium, and high. ``forced_tool_choice_allowed`` records
     whether a forced tool choice is part of the shape. This builder rejects
-    every ``tool_choice`` argument.
+    every ``tool_choice`` argument. ``transport`` selects ``messages.create``
+    or ``messages.stream``. The builder does not add ``stream`` itself.
     """
 
     model_id: str
@@ -100,6 +112,7 @@ class ModelCapability:
     between_tools_allowed: bool
     forced_tool_choice_allowed: bool
     qualification_status: QualificationStatus
+    transport: RequestTransport
 
 
 def _legacy_row(model_id: str) -> ModelCapability:
@@ -113,6 +126,7 @@ def _legacy_row(model_id: str) -> ModelCapability:
         between_tools_allowed=False,
         forced_tool_choice_allowed=False,
         qualification_status=QualificationStatus.ADMITTED_V1,
+        transport=RequestTransport.CREATE,
     )
 
 
@@ -132,6 +146,7 @@ def _candidate_row(
         between_tools_allowed=between_tools_allowed,
         forced_tool_choice_allowed=False,
         qualification_status=QualificationStatus.CANDIDATE_NOT_QUALIFIED,
+        transport=RequestTransport.STREAM,
     )
 
 
@@ -162,6 +177,7 @@ _UNKNOWN_LEGACY_BOUND = ModelCapability(
     between_tools_allowed=False,
     forced_tool_choice_allowed=False,
     qualification_status=QualificationStatus.UNKNOWN_ID_LEGACY_BOUND,
+    transport=RequestTransport.CREATE,
 )
 
 
@@ -230,7 +246,9 @@ def build_request(
         tool_choice: Rejected for every row. Pass None to leave it unset.
 
     Returns:
-        Keyword arguments for one ``messages.create`` call.
+        Keyword arguments for one ``messages.create`` or ``messages.stream``
+        call. The resolved row's ``transport`` chooses the helper. The
+        streaming helper adds ``stream: true`` itself.
 
     Raises:
         LlmRequestShapeRejected: The shape is not sendable. The message is

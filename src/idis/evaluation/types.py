@@ -13,6 +13,68 @@ from datetime import UTC, datetime
 from enum import Enum, StrEnum
 from typing import Any, Literal
 
+from idis.api.openapi_loader import OpenAPILoadError, load_openapi_spec
+
+HARNESS_DEAL_STAGE_REQUIRED = "HARNESS_DEAL_STAGE_REQUIRED"
+HARNESS_DEAL_STAGE_INVALID = "HARNESS_DEAL_STAGE_INVALID"
+HARNESS_OPENAPI_UNAVAILABLE = "HARNESS_OPENAPI_UNAVAILABLE"
+_DEAL_STAGE_SCHEMA_NAME = "DealStage"
+
+
+class HarnessContractError(Exception):
+    """Fail-closed harness input error. The message is the stable code only."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
+def deal_stage_for_request(value: object) -> str:
+    """Return ``value`` only when it is an exact OpenAPI ``DealStage`` member.
+
+    ``None``, a non-string, and a blank string are missing. Any other string
+    that is not an exact enum member is invalid. The exception carries the
+    stable code only and does not echo the supplied value.
+
+    Args:
+        value: Stage text the operator or dataset case supplied.
+
+    Returns:
+        The same string, unchanged, when it is an exact ``DealStage`` member.
+
+    Raises:
+        HarnessContractError: ``HARNESS_DEAL_STAGE_REQUIRED``,
+            ``HARNESS_DEAL_STAGE_INVALID``, or ``HARNESS_OPENAPI_UNAVAILABLE``.
+            A missing OpenAPI document becomes ``HARNESS_OPENAPI_UNAVAILABLE``
+            with no path in the message or exception chain.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise HarnessContractError(HARNESS_DEAL_STAGE_REQUIRED)
+    allowed: frozenset[str] | None
+    try:
+        allowed = _openapi_deal_stage_values()
+    except OpenAPILoadError:
+        allowed = None
+    if allowed is None:
+        raise HarnessContractError(HARNESS_OPENAPI_UNAVAILABLE) from None
+    if value not in allowed:
+        raise HarnessContractError(HARNESS_DEAL_STAGE_INVALID)
+    return value
+
+
+def _openapi_deal_stage_values() -> frozenset[str]:
+    spec = load_openapi_spec()
+    components = spec.get("components")
+    schemas = components.get("schemas") if isinstance(components, dict) else None
+    schema = schemas.get(_DEAL_STAGE_SCHEMA_NAME) if isinstance(schemas, dict) else None
+    raw_enum = schema.get("enum") if isinstance(schema, dict) else None
+    if not isinstance(raw_enum, list) or not raw_enum:
+        raise HarnessContractError(HARNESS_DEAL_STAGE_INVALID)
+    values = [item for item in raw_enum if isinstance(item, str) and item]
+    if len(values) != len(raw_enum):
+        raise HarnessContractError(HARNESS_DEAL_STAGE_INVALID)
+    return frozenset(values)
+
 
 class ExitCode(int, Enum):
     """CLI exit codes for evaluation harness."""

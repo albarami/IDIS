@@ -26,6 +26,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Never, Protocol
 
+from idis.evaluation.types import deal_stage_for_request
 from idis.services.ingestion.no_substantive_content_attestation import (
     DOCUMENT_NO_SUBSTANTIVE_CONTENT_ATTESTATION_REQUIRED,
     DOCUMENT_NO_SUBSTANTIVE_CONTENT_CONFIRMED,
@@ -623,6 +624,7 @@ def prepare_two_company_source_packages(
     api_client: _PreparationApiClient,
     api_key: str,
     ledger_path: str | Path,
+    deal_stage: str | None,
     root: str | Path = DEFAULT_SOURCE_ROOT,
     expected_company_count: int = 2,
     expected_file_counts: Sequence[int] = DEFAULT_EXPECTED_FILE_COUNTS,
@@ -636,7 +638,10 @@ def prepare_two_company_source_packages(
     This is an injected-client boundary, not the final external launcher.  It
     performs no provider probes and never creates a run.  Every accepted resume
     row is checked against the deal-scoped durable API before it is skipped.
+
+    ``deal_stage`` is required and is checked before any source read or request.
     """
+    resolved_stage = deal_stage_for_request(deal_stage)
     if not isinstance(api_key, str) or not api_key.strip():
         raise SourcePackageContractError(
             "DATA_ROOM_DURABLE_HANDOFF_INCOMPLETE",
@@ -680,11 +685,13 @@ def prepare_two_company_source_packages(
                 json_body={
                     "name": company.deal_alias,
                     "company_name": company.company_alias,
+                    "stage": resolved_stage,
                 },
             )
             state["deal_id"] = _validate_deal_record(
                 response,
                 company=company,
+                deal_stage=resolved_stage,
             )
             _save_prepare_ledger(resolved_ledger_path, ledger, contract.root)
         else:
@@ -694,7 +701,10 @@ def prepare_two_company_source_packages(
                 expected_status=200,
                 headers=headers,
             )
-            if _validate_deal_record(response, company=company) != deal_id:
+            if (
+                _validate_deal_record(response, company=company, deal_stage=resolved_stage)
+                != deal_id
+            ):
                 _fail_durable("A resumed deal does not match its source company")
 
     deal_ids = [state["deal_id"] for state in company_states]
@@ -1469,9 +1479,14 @@ def _validate_deal_record(
     body: Mapping[str, Any],
     *,
     company: CompanySourceContract,
+    deal_stage: str,
 ) -> str:
     deal_id = _required_uuid(body, "deal_id")
-    if body.get("name") != company.deal_alias or body.get("company_name") != company.company_alias:
+    if (
+        body.get("name") != company.deal_alias
+        or body.get("company_name") != company.company_alias
+        or body.get("stage") != deal_stage
+    ):
         _fail_durable("A durable deal does not match its approved safe aliases")
     return deal_id
 

@@ -1057,6 +1057,7 @@ def test_failed_parse_receipt_cannot_advance_terminal_success_ledger(tmp_path: P
 
     with pytest.raises(SourcePackageContractError) as caught:
         prepare_two_company_source_packages(
+            deal_stage="SERIES_B",
             api_client=_FailedParsePreparationApi(),
             api_key="fictional-task4-api-key",
             ledger_path=tmp_path / "safe-preparation-ledger.jsonl",

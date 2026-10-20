@@ -4,9 +4,12 @@ Usage:
     python -m idis validate --validator <name> [--input PATH]
     python -m idis schemas check
     python -m idis prompts validate [--prompts-root DIR] [--repo-root DIR] [--out FILE]
-    python -m idis test gdbs-s --dataset <path> [--execute --base-url URL] [--out FILE]
-    python -m idis test gdbs-f --dataset <path> [--execute --base-url URL] [--out FILE]
-    python -m idis test gdbs-a --dataset <path> [--execute --base-url URL] [--out FILE]
+    python -m idis test gdbs-s --dataset <path> --deal-stage <DealStage>
+        [--execute --base-url URL] [--out FILE]
+    python -m idis test gdbs-f --dataset <path> --deal-stage <DealStage>
+        [--execute --base-url URL] [--out FILE]
+    python -m idis test gdbs-a --dataset <path> --deal-stage <DealStage>
+        [--execute --base-url URL] [--out FILE]
 
 Validators: no_free_facts, muhasabah, sanad_integrity, audit_event
 
@@ -215,7 +218,13 @@ def cmd_test_gdbs(args: argparse.Namespace) -> int:
         2: BLOCKED (execution blocked due to missing dependencies)
     """
     from idis.evaluation.harness import format_summary, get_exit_code, run_suite
-    from idis.evaluation.types import SuiteId
+    from idis.evaluation.types import HarnessContractError, SuiteId, deal_stage_for_request
+
+    try:
+        resolved_stage = deal_stage_for_request(args.deal_stage)
+    except HarnessContractError as exc:
+        print(exc.code, file=sys.stderr)
+        return 1
 
     suite: SuiteId = args.suite
     dataset_path = Path(args.dataset)
@@ -231,6 +240,7 @@ def cmd_test_gdbs(args: argparse.Namespace) -> int:
         result = run_suite(
             dataset_root=dataset_path,
             suite=suite,
+            deal_stage=resolved_stage,
             mode=mode,
             base_url=base_url,
             api_key=api_key,
@@ -262,6 +272,7 @@ def cmd_test_gdbs(args: argparse.Namespace) -> int:
     result = run_suite(
         dataset_root=dataset_path,
         suite=suite,
+        deal_stage=resolved_stage,
         mode=mode,
         base_url=base_url,
         api_key=api_key,
@@ -398,6 +409,12 @@ def create_parser() -> argparse.ArgumentParser:
             required=True,
             metavar="PATH",
             help="Path to GDBS dataset root (must contain manifest.json)",
+        )
+        suite_parser.add_argument(
+            "--deal-stage",
+            required=True,
+            dest="deal_stage",
+            help="Exact OpenAPI DealStage value for deal creation. Required; no default.",
         )
         suite_parser.add_argument(
             "--execute",

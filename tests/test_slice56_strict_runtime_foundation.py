@@ -491,6 +491,7 @@ def test_private_harness_strict_block_includes_inventory_before_upload_without_l
 
     summary = run_real_example_full_run_harness(
         RealExampleFullRunHarnessOptions(
+            deal_stage="SERIES_B",
             root=root,
             api_base_url=STRICT_API_BASE_URL,
             require_full_live=True,
@@ -527,6 +528,7 @@ def test_private_harness_strict_summary_buckets_private_unknown_suffixes(
 
     summary = run_real_example_full_run_harness(
         RealExampleFullRunHarnessOptions(
+            deal_stage="SERIES_B",
             root=root,
             api_base_url=STRICT_API_BASE_URL,
             require_full_live=True,
@@ -657,7 +659,7 @@ def test_non_strict_private_harness_keeps_existing_extension_summary(tmp_path: P
     client = _FakeApiClient()
 
     summary = run_real_example_full_run_harness(
-        RealExampleFullRunHarnessOptions(root=root, api_client=client)
+        RealExampleFullRunHarnessOptions(deal_stage="SERIES_B", root=root, api_client=client)
     )
 
     assert summary["status"] == "succeeded"

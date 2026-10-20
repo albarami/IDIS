@@ -31,6 +31,7 @@ def _prepare(
     ledger_path: Path,
 ) -> dict[str, Any]:
     return _module().prepare_two_company_source_packages(
+        deal_stage="SERIES_B",
         api_client=api,
         api_key="test-secret-that-must-never-be-serialized",
         ledger_path=ledger_path,
@@ -636,6 +637,7 @@ def test_count_drift_fails_before_any_api_call(tmp_path: Path) -> None:
 
     with pytest.raises(_module().SourcePackageContractError) as exc:
         _module().prepare_two_company_source_packages(
+            deal_stage="SERIES_B",
             api_client=api,
             api_key="test-secret",
             ledger_path=tmp_path / "ledger.json",

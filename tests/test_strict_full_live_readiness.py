@@ -341,6 +341,7 @@ def test_private_harness_require_full_live_blocks_before_upload_or_run_without_l
 
     summary = run_real_example_full_run_harness(
         RealExampleFullRunHarnessOptions(
+            deal_stage="SERIES_A",
             root=root,
             api_base_url=STRICT_API_BASE_URL,
             require_full_live=True,
@@ -393,6 +394,7 @@ def test_private_harness_require_full_live_proceeds_when_preflight_passes(
 
     summary = run_real_example_full_run_harness(
         RealExampleFullRunHarnessOptions(
+            deal_stage="SERIES_A",
             root=root,
             api_base_url=STRICT_API_BASE_URL,
             require_full_live=True,
@@ -425,7 +427,7 @@ def test_private_harness_non_strict_behavior_still_uploads_and_runs(tmp_path: Pa
     client = _FakeApiClient()
 
     summary = run_real_example_full_run_harness(
-        RealExampleFullRunHarnessOptions(root=root, api_client=client)
+        RealExampleFullRunHarnessOptions(deal_stage="SERIES_A", root=root, api_client=client)
     )
 
     assert summary["status"] == "succeeded"

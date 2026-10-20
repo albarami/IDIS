@@ -81,6 +81,7 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             "api_worker_path_comparison": _api_worker_path_comparison(files),
             "snapshot_steps": _snapshot_steps(files),
             "full_steps": _full_steps(files),
+            "run_pipeline_composition_root": _run_pipeline_composition_root(files),
             "ingestion_service": _ingestion_service(files),
             "persisted_ingestion_corpus": _persisted_ingestion_corpus(root, files),
             "unified_run_document_loader": _unified_run_document_loader(files),
@@ -501,6 +502,8 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/services/runs/execution.py",
         "src/idis/services/runs/orchestrator.py",
         "src/idis/services/runs/steps.py",
+        "src/idis/services/runs/snapshot_postgres_output_staging.py",
+        "src/idis/services/runs/strict_full_live.py",
         "src/idis/pipeline/worker.py",
         "src/idis/pipeline/executor.py",
         "src/idis/services/ingestion/service.py",
@@ -617,7 +620,37 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "tests/test_run_document_loader.py",
         "pyproject.toml",
     ]
+    relative_paths.extend(_step_runtime_allowlist_paths(root))
     return {path: _read(root / path) for path in relative_paths}
+
+
+def _step_runtime_allowlist_paths(root: Path) -> list[str]:
+    """Return step_runtime modules, or one absent path so `_read` yields empty text."""
+    directory = root / "src/idis/services/runs/step_runtime"
+    absent = "src/idis/services/runs/step_runtime/__init__.py"
+    if not directory.is_dir():
+        return [absent]
+    discovered = sorted(
+        path.relative_to(root).as_posix() for path in directory.glob("*.py") if path.is_file()
+    )
+    return discovered or [absent]
+
+
+def _runs_and_step_runtime_text(files: dict[str, str]) -> str:
+    """Combine runs.py with step_runtime sources without touching other API text."""
+    parts = [files.get("src/idis/api/routes/runs.py", "")]
+    prefix = "src/idis/services/runs/step_runtime/"
+    for path in sorted(files):
+        normalized = path.replace("\\", "/")
+        if normalized.startswith(prefix) and normalized.endswith(".py"):
+            parts.append(files[path])
+    return "\n".join(parts)
+
+
+def _source_defines_function(source: str, function_name: str) -> bool:
+    """Return True when a source line starts with `def function_name(`."""
+    prefix = f"def {function_name}("
+    return any(line.lstrip().startswith(prefix) for line in source.splitlines())
 
 
 def _read(path: Path) -> str:
@@ -787,6 +820,70 @@ def _full_steps(files: dict[str, str]) -> WiringItem:
             "RAG/graph inputs are not fed into analysis/debate context.",
         ],
     )
+
+
+def _run_pipeline_composition_root(files: dict[str, str]) -> WiringItem:
+    """Report the service composition root that still imports route-private helpers."""
+    steps_text = files.get("src/idis/services/runs/steps.py", "")
+    route_private_import_count = _count_build_run_context_route_private_imports(steps_text)
+    return WiringItem(
+        key="run_pipeline_composition_root",
+        label="Run pipeline composition root",
+        status="PARTIAL",
+        summary=(
+            "steps.build_run_context still composes the run pipeline by importing "
+            "route-private helpers."
+        ),
+        evidence=[
+            (
+                "steps.build_run_context function-local import block names "
+                f"{route_private_import_count} route-private imports"
+            ),
+        ],
+        gaps=[
+            "service-layer composition root still imports route-private helpers (Phase 2.1)",
+        ],
+        phase_2_action="Phase 2.1",
+        metadata={"route_private_import_count": route_private_import_count},
+    )
+
+
+def _count_build_run_context_route_private_imports(steps_source: str) -> int:
+    """Count idis.api.routes names imported inside build_run_context."""
+    if not steps_source.strip():
+        return 0
+    try:
+        tree = ast.parse(steps_source)
+    except SyntaxError as exc:
+        raise RuntimeError("steps.py could not be parsed for composition-root imports") from exc
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "build_run_context":
+            return _route_private_import_name_count(node)
+    return 0
+
+
+def _route_private_import_name_count(function: ast.AST) -> int:
+    skipped = _nested_scope_node_ids(function)
+    count = 0
+    for node in ast.walk(function):
+        if id(node) in skipped:
+            continue
+        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("idis.api.routes"):
+            count += len(node.names)
+        elif isinstance(node, ast.Import):
+            count += sum(1 for alias in node.names if alias.name.startswith("idis.api.routes"))
+    return count
+
+
+def _nested_scope_node_ids(function: ast.AST) -> set[int]:
+    skipped: set[int] = set()
+    for node in ast.walk(function):
+        if node is function:
+            continue
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            for inner in ast.walk(node):
+                skipped.add(id(inner))
+    return skipped
 
 
 def _ingestion_service(files: dict[str, str]) -> WiringItem:
@@ -2835,7 +2932,7 @@ def _api_upload_to_selected_run_smoke(files: dict[str, str]) -> WiringItem:
 
 
 def _default_upload_ingestion_wiring(files: dict[str, str]) -> WiringItem:
-    runs_text = files.get("src/idis/api/routes/runs.py", "")
+    runs_and_step_runtime = _runs_and_step_runtime_text(files)
     main_text = files.get("src/idis/api/main.py", "")
     defaults_text = files.get("src/idis/services/ingestion/defaults.py", "")
     evidence_repo_text = files.get("src/idis/persistence/repositories/evidence.py", "")
@@ -2887,8 +2984,8 @@ def _default_upload_ingestion_wiring(files: dict[str, str]) -> WiringItem:
     )
     full_run_step_name_ci_added = "tests/test_api_full_run_step_name_postgres.py" in ci_text
     evidence_repo_wired = (
-        "get_evidence_repository(db_conn, tenant_id)" in runs_text
-        and "evidence_repo=evidence_repo" in runs_text
+        "get_evidence_repository(db_conn, tenant_id)" in runs_and_step_runtime
+        and "evidence_repo=evidence_repo" in runs_and_step_runtime
         and "PostgresEvidenceRepository" in evidence_repo_text
     )
     durable_evidence_test_added = (
@@ -3838,7 +3935,7 @@ def _rag_vector_retrieval(root: Path, files: dict[str, str]) -> WiringItem:
 def _rag_full_run_wiring_present(files: dict[str, str]) -> bool:
     run_step = files.get("src/idis/models/run_step.py", "")
     steps = files.get("src/idis/services/runs/steps.py", "")
-    runs = files.get("src/idis/api/routes/runs.py", "")
+    runs_and_step_runtime = _runs_and_step_runtime_text(files)
     orchestrator = files.get("src/idis/services/runs/orchestrator.py", "")
     product_bundle = files.get("src/idis/deliverables/product_bundle.py", "")
     indexing = files.get("src/idis/services/rag/indexing.py", "")
@@ -3848,7 +3945,7 @@ def _rag_full_run_wiring_present(files: dict[str, str]) -> bool:
             "RAG_EVIDENCE" in run_step,
             run_step.find("RAG_EVIDENCE") > run_step.find("GRAPH_EVIDENCE"),
             run_step.find("ENRICHMENT") > run_step.find("RAG_EVIDENCE"),
-            "_run_full_rag_evidence" in runs,
+            _source_defines_function(runs_and_step_runtime, "_run_full_rag_evidence"),
             "rag_fn=" in steps,
             "_execute_rag_evidence" in orchestrator,
             "_rag_package" in product_bundle,

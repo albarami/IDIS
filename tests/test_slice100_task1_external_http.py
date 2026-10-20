@@ -104,6 +104,7 @@ def _root(tmp_path: Path) -> Path:
 def _strict_options(root: Path, **overrides: Any) -> RealExampleFullRunHarnessOptions:
     values: dict[str, Any] = {
         "root": root,
+        "deal_stage": "GROWTH",
         "require_full_live": True,
         "api_base_url": "http://127.0.0.1:8000",
         "strict_preflight_proof_id": "00000000-0000-4000-8000-000000000100",
@@ -339,7 +340,7 @@ def test_non_strict_harness_keeps_hermetic_injected_client_contract(tmp_path: Pa
 
     client = LegacyClient()
     summary = run_real_example_full_run_harness(
-        RealExampleFullRunHarnessOptions(root=root, api_client=client)
+        RealExampleFullRunHarnessOptions(deal_stage="GROWTH", root=root, api_client=client)
     )
 
     assert summary["status"] == "succeeded"

@@ -19,7 +19,8 @@ and thresholds only - no filesystem paths.
 Regenerating the pin after an INTENTIONAL dataset change:
     python -c "from pathlib import Path; import json; from idis.evaluation.baseline import \
 build_baseline_document; print(json.dumps(build_baseline_document(\
-dataset_root=Path('tests/fixtures/gdbs_mini'), suite='gdbs-s'), indent=2, sort_keys=True))"
+dataset_root=Path('tests/fixtures/gdbs_mini'), suite='gdbs-s', deal_stage='SEED'), \
+indent=2, sort_keys=True))"
 """
 
 from __future__ import annotations
@@ -106,13 +107,19 @@ def build_baseline_document(
     *,
     dataset_root: Path,
     suite: SuiteId,
+    deal_stage: str | None,
     suite_result: SuiteResult | None = None,
 ) -> dict[str, Any]:
     """Build a pinnable baseline document from a validate-mode run of the suite."""
     if suite_result is None:
         from idis.evaluation.harness import run_suite
 
-        suite_result = run_suite(dataset_root=Path(dataset_root), suite=suite, mode="validate")
+        suite_result = run_suite(
+            dataset_root=Path(dataset_root),
+            suite=suite,
+            deal_stage=deal_stage,
+            mode="validate",
+        )
 
     metrics = collect_current_metrics(Path(dataset_root), suite, suite_result)
     return {

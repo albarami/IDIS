@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from idis.audit.sink import InMemoryAuditSink
+from idis.evaluation.types import deal_stage_for_request
 from idis.models.run_step import FULL_STEPS, StepName
 from idis.persistence.repositories.run_steps import InMemoryRunStepsRepository
 from idis.services.runs.data_room_inventory_package import (
@@ -30,6 +31,7 @@ DEFERRED_LEGACY_STEP_REASONS: dict[str, str] = {
 def run_data_room_harness(
     *,
     data_room_root: str | Path,
+    stage: str | None,
     mode: str = "FULL",
     tenant_id: str,
     deal_id: str,
@@ -41,6 +43,7 @@ def run_data_room_harness(
 
     Args:
         data_room_root: Arbitrary local data-room folder.
+        stage: Exact OpenAPI ``DealStage`` value. Required; there is no default.
         mode: Run mode. Slice 17 supports ``FULL`` only.
         tenant_id: Tenant scope for the in-memory run.
         deal_id: Deal scope for the in-memory run.
@@ -53,7 +56,9 @@ def run_data_room_harness(
 
     Raises:
         ValueError: If mode is not ``FULL``.
+        HarnessContractError: If ``stage`` is missing or not an exact DealStage.
     """
+    resolved_stage = deal_stage_for_request(stage)
     if mode != "FULL":
         raise ValueError("Slice 17 data-room harness supports FULL mode only")
 
@@ -72,6 +77,7 @@ def run_data_room_harness(
         mode=mode,
         data_room_root=root,
         company_name=company_name,
+        stage=resolved_stage,
         audit_sink=audit_sink,
         parse_supported_files=parse_supported_files,
     )
@@ -109,6 +115,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--tenant-id", required=True)
     parser.add_argument("--deal-id", required=True)
     parser.add_argument("--company-name", required=True)
+    parser.add_argument("--stage", required=True, dest="stage")
     parser.add_argument("--output", dest="output_path")
     args = parser.parse_args(argv)
 
@@ -118,6 +125,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         tenant_id=args.tenant_id,
         deal_id=args.deal_id,
         company_name=args.company_name,
+        stage=args.stage,
         output_path=args.output_path,
     )
     if args.output_path is None:
@@ -133,6 +141,7 @@ def _build_context(
     mode: str,
     data_room_root: Path,
     company_name: str,
+    stage: str,
     audit_sink: InMemoryAuditSink,
     parse_supported_files: bool,
 ) -> RunContext:
@@ -147,6 +156,7 @@ def _build_context(
             "tenant_id": tenant_id,
             "deal_id": deal_id,
             "company_name": company_name,
+            "stage": stage,
         },
         data_room_root_path=str(data_room_root),
         preflight_corpus=[],

@@ -6,6 +6,7 @@ ingest real data rooms, call external APIs, or require live infrastructure.
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import pytest
@@ -932,3 +933,157 @@ def test_full_system_report_does_not_overstate_phase_2_9_wiring() -> None:
     assert "claim verdict/action promotion is not wired" in report.lower()
     assert "coverage updates are not wired" in report.lower()
     assert "claim-sanad link boundary is fully wired into production runs" not in report
+
+
+_COMPOSITION_ROOT_GAP = (
+    "service-layer composition root still imports route-private helpers (Phase 2.1)"
+)
+_RAG_DEFINITION_PREFIX = "def _run_full_rag_evidence("
+_RAG_REEXPORT_LINE = (
+    "from idis.services.runs.step_runtime.evidence import _run_full_rag_evidence  # noqa: F401\n"
+)
+_EVIDENCE_REPO_NEEDLES = (
+    "get_evidence_repository(db_conn, tenant_id)",
+    "evidence_repo=evidence_repo",
+)
+_RUNS_TEXT_KEY = "src/idis/api/routes/runs.py"
+_STEP_RUNTIME_TEXT_PREFIX = "src/idis/services/runs/step_runtime/"
+
+
+def _count_build_run_context_route_imports(tree: ast.AST) -> int:
+    """Count idis.api.routes names imported in build_run_context, excluding nested defs."""
+    for node in getattr(tree, "body", []):
+        if isinstance(node, ast.FunctionDef) and node.name == "build_run_context":
+            return _route_import_name_count(node)
+    raise AssertionError("build_run_context is missing from steps.py")
+
+
+def _route_import_name_count(function: ast.AST) -> int:
+    skipped = _nested_scope_ids(function)
+    count = 0
+    for node in ast.walk(function):
+        if id(node) in skipped:
+            continue
+        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("idis.api.routes"):
+            count += len(node.names)
+        elif isinstance(node, ast.Import):
+            count += sum(1 for alias in node.names if alias.name.startswith("idis.api.routes"))
+    return count
+
+
+def _nested_scope_ids(function: ast.AST) -> set[int]:
+    skipped: set[int] = set()
+    for node in ast.walk(function):
+        if node is function:
+            continue
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            for inner in ast.walk(node):
+                skipped.add(id(inner))
+    return skipped
+
+
+def _live_route_private_import_count() -> int:
+    steps_path = REPO_ROOT / "src/idis/services/runs/steps.py"
+    tree = ast.parse(steps_path.read_text(encoding="utf-8"))
+    return _count_build_run_context_route_imports(tree)
+
+
+def test_run_pipeline_composition_root_stays_partial_while_route_helpers_remain() -> None:
+    """The composition root is PARTIAL and reports the live steps.py import count."""
+    from scripts.audit_full_system_wiring import (
+        _load_relevant_files,
+        _run_pipeline_composition_root,
+    )
+
+    expected_count = _live_route_private_import_count()
+    item = collect_wiring_inventory(REPO_ROOT)["run_pipeline_composition_root"]
+    evidence = (
+        "steps.build_run_context function-local import block names "
+        f"{expected_count} route-private imports"
+    )
+
+    assert item.status == "PARTIAL"
+    assert item.metadata["route_private_import_count"] == expected_count
+    assert evidence in item.evidence
+    assert _COMPOSITION_ROOT_GAP in item.gaps
+
+    files = _load_relevant_files(REPO_ROOT)
+    steps_key = "src/idis/services/runs/steps.py"
+    assert (
+        _run_pipeline_composition_root(files).metadata["route_private_import_count"]
+        == expected_count
+    )
+    files[steps_key] = files[steps_key].replace("        _run_full_rag_evidence,\n", "", 1)
+    shrunk = _run_pipeline_composition_root(files)
+    assert shrunk.status == "PARTIAL"
+    assert shrunk.metadata["route_private_import_count"] == expected_count - 1
+
+
+def test_rag_full_run_wiring_present_rejects_reexport_without_definition() -> None:
+    """A re-export of _run_full_rag_evidence must not satisfy the FULL RAG check."""
+    from scripts.audit_full_system_wiring import (
+        _load_relevant_files,
+        _rag_full_run_wiring_present,
+    )
+
+    files = _load_relevant_files(REPO_ROOT)
+    assert _rag_full_run_wiring_present(files) is True
+
+    reexport_only = dict(files)
+    reexport_only[_RUNS_TEXT_KEY] = _RAG_REEXPORT_LINE
+    assert _rag_full_run_wiring_present(reexport_only) is False
+
+
+def test_rag_full_run_wiring_present_accepts_definition_in_runs_or_step_runtime() -> None:
+    """The RAG definition counts in runs.py or in step_runtime text."""
+    from scripts.audit_full_system_wiring import (
+        _load_relevant_files,
+        _rag_full_run_wiring_present,
+    )
+
+    files = _load_relevant_files(REPO_ROOT)
+    runs_text = files[_RUNS_TEXT_KEY]
+    assert any(line.lstrip().startswith(_RAG_DEFINITION_PREFIX) for line in runs_text.splitlines())
+    assert _rag_full_run_wiring_present(files) is True
+
+    moved = dict(files)
+    moved[_RUNS_TEXT_KEY] = runs_text.replace("_run_full_rag_evidence", "RAG_EVIDENCE_NAME_ABSENT")
+    moved[f"{_STEP_RUNTIME_TEXT_PREFIX}evidence.py"] = (
+        "def _run_full_rag_evidence(ctx):\n    return None\n"
+    )
+    assert _rag_full_run_wiring_present(moved) is True
+
+
+def test_default_upload_ingestion_needles_match_runs_or_step_runtime_text() -> None:
+    """Upload evidence-repo needles count in runs.py or in step_runtime text."""
+    from scripts.audit_full_system_wiring import (
+        _default_upload_ingestion_wiring,
+        _load_relevant_files,
+    )
+
+    files = _load_relevant_files(REPO_ROOT)
+
+    def wired(snapshot: dict[str, str]) -> bool:
+        return (
+            _default_upload_ingestion_wiring(snapshot).metadata["evidence_repo_wired_to_postgres"]
+            is True
+        )
+
+    assert wired(files) is True
+
+    stripped = dict(files)
+    for key, text in list(stripped.items()):
+        normalized = key.replace("\\", "/")
+        if normalized == _RUNS_TEXT_KEY or normalized.startswith(_STEP_RUNTIME_TEXT_PREFIX):
+            for needle in _EVIDENCE_REPO_NEEDLES:
+                text = text.replace(needle, "NEEDLE_ABSENT")
+            stripped[key] = text
+    assert wired(stripped) is False
+
+    moved = dict(stripped)
+    moved[f"{_STEP_RUNTIME_TEXT_PREFIX}snapshot.py"] = (
+        "def _run_snapshot_extraction():\n"
+        "    repo = get_evidence_repository(db_conn, tenant_id)\n"
+        "    pipeline = ExtractionPipeline(evidence_repo=evidence_repo)\n"
+    )
+    assert wired(moved) is True

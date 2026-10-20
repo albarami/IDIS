@@ -58,6 +58,7 @@ def test_synthetic_api_upload_rehearsal_requires_explicit_max_cases() -> None:
 
     try:
         build_bounded_synthetic_api_upload_rehearsal(
+            deal_stage="SEED",
             dataset_root=Path("datasets/gdbs_full"),
             env={},
             max_cases=None,
@@ -78,6 +79,7 @@ def test_synthetic_api_upload_rehearsal_requires_explicit_upload_permission() ->
 
     try:
         build_bounded_synthetic_api_upload_rehearsal(
+            deal_stage="SEED",
             dataset_root=Path("datasets/gdbs_full"),
             env={},
             max_cases=1,
@@ -98,6 +100,7 @@ def test_synthetic_api_upload_rehearsal_rejects_non_gdbs_root() -> None:
 
     try:
         build_bounded_synthetic_api_upload_rehearsal(
+            deal_stage="SEED",
             dataset_root=Path("tests/fixtures/gdbs_mini"),
             env={},
             max_cases=1,
@@ -126,6 +129,7 @@ def test_synthetic_api_upload_rehearsal_uploads_via_public_upload_only(
     monkeypatch.setattr(rehearsal.TestClient, "post", recording_post)
 
     report = rehearsal.build_bounded_synthetic_api_upload_rehearsal(
+        deal_stage="SEED",
         dataset_root=Path("datasets/gdbs_full"),
         env={},
         max_cases=1,
@@ -152,6 +156,7 @@ def test_synthetic_api_upload_rehearsal_reports_safe_uploaded_document_summaries
     )
 
     report = build_bounded_synthetic_api_upload_rehearsal(
+        deal_stage="SEED",
         dataset_root=Path("datasets/gdbs_full"),
         env={},
         max_cases=1,
@@ -208,6 +213,7 @@ def test_synthetic_api_upload_rehearsal_replaces_dataset_path_with_safe_label(
     )
 
     report = build_bounded_synthetic_api_upload_rehearsal(
+        deal_stage="SEED",
         dataset_root=Path("datasets/gdbs_full"),
         env={},
         max_cases=1,
@@ -233,6 +239,7 @@ def test_synthetic_api_upload_rehearsal_isolates_ambient_object_store_backend(
     monkeypatch.setenv("IDIS_OBJECT_STORE_BACKEND", "s3")
 
     report = build_bounded_synthetic_api_upload_rehearsal(
+        deal_stage="SEED",
         dataset_root=Path("datasets/gdbs_full"),
         env={},
         max_cases=1,
@@ -260,6 +267,7 @@ def test_synthetic_api_upload_rehearsal_isolates_ambient_database_url(
     monkeypatch.setenv("IDIS_DATABASE_URL", ambient_database_url)
 
     report = build_bounded_synthetic_api_upload_rehearsal(
+        deal_stage="SEED",
         dataset_root=Path("datasets/gdbs_full"),
         env={},
         max_cases=1,
@@ -297,6 +305,7 @@ def test_synthetic_api_upload_rehearsal_upload_failures_are_safe(
 
     try:
         rehearsal.build_bounded_synthetic_api_upload_rehearsal(
+            deal_stage="SEED",
             dataset_root=Path("datasets/gdbs_full"),
             env={},
             max_cases=1,
@@ -330,6 +339,7 @@ def test_synthetic_api_upload_rehearsal_does_not_upload_when_not_allowed_even_if
 
     try:
         rehearsal.build_bounded_synthetic_api_upload_rehearsal(
+            deal_stage="SEED",
             dataset_root=Path("datasets/gdbs_full"),
             env={},
             max_cases=1,
@@ -352,6 +362,7 @@ def test_synthetic_api_upload_rehearsal_never_claims_package_verification_withou
     )
 
     report = build_bounded_synthetic_api_upload_rehearsal(
+        deal_stage="SEED",
         dataset_root=Path("datasets/gdbs_full"),
         env={},
         max_cases=1,

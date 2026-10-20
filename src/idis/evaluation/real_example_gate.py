@@ -77,6 +77,7 @@ from idis.evaluation.real_example_terminal_reconciliation import (
     inspect_pdf_ocr_requirements,
     reconcile_terminal_ingestion,
 )
+from idis.evaluation.types import HarnessContractError, deal_stage_for_request
 from idis.models.document_classification import DocumentSupportStatus, DocumentTriageStatus
 from idis.parsers.media import (
     FASTER_WHISPER_ADAPTER_NAME,
@@ -2953,12 +2954,14 @@ def _execute_durable_ingestion_proof(
     profile_hmac_sha256: str,
     local_runtime_readiness_sha256: str,
     acceptance_tenant_id: str,
+    deal_stage: str | None,
     no_substantive_content_attestation: (
         VerifiedDocumentNoSubstantiveContentAttestation
         | VerifiedDocumentNoSubstantiveContentAttestationManifest
         | None
     ) = None,
 ) -> dict[str, Any]:
+    resolved_stage = deal_stage_for_request(deal_stage)
     if not _is_sha256(profile_hmac_sha256) or not _is_sha256(local_runtime_readiness_sha256):
         raise DurableIngestionGateError("STRICT_FULL_LIVE_BLOCKED")
     if not verify_tenant_isolation or canary_client is None:
@@ -2995,6 +2998,7 @@ def _execute_durable_ingestion_proof(
         api_client=api_client,
         api_key=api_key,
         ledger_path=ledger_path,
+        deal_stage=resolved_stage,
         root=root,
         expected_company_count=expected_company_count,
         expected_file_counts=expected_file_counts,
@@ -3259,6 +3263,7 @@ def _run_durable_ingestion_cli(
 ) -> int:
     try:
         profile_hmac_sha256 = _require_task4_gate_profile(strict_profile)
+        resolved_stage = deal_stage_for_request(getattr(args, "deal_stage", None))
         if strict_profile is None:  # pragma: no cover - rejected by the helper above.
             raise DurableIngestionGateError("STRICT_FULL_LIVE_BLOCKED")
         strict_env = strict_profile.values
@@ -3302,6 +3307,7 @@ def _run_durable_ingestion_cli(
                 receipt = _execute_durable_ingestion_proof(
                     root=source_root,
                     ledger_path=ledger_path,
+                    deal_stage=resolved_stage,
                     expected_company_count=expected_company_count,
                     expected_file_counts=expected_file_counts,
                     expected_total_files=expected_total_files,
@@ -3336,6 +3342,7 @@ def _run_durable_ingestion_cli(
         _write_safe_durable_ingestion_receipt(report_path, receipt)
     except (
         DurableIngestionGateError,
+        HarnessContractError,
         DocumentNoSubstantiveContentAttestationError,
         SourcePackageContractError,
         TerminalIngestionReconciliationError,
@@ -3399,6 +3406,7 @@ def main(
     parser.add_argument("--expected-company-count", type=int)
     parser.add_argument("--expected-file-counts")
     parser.add_argument("--expected-total-files", type=int)
+    parser.add_argument("--deal-stage", dest="deal_stage", required=False)
     parser.add_argument("--require-full-live", action="store_true")
     parser.add_argument("--prepare-data-rooms", action="store_true")
     parser.add_argument("--preflight-only", action="store_true")

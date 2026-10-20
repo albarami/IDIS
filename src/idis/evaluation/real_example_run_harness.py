@@ -19,6 +19,7 @@ from typing import Any, Generic, Protocol, TypeVar, cast
 from urllib.parse import urlsplit
 
 from idis.api.auth import IDIS_API_KEYS_ENV
+from idis.evaluation.types import deal_stage_for_request
 from idis.models.document_classification import DocumentSupportStatus, DocumentTriageStatus
 from idis.services.documents.parser_capabilities import capability_for_document
 from idis.services.runs.strict_full_live import (
@@ -161,6 +162,7 @@ class RealExampleFullRunHarnessOptions:
     """Options for the private production-style real_example run harness."""
 
     root: str | Path
+    deal_stage: str | None
     private_run: bool = True
     safe_summary: bool = True
     output_path: str | Path | None = None
@@ -445,6 +447,7 @@ def _run_harness_process_child(options: RealExampleFullRunHarnessOptions) -> Non
 
 
 def _validate_options(options: RealExampleFullRunHarnessOptions) -> None:
+    deal_stage_for_request(options.deal_stage)
     if not options.private_run:
         raise ValueError("real_example run harness requires private_run=True")
     if not options.safe_summary:
@@ -506,6 +509,7 @@ def _run_with_client(
     root: Path,
     client: _ApiClientLike,
 ) -> dict[str, Any]:
+    resolved_stage = deal_stage_for_request(options.deal_stage)
     harness_started_at = time.monotonic()
     upload_timing = _UploadTimingRecorder(
         max_upload_concurrency=options.max_upload_concurrency,
@@ -556,7 +560,11 @@ def _run_with_client(
                     else None
                 ),
             ),
-            json={"name": options.deal_name, "company_name": options.company_name},
+            json={
+                "name": options.deal_name,
+                "company_name": options.company_name,
+                "stage": resolved_stage,
+            },
         ),
         timeout_seconds=_remaining_timeout_seconds(harness_started_at, options.run_timeout_seconds),
         poll_interval_seconds=options.run_poll_interval_seconds,

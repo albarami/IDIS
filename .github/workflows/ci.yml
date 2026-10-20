@@ -981,7 +981,7 @@ jobs:
           echo "=== Running GDBS-S Evaluation Harness (validate mode, drift-gated) ==="
           # gdbs_mini fixture + pinned baseline: any nonzero exit (drift, blocked, or a
           # missing/malformed baseline) fails this step directly under bash errexit (Slice99)
-          python -m idis test gdbs-s --dataset tests/fixtures/gdbs_mini --baseline tests/fixtures/gdbs_baseline/gdbs_mini_gdbs_s_baseline.json --out gdbs_s_report.json
+          python -m idis test gdbs-s --dataset tests/fixtures/gdbs_mini --deal-stage SEED --baseline tests/fixtures/gdbs_baseline/gdbs_mini_gdbs_s_baseline.json --out gdbs_s_report.json
           echo "[OK] GDBS-S validation + drift gate PASSED"
 
       - name: Display GDBS-S report

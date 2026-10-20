@@ -165,6 +165,7 @@ class FakePreparationApi:
                 else str(uuid.uuid4())
             )
             requested_name = str(kwargs["json"]["name"])
+            requested_stage = kwargs["json"].get("stage")
             response_name = "deal-999" if self.deal_alias_mismatch else requested_name
             response_company = "company-999" if self.deal_alias_mismatch else company_alias
             self.state.deals.setdefault(
@@ -173,6 +174,7 @@ class FakePreparationApi:
                     "deal_id": deal_id,
                     "name": requested_name,
                     "company_name": company_alias,
+                    "stage": requested_stage,
                     "status": "NEW",
                 },
             )
@@ -180,6 +182,7 @@ class FakePreparationApi:
                 "deal_id": deal_id,
                 "name": response_name,
                 "company_name": response_company,
+                "stage": requested_stage,
                 "status": "NEW",
             }
             self._idempotency_commit(kwargs, fingerprint, 201, response_body)

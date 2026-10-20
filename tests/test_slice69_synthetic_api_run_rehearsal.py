@@ -65,6 +65,7 @@ def test_synthetic_api_run_rehearsal_requires_explicit_run_permission() -> None:
 
     try:
         rehearsal.build_bounded_synthetic_api_run_rehearsal(
+            deal_stage="SERIES_A",
             dataset_root=Path("datasets/gdbs_full"),
             env={},
             max_cases=1,
@@ -93,6 +94,7 @@ def test_synthetic_api_run_rehearsal_requires_max_cases_before_api_posts(
 
     try:
         rehearsal.build_bounded_synthetic_api_run_rehearsal(
+            deal_stage="SERIES_A",
             dataset_root=Path("datasets/gdbs_full"),
             env={},
             max_cases=None,
@@ -122,6 +124,7 @@ def test_synthetic_api_run_rehearsal_requires_upload_permission_before_api_posts
 
     try:
         rehearsal.build_bounded_synthetic_api_run_rehearsal(
+            deal_stage="SERIES_A",
             dataset_root=Path("datasets/gdbs_full"),
             env={},
             max_cases=1,
@@ -153,6 +156,7 @@ def test_synthetic_api_run_rehearsal_rejects_multi_case_before_upload_or_run_pos
 
     try:
         rehearsal.build_bounded_synthetic_api_run_rehearsal(
+            deal_stage="SERIES_A",
             dataset_root=Path("datasets/gdbs_full"),
             env={},
             max_cases=2,
@@ -184,6 +188,7 @@ def test_synthetic_api_run_rehearsal_uses_public_run_api_with_deal_documents(
     monkeypatch.setattr(rehearsal.TestClient, "post", recording_post)
 
     report = rehearsal.build_bounded_synthetic_api_run_rehearsal(
+        deal_stage="SERIES_A",
         dataset_root=Path("datasets/gdbs_full"),
         env={},
         max_cases=1,
@@ -223,6 +228,7 @@ def test_synthetic_api_run_rehearsal_reports_methodology_admission_failure_witho
     )
 
     report = build_bounded_synthetic_api_run_rehearsal(
+        deal_stage="SERIES_A",
         dataset_root=Path("datasets/gdbs_full"),
         env={},
         max_cases=1,
@@ -297,6 +303,7 @@ def test_synthetic_api_run_rehearsal_does_not_claim_block_when_run_is_accepted(
     )
 
     report = rehearsal.build_bounded_synthetic_api_run_rehearsal(
+        deal_stage="SERIES_A",
         dataset_root=Path("datasets/gdbs_full"),
         env={},
         max_cases=1,
@@ -379,6 +386,7 @@ def test_synthetic_api_run_rehearsal_isolates_ambient_run_env(
     monkeypatch.setenv("IDIS_OBJECT_STORE_BASE_DIR", str(tmp_path / "ambient-objects"))
 
     report = build_bounded_synthetic_api_run_rehearsal(
+        deal_stage="SERIES_A",
         dataset_root=Path("datasets/gdbs_full"),
         env={},
         max_cases=1,
@@ -410,6 +418,7 @@ def test_synthetic_api_run_rehearsal_report_has_no_private_surface_leakage(
     )
 
     report = build_bounded_synthetic_api_run_rehearsal(
+        deal_stage="SERIES_A",
         dataset_root=Path("datasets/gdbs_full"),
         env={},
         max_cases=1,

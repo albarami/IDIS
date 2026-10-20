@@ -9,7 +9,8 @@ Phase 6 Release Gate:
 
 Usage:
     python scripts/gates/gate_3_gdbs_f.py --status   # Check prerequisites
-    python scripts/gates/gate_3_gdbs_f.py --execute   # Run full gate evaluation
+    python scripts/gates/gate_3_gdbs_f.py --execute --deal-stage <DealStage>
+        # Run full gate evaluation
 """
 
 from __future__ import annotations
@@ -119,7 +120,7 @@ def run_gate_3_blocked() -> dict:
             "Integrate Sanad chain building into pipeline",
             "Wire debate orchestration to deliverable generation",
             "Implement /v1/deals/{dealId}/runs full execution endpoint",
-            "Run: python scripts/gates/gate_3_gdbs_f.py --execute",
+            "Run: python scripts/gates/gate_3_gdbs_f.py --execute --deal-stage <DealStage>",
         ],
     }
 
@@ -311,6 +312,8 @@ def _write_gate3_summary(results_dir: Path, suite_result: Any, gate_status: str)
 def run_gate_3_execute(
     case_limit: int | None = None,
     http_timeout: float | None = None,
+    *,
+    deal_stage: str | None,
 ) -> dict[str, Any]:
     """Execute Gate 3 evaluation on GDBS-F dataset.
 
@@ -325,6 +328,9 @@ def run_gate_3_execute(
     Returns:
         Gate result dict with status, metrics, and artifact paths.
     """
+    from idis.evaluation.types import deal_stage_for_request
+
+    resolved_stage = deal_stage_for_request(deal_stage)
     ready, blockers = check_prerequisites()
     if not ready:
         return {
@@ -381,6 +387,7 @@ def run_gate_3_execute(
         suite_result = run_suite(
             dataset_root=GDBS_PATH,
             suite="gdbs-f",
+            deal_stage=resolved_stage,
             mode="execute",
             base_url=GATE3_BASE_URL,
             api_key=GATE3_API_KEY,
@@ -443,6 +450,11 @@ def main() -> int:
         help="Execute Gate 3 evaluation (requires operational pipeline)",
     )
     parser.add_argument(
+        "--deal-stage",
+        dest="deal_stage",
+        help="Exact OpenAPI DealStage for deal creation. Required with --execute; no default.",
+    )
+    parser.add_argument(
         "--status",
         action="store_true",
         help="Show current gate status and blockers",
@@ -466,10 +478,18 @@ def main() -> int:
         args.status = True
 
     if args.execute:
+        from idis.evaluation.types import HarnessContractError, deal_stage_for_request
+
+        try:
+            resolved_stage = deal_stage_for_request(args.deal_stage)
+        except HarnessContractError as exc:
+            print(exc.code, file=sys.stderr)
+            return 1
         RESULTS_PATH.mkdir(parents=True, exist_ok=True)
         report = run_gate_3_execute(
             case_limit=args.limit,
             http_timeout=args.timeout,
+            deal_stage=resolved_stage,
         )
         status = report.get("status", "UNKNOWN")
 

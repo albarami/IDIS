@@ -108,6 +108,7 @@ def test_synthetic_full_execution_rehearsal_blocks_without_durable_methodologies
     monkeypatch.setattr(rehearsal, "verify_package_surfaces", fail_if_package_helper_called)
 
     report = rehearsal.build_bounded_synthetic_full_execution_rehearsal(
+        deal_stage="SERIES_B",
         dataset_root=Path("datasets/gdbs_full"),
         env={},
         max_cases=1,
@@ -165,6 +166,7 @@ def test_synthetic_full_execution_rehearsal_is_non_strict_and_not_runtime_proof(
     )
 
     report = rehearsal.build_bounded_synthetic_full_execution_rehearsal(
+        deal_stage="SERIES_B",
         dataset_root=Path("datasets/gdbs_full"),
         env={},
         max_cases=1,
@@ -187,6 +189,7 @@ def test_synthetic_full_execution_rehearsal_rejects_missing_execution_opt_in() -
 
     try:
         rehearsal.build_bounded_synthetic_full_execution_rehearsal(
+            deal_stage="SERIES_B",
             dataset_root=Path("datasets/gdbs_full"),
             env={},
             max_cases=1,
@@ -216,6 +219,7 @@ def test_synthetic_full_execution_rehearsal_requires_max_cases_before_api_posts(
 
     try:
         rehearsal.build_bounded_synthetic_full_execution_rehearsal(
+            deal_stage="SERIES_B",
             dataset_root=Path("datasets/gdbs_full"),
             env={},
             max_cases=None,
@@ -246,6 +250,7 @@ def test_synthetic_full_execution_rehearsal_requires_upload_opt_in_before_api_po
 
     try:
         rehearsal.build_bounded_synthetic_full_execution_rehearsal(
+            deal_stage="SERIES_B",
             dataset_root=Path("datasets/gdbs_full"),
             env={},
             max_cases=1,
@@ -277,6 +282,7 @@ def test_synthetic_full_execution_rehearsal_rejects_multi_case_before_api_posts(
 
     try:
         rehearsal.build_bounded_synthetic_full_execution_rehearsal(
+            deal_stage="SERIES_B",
             dataset_root=Path("datasets/gdbs_full"),
             env={},
             max_cases=2,
@@ -297,6 +303,7 @@ def test_synthetic_full_execution_rehearsal_rejects_non_gdbs_root() -> None:
 
     try:
         rehearsal.build_bounded_synthetic_full_execution_rehearsal(
+            deal_stage="SERIES_B",
             dataset_root=Path("real_example"),
             env={},
             max_cases=1,
@@ -323,6 +330,7 @@ def test_synthetic_full_execution_rehearsal_report_has_no_private_surface_leakag
     )
 
     report = rehearsal.build_bounded_synthetic_full_execution_rehearsal(
+        deal_stage="SERIES_B",
         dataset_root=Path("datasets/gdbs_full"),
         env={},
         max_cases=1,
@@ -418,6 +426,7 @@ def test_synthetic_full_execution_rehearsal_isolates_ambient_runtime_env(
     monkeypatch.setenv("IDIS_OBJECT_STORE_BASE_DIR", str(tmp_path / "ambient-objects"))
 
     report = rehearsal.build_bounded_synthetic_full_execution_rehearsal(
+        deal_stage="SERIES_B",
         dataset_root=Path("datasets/gdbs_full"),
         env={},
         max_cases=1,
@@ -498,6 +507,7 @@ def test_synthetic_full_execution_rehearsal_isolates_ambient_live_provider_env(
         monkeypatch.setenv(key, value)
 
     report = rehearsal.build_bounded_synthetic_full_execution_rehearsal(
+        deal_stage="SERIES_B",
         dataset_root=Path("datasets/gdbs_full"),
         env={},
         max_cases=1,

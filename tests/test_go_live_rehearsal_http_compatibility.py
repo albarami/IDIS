@@ -110,6 +110,7 @@ def _upload(client: TestClient | httpx.Client) -> None:
         client=client,
         dataset_root=Path("datasets/gdbs_full"),
         selected_cases=[SimpleNamespace(case_id="deal_001", directory="deals/deal_001_clean")],
+        deal_stage="SEED",
     )
 
 

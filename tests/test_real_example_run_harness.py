@@ -53,6 +53,7 @@ class _FakeApiClient:
     ) -> None:
         self.uploads: list[dict[str, Any]] = []
         self.run_requests: list[dict[str, Any]] = []
+        self.deal_requests: list[dict[str, Any]] = []
         self.created_deals = 0
         self._run_response = run_response or {"status": "SUCCEEDED", "steps": []}
         self._upload_statuses = list(upload_statuses or [])
@@ -68,6 +69,7 @@ class _FakeApiClient:
     ) -> _FakeResponse:
         if url == "/v1/deals":
             self.created_deals += 1
+            self.deal_requests.append(dict(json or {}))
             return _FakeResponse(201, {"deal_id": "deal-private-1"})
         if url == "/v1/deals/deal-private-1/documents/upload":
             self.uploads.append(
@@ -329,6 +331,7 @@ def test_harness_rejects_non_private_or_unsafe_summary(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="private"):
         run_real_example_full_run_harness(
             RealExampleFullRunHarnessOptions(
+                deal_stage="SEED",
                 root=root,
                 private_run=False,
                 safe_summary=True,
@@ -339,6 +342,7 @@ def test_harness_rejects_non_private_or_unsafe_summary(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="safe_summary"):
         run_real_example_full_run_harness(
             RealExampleFullRunHarnessOptions(
+                deal_stage="SEED",
                 root=root,
                 private_run=True,
                 safe_summary=False,
@@ -371,6 +375,7 @@ def test_harness_never_emits_private_paths_filenames_or_content(tmp_path: Path) 
 
     summary = run_real_example_full_run_harness(
         RealExampleFullRunHarnessOptions(
+            deal_stage="SEED",
             root=root,
             output_path=output_path,
             api_client=_FakeApiClient(),
@@ -402,7 +407,7 @@ def test_harness_suppresses_api_parser_diagnostics(tmp_path: Path, capsys: Any) 
             return super().post(*args, **kwargs)
 
     summary = run_real_example_full_run_harness(
-        RealExampleFullRunHarnessOptions(root=root, api_client=NoisyApiClient())
+        RealExampleFullRunHarnessOptions(deal_stage="SEED", root=root, api_client=NoisyApiClient())
     )
 
     captured = capsys.readouterr()
@@ -421,7 +426,7 @@ def test_harness_starts_full_run_with_selected_document_ids_not_folder_paths(
     client = _FakeApiClient()
 
     summary = run_real_example_full_run_harness(
-        RealExampleFullRunHarnessOptions(root=root, api_client=client)
+        RealExampleFullRunHarnessOptions(deal_stage="SEED", root=root, api_client=client)
     )
 
     assert summary["selected_document_count"] == 2
@@ -466,7 +471,7 @@ def test_harness_selects_only_parsed_uploaded_documents(tmp_path: Path) -> None:
     )
 
     summary = run_real_example_full_run_harness(
-        RealExampleFullRunHarnessOptions(root=root, api_client=client)
+        RealExampleFullRunHarnessOptions(deal_stage="SEED", root=root, api_client=client)
     )
 
     assert summary["uploaded_document_count"] == 1
@@ -496,7 +501,7 @@ def test_harness_requires_explicit_parsed_upload_status(tmp_path: Path) -> None:
     )
 
     summary = run_real_example_full_run_harness(
-        RealExampleFullRunHarnessOptions(root=root, api_client=client)
+        RealExampleFullRunHarnessOptions(deal_stage="SEED", root=root, api_client=client)
     )
 
     assert summary["status"] == "blocked"
@@ -530,7 +535,7 @@ def test_harness_rejects_non_exact_parsed_upload_status(tmp_path: Path) -> None:
     )
 
     summary = run_real_example_full_run_harness(
-        RealExampleFullRunHarnessOptions(root=root, api_client=client)
+        RealExampleFullRunHarnessOptions(deal_stage="SEED", root=root, api_client=client)
     )
 
     assert summary["selected_document_count"] == 0
@@ -557,7 +562,7 @@ def test_harness_reports_upload_read_errors_without_private_paths(
     monkeypatch.setattr(Path, "read_bytes", read_bytes_or_fail)
 
     summary = run_real_example_full_run_harness(
-        RealExampleFullRunHarnessOptions(root=root, api_client=_FakeApiClient())
+        RealExampleFullRunHarnessOptions(deal_stage="SEED", root=root, api_client=_FakeApiClient())
     )
 
     encoded = json.dumps(summary, sort_keys=True)
@@ -580,6 +585,7 @@ def test_harness_counts_deferred_files_safely_and_keeps_mp4_unavailable(
 
     summary = run_real_example_full_run_harness(
         RealExampleFullRunHarnessOptions(
+            deal_stage="SEED",
             root=root,
             api_client=_FakeApiClient(),
             local_stt_model_configured=False,
@@ -608,7 +614,7 @@ def test_harness_uploads_supported_html_text_class_without_leak(tmp_path: Path) 
     )
 
     summary = run_real_example_full_run_harness(
-        RealExampleFullRunHarnessOptions(root=root, api_client=_FakeApiClient())
+        RealExampleFullRunHarnessOptions(deal_stage="SEED", root=root, api_client=_FakeApiClient())
     )
 
     # Canonical-supported .html is uploaded/attempted, not deferred.
@@ -643,7 +649,7 @@ def test_harness_reports_full_run_blocker_as_structured_safe_blocker(
     )
 
     summary = run_real_example_full_run_harness(
-        RealExampleFullRunHarnessOptions(root=root, api_client=client)
+        RealExampleFullRunHarnessOptions(deal_stage="SEED", root=root, api_client=client)
     )
 
     assert summary["status"] == "blocked"
@@ -671,6 +677,7 @@ def test_harness_hard_timeout_returns_structured_safe_run_timeout(
 
     summary = run_real_example_full_run_harness(
         RealExampleFullRunHarnessOptions(
+            deal_stage="SEED",
             root=root,
             output_path=output_path,
             resume_state_output_path=resume_state_output_path,
@@ -727,6 +734,7 @@ def test_harness_deadline_returns_structured_timeout_during_upload(
 
     summary = run_real_example_full_run_harness(
         RealExampleFullRunHarnessOptions(
+            deal_stage="SEED",
             root=root,
             api_client=_SlowUploadApiClient(delay_seconds=0.1),
             run_timeout_seconds=0.04,
@@ -781,7 +789,7 @@ def test_harness_upload_profile_reports_safe_timing_counts_by_outcome(
     )
 
     summary = run_real_example_full_run_harness(
-        RealExampleFullRunHarnessOptions(root=root, api_client=client)
+        RealExampleFullRunHarnessOptions(deal_stage="SEED", root=root, api_client=client)
     )
 
     profile = summary["upload_profile"]
@@ -820,6 +828,7 @@ def test_harness_upload_profile_identifies_upload_api_as_slowest_phase_at_scale(
 
     summary = run_real_example_full_run_harness(
         RealExampleFullRunHarnessOptions(
+            deal_stage="SEED",
             root=root,
             api_client=_SlowUploadApiClient(delay_seconds=0.02),
             run_timeout_seconds=5,
@@ -857,7 +866,9 @@ def test_harness_upload_profile_exposes_internal_upload_api_phase_buckets(
     )
 
     summary = run_real_example_full_run_harness(
-        RealExampleFullRunHarnessOptions(root=root, api_client=_FakeApiClientWithPhaseRecorder())
+        RealExampleFullRunHarnessOptions(
+            deal_stage="SEED", root=root, api_client=_FakeApiClientWithPhaseRecorder()
+        )
     )
 
     internal_profile = summary["upload_profile"]["internal_upload_api"]
@@ -890,7 +901,7 @@ def test_harness_upload_profile_exposes_safe_parser_diagnostics(
     client = _FakeApiClientWithPhaseRecorder()
 
     summary = run_real_example_full_run_harness(
-        RealExampleFullRunHarnessOptions(root=root, api_client=client)
+        RealExampleFullRunHarnessOptions(deal_stage="SEED", root=root, api_client=client)
     )
 
     assert len(client.uploads) == 1
@@ -953,6 +964,7 @@ def test_harness_filters_unsafe_internal_upload_phase_recorder_summary(
 
     summary = run_real_example_full_run_harness(
         RealExampleFullRunHarnessOptions(
+            deal_stage="SEED",
             root=root,
             api_client=_FakeApiClientWithPhaseRecorder(_UnsafePhaseRecorder()),
         )
@@ -1007,6 +1019,7 @@ def test_harness_upload_timeout_returns_partial_timing_profile(
 
     summary = run_real_example_full_run_harness(
         RealExampleFullRunHarnessOptions(
+            deal_stage="SEED",
             root=root,
             api_client=_SlowUploadApiClient(delay_seconds=0.05),
             run_timeout_seconds=0.02,
@@ -1050,7 +1063,7 @@ def test_harness_upload_concurrency_is_disabled_by_default_and_order_is_stable(
     client = _FakeApiClient()
 
     summary = run_real_example_full_run_harness(
-        RealExampleFullRunHarnessOptions(root=root, api_client=client)
+        RealExampleFullRunHarnessOptions(deal_stage="SEED", root=root, api_client=client)
     )
 
     assert summary["upload_profile"]["concurrency"] == {
@@ -1072,7 +1085,7 @@ def test_harness_public_upload_contract_omits_optional_sha_without_folder_bypass
     client = _FakeApiClient()
 
     summary = run_real_example_full_run_harness(
-        RealExampleFullRunHarnessOptions(root=root, api_client=client)
+        RealExampleFullRunHarnessOptions(deal_stage="SEED", root=root, api_client=client)
     )
 
     assert summary["selected_document_count"] == 2
@@ -1103,6 +1116,7 @@ def test_in_process_upload_api_calls_are_not_executed_in_background_threads(
 
     summary = run_real_example_full_run_harness(
         RealExampleFullRunHarnessOptions(
+            deal_stage="SEED",
             root=root,
             api_client=_FakeApiClient(),
             run_timeout_seconds=5,
@@ -1122,6 +1136,7 @@ def test_harness_rejects_upload_concurrency_until_thread_safety_is_proven(
     with pytest.raises(ValueError, match="max_upload_concurrency"):
         run_real_example_full_run_harness(
             RealExampleFullRunHarnessOptions(
+                deal_stage="SEED",
                 root=root,
                 api_client=_FakeApiClient(),
                 max_upload_concurrency=2,
@@ -1220,6 +1235,7 @@ def test_process_wrapper_returns_structured_timeout_from_latest_checkpoint(
 
     summary = run_real_example_full_run_harness_process(
         RealExampleFullRunHarnessOptions(
+            deal_stage="SEED",
             root=tmp_path,
             output_path=output_path,
             checkpoint_output_path=checkpoint_path,
@@ -1320,6 +1336,7 @@ def test_process_wrapper_timeout_after_run_start_checkpoint_reports_attempted_ru
 
     summary = run_real_example_full_run_harness_process(
         RealExampleFullRunHarnessOptions(
+            deal_stage="SEED",
             root=tmp_path,
             checkpoint_output_path=checkpoint_path,
             run_timeout_seconds=0.01,
@@ -1348,6 +1365,7 @@ def test_process_checkpoint_is_aggregate_only_and_private_content_safe(
 
     summary = run_real_example_full_run_harness(
         RealExampleFullRunHarnessOptions(
+            deal_stage="SEED",
             root=root,
             api_client=_FakeApiClient(),
             checkpoint_output_path=checkpoint_path,
@@ -1370,6 +1388,7 @@ def test_process_wrapper_bounded_synthetic_run_succeeds(tmp_path: Path) -> None:
 
     summary = run_real_example_full_run_harness_process(
         RealExampleFullRunHarnessOptions(
+            deal_stage="SEED",
             root=root,
             output_path=tmp_path / "summary.json",
             checkpoint_output_path=tmp_path / "checkpoint.json",
@@ -1399,6 +1418,7 @@ def test_harness_deadline_bounds_inventory_without_private_paths(
 
     summary = run_real_example_full_run_harness(
         RealExampleFullRunHarnessOptions(
+            deal_stage="SEED",
             root=root,
             api_client=_FakeApiClient(),
             run_timeout_seconds=0.1,
@@ -1436,6 +1456,7 @@ def test_harness_deadline_bounds_file_triage_without_private_paths(
 
     summary = run_real_example_full_run_harness(
         RealExampleFullRunHarnessOptions(
+            deal_stage="SEED",
             root=root,
             api_client=_FakeApiClient(),
             run_timeout_seconds=0.1,
@@ -1465,6 +1486,7 @@ def test_harness_run_timeout_without_snapshot_still_reports_attempted_timeout(
 
     summary = run_real_example_full_run_harness(
         RealExampleFullRunHarnessOptions(
+            deal_stage="SEED",
             root=root,
             api_client=_SlowRunApiClient(delay_seconds=0.3, seed_run_snapshot=False),
             run_timeout_seconds=0.1,
@@ -1503,7 +1525,7 @@ def test_successful_synthetic_mini_data_room_run_produces_safe_aggregate_status(
     )
 
     summary = run_real_example_full_run_harness(
-        RealExampleFullRunHarnessOptions(root=root, api_client=client)
+        RealExampleFullRunHarnessOptions(deal_stage="SEED", root=root, api_client=client)
     )
 
     assert summary["harness"] == "real_example_production_full_run_private_v1"

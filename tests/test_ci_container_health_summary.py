@@ -73,7 +73,9 @@ _PRESERVED_STEP_NAMES = (
 _F99595EF_JOB_DIGESTS = {
     "backup-restore-drill": "152593732bb006b84ac1c26fe3a178d27f5d200ca69a2a2c7c48f720d87d70d3",
     "check": "6dc86cde933106f39b7eda71332029a7ca4bc94c08fec9a0f65e57cecc0e20f1",
-    "evaluation-harness": "ea835316a4d6d092d26f4739f66c75f852f396003cf8ce59f8ddb02d0a54eb35",
+    # GL-12 slice 2, 2026-10-19: --deal-stage SEED on the gdbs-s command. Previous digest:
+    # ea835316a4d6d092d26f4739f66c75f852f396003cf8ce59f8ddb02d0a54eb35
+    "evaluation-harness": "96ba60654e4ad689f78756ddbcc7fff7c496e5d8c733f3cb7167118403eed65b",
     "k8s-validate": "5054b069fee639461e357604d3ff5f7003386045b23703dccbaff80f8485ca19",
     # CIR-04 checkpoint 23 assembly re-pin: the H3 set and R5-04/R5-04b on the combined job.
     # Previous digests: 16c82ea3c93ff8df074a669f6e643ae2808099d22b05a4588683376f34ee0e7e (H3-6g)

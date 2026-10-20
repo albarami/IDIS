@@ -1615,6 +1615,7 @@ def test_durable_workflow_prepares_collects_and_reconciles_before_reducing(
     )
 
     receipt = gate._execute_durable_ingestion_proof(
+        deal_stage="SERIES_A",
         root=tmp_path / "source",
         ledger_path=tmp_path / ".local_reports" / "prepare-ledger.jsonl",
         expected_company_count=2,

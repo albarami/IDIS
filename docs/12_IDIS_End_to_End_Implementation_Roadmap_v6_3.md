@@ -691,7 +691,7 @@ docs(phase-3): update roadmap with Phase 3 completion
   3. Sanad chain building not automated
   4. Debate execution not integrated with deliverable generation
   5. No `/v1/deals/{dealId}/runs` full execution endpoint
-- **Framework ready:** When pipeline is complete, run `python scripts/gates/gate_3_gdbs_f.py --execute`
+- **Framework ready:** When pipeline is complete, run `python scripts/gates/gate_3_gdbs_f.py --execute --deal-stage <DealStage>`
 
 **CODEX APPROVAL (2026-01-19):**
 - **Commit:** `b50c839`

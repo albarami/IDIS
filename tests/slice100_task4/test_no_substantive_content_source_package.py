@@ -94,6 +94,7 @@ def test_all_uploads_bind_the_source_tree_fingerprint_header(tmp_path: Path) -> 
     api = FakePreparationApi()
 
     result = source_package.prepare_two_company_source_packages(
+        deal_stage="SERIES_B",
         api_client=api,
         api_key="test-only-secret",
         ledger_path=tmp_path / "ledger" / "prepare.jsonl",

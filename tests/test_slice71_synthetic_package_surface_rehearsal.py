@@ -22,6 +22,7 @@ def test_synthetic_package_surface_rehearsal_requires_explicit_package_opt_in() 
 
     try:
         rehearsal.build_bounded_synthetic_package_surface_rehearsal(
+            deal_stage="GROWTH",
             dataset_root=Path("datasets/gdbs_full"),
             env={},
             max_cases=1,
@@ -47,6 +48,7 @@ def test_synthetic_package_surface_rehearsal_fails_closed_without_postgres(
 
     try:
         rehearsal.build_bounded_synthetic_package_surface_rehearsal(
+            deal_stage="GROWTH",
             dataset_root=Path("datasets/gdbs_full"),
             env={},
             max_cases=1,
@@ -74,6 +76,7 @@ def test_synthetic_package_surface_rehearsal_fails_closed_when_postgres_unreacha
 
     try:
         rehearsal.build_bounded_synthetic_package_surface_rehearsal(
+            deal_stage="GROWTH",
             dataset_root=Path("datasets/gdbs_full"),
             env={},
             max_cases=1,
@@ -234,6 +237,7 @@ def test_synthetic_package_surface_rehearsal_proves_same_run_package_surfaces(
     monkeypatch.setenv("IDIS_ENABLE_VECTOR_SEARCH", "1")
 
     report = build_bounded_synthetic_package_surface_rehearsal(
+        deal_stage="GROWTH",
         dataset_root=Path("datasets/gdbs_full"),
         env={},
         max_cases=1,

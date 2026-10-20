@@ -101,7 +101,7 @@ make format && make lint && make typecheck && make test && make check
 make.bat check
 
 # Gate 3 execution (when ready)
-python scripts/gates/gate_3_gdbs_f.py --execute
+python scripts/gates/gate_3_gdbs_f.py --execute --deal-stage <DealStage>
 ```
 
 ---

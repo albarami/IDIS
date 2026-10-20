@@ -142,8 +142,8 @@ def test_count_step_rejects_not_executed_skip_mismatch_and_wrong_file(
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join(entries))
     node_ids = collected_linux_poppler_node_ids()
     no_database, database = _partition(node_ids)
-    assert len(node_ids) == 113
-    assert len(no_database) == 110
+    assert len(node_ids) == 118
+    assert len(no_database) == 115
     assert len(database) == 3
     cases = (
         tmp_path / "pass",

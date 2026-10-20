@@ -49,6 +49,13 @@ from idis.persistence.repositories.strict_preflight_proofs import (
     StrictPreflightProofError,
     get_strict_preflight_proofs_repository,
 )
+from idis.providers.role_config import (
+    LLM_ROLE_CONFIG_UNADMITTED,
+    LlmRole,
+    RoleConfigError,
+    RoleModelConfig,
+    resolve_role_config,
+)
 from idis.services.runs import strict_full_live as strict_full_live_module
 from idis.services.runs.execution import RunExecutionService
 from idis.services.runs.lifecycle import RunLifecycleService
@@ -2031,23 +2038,21 @@ def _run_full_layer2_ic_challenge(
     strict_dotenv_path = os.environ.get(IDIS_STRICT_DOTENV_PATH_ENV)
     strict_full_live = is_strict_full_live_required(dotenv_path=strict_dotenv_path)
     backend = str(os.environ.get("IDIS_DEBATE_BACKEND", "")).strip().lower()
-    default_model = os.environ.get(
-        "IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT",
-        "claude-sonnet-4-20250514",
-    )
-    arbiter_model = os.environ.get(
-        "IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER",
-        "claude-opus-4-20250514",
-    )
+    challenger_config = resolve_role_config(LlmRole.IC_CHALLENGER, backend=backend)
+    arbiter_config = resolve_role_config(LlmRole.IC_ARBITER, backend=backend)
     challenger_runner = None
     arbiter_runner = None
     if strict_full_live:
         challenger_runner, arbiter_runner = build_live_layer2_ic_runners(
             challenger_client=_new_budgeted_llm_client(
-                model=default_model, max_tokens=8192, tenant_id=tenant_id
+                model=challenger_config.model,
+                max_tokens=challenger_config.max_output_tokens,
+                tenant_id=tenant_id,
             ),
             arbiter_client=_new_budgeted_llm_client(
-                model=arbiter_model, max_tokens=8192, tenant_id=tenant_id
+                model=arbiter_config.model,
+                max_tokens=arbiter_config.max_output_tokens,
+                tenant_id=tenant_id,
             ),
         )
     service = RunLayer2ICChallengeService(
@@ -2127,8 +2132,8 @@ def _run_full_layer2_ic_challenge(
     result["layer2_provenance"] = _build_layer2_provenance(
         strict_full_live=strict_full_live,
         backend=backend,
-        challenger_model=default_model if strict_full_live else None,
-        arbiter_model=arbiter_model if strict_full_live else None,
+        challenger_model=challenger_config.model if strict_full_live else None,
+        arbiter_model=arbiter_config.model if strict_full_live else None,
         challenger_runner=challenger_runner,
         arbiter_runner=arbiter_runner,
     )
@@ -3468,11 +3473,32 @@ def _graph_evidence_by_claim(
     return evidence_by_claim
 
 
-_ANALYSIS_MAX_TOKENS = 8192
-_SCORING_MAX_TOKENS = 16384
-_DEBATE_MAX_TOKENS = 8192
-_DEFAULT_DEBATE_MODEL = "claude-sonnet-4-20250514"
-_DEFAULT_DEBATE_ARBITER_MODEL = "claude-opus-4-20250514"
+_ANALYSIS_ROLES = (
+    LlmRole.FINANCIAL_AGENT,
+    LlmRole.HISTORIAN_AGENT,
+    LlmRole.MARKET_AGENT,
+    LlmRole.RISK_OFFICER_AGENT,
+    LlmRole.SECTOR_SPECIALIST_AGENT,
+    LlmRole.TEAM_AGENT,
+    LlmRole.TECHNICAL_AGENT,
+    LlmRole.TERMS_AGENT,
+)
+_DEBATE_DEFAULT_ROLES = (
+    LlmRole.ADVOCATE,
+    LlmRole.SANAD_BREAKER,
+    LlmRole.CONTRADICTION_FINDER,
+    LlmRole.RISK_OFFICER,
+)
+
+
+def _shared_role_config(roles: tuple[LlmRole, ...], *, backend: str) -> RoleModelConfig:
+    """Return the shared model and token limit for roles that still use one client."""
+    configs = [resolve_role_config(role, backend=backend) for role in roles]
+    head = configs[0]
+    for config in configs[1:]:
+        if config.model != head.model or config.max_output_tokens != head.max_output_tokens:
+            raise RoleConfigError(LLM_ROLE_CONFIG_UNADMITTED)
+    return head
 
 
 @dataclass(frozen=True)
@@ -3509,43 +3535,39 @@ DebateRoleRunnersFactory = Callable[[DebateRoleRunnerSelection], Any]
 
 
 def _resolve_analysis_selection() -> AnalysisClientSelection:
-    """Resolve the analysis backend/model selection from env (no client construction)."""
+    """Resolve the analysis backend, model, and token limit from the admitted rows."""
     backend = os.environ.get("IDIS_DEBATE_BACKEND", "deterministic")
-    model = (
-        os.environ.get("IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT", _DEFAULT_DEBATE_MODEL)
-        if backend == "anthropic"
-        else None
+    config = _shared_role_config(_ANALYSIS_ROLES, backend=backend)
+    return AnalysisClientSelection(
+        backend=backend,
+        model=config.model,
+        max_tokens=config.max_output_tokens,
     )
-    return AnalysisClientSelection(backend=backend, model=model, max_tokens=_ANALYSIS_MAX_TOKENS)
 
 
 def _resolve_scoring_selection() -> ScoringClientSelection:
-    """Resolve the scoring backend/model selection from env (no client construction)."""
+    """Resolve the scoring backend, model, and token limit from the admitted row."""
     backend = os.environ.get("IDIS_DEBATE_BACKEND", "deterministic")
-    model = (
-        os.environ.get("IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT", _DEFAULT_DEBATE_MODEL)
-        if backend == "anthropic"
-        else None
+    config = resolve_role_config(LlmRole.SCORING, backend=backend)
+    return ScoringClientSelection(
+        backend=backend,
+        model=config.model,
+        max_tokens=config.max_output_tokens,
     )
-    return ScoringClientSelection(backend=backend, model=model, max_tokens=_SCORING_MAX_TOKENS)
 
 
 def _resolve_debate_selection() -> DebateRoleRunnerSelection:
-    """Resolve the debate backend/models selection from env (no runner construction)."""
+    """Resolve the debate backend and models from the admitted rows."""
     backend = os.environ.get("IDIS_DEBATE_BACKEND", "deterministic")
-    if backend == "anthropic":
-        default_model = os.environ.get("IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT", _DEFAULT_DEBATE_MODEL)
-        arbiter_model = os.environ.get(
-            "IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER", _DEFAULT_DEBATE_ARBITER_MODEL
-        )
-    else:
-        default_model = None
-        arbiter_model = None
+    shared = _shared_role_config(_DEBATE_DEFAULT_ROLES, backend=backend)
+    arbiter = resolve_role_config(LlmRole.ARBITER, backend=backend)
+    if arbiter.max_output_tokens != shared.max_output_tokens:
+        raise RoleConfigError(LLM_ROLE_CONFIG_UNADMITTED)
     return DebateRoleRunnerSelection(
         backend=backend,
-        default_model=default_model,
-        arbiter_model=arbiter_model,
-        max_tokens=_DEBATE_MAX_TOKENS,
+        default_model=shared.model,
+        arbiter_model=arbiter.model,
+        max_tokens=shared.max_output_tokens,
     )
 
 
@@ -4129,8 +4151,6 @@ def _get_extraction_output_schema() -> dict[str, Any]:
         return result
 
 
-_EXTRACTION_MAX_TOKENS = 4096
-
 # Safe, fixed strict-live-extraction outcome codes (value == name, mirroring
 # STRICT_FULL_LIVE_BLOCKED). Surfaced only as codes — never with secrets or raw messages.
 STRICT_LIVE_EXTRACTION_REQUIRED = "STRICT_LIVE_EXTRACTION_REQUIRED"
@@ -4165,22 +4185,19 @@ class ExtractorClientSelection:
 
 ExtractorClientFactory = Callable[[ExtractorClientSelection], Any]
 
-_DEFAULT_ANTHROPIC_EXTRACT_MODEL = "claude-sonnet-4-20250514"
 _EXTRACTION_PROMPT_ID = "EXTRACT_CLAIMS_V1"
 _METHODOLOGY_EXTRACTION_PROMPT_ID = "METHODOLOGY_QUESTION_EXTRACTION_V1"
 
 
 def _resolve_extraction_selection() -> ExtractorClientSelection:
-    """Resolve the extraction backend/model selection from env (no client construction)."""
-    import os
-
+    """Resolve the extraction backend, model, and token limit from the admitted row."""
     backend = os.environ.get("IDIS_EXTRACT_BACKEND", "deterministic")
-    model = (
-        os.environ.get("IDIS_ANTHROPIC_MODEL_EXTRACT", _DEFAULT_ANTHROPIC_EXTRACT_MODEL)
-        if backend == "anthropic"
-        else None
+    config = resolve_role_config(LlmRole.EXTRACTION, backend=backend)
+    return ExtractorClientSelection(
+        backend=backend,
+        model=config.model,
+        max_tokens=config.max_output_tokens,
     )
-    return ExtractorClientSelection(backend=backend, model=model, max_tokens=_EXTRACTION_MAX_TOKENS)
 
 
 def _build_strict_anthropic_extractor(

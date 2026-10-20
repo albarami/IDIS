@@ -113,6 +113,20 @@ class LinuxPopplerGatedNodes(tuple[tuple[str, str], ...]):
         "tests/test_tesseract_ocr_adapter.py::"
         "test_private_gate_ocr_enabled_retries_prior_ocr_required_ledger_entry "
         "(call)\n"
+        "\n"
+        "CIR-04H3-9, 2026-10-19. "
+        "H ruling (cir04-h-queue-worker-rows.json). "
+        "The five queue-worker rows bind the governed runtime through create_app "
+        "→ build_default_ingestion_service (defaults.py:100), the path of their "
+        "gated sibling; they are first class and are gated by decoration only.\n"
+        "They join only after a prefix-present execution at the current head shows "
+        "them green; a second cause returns them for classification.\n"
+        "No other row in run6b fails for the governed-Poppler cause.\n"
+        "A hosted NOT_EXECUTED result is never a pass.\n"
+        "They are the no-database class: the fixture forces is_postgres_configured "
+        "false and removes the URL.\n"
+        "Complete-input capture run6b check.log SHA-256\n"
+        "3dca92fbf1ebb0714476ddcada9ab011a4ac70a6739165882d1d6bdc05f7490f.\n"
     )
 
     def __new__(cls, values: tuple[tuple[str, str], ...]) -> LinuxPopplerGatedNodes:
@@ -212,6 +226,14 @@ LINUX_POPPLER_GATED_NODES: tuple[tuple[str, str], ...] = LinuxPopplerGatedNodes(
         (
             "tests/test_slice100_task1_queue_worker.py",
             "test_strict_full_create_requires_preflight_proof_before_run_row",
+        ),
+        (
+            "tests/test_slice100_task1_queue_worker.py",
+            "test_strict_full_create_returns_queued_without_inline_execution",
+        ),
+        (
+            "tests/test_slice100_task1_queue_worker.py",
+            "test_strict_proof_failures_are_stable_and_create_no_run",
         ),
         (
             "tests/slice100_task4/test_watermark_batch_attestation_red.py",

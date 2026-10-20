@@ -223,6 +223,28 @@ def _strict_client(
         lambda **_kwargs: ("00000000-0000-4000-8000-000000000701",),
     )
 
+    def _reload_seeded_frozen_corpus(
+        *,
+        db_conn: Any,
+        tenant_id: str,
+        deal_id: str,
+        selected_document_ids: tuple[str, ...],
+    ) -> list[dict[str, Any]]:
+        # The route reloads after the stubbed freeze. This twin has no frozen rows;
+        # return the document seeded on deal_documents, and only for its selected id.
+        if selected_document_ids != ("document-1",):
+            raise AssertionError(
+                "frozen reload must return the seeded corpus only for ('document-1',)"
+            )
+        return list(app.state.deal_documents[deal_id])
+
+    monkeypatch.setattr(
+        runs_route,
+        "_reload_frozen_preflight_corpus",
+        _reload_seeded_frozen_corpus,
+        raising=True,
+    )
+
     class ForbiddenExecutionService:
         def __init__(self, **_kwargs: Any) -> None:
             raise AssertionError("strict API must not construct RunExecutionService")
@@ -272,6 +294,7 @@ def _strict_client(
     return client, deal_id
 
 
+@requires_linux_governed_poppler
 def test_strict_full_create_returns_queued_without_inline_execution(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -327,6 +350,7 @@ def test_strict_full_create_requires_preflight_proof_before_run_row(
         "STRICT_PREFLIGHT_PROOF_ALREADY_CONSUMED",
     ],
 )
+@requires_linux_governed_poppler
 def test_strict_proof_failures_are_stable_and_create_no_run(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -98,7 +98,11 @@ def test_slice27_selected_multidocument_full_acceptance_is_durable_and_safe(
     deal_response = client.post(
         "/v1/deals",
         headers={"X-IDIS-API-Key": pg_helpers.API_KEY},
-        json={"name": "Slice 27 Multi Document Deal", "company_name": "Synthetic Co"},
+        json={
+            "name": "Slice 27 Multi Document Deal",
+            "company_name": "Synthetic Co",
+            "stage": "SERIES_A",
+        },
     )
     assert deal_response.status_code == 201
     deal_id = str(deal_response.json()["deal_id"])

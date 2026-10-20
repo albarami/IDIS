@@ -119,6 +119,19 @@ _LINUX_PARAMS: dict[tuple[str, str], tuple[str, ...]] = {
         "test_strict_api_uses_reviewed_role_despite_ambient_mutation",
     ): ("[None]", "[]", "[worker]", "[api,worker]", "[combined]"),
     (
+        "tests/test_slice100_task1_queue_worker.py",
+        "test_strict_full_create_returns_queued_without_inline_execution",
+    ): ("",),
+    (
+        "tests/test_slice100_task1_queue_worker.py",
+        "test_strict_proof_failures_are_stable_and_create_no_run",
+    ): (
+        "[STRICT_PREFLIGHT_PROOF_INVALID]",
+        "[STRICT_PREFLIGHT_PROOF_EXPIRED]",
+        "[STRICT_PREFLIGHT_PROOF_MISMATCH]",
+        "[STRICT_PREFLIGHT_PROOF_ALREADY_CONSUMED]",
+    ),
+    (
         "tests/slice100_task4/test_complete_pdf_page_census_red.py",
         "test_image_only_receipt_without_render_or_no_consensus_provenance_fails_closed",
     ): ("[ocr_render_admission]", "[ocr_page_execution_receipt]"),
@@ -968,7 +981,7 @@ def test_collected_linux_node_ids_match_the_printer() -> None:
 
     printed = _printed_linux_ids()
     assert printed == set(_linux_node_ids())
-    assert len(printed) == 113
+    assert len(printed) == 118
 
 
 def test_database_class_partition_and_fixture_reach() -> None:
@@ -1009,9 +1022,9 @@ def test_database_class_partition_and_fixture_reach() -> None:
     full = _printed_linux_ids()
     database_ids = _printed_linux_ids("--database-class")
     no_database_ids = _printed_linux_ids("--no-database-class")
-    assert len(full) == 113
+    assert len(full) == 118
     assert len(database_ids) == 3
-    assert len(no_database_ids) == 110
+    assert len(no_database_ids) == 115
     assert database_ids.isdisjoint(no_database_ids)
     assert database_ids | no_database_ids == full
     reached = {
@@ -1080,6 +1093,7 @@ def test_tokens_properties_and_variables_are_exact() -> None:
     assert "3016b24fa46419e3e48e9fb7cfdd86bcab7ab227bd2fc63f4998d8380a90be4d" in citation
     assert "2584a5e3b869bb0613dd09f2295df0e93bd8e1fe60cd697f589f87ce3f2ace9b" in citation
     assert "3085c49491dd7b217420c769c5e19858f53d9c3e0df58e48294f953be9384ed4" in citation
+    assert "3dca92fbf1ebb0714476ddcada9ab011a4ac70a6739165882d1d6bdc05f7490f" in citation
     assert (
         "Rows whose binding cause is demonstrated per node by the hook join the "
         "closed list exactly as rows whose block shows it; the product's laundering "

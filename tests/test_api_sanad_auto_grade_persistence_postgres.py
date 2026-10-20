@@ -65,7 +65,11 @@ def test_slice28_selected_full_run_persists_sanad_grades_without_known_blocker(
     deal_response = client.post(
         "/v1/deals",
         headers={"X-IDIS-API-Key": pg_helpers.API_KEY},
-        json={"name": "Slice 28 Sanad Auto Grade Deal", "company_name": "Synthetic Co"},
+        json={
+            "name": "Slice 28 Sanad Auto Grade Deal",
+            "company_name": "Synthetic Co",
+            "stage": "SERIES_B",
+        },
     )
     assert deal_response.status_code == 201
     deal_id = str(deal_response.json()["deal_id"])

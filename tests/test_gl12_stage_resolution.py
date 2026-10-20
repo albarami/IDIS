@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from idis.analysis.scoring.models import ScoreDimension, Stage
+from idis.analysis.scoring.models import ScoreDimension, Stage, resolve_stage
 from idis.analysis.scoring.stage_packs import get_stage_pack
+from idis.api.openapi_loader import load_openapi_spec
 from idis.models.layer2_durability import Layer2ChallengeRow
 from idis.models.layer2_ic_challenge import (
     Layer2ChallengeCategory,
@@ -530,3 +531,80 @@ def test_stage_unknown_message_caps_raw_text_at_120_characters(
         "stage_text": exact,
     }
     assert exact_client.calls == 0
+
+
+def test_created_in_memory_deal_stage_reaches_full_partials_unchanged() -> None:
+    """A mapped stage stored on an in-memory deal is the FULL partials' snapshot.
+
+    The hosted FULL acceptance tests set this spelling on POST /v1/deals. The
+    start-run path loads that row and binds it, unchanged, onto the partials.
+    """
+    from types import SimpleNamespace
+
+    from idis.api.routes.runs import _load_deal_metadata_for_run
+    from idis.audit.sink import InMemoryAuditSink
+    from idis.persistence.repositories.deals import (
+        InMemoryDealsRepository,
+        clear_in_memory_store,
+    )
+    from idis.services.runs.steps import build_run_context
+
+    cases = (
+        (DEAL_ID, "SERIES_A"),
+        ("44444444-4444-4444-4444-444444444444", "SERIES_B"),
+    )
+    request = SimpleNamespace(state=SimpleNamespace(db_conn=None))
+    clear_in_memory_store()
+    try:
+        for deal_id, spelling in cases:
+            InMemoryDealsRepository(TENANT_ID).create(
+                deal_id=deal_id,
+                name="Stage Deal",
+                company_name="Synthetic Co",
+                stage=spelling,
+            )
+            loaded = _load_deal_metadata_for_run(request, TENANT_ID, deal_id)
+            context = build_run_context(
+                db_conn=None,
+                tenant_id=TENANT_ID,
+                run_id=RUN_ID,
+                deal_id=deal_id,
+                mode="FULL",
+                documents=[],
+                deal_metadata=loaded,
+                audit_sink=InMemoryAuditSink(),
+            )
+            assert loaded is not None
+            assert loaded["stage"] == spelling
+            for partial in (
+                context.enrich_fn,
+                context.debate_fn,
+                context.layer2_ic_challenge_fn,
+                context.analysis_fn,
+            ):
+                assert partial is not None
+                assert partial.keywords["deal_metadata"]["stage"] == spelling
+    finally:
+        clear_in_memory_store()
+
+
+def test_api_deal_stage_enum_contract_with_the_scoring_mapper() -> None:
+    """Pin each OpenAPI DealStage value to the scoring mapper's current result.
+
+    Characterization of the current mapper. It does not choose a stage pack
+    for the two API values that still fail closed.
+    """
+    deal_stage_enum = load_openapi_spec()["components"]["schemas"]["DealStage"]["enum"]
+    # LATER and OTHER have no scoring stage; owner/GL-02 decision pending
+    # (RUN_STATE record of 2026-10-19).
+    pinned_resolution: dict[str, Stage | None] = {
+        "SEED": Stage.SEED,
+        "SERIES_A": Stage.SERIES_A,
+        "SERIES_B": Stage.SERIES_B,
+        "GROWTH": Stage.GROWTH,
+        "LATER": None,
+        "OTHER": None,
+    }
+    assert set(deal_stage_enum) == set(pinned_resolution)
+    for api_value, expected in pinned_resolution.items():
+        assert resolve_stage(api_value) is expected

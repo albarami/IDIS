@@ -20,7 +20,6 @@ import pytest
 
 from idis.analysis.scoring.models import Stage
 from idis.analysis.scoring.stage_packs import get_stage_pack
-from idis.api.routes.runs import _build_layer2_provenance
 from idis.audit.sink import InMemoryAuditSink
 from idis.deliverables.generator import DeliverablesGenerator
 from idis.models.layer2_durability import Layer2ChallengeRow, Layer2FindingRow
@@ -34,6 +33,7 @@ from idis.services.runs.layer2_ic_challenge import (
     Layer2ICLLMRunner,
     RunLayer2ICChallengeService,
 )
+from idis.services.runs.step_runtime.roles import _build_layer2_provenance
 from idis.services.runs.strict_full_live import (
     StrictComponentStatus,
     build_strict_full_live_readiness_report,
@@ -103,7 +103,7 @@ def _run_live_layer2() -> tuple[dict[str, Any], Any, Layer2ICLLMRunner, Layer2IC
 
 def _routed_stage_emphasis(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """Return stage emphasis from the FULL route given the fixture stage snapshot."""
-    from idis.api.routes.runs import _run_full_layer2_ic_challenge
+    from idis.services.runs.step_runtime.layer2 import _run_full_layer2_ic_challenge
 
     response = _layer2_response(
         supported_claim_ids=["claim-a"],

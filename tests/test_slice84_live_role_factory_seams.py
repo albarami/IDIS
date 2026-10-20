@@ -19,17 +19,6 @@ from unittest.mock import patch
 
 import pytest
 
-from idis.api.routes.runs import (
-    AnalysisClientSelection,
-    DebateRoleRunnerSelection,
-    ScoringClientSelection,
-    _build_analysis_llm_client,
-    _build_debate_role_runners,
-    _build_scoring_llm_client,
-    _run_full_analysis,
-    _run_full_debate,
-    _run_full_scoring,
-)
 from idis.debate.orchestrator import RoleRunners
 from idis.debate.roles.advocate import AdvocateRole
 from idis.debate.roles.llm_role_runner import LLMRoleRunner
@@ -37,6 +26,19 @@ from idis.services.extraction.extractors.anthropic_client import AnthropicLLMCli
 from idis.services.extraction.extractors.llm_client import (
     DeterministicAnalysisLLMClient,
     DeterministicScoringLLMClient,
+)
+from idis.services.runs.step_runtime.analysis import (
+    _run_full_analysis,
+    _run_full_debate,
+    _run_full_scoring,
+)
+from idis.services.runs.step_runtime.roles import (
+    AnalysisClientSelection,
+    DebateRoleRunnerSelection,
+    ScoringClientSelection,
+    _build_analysis_llm_client,
+    _build_debate_role_runners,
+    _build_scoring_llm_client,
 )
 
 _FAKE_KEY = "sk-ant-test-fake-key-for-unit-test"

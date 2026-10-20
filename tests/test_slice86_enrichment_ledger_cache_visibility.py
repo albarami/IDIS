@@ -86,7 +86,7 @@ def _request() -> EnrichmentRequest:
 def _run_step(*, strict: bool, registry_factory: Any = None, service: Any = None) -> dict[str, Any]:
     from contextlib import ExitStack
 
-    from idis.api.routes.runs import _run_full_enrichment
+    from idis.services.runs.step_runtime.enrichment import _run_full_enrichment
 
     env = _env_without("IDIS_REQUIRE_FULL_LIVE", "IDIS_STRICT_DOTENV_PATH")
     with ExitStack() as stack:

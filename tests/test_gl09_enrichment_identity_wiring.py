@@ -63,7 +63,7 @@ def _install_connector(monkeypatch: pytest.MonkeyPatch, connector: _RecordingCon
 
 
 def _run(**kwargs: Any) -> dict[str, Any]:
-    from idis.api.routes.runs import _run_full_enrichment
+    from idis.services.runs.step_runtime.enrichment import _run_full_enrichment
 
     return _run_full_enrichment(
         run_id=RUN_ID,

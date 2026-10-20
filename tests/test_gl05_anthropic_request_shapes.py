@@ -39,6 +39,7 @@ _EFFORTS = ("low", "medium", "high", "xhigh", "max")
 _BETWEEN_TOOLS_EFFORTS = ("low", "medium", "high")
 _LEGACY_IDS = ("claude-sonnet-4-20250514", "claude-opus-4-20250514")
 _CANDIDATE_IDS = ("claude-sonnet-5-5", "claude-opus-5-5")
+_CANDIDATE_CONTRACT_ALLOWLIST = ("contracts/llm_role_configs_v2.json",)
 _SRC = Path(__file__).resolve().parents[1] / "src"
 _CAPABILITIES = _SRC / "idis" / "providers" / "anthropic_capabilities.py"
 _ENV_PRUNE_DIRS = (
@@ -434,6 +435,24 @@ def test_candidate_ids_are_named_only_by_the_capability_table() -> None:
     assert "claude-opus-5-5" in table
 
 
+def test_candidate_contract_allow_list_is_the_inactive_role_document_only(tmp_path: Path) -> None:
+    """The inactive role document is the only contract the candidate scan skips."""
+    assert _CANDIDATE_CONTRACT_ALLOWLIST == ("contracts/llm_role_configs_v2.json",)
+    module_path = Path(__file__).resolve().parents[1] / "tests" / "test_gl05_role_config_v2.py"
+    spec = importlib.util.spec_from_file_location("gl05_role_config_v2_refs", module_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.source_modules_referencing_candidate_document(_SRC.parent) == []
+    source = _SRC.parent / "contracts" / "llm_role_configs_v2.json"
+    payload = source.read_text(encoding="utf-8")
+    contracts = tmp_path / "contracts"
+    contracts.mkdir()
+    (contracts / "llm_role_configs_v2.json").write_text(payload, encoding="utf-8")
+    (contracts / "copied_candidate_roles.json").write_text(payload, encoding="utf-8")
+    assert _candidate_id_hits(tmp_path) == ["contracts/copied_candidate_roles.json"]
+
+
 def test_widened_candidate_scan_fails_when_a_contract_names_a_candidate(
     tmp_path: Path,
 ) -> None:
@@ -654,8 +673,11 @@ def _candidate_id_hits(root: Path) -> list[str]:
             if path.resolve() not in allowed and _names_candidate(path):
                 hits.append(path.relative_to(root).as_posix())
     for path in _widened_candidate_paths(root):
+        relative = path.relative_to(root).as_posix()
+        if relative in _CANDIDATE_CONTRACT_ALLOWLIST:
+            continue
         if _names_candidate(path):
-            hits.append(path.relative_to(root).as_posix())
+            hits.append(relative)
     return sorted(hits)
 
 

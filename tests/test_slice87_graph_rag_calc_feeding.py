@@ -21,7 +21,6 @@ from typing import Any
 
 import pytest
 
-from idis.api.routes.runs import _run_full_graph_evidence, _run_full_rag_evidence
 from idis.audit.sink import InMemoryAuditSink
 from idis.calc.engine import CalcEngine, InputGradeInfo
 from idis.calc.formulas.core import register_core_formulas
@@ -36,6 +35,10 @@ from idis.persistence.repositories.calculations import (
 from idis.persistence.repositories.run_steps import InMemoryRunStepsRepository
 from idis.services.graph.retrieval import GraphRetrievalService
 from idis.services.runs.orchestrator import RunContext, RunOrchestrator
+from idis.services.runs.step_runtime.evidence import (
+    _run_full_graph_evidence,
+    _run_full_rag_evidence,
+)
 from tests.test_slice61_graph_visibility import (
     DEAL_ID,
     RUN_ID,

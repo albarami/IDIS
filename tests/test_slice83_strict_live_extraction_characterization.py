@@ -23,11 +23,12 @@ from unittest.mock import patch
 
 import pytest
 
-from idis.api.routes.runs import _build_extraction_llm_client, _run_snapshot_extraction
 from idis.models.extraction_execution import MethodologyExtractionExecutionRunResult
 from idis.models.run_step import RunStep, StepName
 from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
 from idis.services.extraction.extractors.llm_client import DeterministicLLMClient
+from idis.services.runs.step_runtime.roles import _build_extraction_llm_client
+from idis.services.runs.step_runtime.snapshot import _run_snapshot_extraction
 from idis.services.runs.strict_full_live import is_strict_full_live_required
 
 # Same fake unit-test key shape used by the existing test_llm_backend_selection.py (no real key).
@@ -74,7 +75,7 @@ def test_anthropic_without_key_fails_closed_safely() -> None:
 
 
 def test_strict_enforcement_is_explicit_not_env_inferred() -> None:
-    from idis.api.routes.runs import StrictLiveExtractionError
+    from idis.services.runs.step_runtime.roles import StrictLiveExtractionError
 
     # Task 3: the explicit strict flag forbids deterministic extraction (fail closed)...
     with (

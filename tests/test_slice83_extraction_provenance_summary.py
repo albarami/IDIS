@@ -17,13 +17,13 @@ from unittest.mock import patch
 
 import pytest
 
-from idis.api.routes.runs import (
+from idis.services.runs.step_runtime.roles import (
     STRICT_LIVE_EXTRACTION_PROVIDER_FAILED,
     ExtractorClientSelection,
     StrictLiveExtractionError,
     _build_extraction_provenance,
-    _run_snapshot_extraction,
 )
+from idis.services.runs.step_runtime.snapshot import _run_snapshot_extraction
 
 _EXISTING_SUMMARY_FIELDS = (
     "status",

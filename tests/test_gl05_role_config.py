@@ -242,7 +242,7 @@ def test_path_only_roles_pin_prompt_paths_without_registry_ids() -> None:
 def test_selection_helpers_match_pre_slice_and_resolver(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from idis.api.routes.runs import (
+    from idis.services.runs.step_runtime.roles import (
         _resolve_analysis_selection,
         _resolve_debate_selection,
         _resolve_extraction_selection,
@@ -424,7 +424,6 @@ def _sentinel_config() -> RoleModelConfig:
 
 
 def test_builders_pass_resolver_model_and_max_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
-    from idis.api.routes import runs as runs_module
     from idis.services.runs.step_runtime import roles as roles_module
 
     sentinel = _sentinel_config()
@@ -446,10 +445,10 @@ def test_builders_pass_resolver_model_and_max_tokens(monkeypatch: pytest.MonkeyP
     monkeypatch.setenv("IDIS_DEBATE_BACKEND", "anthropic")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sentinel-not-used")
 
-    runs_module._build_extraction_llm_client()
-    runs_module._build_analysis_llm_client()
-    runs_module._build_scoring_llm_client()
-    runs_module._build_debate_role_runners()
+    roles_module._build_extraction_llm_client()
+    roles_module._build_analysis_llm_client()
+    roles_module._build_scoring_llm_client()
+    roles_module._build_debate_role_runners()
 
     assert calls
     assert calls == [(_PATCHED_MODEL, _PATCHED_MAX_TOKENS)] * len(calls)
@@ -460,7 +459,6 @@ class _StopAfterRunners(Exception):
 
 
 def test_ic_route_passes_resolver_model_and_max_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
-    from idis.api.routes import runs as runs_module
     from idis.services.runs.step_runtime import layer2 as layer2_module
 
     sentinel = _sentinel_config()
@@ -488,7 +486,7 @@ def test_ic_route_passes_resolver_model_and_max_tokens(monkeypatch: pytest.Monke
     )
     monkeypatch.setenv("IDIS_DEBATE_BACKEND", "anthropic")
     with pytest.raises(_StopAfterRunners):
-        runs_module._run_full_layer2_ic_challenge(
+        layer2_module._run_full_layer2_ic_challenge(
             run_id="22222222-2222-2222-2222-222222222222",
             tenant_id="11111111-1111-1111-1111-111111111111",
             deal_id="33333333-3333-3333-3333-333333333333",

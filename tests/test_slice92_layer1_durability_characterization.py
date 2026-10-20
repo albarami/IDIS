@@ -39,7 +39,6 @@ from pathlib import Path
 
 import idis.api.routes.runs as runs_mod
 import idis.deliverables.product_bundle as product_bundle_mod
-from idis.api.routes.runs import _run_full_layer2_ic_challenge
 from idis.models.run_step import FULL_STEPS, IMPLEMENTED_STEPS, StepName
 from idis.services.runs.methodology_evidence_trust_court import (
     InMemoryRunMethodologyEvidenceTrustCourtService,
@@ -50,6 +49,7 @@ from idis.services.runs.methodology_layer2_readiness_package import (
 from idis.services.runs.methodology_validated_evidence_package import (
     InMemoryRunMethodologyValidatedEvidencePackageService,
 )
+from idis.services.runs.step_runtime.layer2 import _run_full_layer2_ic_challenge
 
 _PERSISTENCE_DIR = Path("src/idis/persistence")
 _MIGRATIONS_DIR = _PERSISTENCE_DIR / "migrations" / "versions"

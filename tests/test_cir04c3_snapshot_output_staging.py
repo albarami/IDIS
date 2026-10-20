@@ -450,7 +450,10 @@ def test_complete_custody_assertion_runs_inside_boundary_before_ledger() -> None
 
 @pytest.mark.parametrize("step", ["extract", "grade"])
 def test_staged_wrapper_requires_complete_dependencies_before_producer(step: str) -> None:
-    from idis.api.routes.runs import _run_snapshot_auto_grade, _run_snapshot_extraction
+    from idis.services.runs.step_runtime.snapshot import (
+        _run_snapshot_auto_grade,
+        _run_snapshot_extraction,
+    )
 
     kwargs: dict[str, Any] = {
         "run_id": str(uuid4()),

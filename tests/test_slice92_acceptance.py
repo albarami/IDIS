@@ -28,7 +28,6 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from idis.api.routes.runs import _run_full_layer2_ic_challenge
 from idis.audit.sink import InMemoryAuditSink
 from idis.deliverables.generator import DeliverablesGenerator
 from idis.deliverables.product_bundle import ProductBundleExporter
@@ -42,6 +41,7 @@ from idis.persistence.repositories.run_steps import (
     clear_run_steps_store,
 )
 from idis.services.runs.orchestrator import RunOrchestrator
+from idis.services.runs.step_runtime.layer2 import _run_full_layer2_ic_challenge
 from idis.storage.filesystem_store import FilesystemObjectStore
 from tests.test_deliverables_generator import (
     _TIMESTAMP,

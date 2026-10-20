@@ -137,12 +137,12 @@ def test_methodology_service_stays_pure_persistence_is_in_wrapper() -> None:
         assert token not in methodology_src, token
 
     # Task 2 (G1 closed): durable persistence is the FULL-path wrapper's job, wired into the run.
-    from idis.api.routes import runs as runs_routes
     from idis.services.runs import steps as run_steps
+    from idis.services.runs.step_runtime import snapshot as snapshot_module
 
-    assert hasattr(runs_routes, "_run_full_methodology_deterministic_calculation")
+    assert hasattr(snapshot_module, "_run_full_methodology_deterministic_calculation")
     assert "get_calculations_repository" in inspect.getsource(
-        runs_routes._run_full_methodology_deterministic_calculation
+        snapshot_module._run_full_methodology_deterministic_calculation
     )
     assert "methodology_deterministic_calculation_fn" in inspect.getsource(
         run_steps.build_run_context

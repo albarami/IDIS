@@ -19,12 +19,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from idis.api.routes.runs import _run_full_rag_evidence
 from idis.services.rag.constants import VECTOR_EMBEDDING_DIMENSIONS
 from idis.services.rag.embedding_health import EmbeddingHealthCheck
 from idis.services.rag.indexing import index_document_spans_for_deal
 from idis.services.rag.pgvector_health import PgvectorHealthCheck
 from idis.services.runs.orchestrator import RunStepBlockedError
+from idis.services.runs.step_runtime.evidence import _run_full_rag_evidence
 from tests.test_slice63_rag_full_wiring import DEAL_ID, RUN_ID, TENANT_ID, _documents
 
 _FAKE_VECTOR = [0.01] * VECTOR_EMBEDDING_DIMENSIONS

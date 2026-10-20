@@ -20,14 +20,14 @@ class TestRetrieveClaimsForDebateWiring:
 
     def test_uses_inmemory_when_db_conn_is_none(self) -> None:
         """Without db_conn, InMemory repos are used."""
-        from idis.api.routes.runs import _retrieve_claims_for_debate
+        from idis.services.runs.step_runtime.analysis import _retrieve_claims_for_debate
 
         result = _retrieve_claims_for_debate(TENANT, [], db_conn=None)
         assert result == []
 
     def test_uses_postgres_when_db_conn_provided(self) -> None:
         """With db_conn, Postgres ClaimsRepository is constructed."""
-        from idis.api.routes.runs import _retrieve_claims_for_debate
+        from idis.services.runs.step_runtime.analysis import _retrieve_claims_for_debate
 
         mock_conn = MagicMock()
         mock_claims_cls = MagicMock()
@@ -296,7 +296,7 @@ class TestSnapshotExtractionDbConn:
                 conflict_count=0,
             )
 
-            from idis.api.routes.runs import _run_snapshot_extraction
+            from idis.services.runs.step_runtime.snapshot import _run_snapshot_extraction
 
             _run_snapshot_extraction(
                 run_id="r1",
@@ -338,7 +338,7 @@ class TestSnapshotExtractionDbConn:
                 conflict_count=0,
             )
 
-            from idis.api.routes.runs import _run_snapshot_extraction
+            from idis.services.runs.step_runtime.snapshot import _run_snapshot_extraction
 
             _run_snapshot_extraction(
                 run_id="r1",

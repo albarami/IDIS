@@ -97,7 +97,7 @@ def test_run_full_deliverables_marks_durable_export_when_db_and_object_store(
     monkeypatch: Any,
 ) -> None:
     """DELIVERABLES summary must honestly signal same-run durable package export."""
-    from idis.api.routes import runs as runs_route
+    from idis.services.runs.step_runtime import deliverables as deliverables_module
 
     class FakeObjectStore:
         backend_name = "filesystem"
@@ -136,7 +136,7 @@ def test_run_full_deliverables_marks_durable_export_when_db_and_object_store(
         FakeRepository,
     )
 
-    summary = runs_route._run_full_deliverables(
+    summary = deliverables_module._run_full_deliverables(
         run_id="22222222-2222-4222-8222-222222222222",
         tenant_id=str(pg_helpers.TENANT_ID),
         deal_id=str(pg_helpers.DEAL_ID),

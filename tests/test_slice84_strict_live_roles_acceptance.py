@@ -24,7 +24,20 @@ from unittest.mock import patch
 
 import pytest
 
-from idis.api.routes.runs import (
+from idis.debate.orchestrator import RoleRunners
+from idis.debate.roles.advocate import AdvocateRole
+from idis.models.run_step import RunStep, StepName
+from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
+from idis.services.extraction.extractors.llm_client import (
+    DeterministicAnalysisLLMClient,
+    DeterministicScoringLLMClient,
+)
+from idis.services.runs.step_runtime.analysis import (
+    _run_full_analysis,
+    _run_full_debate,
+    _run_full_scoring,
+)
+from idis.services.runs.step_runtime.roles import (
     STRICT_LIVE_ANALYSIS_PROVIDER_FAILED,
     STRICT_LIVE_ANALYSIS_REQUIRED,
     STRICT_LIVE_DEBATE_PROVIDER_FAILED,
@@ -41,17 +54,6 @@ from idis.api.routes.runs import (
     _build_debate_role_runners,
     _build_scoring_llm_client,
     _build_scoring_provenance,
-    _run_full_analysis,
-    _run_full_debate,
-    _run_full_scoring,
-)
-from idis.debate.orchestrator import RoleRunners
-from idis.debate.roles.advocate import AdvocateRole
-from idis.models.run_step import RunStep, StepName
-from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
-from idis.services.extraction.extractors.llm_client import (
-    DeterministicAnalysisLLMClient,
-    DeterministicScoringLLMClient,
 )
 
 _DEAL_STAGE = "seed"

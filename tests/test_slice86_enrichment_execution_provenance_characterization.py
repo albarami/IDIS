@@ -138,7 +138,7 @@ def test_summary_keeps_legacy_fields_and_gains_ledger() -> None:
     # HITs; blocked_count only BLOCKED_*), and MISS/ERROR are no longer invisible — they are
     # recorded in the additive enrichment_ledger (full coverage in
     # test_slice86_enrichment_ledger_cache_visibility.py).
-    from idis.api.routes.runs import _run_full_enrichment
+    from idis.services.runs.step_runtime.enrichment import _run_full_enrichment
 
     env = _env_without("IDIS_REQUIRE_FULL_LIVE", "IDIS_STRICT_DOTENV_PATH")
     with (
@@ -191,7 +191,7 @@ def test_summary_keeps_legacy_fields_and_gains_ledger() -> None:
 def test_strict_fatality_is_uniform(
     connector: Any, requires_byol: bool, expected_fragment: str
 ) -> None:
-    from idis.api.routes.runs import _run_full_enrichment
+    from idis.services.runs.step_runtime.enrichment import _run_full_enrichment
 
     def registry() -> EnrichmentProviderRegistry:
         return _registry((connector, requires_byol))
@@ -330,8 +330,8 @@ def test_deliverables_and_product_bundle_carry_enrichment_evidence() -> None:
     # Task 4 drift-flip: deliverables/product bundle now thread enrichment_evidence and the
     # bundle exposes the enrichment package (full coverage in
     # test_slice86_source_grade_vc_visibility.py).
-    from idis.api.routes.runs import _run_full_deliverables
     from idis.deliverables.product_bundle import ProductBundleExporter
+    from idis.services.runs.step_runtime.deliverables import _run_full_deliverables
 
     deliverables_params = set(inspect.signature(_run_full_deliverables).parameters)
     assert {"graph_evidence", "rag_evidence", "layer2_evidence"} <= deliverables_params
@@ -350,7 +350,8 @@ def test_deliverables_and_product_bundle_carry_enrichment_evidence() -> None:
 def test_refs_feed_analysis_scoring_layer2_not_debate() -> None:
     from idis.analysis.models import AnalysisContext
     from idis.analysis.scoring.engine import _ScoringNFFValidator
-    from idis.api.routes.runs import _run_full_analysis, _run_full_layer2_ic_challenge
+    from idis.services.runs.step_runtime.analysis import _run_full_analysis
+    from idis.services.runs.step_runtime.layer2 import _run_full_layer2_ic_challenge
 
     assert "enrichment_refs" in inspect.signature(_run_full_analysis).parameters
     assert "enrichment_refs" in inspect.signature(_run_full_layer2_ic_challenge).parameters

@@ -30,7 +30,7 @@ from idis.services.prompts.registry import (
 IDIS_REQUIRE_PROMOTED_PROMPTS_ENV = "IDIS_REQUIRE_PROMOTED_PROMPTS"
 
 # The canonical runtime prompt surface: the ids the API stamps into extraction/debate/scoring
-# step provenance (kept in sync with idis.api.routes.runs constants by test).
+# step provenance (kept in sync with step_runtime roles.py and snapshot.py prompt ids by test).
 RUNTIME_PROMPT_IDS: tuple[str, ...] = (
     "EXTRACT_CLAIMS_V1",
     "METHODOLOGY_QUESTION_EXTRACTION_V1",

@@ -416,8 +416,8 @@ def test_strict_readiness_distinguishes_env_present_not_loaded_and_tenant_missin
 def test_strict_full_enrichment_fails_closed_on_provider_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import idis.api.routes.runs as runs_module
     import idis.services.enrichment.service as enrichment_service_module
+    from idis.services.runs.step_runtime import enrichment as enrichment_module
 
     registry = EnrichmentProviderRegistry()
     registry.register(_FakeConnector(should_raise=True), requires_byol=True)
@@ -443,7 +443,7 @@ def test_strict_full_enrichment_fails_closed_on_provider_error(
     )
 
     with pytest.raises(RuntimeError, match="Strict enrichment provider failed: companies_house"):
-        runs_module._run_full_enrichment(
+        enrichment_module._run_full_enrichment(
             run_id="00000000-0000-4000-8000-000000000057",
             tenant_id=TENANT_ID,
             deal_id="safe-public-company",
@@ -497,8 +497,8 @@ def test_service_provider_exception_details_are_redacted() -> None:
 def test_strict_full_enrichment_public_provider_error_uses_generic_wording(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import idis.api.routes.runs as runs_module
     import idis.services.enrichment.service as enrichment_service_module
+    from idis.services.runs.step_runtime import enrichment as enrichment_module
 
     registry = EnrichmentProviderRegistry()
     registry.register(
@@ -520,7 +520,7 @@ def test_strict_full_enrichment_public_provider_error_uses_generic_wording(
     )
 
     with pytest.raises(RuntimeError, match="Strict enrichment provider failed: sec_edgar") as exc:
-        runs_module._run_full_enrichment(
+        enrichment_module._run_full_enrichment(
             run_id="00000000-0000-4000-8000-000000000061",
             tenant_id=TENANT_ID,
             deal_id="safe-public-company",
@@ -535,8 +535,8 @@ def test_strict_full_enrichment_public_provider_error_uses_generic_wording(
 def test_strict_full_enrichment_fails_closed_on_blocked_missing_byol(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import idis.api.routes.runs as runs_module
     import idis.services.enrichment.service as enrichment_service_module
+    from idis.services.runs.step_runtime import enrichment as enrichment_module
 
     registry = EnrichmentProviderRegistry()
     registry.register(
@@ -570,7 +570,7 @@ def test_strict_full_enrichment_fails_closed_on_blocked_missing_byol(
     )
 
     with pytest.raises(RuntimeError, match="Strict enrichment provider blocked: companies_house"):
-        runs_module._run_full_enrichment(
+        enrichment_module._run_full_enrichment(
             run_id="00000000-0000-4000-8000-000000000060",
             tenant_id=TENANT_ID,
             deal_id="safe-public-company",
@@ -584,8 +584,8 @@ def test_strict_full_enrichment_fails_closed_on_blocked_missing_byol(
 def test_non_strict_full_enrichment_keeps_best_effort_on_provider_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import idis.api.routes.runs as runs_module
     import idis.services.enrichment.service as enrichment_service_module
+    from idis.services.runs.step_runtime import enrichment as enrichment_module
 
     registry = EnrichmentProviderRegistry()
     registry.register(_FakeConnector(should_raise=True), requires_byol=True)
@@ -610,7 +610,7 @@ def test_non_strict_full_enrichment_keeps_best_effort_on_provider_error(
         raising=False,
     )
 
-    result = runs_module._run_full_enrichment(
+    result = enrichment_module._run_full_enrichment(
         run_id="00000000-0000-4000-8000-000000000058",
         tenant_id=TENANT_ID,
         deal_id="safe-public-company",
@@ -625,8 +625,8 @@ def test_non_strict_full_enrichment_keeps_best_effort_on_provider_error(
 
 
 def test_full_enrichment_preserves_provenance_refs(monkeypatch: pytest.MonkeyPatch) -> None:
-    import idis.api.routes.runs as runs_module
     import idis.services.enrichment.service as enrichment_service_module
+    from idis.services.runs.step_runtime import enrichment as enrichment_module
 
     registry = EnrichmentProviderRegistry()
     registry.register(_FakeConnector(), requires_byol=True)
@@ -650,7 +650,7 @@ def test_full_enrichment_preserves_provenance_refs(monkeypatch: pytest.MonkeyPat
         raising=False,
     )
 
-    result = runs_module._run_full_enrichment(
+    result = enrichment_module._run_full_enrichment(
         run_id="00000000-0000-4000-8000-000000000059",
         tenant_id=TENANT_ID,
         deal_id="safe-public-company",

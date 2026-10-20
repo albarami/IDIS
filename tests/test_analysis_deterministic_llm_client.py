@@ -193,7 +193,7 @@ class TestBuildAnalysisLLMClientWiring:
         """When no real LLM backend is configured, the analysis client must be the analysis stub."""
         monkeypatch.delenv("IDIS_DEBATE_BACKEND", raising=False)
 
-        from idis.api.routes.runs import _build_analysis_llm_client
+        from idis.services.runs.step_runtime.roles import _build_analysis_llm_client
 
         client = _build_analysis_llm_client()
         assert isinstance(client, DeterministicAnalysisLLMClient)
@@ -204,7 +204,7 @@ class TestBuildAnalysisLLMClientWiring:
         """Explicit 'deterministic' backend must also return the analysis stub."""
         monkeypatch.setenv("IDIS_DEBATE_BACKEND", "deterministic")
 
-        from idis.api.routes.runs import _build_analysis_llm_client
+        from idis.services.runs.step_runtime.roles import _build_analysis_llm_client
 
         client = _build_analysis_llm_client()
         assert isinstance(client, DeterministicAnalysisLLMClient)

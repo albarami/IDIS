@@ -16,7 +16,6 @@ import uuid as uuid_mod
 from functools import partial
 from typing import Any
 
-from idis.api.routes.runs import _run_full_layer2_ic_challenge
 from idis.audit.sink import InMemoryAuditSink
 from idis.models.run_step import StepName, StepStatus
 from idis.persistence.repositories.layer1_evidence import (
@@ -28,6 +27,7 @@ from idis.persistence.repositories.run_steps import (
     clear_run_steps_store,
 )
 from idis.services.runs.orchestrator import RunContext, RunOrchestrator
+from idis.services.runs.step_runtime.layer2 import _run_full_layer2_ic_challenge
 from tests.test_run_methodology_claim_materialization_service import TENANT_ID
 from tests.test_slice63_rag_full_wiring import _documents
 from tests.test_slice92_layer1_persistence_wiring import _ctx_with_finding_inputs

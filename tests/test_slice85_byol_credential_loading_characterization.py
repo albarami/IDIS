@@ -275,7 +275,7 @@ def _fake_byol_only_registry() -> EnrichmentProviderRegistry:
 
 
 def test_run_full_enrichment_strict_raises_on_missing_byol_without_leak() -> None:
-    from idis.api.routes.runs import _run_full_enrichment
+    from idis.services.runs.step_runtime.enrichment import _run_full_enrichment
 
     env = _env_without(*_ENV_MARKERS, "IDIS_REQUIRE_FULL_LIVE", "IDIS_STRICT_DOTENV_PATH")
     with (
@@ -317,7 +317,7 @@ def test_run_full_enrichment_strict_raises_on_missing_byol_without_leak() -> Non
 
 
 def test_run_full_enrichment_non_strict_counts_blocked_without_raise() -> None:
-    from idis.api.routes.runs import _run_full_enrichment
+    from idis.services.runs.step_runtime.enrichment import _run_full_enrichment
 
     env = _env_without(*_ENV_MARKERS, "IDIS_REQUIRE_FULL_LIVE", "IDIS_STRICT_DOTENV_PATH")
     with (
@@ -345,7 +345,7 @@ def test_run_full_enrichment_non_strict_counts_blocked_without_raise() -> None:
 
 
 def test_preflight_and_execution_share_repo_factory() -> None:
-    from idis.api.routes.runs import _run_full_enrichment
+    from idis.services.runs.step_runtime.enrichment import _run_full_enrichment
 
     execution_src = inspect.getsource(_run_full_enrichment)
     preflight_src = inspect.getsource(build_strict_full_live_admission_report)

@@ -104,7 +104,7 @@ class TestBuilderMaxTokensWiring:
     )
     def test_extraction_builder_uses_4096(self) -> None:
         """_build_extraction_llm_client should use max_tokens=4096."""
-        from idis.api.routes.runs import _build_extraction_llm_client
+        from idis.services.runs.step_runtime.roles import _build_extraction_llm_client
 
         client = _build_extraction_llm_client()
         assert client._max_tokens == 4096
@@ -118,7 +118,7 @@ class TestBuilderMaxTokensWiring:
     )
     def test_analysis_builder_uses_8192(self) -> None:
         """_build_analysis_llm_client should use max_tokens=8192."""
-        from idis.api.routes.runs import _build_analysis_llm_client
+        from idis.services.runs.step_runtime.roles import _build_analysis_llm_client
 
         client = _build_analysis_llm_client()
         assert client._max_tokens == 8192
@@ -132,7 +132,7 @@ class TestBuilderMaxTokensWiring:
     )
     def test_scoring_builder_uses_16384(self) -> None:
         """_build_scoring_llm_client should use max_tokens=16384."""
-        from idis.api.routes.runs import _build_scoring_llm_client
+        from idis.services.runs.step_runtime.roles import _build_scoring_llm_client
 
         client = _build_scoring_llm_client()
         assert client._max_tokens == 16384
@@ -146,7 +146,7 @@ class TestBuilderMaxTokensWiring:
     )
     def test_debate_builder_uses_8192(self) -> None:
         """_build_debate_role_runners default+arbiter clients use max_tokens=8192."""
-        from idis.api.routes.runs import _build_debate_role_runners
+        from idis.services.runs.step_runtime.roles import _build_debate_role_runners
 
         runners = _build_debate_role_runners()
         assert runners.advocate._llm_client._max_tokens == 8192
@@ -161,7 +161,7 @@ class TestBuilderMaxTokensWiring:
     )
     def test_deterministic_builders_unchanged(self) -> None:
         """Deterministic builders should not have _max_tokens attribute."""
-        from idis.api.routes.runs import (
+        from idis.services.runs.step_runtime.roles import (
             _build_analysis_llm_client,
             _build_extraction_llm_client,
             _build_scoring_llm_client,

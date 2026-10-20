@@ -163,7 +163,7 @@ def test_grade_is_not_persisted_into_enrichment_provenance() -> None:
 
 
 def test_ledger_rows_carry_source_grade() -> None:
-    from idis.api.routes.runs import _run_full_enrichment
+    from idis.services.runs.step_runtime.enrichment import _run_full_enrichment
 
     env = _env_without("IDIS_REQUIRE_FULL_LIVE", "IDIS_STRICT_DOTENV_PATH")
     with (
@@ -187,7 +187,7 @@ def test_ledger_rows_carry_source_grade() -> None:
 
 
 def test_red_provider_grades_c_with_byol_d_without() -> None:
-    from idis.api.routes.runs import _run_full_enrichment
+    from idis.services.runs.step_runtime.enrichment import _run_full_enrichment
 
     # RED + BYOL credentials present -> C (warm service whose repo holds the credentials).
     registry = EnrichmentProviderRegistry()
@@ -315,8 +315,8 @@ def test_export_sanitizes_bogus_evidence_fields_leak_free(tmp_path: Path) -> Non
 
 
 def test_deliverables_step_and_orchestrator_thread_enrichment_evidence() -> None:
-    from idis.api.routes.runs import _run_full_deliverables
     from idis.services.runs import orchestrator
+    from idis.services.runs.step_runtime.deliverables import _run_full_deliverables
 
     assert "enrichment_evidence" in inspect.signature(_run_full_deliverables).parameters
     orchestrator_source = inspect.getsource(orchestrator)

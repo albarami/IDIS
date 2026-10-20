@@ -249,7 +249,7 @@ def test_full_scoring_uses_series_a_pack_for_series_a_deal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A deal stage of 'Series A' selects the SERIES_A pack, not SEED."""
-    from idis.api.routes.runs import _run_full_scoring
+    from idis.services.runs.step_runtime.analysis import _run_full_scoring
 
     _quiet_env(monkeypatch)
     client = _RecordingScoringClient(_product_only_response())
@@ -281,8 +281,8 @@ def test_full_scoring_unmappable_stage_is_stage_unknown(
     raw_stage: str,
 ) -> None:
     """An unmapped deal stage blocks scoring and keeps the raw text visible."""
-    from idis.api.routes.runs import _run_full_scoring
     from idis.services.runs.orchestrator import RunStepBlockedError
+    from idis.services.runs.step_runtime.analysis import _run_full_scoring
 
     _quiet_env(monkeypatch)
     client = _RecordingScoringClient(_product_only_response())
@@ -337,7 +337,6 @@ def test_full_layer2_summaries_use_the_admitted_deal_stage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The deal_metadata snapshot selects emphasis, not a fresh repository read."""
-    from idis.api.routes.runs import _run_full_layer2_ic_challenge
     from idis.persistence.repositories.deals import (
         clear_in_memory_store,
         seed_deal_in_memory,
@@ -346,6 +345,7 @@ def test_full_layer2_summaries_use_the_admitted_deal_stage(
         InMemoryLayer2ChallengeRepository,
         clear_in_memory_layer2_challenge_store,
     )
+    from idis.services.runs.step_runtime.layer2 import _run_full_layer2_ic_challenge
 
     _quiet_env(monkeypatch)
     clear_in_memory_store()
@@ -383,12 +383,12 @@ def test_full_layer2_unmapped_stage_blocks_before_runners(
     visible: str,
 ) -> None:
     """An unmapped snapshot blocks Layer-2 before runners are built or rows written."""
-    from idis.api.routes.runs import _run_full_layer2_ic_challenge
     from idis.persistence.repositories.layer2_challenge import (
         InMemoryLayer2ChallengeRepository,
         clear_in_memory_layer2_challenge_store,
     )
     from idis.services.runs.orchestrator import RunStepBlockedError
+    from idis.services.runs.step_runtime.layer2 import _run_full_layer2_ic_challenge
 
     challenger, arbiter, built = _strict_layer2_fakes(monkeypatch)
     repository = _RecordingChallengeRepository()
@@ -427,7 +427,7 @@ def test_full_layer2_deferred_record_carries_the_resolved_stage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A deferred FULL Layer-2 record keeps the stage resolved from deal_metadata."""
-    from idis.api.routes.runs import _run_full_layer2_ic_challenge
+    from idis.services.runs.step_runtime.layer2 import _run_full_layer2_ic_challenge
 
     _quiet_env(monkeypatch)
     result = _run_full_layer2_ic_challenge(
@@ -448,8 +448,9 @@ def test_stage_unknown_message_caps_raw_text_at_120_characters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Both STAGE_UNKNOWN messages echo at most 120 characters of the raw stage."""
-    from idis.api.routes.runs import _run_full_layer2_ic_challenge, _run_full_scoring
     from idis.services.runs.orchestrator import RunStepBlockedError
+    from idis.services.runs.step_runtime.analysis import _run_full_scoring
+    from idis.services.runs.step_runtime.layer2 import _run_full_layer2_ic_challenge
 
     raw = "Q" * (_STAGE_UNKNOWN_MESSAGE_LIMIT + 1)
     capped = "Q" * _STAGE_UNKNOWN_MESSAGE_LIMIT

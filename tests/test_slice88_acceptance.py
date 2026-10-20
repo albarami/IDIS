@@ -19,7 +19,6 @@ from typing import Any
 
 import pytest
 
-from idis.api.routes.runs import _run_full_graph_evidence
 from idis.calc.engine import CalcEngine, InputGradeInfo
 from idis.calc.formulas.core import register_core_formulas
 from idis.calc.formulas.registry import FormulaRegistry
@@ -39,6 +38,7 @@ from idis.persistence.repositories.claims import (
 )
 from idis.services.graph.retrieval import GraphRetrievalService
 from idis.services.runs.orchestrator import RunStepBlockedError
+from idis.services.runs.step_runtime.evidence import _run_full_graph_evidence
 from tests.test_slice61_graph_visibility import (
     DEAL_ID,
     RUN_ID,

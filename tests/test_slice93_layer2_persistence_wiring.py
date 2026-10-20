@@ -24,12 +24,12 @@ from typing import Any
 
 import pytest
 
-from idis.api.routes.runs import _run_full_layer2_ic_challenge
 from idis.persistence.repositories.layer2_challenge import (
     InMemoryLayer2ChallengeRepository,
     clear_in_memory_layer2_challenge_store,
 )
 from idis.services.runs.layer2_ic_challenge import Layer2ICChallengeBlockedError
+from idis.services.runs.step_runtime.layer2 import _run_full_layer2_ic_challenge
 
 TENANT_ID = "11111111-1111-1111-1111-111111111111"
 DEAL_ID = "33333333-3333-3333-3333-333333333333"

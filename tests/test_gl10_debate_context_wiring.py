@@ -8,7 +8,6 @@ from typing import Any
 import pytest
 
 import idis.services.runs.step_runtime.analysis as analysis_mod
-from idis.api.routes.runs import _run_full_debate
 from idis.calc.engine import CalcEngine, InputGradeInfo
 from idis.calc.formulas.core import register_core_formulas
 from idis.calc.formulas.registry import FormulaRegistry
@@ -18,6 +17,7 @@ from idis.persistence.repositories.calculations import (
     InMemoryCalculationsRepository,
     clear_in_memory_calculations_store,
 )
+from idis.services.runs.step_runtime.analysis import _run_full_debate
 
 TENANT_ID = "11111111-1111-1111-1111-111111111111"
 DEAL_ID = "22222222-2222-2222-2222-222222222222"

@@ -10,7 +10,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from idis.api.routes.runs import _run_full_rag_evidence
 from idis.audit.sink import InMemoryAuditSink
 from idis.deliverables.generator import DeliverablesGenerator
 from idis.deliverables.product_bundle import ProductBundleExporter
@@ -25,6 +24,7 @@ from idis.services.rag.indexing import index_document_spans_for_deal
 from idis.services.rag.pgvector_health import PgvectorHealthCheck
 from idis.services.rag.retrieval import retrieve_rag_probe_evidence
 from idis.services.runs.orchestrator import RunContext, RunOrchestrator, RunStepBlockedError
+from idis.services.runs.step_runtime.evidence import _run_full_rag_evidence
 from idis.services.runs.strict_full_live import (
     StrictComponentStatus,
     build_strict_full_live_readiness_report,

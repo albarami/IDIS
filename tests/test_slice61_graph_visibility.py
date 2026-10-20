@@ -8,7 +8,6 @@ from typing import Any
 
 import pytest
 
-from idis.api.routes.runs import _run_full_graph_evidence
 from idis.audit.sink import InMemoryAuditSink
 from idis.deliverables.generator import DeliverablesGenerator
 from idis.deliverables.product_bundle import ProductBundleExporter
@@ -25,6 +24,7 @@ from idis.persistence.repositories.run_steps import (
 )
 from idis.services.graph.retrieval import GraphRetrievalService
 from idis.services.runs.orchestrator import RunContext, RunOrchestrator, RunStepBlockedError
+from idis.services.runs.step_runtime.evidence import _run_full_graph_evidence
 from idis.services.runs.strict_full_live import build_strict_full_live_readiness_report
 from idis.storage.filesystem_store import FilesystemObjectStore
 from tests.test_deliverables_generator import (

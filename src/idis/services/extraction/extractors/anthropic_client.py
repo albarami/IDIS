@@ -16,10 +16,12 @@ import logging
 import os
 import time
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, NamedTuple, cast
 
 import anthropic
 
+from idis.models.methodology_extraction import exact_canonical_json_bytes
 from idis.providers.anthropic_capabilities import (
     LlmRequestShapeRejected,
     RequestShapeReason,
@@ -37,6 +39,7 @@ from idis.providers.anthropic_failure import (
     LlmProviderRequestRejected,
     classify_http_status,
 )
+from idis.providers.anthropic_prepared import PreparedLlmRequest
 from idis.providers.anthropic_result import LlmResult, parse_message
 
 logger = logging.getLogger(__name__)
@@ -123,6 +126,42 @@ class AnthropicLLMClient:
         """
         return self.call_typed(prompt, json_mode=json_mode).text
 
+    def prepare_request(self, prompt: str, *, json_mode: bool = False) -> PreparedLlmRequest:
+        """Build the request ``call_typed`` will send, without using the SDK client.
+
+        Args:
+            prompt: The full prompt text to send.
+            json_mode: If True, instruct the model to return JSON.
+
+        Returns:
+            The SDK keyword arguments, transport, model, output ceiling, and
+            the canonical UTF-8 size of those arguments.
+
+        Raises:
+            LlmRequestShapeRejected: The model and effort pair cannot be sent.
+        """
+        system_parts: list[str] = []
+        if json_mode:
+            system_parts.append(
+                "You MUST respond with valid JSON only. No markdown, no explanation, "
+                "no code fences. Output raw JSON."
+            )
+        built = build_request(
+            model=self._model,
+            max_tokens=self._max_tokens,
+            system="\n".join(system_parts) if system_parts else "",
+            messages=[{"role": "user", "content": prompt}],
+            effort=self._effort,
+        )
+        params = to_message_create_params(built)
+        return PreparedLlmRequest(
+            params=MappingProxyType(params),
+            transport=resolve_model_capability(self._model).transport,
+            model=self._model,
+            max_tokens=self._max_tokens,
+            payload_bytes=len(exact_canonical_json_bytes(params)),
+        )
+
     def call_typed(self, prompt: str, *, json_mode: bool = False) -> LlmResult:
         """Send one prompt and return the typed completion.
 
@@ -141,22 +180,9 @@ class AnthropicLLMClient:
         Raises:
             RuntimeError: Typed provider or response failure.
         """
-        system_parts: list[str] = []
-        if json_mode:
-            system_parts.append(
-                "You MUST respond with valid JSON only. No markdown, no explanation, "
-                "no code fences. Output raw JSON."
-            )
-
-        built = build_request(
-            model=self._model,
-            max_tokens=self._max_tokens,
-            system="\n".join(system_parts) if system_parts else "",
-            messages=[{"role": "user", "content": prompt}],
-            effort=self._effort,
-        )
-        params = to_message_create_params(built)
-        transport = resolve_model_capability(self._model).transport
+        prepared = self.prepare_request(prompt, json_mode=json_mode)
+        params = prepared.params
+        transport = prepared.transport
         for attempt in range(MAX_RETRIES + 1):
             failure: LlmProviderError | None = None
             try:

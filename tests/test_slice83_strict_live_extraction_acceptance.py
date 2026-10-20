@@ -20,14 +20,14 @@ from unittest.mock import patch
 
 import pytest
 
-from idis.api.routes.runs import (
+from idis.services.extraction.extractors.llm_client import DeterministicLLMClient
+from idis.services.runs.step_runtime.roles import (
     STRICT_LIVE_EXTRACTION_PROVIDER_FAILED,
     STRICT_LIVE_EXTRACTION_REQUIRED,
     ExtractorClientSelection,
     StrictLiveExtractionError,
-    _run_snapshot_extraction,
 )
-from idis.services.extraction.extractors.llm_client import DeterministicLLMClient
+from idis.services.runs.step_runtime.snapshot import _run_snapshot_extraction
 
 _EXISTING_SUMMARY_FIELDS = (
     "status",
@@ -178,7 +178,7 @@ def test_acceptance_non_strict_and_snapshot_use_deterministic() -> None:
     env = _env_without("IDIS_EXTRACT_BACKEND")
     env["IDIS_REQUIRE_FULL_LIVE"] = "1"
     with patch.dict(os.environ, env, clear=True):
-        from idis.api.routes.runs import _build_extraction_llm_client
+        from idis.services.runs.step_runtime.roles import _build_extraction_llm_client
 
         assert isinstance(_build_extraction_llm_client(), DeterministicLLMClient)
 

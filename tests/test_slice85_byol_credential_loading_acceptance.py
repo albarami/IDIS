@@ -234,7 +234,7 @@ def _fake_byol_only_registry() -> Any:
 
 
 def test_acceptance_execution_backstop_fails_closed_in_strict_without_leak() -> None:
-    from idis.api.routes.runs import _run_full_enrichment
+    from idis.services.runs.step_runtime.enrichment import _run_full_enrichment
 
     env = _env_without(*_ENV_MARKERS, "IDIS_REQUIRE_FULL_LIVE", "IDIS_STRICT_DOTENV_PATH")
     env["IDIS_ENRICHMENT_ENCRYPTION_KEY"] = _ENC_KEY_MARKER
@@ -274,7 +274,7 @@ def test_acceptance_execution_backstop_fails_closed_in_strict_without_leak() -> 
 
 
 def test_acceptance_non_strict_summary_is_unchanged_and_leak_free() -> None:
-    from idis.api.routes.runs import _run_full_enrichment
+    from idis.services.runs.step_runtime.enrichment import _run_full_enrichment
 
     env = _env_without(*_ENV_MARKERS, "IDIS_REQUIRE_FULL_LIVE", "IDIS_STRICT_DOTENV_PATH")
     with (

@@ -19,15 +19,15 @@ from unittest.mock import patch
 
 import pytest
 
-from idis.api.routes.runs import (
+from idis.services.extraction.extractors.llm_client import DeterministicLLMClient
+from idis.services.runs.step_runtime.roles import (
     STRICT_LIVE_EXTRACTION_PROVIDER_FAILED,
     STRICT_LIVE_EXTRACTION_REQUIRED,
     ExtractorClientSelection,
     StrictLiveExtractionError,
     _build_extraction_llm_client,
-    _run_snapshot_extraction,
 )
-from idis.services.extraction.extractors.llm_client import DeterministicLLMClient
+from idis.services.runs.step_runtime.snapshot import _run_snapshot_extraction
 
 _FAKE_KEY = "sk-ant-test-fake-key-for-unit-test"
 _LEAK_MARKERS = (

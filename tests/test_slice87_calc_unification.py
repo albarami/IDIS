@@ -91,7 +91,9 @@ def _methodology_inputs() -> dict[str, Any]:
 
 
 def test_full_methodology_calc_persists_records_durably() -> None:
-    from idis.api.routes.runs import _run_full_methodology_deterministic_calculation
+    from idis.services.runs.step_runtime.snapshot import (
+        _run_full_methodology_deterministic_calculation,
+    )
 
     run_result, calculations, calc_sanads = _run_full_methodology_deterministic_calculation(
         **_methodology_inputs(),
@@ -112,7 +114,9 @@ def test_full_methodology_calc_persists_records_durably() -> None:
 
 
 def test_full_methodology_persistence_is_idempotent_on_rerun() -> None:
-    from idis.api.routes.runs import _run_full_methodology_deterministic_calculation
+    from idis.services.runs.step_runtime.snapshot import (
+        _run_full_methodology_deterministic_calculation,
+    )
 
     inputs = _methodology_inputs()
     _run_full_methodology_deterministic_calculation(**inputs, db_conn=None)

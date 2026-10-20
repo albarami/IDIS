@@ -85,7 +85,7 @@ def test_extraction_seam_is_capped_on_the_real_path(
     exhausted_budget: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("IDIS_EXTRACT_BACKEND", "anthropic")
-    from idis.api.routes.runs import _build_extraction_llm_client
+    from idis.services.runs.step_runtime.roles import _build_extraction_llm_client
 
     client = _build_extraction_llm_client(tenant_id=exhausted_budget)
     with pytest.raises(ProviderBudgetExceededError):
@@ -96,7 +96,7 @@ def test_analysis_seam_is_capped_on_the_real_path(
     exhausted_budget: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("IDIS_DEBATE_BACKEND", "anthropic")
-    from idis.api.routes.runs import _build_analysis_llm_client
+    from idis.services.runs.step_runtime.roles import _build_analysis_llm_client
 
     client = _build_analysis_llm_client(tenant_id=exhausted_budget)
     with pytest.raises(ProviderBudgetExceededError):
@@ -107,7 +107,7 @@ def test_scoring_seam_is_capped_on_the_real_path(
     exhausted_budget: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("IDIS_DEBATE_BACKEND", "anthropic")
-    from idis.api.routes.runs import _build_scoring_llm_client
+    from idis.services.runs.step_runtime.roles import _build_scoring_llm_client
 
     client = _build_scoring_llm_client(tenant_id=exhausted_budget)
     with pytest.raises(ProviderBudgetExceededError):
@@ -118,7 +118,7 @@ def test_debate_layer1_role_seam_is_capped_on_the_real_path(
     exhausted_budget: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("IDIS_DEBATE_BACKEND", "anthropic")
-    from idis.api.routes.runs import _build_debate_role_runners
+    from idis.services.runs.step_runtime.roles import _build_debate_role_runners
 
     runners = _build_debate_role_runners(context=None, tenant_id=exhausted_budget)
     with pytest.raises(ProviderBudgetExceededError):
@@ -126,8 +126,8 @@ def test_debate_layer1_role_seam_is_capped_on_the_real_path(
 
 
 def test_layer2_ic_challenge_seam_is_capped_on_the_real_path(exhausted_budget: str) -> None:
-    from idis.api.routes.runs import _new_budgeted_llm_client
     from idis.services.runs.layer2_ic_challenge import build_live_layer2_ic_runners
+    from idis.services.runs.step_runtime.roles import _new_budgeted_llm_client
 
     challenger = _new_budgeted_llm_client(
         model="claude-sonnet-4-20250514", max_tokens=8192, tenant_id=exhausted_budget
@@ -148,10 +148,10 @@ def test_no_live_anthropic_construction_bypasses_the_budget_helper() -> None:
     # runs.py or in step_runtime after the composition-root move.
     import inspect
 
-    from idis.api.routes import runs as runs_module
+    from idis.services.runs.step_runtime import roles as roles_module
 
     assert _anthropic_construction_problems(_live_anthropic_sources()) == ()
-    helper_src = inspect.getsource(runs_module._new_budgeted_llm_client)
+    helper_src = inspect.getsource(roles_module._new_budgeted_llm_client)
     assert "AnthropicLLMClient(" in helper_src  # ...and it lives inside the budget helper
 
 

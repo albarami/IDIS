@@ -84,8 +84,8 @@ def _report(checker: Any, env: dict[str, str]) -> Any:
 
 
 def test_build_layer2_provenance_records_safe_executed_signal() -> None:
-    from idis.api.routes.runs import _build_layer2_provenance
     from idis.services.runs.layer2_ic_challenge import Layer2ICLLMRunner
+    from idis.services.runs.step_runtime.roles import _build_layer2_provenance
 
     response = _layer2_response(supported_claim_ids=["claim-a"], supported_calc_ids=["calc-a"])
     challenger = Layer2ICLLMRunner(
@@ -127,7 +127,7 @@ def test_build_layer2_provenance_records_safe_executed_signal() -> None:
 
 
 def test_build_layer2_provenance_not_executed_when_runners_missing() -> None:
-    from idis.api.routes.runs import _build_layer2_provenance
+    from idis.services.runs.step_runtime.roles import _build_layer2_provenance
 
     provenance = _build_layer2_provenance(
         strict_full_live=False,
@@ -150,7 +150,7 @@ def test_build_layer2_provenance_not_executed_when_runners_missing() -> None:
 
 
 def test_layer2_provenance_surfaced_in_result_non_strict() -> None:
-    from idis.api.routes.runs import _run_full_layer2_ic_challenge
+    from idis.services.runs.step_runtime.layer2 import _run_full_layer2_ic_challenge
 
     clear_in_memory_layer2_challenge_store()
     result = _run_full_layer2_ic_challenge(

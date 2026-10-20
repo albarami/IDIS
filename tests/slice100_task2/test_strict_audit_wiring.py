@@ -155,12 +155,12 @@ def test_strict_component_helper_cannot_construct_memory_sink(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Direct strict helper use fails before silently constructing an in-memory authority."""
-    import idis.api.routes.runs as runs_module
+    from idis.services.runs.step_runtime import common as common_module
 
     _strict_env(monkeypatch)
 
     with pytest.raises(Exception) as exc_info:
-        runs_module._resolve_run_audit_sink(None)
+        common_module._resolve_run_audit_sink(None)
 
     assert "AUDIT" in str(exc_info.value).upper()
 
@@ -233,7 +233,6 @@ def test_graph_projection_factory_receives_strict_postgres_sink(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The graph helper must not construct an unaudited GraphProjectionService."""
-    import idis.api.routes.runs as runs_module
     import idis.persistence.graph_consistency as graph_module
     import idis.services.runs.step_runtime.evidence as evidence_module
 
@@ -279,7 +278,7 @@ def test_graph_projection_factory_receives_strict_postgres_sink(
     )
     sink = PostgresAuditSink()
 
-    result = runs_module._project_graph_evidence(
+    result = evidence_module._project_graph_evidence(
         tenant_id=_TENANT_ID,
         deal_id="30000000-0000-4000-8000-000000000002",
         documents=[],

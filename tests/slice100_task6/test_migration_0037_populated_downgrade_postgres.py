@@ -17,6 +17,7 @@ from tests.slice100_task2b._support import (
     tenant_catalog_snapshot,
     tenant_table_inventory,
 )
+from tests.slice100_task6._legacy_0037_planning import seed_legacy_0037_planned_graph
 from tests.slice100_task6.test_migration_0037_red import TASK6_TABLES
 from tests.slice100_task6.test_postgres_0037_red import (
     CANONICAL_CLAIM_IDENTITY,
@@ -30,9 +31,7 @@ from tests.slice100_task6.test_postgres_0037_red import (
     TENANT_A as CANONICAL_TENANT_ID,
 )
 from tests.slice100_task6.test_postgres_task6_write_fencing_red import (
-    _persist_planned_graph,
     _planned_graph_snapshot,
-    _prepare_planning_database,
     _task6_write_counts,
 )
 
@@ -173,11 +172,7 @@ def _assert_0037_and_all_task6_tables(connection: Connection) -> None:
 
 def test_populated_planning_graph_refuses_downgrade_without_any_mutation() -> None:
     with disposable_postgres() as database:
-        selection_id, planned_tasks = _prepare_planning_database(
-            database,
-            schema_revision="0037",
-        )
-        _persist_planned_graph(database, selection_id, planned_tasks)
+        seed_legacy_0037_planned_graph(database)
         assert _task6_write_counts(database) == (100, 100, 0, 0, 0, 0, 0, 0, 0)
 
         with database.admin_engine.connect() as connection:

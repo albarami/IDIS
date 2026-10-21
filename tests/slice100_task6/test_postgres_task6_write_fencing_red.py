@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
-from idis.methodology.category_mapping import load_commercial_dd_question_category_map
-from idis.methodology.models import MethodologyType
+from idis.methodology.category_mapping import (
+    CommercialDDQuestionCategoryMap,
+    load_commercial_dd_question_category_map,
+)
+from idis.methodology.models import MethodologyQuestion, MethodologyType
 from idis.models.document_classification import CddDocumentCategory, FddDocumentCategory
 from idis.models.extraction_task import (
     ExtractionTask,
@@ -19,6 +23,7 @@ from idis.models.extraction_task import (
     SourceSpanReference,
     StrictExtractionTaskAdmission,
 )
+from idis.models.methodology_coverage import MethodologyCoverageRecord
 from idis.persistence.db import set_tenant_local
 from idis.persistence.repositories.methodologies import PostgresMethodologiesRepository
 from idis.persistence.repositories.methodology_extraction import (
@@ -199,77 +204,87 @@ def _prepare_planning_database(
             for registry in registries
             for question in registry.current_version.questions
         }
-        category_map = load_commercial_dd_question_category_map()
-        planned: list[ExtractionTask] = []
-        # This lane proves fenced repository/graph behavior.  The genuine-PG
-        # composition suite is the authority for governed-map planner output.
-        for record in coverage:
-            question = questions[record.methodology_question_id]
-            is_cdd = record.methodology_type is MethodologyType.COMMERCIAL_DD
-            document_id = CDD_DOCUMENT_ID if is_cdd else FDD_DOCUMENT_ID
-            source_span = SourceSpanReference(
-                document_id=document_id,
-                span_id=CDD_SPAN_ID if is_cdd else FDD_SPAN_ID,
-                evidence_tags=[],
-                locator=(
-                    {"page": 1, "line": 1}
-                    if is_cdd
-                    else {"sheet": "P&L", "cell": "A1", "row": 1, "col": 1}
-                ),
-                span_type="PAGE_TEXT" if is_cdd else "CELL",
-                content_hash=CDD_SOURCE_SHA256 if is_cdd else FDD_SOURCE_SHA256,
-                text_excerpt=CDD_SOURCE_TEXT if is_cdd else FDD_SOURCE_TEXT,
-            )
-            primary_fdd = (
-                FddDocumentCategory.UNKNOWN
+        planned = _build_fictional_selected_pair_tasks(
+            questions=questions,
+            coverage=coverage,
+            category_map=load_commercial_dd_question_category_map(),
+        )
+    return selection_id, planned
+
+
+def _build_fictional_selected_pair_tasks(
+    *,
+    questions: Mapping[str, MethodologyQuestion],
+    coverage: Iterable[MethodologyCoverageRecord],
+    category_map: CommercialDDQuestionCategoryMap,
+) -> tuple[ExtractionTask, ...]:
+    """Build the sorted fictional READY plan for the persisted selected pair."""
+    planned: list[ExtractionTask] = []
+    # This lane proves fenced repository/graph behavior.  The genuine-PG
+    # composition suite is the authority for governed-map planner output.
+    for record in coverage:
+        question = questions[record.methodology_question_id]
+        is_cdd = record.methodology_type is MethodologyType.COMMERCIAL_DD
+        document_id = CDD_DOCUMENT_ID if is_cdd else FDD_DOCUMENT_ID
+        source_span = SourceSpanReference(
+            document_id=document_id,
+            span_id=CDD_SPAN_ID if is_cdd else FDD_SPAN_ID,
+            evidence_tags=[],
+            locator=(
+                {"page": 1, "line": 1}
                 if is_cdd
-                else FddDocumentCategory.FINANCIAL_SCHEDULE_MODEL
-            )
-            primary_cdd = (
-                CddDocumentCategory.MARKET_RESEARCH if is_cdd else CddDocumentCategory.UNKNOWN
-            )
-            matched_category = primary_cdd.value if is_cdd else primary_fdd.value
-            planned.append(
-                ExtractionTask(
-                    tenant_id=TENANT_ID,
-                    deal_id=DEAL_ID,
-                    run_id=RUN_ID,
-                    status=ExtractionTaskStatus.READY,
-                    reason_codes=["ready"],
-                    methodology_id=question.methodology_id,
-                    methodology_version_id=question.methodology_version_id,
-                    methodology_question_id=question.methodology_question_id,
-                    methodology_type=question.methodology_type,
-                    methodology_section=question.section,
-                    coverage_record_id=record.coverage_record_id,
-                    document_id=document_id,
-                    classification_id=(
-                        "dc_repository_fencing_cdd" if is_cdd else "dc_repository_fencing_fdd"
+                else {"sheet": "P&L", "cell": "A1", "row": 1, "col": 1}
+            ),
+            span_type="PAGE_TEXT" if is_cdd else "CELL",
+            content_hash=CDD_SOURCE_SHA256 if is_cdd else FDD_SOURCE_SHA256,
+            text_excerpt=CDD_SOURCE_TEXT if is_cdd else FDD_SOURCE_TEXT,
+        )
+        primary_fdd = (
+            FddDocumentCategory.UNKNOWN if is_cdd else FddDocumentCategory.FINANCIAL_SCHEDULE_MODEL
+        )
+        primary_cdd = CddDocumentCategory.MARKET_RESEARCH if is_cdd else CddDocumentCategory.UNKNOWN
+        matched_category = primary_cdd.value if is_cdd else primary_fdd.value
+        planned.append(
+            ExtractionTask(
+                tenant_id=TENANT_ID,
+                deal_id=DEAL_ID,
+                run_id=RUN_ID,
+                status=ExtractionTaskStatus.READY,
+                reason_codes=["ready"],
+                methodology_id=question.methodology_id,
+                methodology_version_id=question.methodology_version_id,
+                methodology_question_id=question.methodology_question_id,
+                methodology_type=question.methodology_type,
+                methodology_section=question.section,
+                coverage_record_id=record.coverage_record_id,
+                document_id=document_id,
+                classification_id=(
+                    "dc_repository_fencing_cdd" if is_cdd else "dc_repository_fencing_fdd"
+                ),
+                source_spans=[source_span],
+                target_fdd_category=primary_fdd,
+                target_cdd_category=primary_cdd,
+                strict_admission=StrictExtractionTaskAdmission(
+                    contract_version="strict-category-span-admission-v2",
+                    matched_category=matched_category,
+                    classified_primary_fdd_category=primary_fdd,
+                    classified_primary_cdd_category=primary_cdd,
+                    classified_secondary_fdd_categories=[],
+                    classified_secondary_cdd_categories=[],
+                    cdd_category_mapping_version=category_map.mapping_version,
+                    cdd_category_mapping_sha256=category_map.canonical_payload_sha256,
+                    classifier_contract_version=category_map.classifier_version,
+                    classifier_reachable_categories_sha256=(
+                        category_map.classifier_reachable_categories_sha256
                     ),
-                    source_spans=[source_span],
-                    target_fdd_category=primary_fdd,
-                    target_cdd_category=primary_cdd,
-                    strict_admission=StrictExtractionTaskAdmission(
-                        contract_version="strict-category-span-admission-v2",
-                        matched_category=matched_category,
-                        classified_primary_fdd_category=primary_fdd,
-                        classified_primary_cdd_category=primary_cdd,
-                        classified_secondary_fdd_categories=[],
-                        classified_secondary_cdd_categories=[],
-                        cdd_category_mapping_version=category_map.mapping_version,
-                        cdd_category_mapping_sha256=category_map.canonical_payload_sha256,
-                        classifier_contract_version=category_map.classifier_version,
-                        classifier_reachable_categories_sha256=(
-                            category_map.classifier_reachable_categories_sha256
-                        ),
-                    ),
-                    required_evidence=list(question.required_evidence),
-                    expected_answer_schema=build_expected_answer_schema(question),
-                    validation_requirements=list(question.validation_requirements),
-                )
+                ),
+                required_evidence=list(question.required_evidence),
+                expected_answer_schema=build_expected_answer_schema(question),
+                validation_requirements=list(question.validation_requirements),
             )
+        )
     assert len(planned) == 100
-    return selection_id, tuple(
+    return tuple(
         sorted(
             planned,
             key=lambda item: (

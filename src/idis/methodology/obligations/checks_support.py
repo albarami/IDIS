@@ -32,6 +32,7 @@ from idis.methodology.obligations.vocab import (
 from idis.models.document_classification import CddDocumentCategory, FddDocumentCategory
 
 _CHILD_ID = re.compile(CHILD_ID_PATTERN)
+_SAFE_LINK_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}")
 _FDD_CATEGORIES = frozenset(
     category.value
     for category in FddDocumentCategory
@@ -114,6 +115,51 @@ def _one_child(register: Register, parent: ParentRecord, child: ChildObligation)
                     ids=(child.child_id, instruction_id),
                 )
             )
+    return findings
+
+
+def _typed_link_counts(register: Register) -> tuple[dict[str, int], dict[str, int]]:
+    """Count loaded ambiguity and cross-row records per id across all shards.
+
+    Counts come from the raw loaded tuples so duplicate records in different
+    files or shards are never collapsed into one target.
+    """
+    ambiguity: dict[str, int] = {}
+    for _shard, amb in register.ambiguities:
+        ambiguity[amb.ambiguity_id] = ambiguity.get(amb.ambiguity_id, 0) + 1
+    cross_row: dict[str, int] = {}
+    for _shard, row in register.cross_rows:
+        cross_row[row.instruction_id] = cross_row.get(row.instruction_id, 0) + 1
+    return ambiguity, cross_row
+
+
+def _typed_link_findings(
+    child: ChildObligation,
+    counts: tuple[dict[str, int], dict[str, int]],
+) -> list[Finding]:
+    """Declared typed links of one ACTIVE child must resolve to exactly one record."""
+    if child.status is not ChildStatus.ACTIVE:
+        return []
+    findings: list[Finding] = []
+    for field, declared, tally in (
+        ("ambiguity_ids", child.ambiguity_ids, counts[0]),
+        ("cross_row_instruction_ids", child.cross_row_instruction_ids, counts[1]),
+    ):
+        for target in declared:
+            observed = tally.get(target, 0)
+            if observed == 1:
+                continue
+            code = (
+                Code.GL02_TYPED_LINK_UNRESOLVED.value
+                if observed == 0
+                else Code.GL02_TYPED_LINK_AMBIGUOUS.value
+            )
+            ids = tuple(
+                token
+                for token in (child.child_id, field, target)
+                if _SAFE_LINK_TOKEN.fullmatch(token)
+            )
+            findings.append(make_finding(code, ids=ids, count=observed))
     return findings
 
 

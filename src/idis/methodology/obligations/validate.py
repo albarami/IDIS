@@ -94,6 +94,8 @@ _INVARIANT_CODES: dict[str, frozenset[str]] = {
             Code.GL02_DERIVED_RULE_SCOPE.value,
             Code.GL02_POLICY_RULE_UNKNOWN.value,
             Code.GL02_RECORD_SHARD_MISMATCH.value,
+            Code.GL02_TYPED_LINK_UNRESOLVED.value,
+            Code.GL02_TYPED_LINK_AMBIGUOUS.value,
         }
     ),
     "I-09": frozenset({Code.GL02_PLAN_MINIMUM_MISSING.value, Code.GL02_PLAN_MINIMUM_UNKNOWN.value}),

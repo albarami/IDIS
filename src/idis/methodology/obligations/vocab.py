@@ -708,6 +708,8 @@ class Code(StrEnum):
     GL02_SPECIALIST_INVALID = "GL02_SPECIALIST_INVALID"
     GL02_CATEGORY_FORBIDDEN = "GL02_CATEGORY_FORBIDDEN"
     GL02_EVIDENCE_TYPE = "GL02_EVIDENCE_TYPE"
+    GL02_TYPED_LINK_UNRESOLVED = "GL02_TYPED_LINK_UNRESOLVED"
+    GL02_TYPED_LINK_AMBIGUOUS = "GL02_TYPED_LINK_AMBIGUOUS"
     GL02_PLAN_MINIMUM_MISSING = "GL02_PLAN_MINIMUM_MISSING"
     GL02_PLAN_MINIMUM_UNKNOWN = "GL02_PLAN_MINIMUM_UNKNOWN"
     GL02_POLICY_UNCARRIED = "GL02_POLICY_UNCARRIED"
@@ -949,6 +951,20 @@ CODE_TABLE: tuple[tuple[str, str, str, str, str], ...] = (
         Code.GL02_DERIVED_RULE_SCOPE.value,
         "test_derived_rule_scope_passes",
         "test_derived_rule_scope_mutation",
+    ),
+    (
+        "I-08",
+        "check_field_completeness",
+        Code.GL02_TYPED_LINK_UNRESOLVED.value,
+        "test_typed_links_pass",
+        "test_missing_ambiguity_target_fails",
+    ),
+    (
+        "I-08",
+        "check_field_completeness",
+        Code.GL02_TYPED_LINK_AMBIGUOUS.value,
+        "test_typed_links_pass",
+        "test_duplicate_typed_target_is_ambiguous",
     ),
     (
         "I-10",

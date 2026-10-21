@@ -19,6 +19,8 @@ from idis.methodology.obligations.checks_support import (
     _packaged_template,
     _plan_shard,
     _raw_matches_cell,
+    _typed_link_counts,
+    _typed_link_findings,
 )
 from idis.methodology.obligations.extract import extract_register
 from idis.methodology.obligations.findings import make_finding
@@ -276,6 +278,7 @@ def check_field_completeness(register: Register, limit: frozenset[str] | None) -
     """I-08. Resolved fields, derivation rules, quotes, specialists, categories and reach."""
     findings: list[Finding] = []
     seen: set[str] = set()
+    typed_links = _typed_link_counts(register)
     for _shard, child in register.children:
         if child.child_id in seen:
             findings.append(make_finding(Code.GL02_CHILD_ID_DUPLICATE.value, ids=(child.child_id,)))
@@ -284,6 +287,7 @@ def check_field_completeness(register: Register, limit: frozenset[str] | None) -
         if parent is None or not _in_limit(parent.parent_id, limit):
             continue
         findings.extend(_one_child(register, parent, child))
+        findings.extend(_typed_link_findings(child, typed_links))
     findings.extend(
         joint_reason_findings(
             tuple(register.parents),

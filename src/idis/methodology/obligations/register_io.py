@@ -71,6 +71,7 @@ class Register:
     views_present: bool
     ledger: tuple[LedgerRecord, ...]
     seals: tuple[SealRecord, ...]
+    ledger_invalid: bool
     shard_findings: tuple[Finding, ...]
 
     def parent(self, parent_id: str) -> ParentRecord | None:
@@ -116,10 +117,7 @@ def load_register(private_root: Path | str) -> Register:
     views_path = root / "authored" / "views" / "XS.jsonl"
     baseline = _load_authored(root, "baseline", BaselineExpectation, by_id, findings)
     views = _load_authored(root, "views", ViewRecord, by_id, findings)
-    ledger_path = root / "ledger" / "issued_ids.jsonl"
-    seals_path = root / "ledger" / "seals.jsonl"
-    ledger = read_jsonl(ledger_path, LedgerRecord) if ledger_path.is_file() else ()
-    seals = read_jsonl(seals_path, SealRecord) if seals_path.is_file() else ()
+    ledger, seals, ledger_invalid = _read_ledger(root)
     return Register(
         root=root,
         source_cells=source_cells,
@@ -140,8 +138,25 @@ def load_register(private_root: Path | str) -> Register:
         views_present=views_path.is_file(),
         ledger=ledger,
         seals=seals,
+        ledger_invalid=ledger_invalid,
         shard_findings=tuple(findings),
     )
+
+
+def _read_ledger(root: Path) -> tuple[tuple[LedgerRecord, ...], tuple[SealRecord, ...], bool]:
+    """Read the ledger. A missing directory is empty; a broken file is invalid."""
+    issued_path = root / "ledger" / "issued_ids.jsonl"
+    seals_path = root / "ledger" / "seals.jsonl"
+    if not issued_path.is_file() and not seals_path.is_file():
+        return (), (), False
+    try:
+        issued = read_jsonl(issued_path, LedgerRecord) if issued_path.is_file() else None
+        seals = read_jsonl(seals_path, SealRecord) if seals_path.is_file() else None
+    except Gl02Error:
+        return (), (), True
+    if issued is None or seals is None:
+        return (), (), True
+    return issued, seals, False
 
 
 def parent_shard(parent: ParentRecord) -> Shard:

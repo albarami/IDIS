@@ -98,6 +98,7 @@ def _named_baseline(
                 make_finding(
                     Code.PENDING_CROSS_SHARD.value,
                     severity=FindingSeverity.INFO,
+                    scope="baseline",
                     ids=(expectation.expectation_id, parent_id),
                 )
             )
@@ -128,6 +129,7 @@ def _pending_baseline(expectation_id: str, parent_ids: list[str]) -> list[Findin
         make_finding(
             Code.PENDING_CROSS_SHARD.value,
             severity=FindingSeverity.INFO,
+            scope="baseline",
             ids=(expectation_id, parent_id),
         )
         for parent_id in parent_ids

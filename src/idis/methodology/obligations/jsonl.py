@@ -66,8 +66,10 @@ def write_json(path: Path, payload: object) -> None:
 
 
 def read_json(path: Path) -> object:
-    """Read one JSON object, rejecting a BOM, bad UTF-8 and duplicate keys."""
+    """Read one JSON object, rejecting a BOM, a carriage return, bad UTF-8 and duplicate keys."""
     raw = _read_utf8(path)
+    if b"\r" in raw:
+        raise Gl02Error(Code.GL02_JSONL_INVALID_RECORD.value)
     if raw and not raw.endswith(b"\n"):
         raise Gl02Error(Code.GL02_JSONL_MISSING_NEWLINE.value)
     try:
@@ -116,21 +118,26 @@ def read_jsonl(path: Path, model: type[T]) -> tuple[T, ...]:
 
 
 def tree_hash(root: Path) -> str:
-    """Hash a directory as sorted relative paths paired with file hashes.
+    """Hash ``derived/`` and ``authored/`` for a seal.
 
-    The digest is SHA-256 over ``relative/path<space>hex`` lines joined by
-    ``\\n`` and terminated by a final ``\\n``. Paths use forward slashes.
+    The digest is SHA-256 over lines of ``relative posix path``, a NUL, the
+    file's SHA-256, and LF, in sorted path order. ``ledger/``, ``manifest/``,
+    ``authoring/``, a review pack and a snapshot are outside the hash.
     """
+    base = Path(root)
+    files: list[Path] = []
+    for folder in ("authored", "derived"):
+        directory = base / folder
+        if not directory.is_dir():
+            continue
+        for path in directory.rglob("*"):
+            if path.is_file() and "__pycache__" not in path.parts:
+                files.append(path)
     lines: list[str] = []
-    if root.is_dir():
-        files = [
-            path for path in root.rglob("*") if path.is_file() and "__pycache__" not in path.parts
-        ]
-        for path in sorted(files, key=lambda item: item.relative_to(root).as_posix()):
-            relative = path.relative_to(root).as_posix()
-            lines.append(f"{relative} {sha256_bytes(path.read_bytes())}")
-    body = "\n".join(lines) + ("\n" if lines else "")
-    return sha256_text(body)
+    for path in sorted(files, key=lambda item: item.relative_to(base).as_posix()):
+        relative = path.relative_to(base).as_posix()
+        lines.append(f"{relative}\0{sha256_bytes(path.read_bytes())}\n")
+    return sha256_text("".join(lines))
 
 
 def _read_utf8(path: Path) -> bytes:

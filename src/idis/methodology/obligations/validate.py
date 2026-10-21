@@ -1,6 +1,6 @@
 """Validate a private obligation register.
 
-``validate_register`` never writes into the private root. I-16 is reserved.
+``validate_register`` never writes into the private root.
 """
 
 from __future__ import annotations
@@ -26,11 +26,13 @@ from idis.methodology.obligations.checks import (
 from idis.methodology.obligations.checks_links import check_baseline, check_views
 from idis.methodology.obligations.errors import Gl02Error
 from idis.methodology.obligations.findings import make_finding
+from idis.methodology.obligations.ledger import check_ledger
 from idis.methodology.obligations.models_records import Finding, ValidationReport
+from idis.methodology.obligations.references import check_references
 from idis.methodology.obligations.register_io import Register, load_register, parent_shard
 from idis.methodology.obligations.vocab import (
     SKIPPED_BASELINE_ABSENT,
-    SKIPPED_LEDGER_LATER,
+    SKIPPED_LEDGER_ABSENT,
     SKIPPED_POLICY_ABSENT,
     SKIPPED_VIEWS_ABSENT,
     SKIPPED_WORKBOOK_ABSENT,
@@ -89,12 +91,19 @@ _INVARIANT_CODES: dict[str, frozenset[str]] = {
             Code.GL02_CATEGORY_FORBIDDEN.value,
             Code.GL02_EVIDENCE_TYPE.value,
             Code.GL02_DERIVED_RULE_UNKNOWN.value,
+            Code.GL02_DERIVED_RULE_SCOPE.value,
             Code.GL02_POLICY_RULE_UNKNOWN.value,
             Code.GL02_RECORD_SHARD_MISMATCH.value,
         }
     ),
     "I-09": frozenset({Code.GL02_PLAN_MINIMUM_MISSING.value, Code.GL02_PLAN_MINIMUM_UNKNOWN.value}),
-    "I-10": frozenset({Code.GL02_POLICY_UNCARRIED.value, Code.GL02_POLICY_ROW_MISMATCH.value}),
+    "I-10": frozenset(
+        {
+            Code.GL02_POLICY_UNCARRIED.value,
+            Code.GL02_POLICY_ROW_MISMATCH.value,
+            Code.GL02_POLICY_GIVEN_NOT_EXTRACTED.value,
+        }
+    ),
     "I-11": frozenset({Code.GL02_AMBIGUITY_TOPIC_MISSING.value}),
     "I-12": frozenset({Code.GL02_SCOPE_NOT_RETAINED.value}),
     "I-13": frozenset(
@@ -107,16 +116,30 @@ _INVARIANT_CODES: dict[str, frozenset[str]] = {
     ),
     "I-14": frozenset({Code.GL02_DERIVED_STALE.value}),
     "I-15": frozenset({Code.GL02_MANIFEST_NOT_PUBLIC_SAFE.value}),
-    "I-16": frozenset({Code.GL02_LEDGER_INTEGRITY.value}),
+    "I-16": frozenset(
+        {
+            Code.GL02_LEDGER_INTEGRITY.value,
+            Code.GL02_LEDGER_ID_MISSING.value,
+            Code.GL02_LEDGER_ID_MOVED.value,
+            Code.GL02_LEDGER_FILE_INVALID.value,
+            Code.GL02_LEDGER_TREE_CHANGED.value,
+        }
+    ),
     "I-17": frozenset({Code.GL02_BASELINE_UNMET.value}),
     "I-18": frozenset({Code.GL02_VIEW_INVALID.value}),
+    "I-19": frozenset({Code.GL02_REFERENCE_UNRESOLVED.value, Code.GL02_REFERENCE_RETIRED.value}),
 }
 _SKIP_FOR = {
     "I-10": SKIPPED_POLICY_ABSENT,
     "I-14": SKIPPED_WORKBOOK_ABSENT,
-    "I-16": SKIPPED_LEDGER_LATER,
+    "I-16": SKIPPED_LEDGER_ABSENT,
     "I-17": SKIPPED_BASELINE_ABSENT,
     "I-18": SKIPPED_VIEWS_ABSENT,
+}
+_PENDING_SCOPE = {
+    "I-10": frozenset({"anchor", "binding"}),
+    "I-17": frozenset({"baseline"}),
+    "I-19": frozenset({"reference"}),
 }
 
 
@@ -134,8 +157,8 @@ def validate_register(
     workbook = None if workbook_path is None else Path(workbook_path)
     policy = None if policy_path is None else Path(policy_path)
     findings: list[Finding] = list(register.shard_findings)
-    skipped: list[str] = [SKIPPED_LEDGER_LATER]
-    skipped_invariants: list[tuple[str, str]] = [("I-16", SKIPPED_LEDGER_LATER)]
+    skipped: list[str] = []
+    skipped_invariants: list[tuple[str, str]] = []
     view_findings, closures = check_views(register) if register.views_present else ([], {})
     if not register.views_present:
         skipped.append(SKIPPED_VIEWS_ABSENT)
@@ -164,10 +187,13 @@ def validate_register(
     findings.extend(check_accounting(register, limit))
     findings.extend(check_shared_instructions(register, limit, shard_set))
     findings.extend(check_field_completeness(register, limit))
+    findings.extend(check_references(register, limit, shard_set))
     findings.extend(check_plan_minimum(register, shard_set))
-    policy_present = policy is not None or register.extraction_report.policy is not None
-    if policy_present:
-        findings.extend(check_policy_coverage(register, True))
+    extracted_policy = register.extraction_report.policy is not None
+    if policy is not None and not extracted_policy:
+        findings.append(make_finding(Code.GL02_POLICY_GIVEN_NOT_EXTRACTED.value, scope="policy"))
+    elif policy is not None or extracted_policy:
+        findings.extend(check_policy_coverage(register, True, limit))
         findings.extend(
             make_finding(code, scope="policy", ids=(code,))
             for code in register.extraction_report.finding_codes
@@ -184,6 +210,12 @@ def validate_register(
     else:
         skipped.append(SKIPPED_BASELINE_ABSENT)
         skipped_invariants.append(("I-17", SKIPPED_BASELINE_ABSENT))
+    ledger_findings, ledger_skipped = check_ledger(register, limit)
+    if ledger_skipped:
+        skipped.append(SKIPPED_LEDGER_ABSENT)
+        skipped_invariants.append(("I-16", SKIPPED_LEDGER_ABSENT))
+    else:
+        findings.extend(ledger_findings)
     findings.extend(_public_safe(register, findings, skipped, skipped_invariants))
     ordered = tuple(
         sorted(findings, key=lambda item: (item.code, item.severity.value, item.scope, item.ids))
@@ -215,6 +247,12 @@ def invariant_status(invariant_id: str, report: ValidationReport) -> str:
             return InvariantStatus.SKIPPED.value
     if invariant_id in {"I-09", "I-11"} and any(
         finding.code == Code.PENDING_CROSS_SHARD.value for finding in report.findings
+    ):
+        return InvariantStatus.SKIPPED.value
+    scopes = _PENDING_SCOPE.get(invariant_id)
+    if scopes is not None and any(
+        finding.code == Code.PENDING_CROSS_SHARD.value and finding.scope in scopes
+        for finding in report.findings
     ):
         return InvariantStatus.SKIPPED.value
     return InvariantStatus.PASS.value
@@ -263,7 +301,7 @@ def _limit(
 def _complete(findings: tuple[Finding, ...], skipped: tuple[str, ...]) -> bool:
     """False while an error, a cross-shard pending item, or any skipped check remains.
 
-    Rule I-16 is required, so ``SKIPPED_LEDGER_LATER`` keeps the register incomplete.
+    Rule I-16 is required, so ``SKIPPED_LEDGER_ABSENT`` keeps the register incomplete.
     """
     if any(finding.severity is FindingSeverity.ERROR for finding in findings):
         return False

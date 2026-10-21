@@ -129,12 +129,24 @@ def whitespace_workbook_bytes() -> bytes:
     return buffer.getvalue()
 
 
-def build_authored_register(directory: Path, *, policy: Path | None = None) -> tuple[Path, Path]:
-    """Extract a structural workbook and author a register that satisfies every local rule."""
+def build_authored_register(
+    directory: Path,
+    *,
+    policy: Path | None = None,
+    workbook_bytes: bytes | None = None,
+) -> tuple[Path, Path]:
+    """Extract a structural workbook and author a register that satisfies every local rule.
+
+    Pass the same ``workbook_bytes`` to a second extract. A new call of
+    ``structural_workbook_bytes`` can change the workbook hash, and parent ids
+    follow that hash.
+    """
     directory.mkdir(parents=True, exist_ok=True)
     root = directory / "register"
     workbook_path = directory / "fictional.xlsx"
-    workbook_path.write_bytes(structural_workbook_bytes())
+    workbook_path.write_bytes(
+        structural_workbook_bytes() if workbook_bytes is None else workbook_bytes
+    )
     extract_register(workbook_path, root, policy_path=policy)
     _author(root)
     return root, workbook_path

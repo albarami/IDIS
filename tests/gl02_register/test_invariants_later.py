@@ -16,8 +16,7 @@ from idis.methodology.obligations.models_records import Finding, ValidationRepor
 from idis.methodology.obligations.register_io import load_register
 from idis.methodology.obligations.validate import invariant_status, validate_register
 from idis.methodology.obligations.vocab import (
-    RESERVED_CODES,
-    SKIPPED_LEDGER_LATER,
+    SKIPPED_LEDGER_ABSENT,
     SKIPPED_POLICY_ABSENT,
     SKIPPED_WORKBOOK_ABSENT,
     ApplicabilityDecision,
@@ -34,7 +33,7 @@ from tests.gl02_register.mutate import (
     update_child,
     update_profile,
 )
-from tests.gl02_register.support import build_authored_register
+from tests.gl02_register.support import build_authored_register, structural_workbook_bytes
 
 _PIN = Code.GL02_SOURCE_PIN_MISMATCH.value
 
@@ -144,19 +143,19 @@ def test_i14_determinism_mutation(authored_register: tuple[Path, Path], tmp_path
     )
 
 
-def test_i16_ledger_code_is_reserved(authored_register: tuple[Path, Path]) -> None:
+def test_i16_ledger_absent_is_skipped(authored_register: tuple[Path, Path]) -> None:
     root, _workbook = authored_register
     report = validate_register(root)
-    assert Code.GL02_LEDGER_INTEGRITY.value in RESERVED_CODES
     assert Code.GL02_LEDGER_INTEGRITY.value not in {item.code for item in report.findings}
-    assert SKIPPED_LEDGER_LATER in report.skipped_checks
+    assert SKIPPED_LEDGER_ABSENT in report.skipped_checks
     assert report.register_complete is False
+    assert invariant_status("I-16", report) == InvariantStatus.SKIPPED.value
 
 
 def test_ledger_skip_alone_blocks_completion() -> None:
     from idis.methodology.obligations.validate import _complete
 
-    assert _complete((), (SKIPPED_LEDGER_LATER,)) is False
+    assert _complete((), (SKIPPED_LEDGER_ABSENT,)) is False
     assert _complete((), ()) is True
 
 
@@ -307,7 +306,10 @@ def _has(report: ValidationReport, code: str, expectation_id: str) -> bool:
 
 
 def _policy_register(directory: Path) -> Path:
-    preview, _workbook = build_authored_register(directory / "preview")
+    workbook_bytes = structural_workbook_bytes()
+    preview, _workbook = build_authored_register(
+        directory / "preview", workbook_bytes=workbook_bytes
+    )
     parent = load_register(preview).parents_by_coordinate["FDD-PL-004"]
     policy = directory / "fictional-policy.json"
     policy.write_text(
@@ -363,7 +365,9 @@ def _policy_register(directory: Path) -> Path:
         ),
         encoding="utf-8",
     )
-    root, _workbook = build_authored_register(directory / "register", policy=policy)
+    root, _workbook = build_authored_register(
+        directory / "register", policy=policy, workbook_bytes=workbook_bytes
+    )
     update_child(
         root,
         "FDD-PL-004",

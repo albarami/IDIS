@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
+from idis.methodology.obligations.audit_input import command_audit_input
 from idis.methodology.obligations.commands import (
     command_extract,
     command_manifest,
@@ -18,8 +20,11 @@ from idis.methodology.obligations.commands import (
     command_runs,
     command_status,
     command_validate,
+    command_views,
 )
 from idis.methodology.obligations.errors import Gl02Error
+from idis.methodology.obligations.ledger import command_seal
+from idis.methodology.obligations.review_pack import command_review_pack
 from idis.methodology.obligations.vocab import Code
 
 
@@ -38,6 +43,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     except OSError:
         sys.stderr.write(f"{Code.GL02_IO.value}\n")
+        return 2
+    except Exception as exc:
+        sys.stderr.write(f"{type(exc).__name__} {Code.GL02_IO.value}\n")
         return 2
 
 
@@ -92,6 +100,39 @@ def _dispatch(args: argparse.Namespace) -> int:
         )
         sys.stdout.write(text)
         return code
+    if args.command == "seal":
+        code, text = command_seal(
+            Path(args.private_root),
+            workbook=None if args.workbook is None else Path(args.workbook),
+            policy=None if args.policy is None else Path(args.policy),
+            shards=args.shard,
+            snapshot_root=None if args.snapshot_root is None else Path(args.snapshot_root),
+            now=args.now or _utc_now(),
+        )
+        sys.stdout.write(text)
+        return code
+    if args.command == "views":
+        sys.stdout.write(command_views(Path(args.private_root), output_format=args.format))
+        return 0
+    if args.command == "review-pack":
+        sys.stdout.write(
+            command_review_pack(
+                Path(args.private_root),
+                out_dir=None if args.out_dir is None else Path(args.out_dir),
+                shards=args.shard,
+            )
+        )
+        return 0
+    if args.command == "audit-input":
+        sys.stdout.write(
+            command_audit_input(
+                Path(args.private_root),
+                stage=args.stage,
+                shard=args.shard,
+                out_file=None if args.out_file is None else Path(args.out_file),
+            )
+        )
+        return 0
     if args.command == "manifest":
         sys.stdout.write(
             command_manifest(
@@ -137,11 +178,35 @@ def _parser() -> argparse.ArgumentParser:
     quote.add_argument("--text", required=True)
     quote.add_argument("--field", default="question")
     quote.add_argument("--show-text", action="store_true")
+    seal = subparsers.add_parser("seal")
+    seal.add_argument("--private-root", required=True)
+    seal.add_argument("--workbook")
+    seal.add_argument("--policy")
+    seal.add_argument("--shard", action="append")
+    seal.add_argument("--snapshot-root")
+    seal.add_argument("--now")
+    views = subparsers.add_parser("views")
+    views.add_argument("--private-root", required=True)
+    views.add_argument("--format", choices=("text", "json"), default="text")
+    review = subparsers.add_parser("review-pack")
+    review.add_argument("--private-root", required=True)
+    review.add_argument("--out-dir")
+    review.add_argument("--shard", action="append")
+    audit = subparsers.add_parser("audit-input")
+    audit.add_argument("--private-root", required=True)
+    audit.add_argument("--stage", required=True, choices=("blind", "compare"))
+    audit.add_argument("--shard", required=True)
+    audit.add_argument("--out-file")
     manifest = subparsers.add_parser("manifest")
     manifest.add_argument("--private-root", required=True)
     manifest.add_argument("--private-out")
     manifest.add_argument("--public-out")
     return parser
+
+
+def _utc_now() -> str:
+    """UTC timestamp supplied by the script. The library does not read the clock."""
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 if __name__ == "__main__":

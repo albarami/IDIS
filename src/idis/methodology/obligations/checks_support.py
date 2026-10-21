@@ -12,6 +12,8 @@ from idis.methodology.obligations.quote import resolve_in_text
 from idis.methodology.obligations.quote_ids import child_quote_findings, quote_finding_ids
 from idis.methodology.obligations.register_io import Register, parent_shard, resolve_child
 from idis.methodology.obligations.vocab import (
+    CHILD_ID_PATTERN,
+    COMMERCIAL_DERIVED_RULE_CODES,
     COORDINATE_KEYS,
     DERIVATIONS_REQUIRING_QUOTES,
     DERIVATIONS_REQUIRING_RATIONALE,
@@ -29,7 +31,7 @@ from idis.methodology.obligations.vocab import (
 )
 from idis.models.document_classification import CddDocumentCategory, FddDocumentCategory
 
-_CHILD_ID = re.compile(r"^GL02-(FDD-(?:PL|CF|LIAB|ASSET)-\d{3}|CDD-[A-Z0-9_]+)-C\d{3}$")
+_CHILD_ID = re.compile(CHILD_ID_PATTERN)
 _FDD_CATEGORIES = frozenset(
     category.value
     for category in FddDocumentCategory
@@ -145,6 +147,8 @@ def _quotes(register: Register, _parent: ParentRecord, child: ChildObligation) -
 
 def _rules(register: Register, child: ChildObligation) -> list[Finding]:
     findings: list[Finding] = []
+    parent = register.parent(child.parent_id)
+    commercial = parent is not None and parent.parent_kind is ParentKind.COMMERCIAL
     view = next((item for item in register.policy_views if item.parent_id == child.parent_id), None)
     anchors = set() if view is None else {item.formula_ordinal for item in view.anchors}
     bindings = (
@@ -157,6 +161,13 @@ def _rules(register: Register, child: ChildObligation) -> list[Finding]:
             if rule.rule_code not in {item.value for item in DerivedRuleCode}:
                 findings.append(
                     make_finding(Code.GL02_DERIVED_RULE_UNKNOWN.value, ids=(child.child_id,))
+                )
+            elif rule.rule_code in COMMERCIAL_DERIVED_RULE_CODES and not commercial:
+                findings.append(
+                    make_finding(
+                        Code.GL02_DERIVED_RULE_SCOPE.value,
+                        ids=(child.child_id, rule.rule_code),
+                    )
                 )
         elif rule.kind is CalculationKind.POLICY_V2_ANCHOR:
             if rule.formula_ordinal not in anchors:

@@ -1,6 +1,6 @@
-"""Invariant checks I-01 through I-14, I-17 and I-18.
+"""Invariant checks I-01 through I-15, I-17 and I-18.
 
-I-16 is reserved and is not implemented.
+I-16 lives in ``ledger.py``. I-19 lives in ``references.py``.
 """
 
 from __future__ import annotations
@@ -328,47 +328,71 @@ def check_plan_minimum(register: Register, shards: frozenset[Shard] | None) -> l
     return findings
 
 
-def check_policy_coverage(register: Register, policy_present: bool) -> list[Finding]:
-    """I-10. Every anchor and source binding is carried by an active child of the cited parent."""
+def check_policy_coverage(
+    register: Register,
+    policy_present: bool,
+    limit: frozenset[str] | None = None,
+) -> list[Finding]:
+    """I-10. Every in-scope anchor and source binding is carried by an active child.
+
+    An uncarried item whose parent is outside ``limit`` is ``PENDING_CROSS_SHARD``
+    with the same ids. A full validation (``limit`` is None) reports an error.
+    """
     if not policy_present:
         return []
     findings: list[Finding] = []
     for view in register.policy_views:
+        outside = not _in_limit(view.parent_id, limit)
         children = _active(register, view.parent_id)
         for anchor in view.anchors:
-            if not any(
+            carried = any(
                 rule.kind is CalculationKind.POLICY_V2_ANCHOR
                 and rule.formula_ordinal == anchor.formula_ordinal
                 for child in children
                 for rule in child.calculation_rules
-            ):
-                findings.append(
-                    make_finding(
-                        Code.GL02_POLICY_UNCARRIED.value,
-                        scope="anchor",
-                        ids=(view.parent_id, str(anchor.formula_ordinal)),
-                    )
+            )
+            if carried:
+                continue
+            findings.append(
+                _policy_gap(
+                    outside,
+                    "anchor",
+                    (view.parent_id, str(anchor.formula_ordinal)),
                 )
+            )
         for binding in view.bindings:
-            if not any(
+            carried = any(
                 rule.kind is CalculationKind.POLICY_V2_BINDING
                 and rule.formula_ordinal == binding.formula_ordinal
                 and rule.binding_ordinal == binding.binding_ordinal
                 for child in children
                 for rule in child.calculation_rules
-            ):
-                findings.append(
-                    make_finding(
-                        Code.GL02_POLICY_UNCARRIED.value,
-                        scope="binding",
-                        ids=(
-                            view.parent_id,
-                            str(binding.formula_ordinal),
-                            str(binding.binding_ordinal),
-                        ),
-                    )
+            )
+            if carried:
+                continue
+            findings.append(
+                _policy_gap(
+                    outside,
+                    "binding",
+                    (
+                        view.parent_id,
+                        str(binding.formula_ordinal),
+                        str(binding.binding_ordinal),
+                    ),
                 )
+            )
     return findings
+
+
+def _policy_gap(outside: bool, scope: str, ids: tuple[str, ...]) -> Finding:
+    if outside:
+        return make_finding(
+            Code.PENDING_CROSS_SHARD.value,
+            severity=FindingSeverity.INFO,
+            scope=scope,
+            ids=ids,
+        )
+    return make_finding(Code.GL02_POLICY_UNCARRIED.value, scope=scope, ids=ids)
 
 
 def check_named_clarifications(

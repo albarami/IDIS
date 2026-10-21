@@ -8,8 +8,10 @@ import pytest
 
 from idis.methodology.obligations.errors import Gl02Error
 from idis.methodology.obligations.jsonl import (
+    read_json,
     read_jsonl,
     reject_floats,
+    sha256_bytes,
     sha256_text,
     tree_hash,
     write_jsonl,
@@ -64,6 +66,14 @@ def test_floats_are_rejected() -> None:
     assert error.value.code == Code.GL02_JSONL_FLOAT.value
 
 
+def test_read_json_rejects_a_carriage_return(tmp_path: Path) -> None:
+    path = tmp_path / "object.json"
+    path.write_bytes(b'{"count":1}\r\n')
+    with pytest.raises(Gl02Error) as error:
+        read_json(path)
+    assert error.value.code == Code.GL02_JSONL_INVALID_RECORD.value
+
+
 def test_tree_hash_is_stable(tmp_path: Path) -> None:
     first = tmp_path / "one"
     second = tmp_path / "two"
@@ -71,4 +81,20 @@ def test_tree_hash_is_stable(tmp_path: Path) -> None:
         (root / "authored").mkdir(parents=True)
         (root / "authored" / "note.txt").write_text("Fictional\n", encoding="utf-8", newline="\n")
     assert tree_hash(first) == tree_hash(second)
-    assert tree_hash(first) == sha256_text("authored/note.txt " + sha256_text("Fictional\n") + "\n")
+    body = "authored/note.txt\0" + sha256_bytes(b"Fictional\n") + "\n"
+    assert tree_hash(first) == sha256_text(body)
+
+
+def test_tree_hash_ignores_ledger_manifest_and_authoring(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    (root / "authored").mkdir(parents=True)
+    (root / "authored" / "note.txt").write_bytes(b"Fictional\n")
+    digest = tree_hash(root)
+    (root / "ledger").mkdir()
+    (root / "ledger" / "issued_ids.jsonl").write_bytes(b"{}\n")
+    (root / "manifest").mkdir()
+    (root / "manifest" / "a.json").write_bytes(b"{}\n")
+    (root / "authoring").mkdir()
+    (root / "authoring" / "a.py").write_bytes(b"x\n")
+    (root / "note.txt").write_bytes(b"x\n")
+    assert tree_hash(root) == digest

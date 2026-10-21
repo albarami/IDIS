@@ -273,11 +273,12 @@ class ViewRecord(ObligationModel):
 
 
 class LedgerRecord(ObligationModel):
-    """One issued child id. Checked by a later packet."""
+    """One child id issued by a seal. Lines are appended and never rewritten."""
 
     child_id: str
     parent_id: str
-    register_version: str
+    public_coordinate: str
+    first_seal: int
 
 
 class SealCounts(ObligationModel):
@@ -286,14 +287,27 @@ class SealCounts(ObligationModel):
     parents: int
     children: int
     active_children: int
+    retired_children: int
+    new_ids: int
+    ambiguities: int
+    cross_row_instructions: int
+    dispositions: int
 
 
 class SealRecord(ObligationModel):
-    """One seal of the private tree. Written by a later packet."""
+    """One seal of the derived and authored tree.
 
-    sequence_number: int
+    ``scope`` is the string ``full`` or a sorted tuple of shard codes.
+    """
+
+    seq: int
     tree_hash: str
+    created_utc: str
+    scope: tuple[str, ...] | str
     counts: SealCounts
+    snapshot: str
+    workbook_sha256: str
+    register_complete: bool
 
 
 class CrossRowInstruction(ObligationModel):

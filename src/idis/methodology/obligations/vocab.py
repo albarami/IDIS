@@ -16,7 +16,7 @@ Record sort keys (applied by the JSONL writer, then by shard order
 - ``RoleAlias``: template role
 - ``BaselineExpectation``: expectation id
 - ``ViewRecord``: view id
-- ``LedgerRecord``: child id
+- ``LedgerRecord``: appended by seal; sorted by child id within one ``first_seal``
 - ``SealRecord``: sequence number
 """
 
@@ -59,6 +59,10 @@ EXPECTED_MERGED_RANGE_COUNTS: dict[str, int] = {
 EXPECTED_DATA_ROW_COUNTS: dict[str, int] = dict(EXPECTED_ROW_COUNTS)
 
 QUOTE_FIELDS: tuple[str, ...] = ("question", "line_item", "term", "nature")
+PUBLIC_COORDINATE_BODY = r"(?:FDD-(?:PL|CF|LIAB|ASSET)-\d{3}|CDD-[A-Z0-9_]+)"
+CHILD_ID_BODY = rf"GL02-{PUBLIC_COORDINATE_BODY}-C\d{{3}}"
+CHILD_ID_PATTERN = rf"^{CHILD_ID_BODY}$"
+PUBLIC_COORDINATE_PATTERN = rf"^{PUBLIC_COORDINATE_BODY}$"
 LABEL_FIELDS: frozenset[str] = frozenset({"line_item", "term", "nature"})
 COORDINATE_KEYS: tuple[str, ...] = (
     "entity",
@@ -484,6 +488,18 @@ class DerivedRuleCode(StrEnum):
     REVENUE_BRIDGE = "REVENUE_BRIDGE"
 
 
+COMMERCIAL_DERIVED_RULE_CODES: frozenset[str] = frozenset(
+    {
+        DerivedRuleCode.MARKET_SIZE_RECONCILIATION.value,
+        DerivedRuleCode.CAGR.value,
+        DerivedRuleCode.CONCENTRATION_TOP_N.value,
+        DerivedRuleCode.RETENTION_COHORT.value,
+        DerivedRuleCode.CAC_PAYBACK.value,
+        DerivedRuleCode.REVENUE_BRIDGE.value,
+    }
+)
+
+
 class CoordinateRequirement(StrEnum):
     REQUIRED = "required"
     INHERIT_FROM_DEAL = "inherit_from_deal"
@@ -711,6 +727,14 @@ class Code(StrEnum):
     GL02_DERIVED_RULE_UNKNOWN = "GL02_DERIVED_RULE_UNKNOWN"
     GL02_CATEGORY_MAP_MISMATCH = "GL02_CATEGORY_MAP_MISMATCH"
     GL02_LEDGER_INTEGRITY = "GL02_LEDGER_INTEGRITY"
+    GL02_LEDGER_ID_MISSING = "GL02_LEDGER_ID_MISSING"
+    GL02_LEDGER_ID_MOVED = "GL02_LEDGER_ID_MOVED"
+    GL02_LEDGER_FILE_INVALID = "GL02_LEDGER_FILE_INVALID"
+    GL02_LEDGER_TREE_CHANGED = "GL02_LEDGER_TREE_CHANGED"
+    GL02_DERIVED_RULE_SCOPE = "GL02_DERIVED_RULE_SCOPE"
+    GL02_POLICY_GIVEN_NOT_EXTRACTED = "GL02_POLICY_GIVEN_NOT_EXTRACTED"
+    GL02_REFERENCE_UNRESOLVED = "GL02_REFERENCE_UNRESOLVED"
+    GL02_REFERENCE_RETIRED = "GL02_REFERENCE_RETIRED"
     GL02_QUOTE_TOO_BROAD = "GL02_QUOTE_TOO_BROAD"
     GL02_DISPOSITION_HEAVY = "GL02_DISPOSITION_HEAVY"
     GL02_JSONL_DUPLICATE_KEY = "GL02_JSONL_DUPLICATE_KEY"
@@ -724,22 +748,26 @@ class Code(StrEnum):
 
 
 WARNING_CODES: frozenset[str] = frozenset(
-    {Code.GL02_QUOTE_TOO_BROAD.value, Code.GL02_DISPOSITION_HEAVY.value}
+    {
+        Code.GL02_QUOTE_TOO_BROAD.value,
+        Code.GL02_DISPOSITION_HEAVY.value,
+        Code.GL02_REFERENCE_RETIRED.value,
+    }
 )
-RESERVED_CODES: frozenset[str] = frozenset({Code.GL02_LEDGER_INTEGRITY.value})
+RESERVED_CODES: frozenset[str] = frozenset()
 
 SKIPPED_WORKBOOK_ABSENT = "SKIPPED_WORKBOOK_ABSENT"
 SKIPPED_POLICY_ABSENT = "SKIPPED_POLICY_ABSENT"
 SKIPPED_BASELINE_ABSENT = "SKIPPED_BASELINE_ABSENT"
 SKIPPED_VIEWS_ABSENT = "SKIPPED_VIEWS_ABSENT"
-SKIPPED_LEDGER_LATER = "SKIPPED_LEDGER_LATER"
+SKIPPED_LEDGER_ABSENT = "SKIPPED_LEDGER_ABSENT"
 SKIPPED_CHECKS: frozenset[str] = frozenset(
     {
         SKIPPED_WORKBOOK_ABSENT,
         SKIPPED_POLICY_ABSENT,
         SKIPPED_BASELINE_ABSENT,
         SKIPPED_VIEWS_ABSENT,
-        SKIPPED_LEDGER_LATER,
+        SKIPPED_LEDGER_ABSENT,
     }
 )
 
@@ -763,6 +791,7 @@ INVARIANT_IDS: tuple[str, ...] = (
     "I-16",
     "I-17",
     "I-18",
+    "I-19",
 )
 
 # invariant, function, primary code, passing test, mutation test
@@ -881,10 +910,10 @@ CODE_TABLE: tuple[tuple[str, str, str, str, str], ...] = (
     ),
     (
         "I-16",
-        "reserved",
+        "check_ledger",
         Code.GL02_LEDGER_INTEGRITY.value,
-        "test_i16_ledger_code_is_reserved",
-        "test_i16_ledger_code_is_reserved",
+        "test_i16_ledger_passes",
+        "test_i16_ledger_seq_gap",
     ),
     (
         "I-17",
@@ -913,6 +942,62 @@ CODE_TABLE: tuple[tuple[str, str, str, str, str], ...] = (
         Code.GL02_JOINT_REASON_MISSING.value,
         "test_joint_reason_passes",
         "test_joint_reason_mutation",
+    ),
+    (
+        "I-08",
+        "check_field_completeness",
+        Code.GL02_DERIVED_RULE_SCOPE.value,
+        "test_derived_rule_scope_passes",
+        "test_derived_rule_scope_mutation",
+    ),
+    (
+        "I-10",
+        "check_policy_coverage",
+        Code.GL02_POLICY_GIVEN_NOT_EXTRACTED.value,
+        "test_policy_given_not_extracted",
+        "test_policy_given_not_extracted",
+    ),
+    (
+        "I-16",
+        "check_ledger",
+        Code.GL02_LEDGER_ID_MISSING.value,
+        "test_i16_ledger_passes",
+        "test_i16_ledger_id_missing",
+    ),
+    (
+        "I-16",
+        "check_ledger",
+        Code.GL02_LEDGER_ID_MOVED.value,
+        "test_i16_ledger_passes",
+        "test_i16_ledger_id_moved",
+    ),
+    (
+        "I-16",
+        "check_ledger",
+        Code.GL02_LEDGER_FILE_INVALID.value,
+        "test_i16_ledger_passes",
+        "test_i16_ledger_file_invalid",
+    ),
+    (
+        "I-16",
+        "check_ledger",
+        Code.GL02_LEDGER_TREE_CHANGED.value,
+        "test_i16_ledger_passes",
+        "test_tree_change_is_informational",
+    ),
+    (
+        "I-19",
+        "check_references",
+        Code.GL02_REFERENCE_UNRESOLVED.value,
+        "test_i19_references_pass",
+        "test_i19_reference_unresolved",
+    ),
+    (
+        "I-19",
+        "check_references",
+        Code.GL02_REFERENCE_RETIRED.value,
+        "test_i19_references_pass",
+        "test_i19_reference_retired",
     ),
 )
 

@@ -67,6 +67,7 @@ _INVARIANT_IDS = frozenset(
         "I-16",
         "I-17",
         "I-18",
+        "I-19",
     }
 )
 _STATUSES = frozenset(item.value for item in InvariantStatus)
@@ -82,6 +83,12 @@ PUBLIC_MANIFEST_KEYS: dict[str, str] = {
     "sheets": "list",
     "commercial_parents": "list",
     "invariants": "list",
+    "ledger": "object",
+    "sealed": "bool",
+    "seal_count": "int",
+    "last_seal_seq": "int_or_null",
+    "last_tree_hash": "hex_or_null",
+    "issued_ids": "int",
     "workbook_sha256": "hex",
     "workbook_byte_count": "int",
     "template_sha256": "hex",
@@ -165,6 +172,7 @@ def assemble_public_manifest(register: Register, report: ValidationReport) -> di
             [parent for parent in register.parents if parent.parent_kind is ParentKind.COMMERCIAL],
             register,
         ),
+        "ledger": _ledger(register),
         "invariants": _invariants(report),
     }
 
@@ -186,15 +194,9 @@ def assert_public_safe(manifest: object) -> None:
 
 def _walk(value: object, key: str | None) -> None:
     if key is not None:
-        kind = PUBLIC_MANIFEST_KEYS[key]
-        if kind == "object" and not isinstance(value, dict):
-            raise Gl02Error(Code.GL02_MANIFEST_NOT_PUBLIC_SAFE.value)
-        if kind == "list" and not isinstance(value, list):
-            raise Gl02Error(Code.GL02_MANIFEST_NOT_PUBLIC_SAFE.value)
-        if kind == "int" and type(value) is not int:
-            raise Gl02Error(Code.GL02_MANIFEST_NOT_PUBLIC_SAFE.value)
-        if kind not in {"object", "list", "int"} and not isinstance(value, str):
-            raise Gl02Error(Code.GL02_MANIFEST_NOT_PUBLIC_SAFE.value)
+        _expect_kind(PUBLIC_MANIFEST_KEYS[key], value)
+    if value is None:
+        return
     if isinstance(value, dict):
         for child_key, child in value.items():
             if child_key not in PUBLIC_MANIFEST_KEYS:
@@ -207,7 +209,7 @@ def _walk(value: object, key: str | None) -> None:
                 raise Gl02Error(Code.GL02_MANIFEST_NOT_PUBLIC_SAFE.value)
             _walk(item, None)
         return
-    if type(value) is int or isinstance(value, str):
+    if type(value) is bool or type(value) is int or isinstance(value, str):
         if isinstance(value, str) and (key is None or not _string_ok(key, value)):
             raise Gl02Error(Code.GL02_MANIFEST_NOT_PUBLIC_SAFE.value)
         return
@@ -220,7 +222,7 @@ def _string_ok(key: str, value: str) -> bool:
         return value == REGISTER_SCHEMA
     if kind == "version":
         return value == REGISTER_VERSION
-    if kind == "hex":
+    if kind in {"hex", "hex_or_null"}:
         return _HEX.fullmatch(value) is not None
     if kind == "coordinate":
         return _COORDINATE.fullmatch(value) is not None
@@ -243,6 +245,36 @@ def _string_ok(key: str, value: str) -> bool:
     if kind == "code":
         return value in _FINDING_CODES or value in SKIPPED_CHECKS
     return False
+
+
+def _expect_kind(kind: str, value: object) -> None:
+    if kind == "object" and not isinstance(value, dict):
+        raise Gl02Error(Code.GL02_MANIFEST_NOT_PUBLIC_SAFE.value)
+    if kind == "list" and not isinstance(value, list):
+        raise Gl02Error(Code.GL02_MANIFEST_NOT_PUBLIC_SAFE.value)
+    if kind == "int" and type(value) is not int:
+        raise Gl02Error(Code.GL02_MANIFEST_NOT_PUBLIC_SAFE.value)
+    if kind == "bool" and type(value) is not bool:
+        raise Gl02Error(Code.GL02_MANIFEST_NOT_PUBLIC_SAFE.value)
+    if kind == "int_or_null" and value is not None and type(value) is not int:
+        raise Gl02Error(Code.GL02_MANIFEST_NOT_PUBLIC_SAFE.value)
+    if kind == "hex_or_null" and value is not None and not isinstance(value, str):
+        raise Gl02Error(Code.GL02_MANIFEST_NOT_PUBLIC_SAFE.value)
+    if kind not in {
+        "object",
+        "list",
+        "int",
+        "bool",
+        "int_or_null",
+        "hex_or_null",
+    } and not isinstance(value, str):
+        raise Gl02Error(Code.GL02_MANIFEST_NOT_PUBLIC_SAFE.value)
+
+
+def _ledger(register: Register) -> dict[str, object]:
+    from idis.methodology.obligations.ledger import ledger_manifest
+
+    return ledger_manifest(register)
 
 
 def _inputs(register: Register) -> dict[str, object]:
@@ -435,6 +467,7 @@ def _invariants(report: ValidationReport) -> list[dict[str, str]]:
             "I-16",
             "I-17",
             "I-18",
+            "I-19",
         )
     ]
 

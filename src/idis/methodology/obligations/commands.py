@@ -12,12 +12,14 @@ from idis.methodology.obligations.manifest import (
     build_private_manifest,
     public_manifest_bytes,
 )
+from idis.methodology.obligations.models_authored import ViewRecord
 from idis.methodology.obligations.models_records import ValidationReport
 from idis.methodology.obligations.quote import locate_phrase
-from idis.methodology.obligations.register_io import load_register
+from idis.methodology.obligations.register_io import Register, load_register
 from idis.methodology.obligations.runs import FieldAccounting, account_parent, field_text
 from idis.methodology.obligations.segments import escape_text
 from idis.methodology.obligations.status import (
+    ledger_status,
     render_status_text,
     selected_shards,
     shard_counts,
@@ -139,9 +141,63 @@ def command_status(
     register = load_register(private_root)
     report = validate_register(private_root)
     rows = shard_counts(register, report, selected)
+    ledger = ledger_status(register)
     if output_format == "json":
-        return 0, canonical_json(status_payload(rows)) + "\n"
-    return 0, render_status_text(rows)
+        return 0, canonical_json(status_payload(rows, ledger)) + "\n"
+    return 0, render_status_text(rows, ledger)
+
+
+def command_views(private_root: Path, *, output_format: str = "text") -> str:
+    """List views. ``agreed_by`` is reported only as present or absent."""
+    if output_format not in {"text", "json"}:
+        raise Gl02Error(Code.GL02_USAGE.value)
+    register = load_register(private_root)
+    from idis.methodology.obligations.checks_links import check_views
+
+    _findings, closures = check_views(register) if register.views_present else ([], {})
+    rows = [
+        _view_row(register, view, closures.get(view.view_id, frozenset()))
+        for _shard, view in register.views
+    ]
+    rows.sort(key=lambda item: str(item["view_id"]))
+    if output_format == "json":
+        return canonical_json({"views": rows}) + "\n"
+    lines = [_view_line(row) for row in rows]
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _view_row(
+    register: Register,
+    view: ViewRecord,
+    closure: frozenset[str],
+) -> dict[str, object]:
+    coordinates = sorted(
+        register.parents_by_id[parent_id].public_coordinate
+        for parent_id in closure
+        if parent_id in register.parents_by_id
+    )
+    agreed = bool(view.agreed_by and view.agreed_by.strip())
+    return {
+        "agreed_by_present": agreed,
+        "closure": view.closure.value,
+        "closure_coordinates": coordinates,
+        "closure_parent_count": len(closure),
+        "primary_parent_count": len(view.parent_ids),
+        "status": view.status.value,
+        "view_id": view.view_id,
+    }
+
+
+def _view_line(row: dict[str, object]) -> str:
+    coordinates = row["closure_coordinates"]
+    shown = ",".join(str(item) for item in coordinates) if isinstance(coordinates, list) else ""
+    agreed = 1 if row["agreed_by_present"] is True else 0
+    return (
+        f"view_id={row['view_id']} status={row['status']} closure={row['closure']} "
+        f"agreed_by_present={agreed} primary_parents={row['primary_parent_count']} "
+        f"closure_parents={row['closure_parent_count']} coordinates={shown}"
+    )
 
 
 def command_quote(
@@ -377,6 +433,10 @@ def _validation_payload(report: ValidationReport) -> dict[str, object]:
         "findings": [finding.model_dump(mode="json") for finding in report.findings],
         "register_complete": report.register_complete,
         "skipped_checks": list(report.skipped_checks),
+        "skipped_invariants": [
+            {"code": code, "invariant": invariant_id}
+            for invariant_id, code in report.skipped_invariants
+        ],
     }
 
 

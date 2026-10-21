@@ -87,16 +87,40 @@ def shard_counts(
     return tuple(_one_shard(register, shard, errors[shard]) for shard in shards)
 
 
-def status_payload(rows: tuple[ShardCounts, ...]) -> dict[str, object]:
+def status_payload(rows: tuple[ShardCounts, ...], ledger: dict[str, object]) -> dict[str, object]:
     """JSON object for the status command."""
-    return {"shards": [row.as_dict() for row in rows]}
+    return {"ledger": ledger, "shards": [row.as_dict() for row in rows]}
 
 
-def render_status_text(rows: tuple[ShardCounts, ...]) -> str:
+def render_status_text(rows: tuple[ShardCounts, ...], ledger: dict[str, object]) -> str:
     """One line per shard, with no source text."""
-    lines = [_line(row) for row in rows]
+    suffix = _ledger_suffix(ledger)
+    lines = [f"{_line(row)} {suffix}" for row in rows]
     lines.append("")
     return "\n".join(lines)
+
+
+def ledger_status(register: Register) -> dict[str, object]:
+    """Sealed flag, last sequence, and whether the current tree matches the seal."""
+    from idis.methodology.obligations.jsonl import tree_hash
+    from idis.methodology.obligations.ledger import ledger_manifest
+
+    summary = ledger_manifest(register)
+    last_hash = summary["last_tree_hash"]
+    matches = isinstance(last_hash, str) and last_hash == tree_hash(register.root)
+    return {
+        "last_seal_seq": summary["last_seal_seq"],
+        "sealed": summary["sealed"],
+        "tree_matches_seal": matches,
+    }
+
+
+def _ledger_suffix(ledger: dict[str, object]) -> str:
+    sealed = 1 if ledger["sealed"] is True else 0
+    matches = 1 if ledger["tree_matches_seal"] is True else 0
+    sequence = ledger["last_seal_seq"]
+    shown = "none" if sequence is None else str(sequence)
+    return f"sealed={sealed} last_seal_seq={shown} tree_matches_seal={matches}"
 
 
 def _one_shard(register: Register, shard: Shard, errors: Counter[str]) -> ShardCounts:

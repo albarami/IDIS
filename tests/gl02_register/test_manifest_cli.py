@@ -63,7 +63,7 @@ def test_i15_public_manifest_mutation(authored_register: tuple[Path, Path]) -> N
     allowed_counts = dict(counts)
     allowed_counts["warnings_by_code"] = [
         *warnings,
-        {"code": "SKIPPED_LEDGER_LATER", "count": 1},
+        {"code": "SKIPPED_LEDGER_ABSENT", "count": 1},
     ]
     allowed["counts"] = allowed_counts
     assert_public_safe(allowed)

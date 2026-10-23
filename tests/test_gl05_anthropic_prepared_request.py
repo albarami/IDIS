@@ -15,6 +15,7 @@ import httpx2
 import pytest
 
 from idis.models.methodology_extraction import exact_canonical_json_bytes
+from idis.providers import role_config_v2
 from idis.providers.anthropic_capabilities import LlmRequestShapeRejected
 from idis.services.extraction.extractors import anthropic_client
 from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
@@ -133,14 +134,92 @@ def test_call_typed_sends_the_prepared_params(monkeypatch: pytest.MonkeyPatch) -
     assert payload == expected
 
 
+_CANDIDATE_ROLE_NAMES = (
+    "methodology_extraction",
+    "market_agent",
+    "technical_agent",
+    "sector_specialist_agent",
+    "team_agent",
+    "historian_agent",
+    "financial_agent",
+    "terms_agent",
+    "risk_officer_agent",
+    "advocate",
+    "sanad_breaker",
+    "contradiction_finder",
+    "risk_officer",
+    "arbiter",
+    "scoring",
+    "ic_challenger",
+    "ic_arbiter",
+)
+
+
+@pytest.mark.parametrize("json_mode", [False, True])
+@pytest.mark.parametrize("role_name", _CANDIDATE_ROLE_NAMES)
+def test_candidate_role_prepares_and_encodes_at_declared_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+    role_name: str,
+    json_mode: bool,
+) -> None:
+    """Each verified candidate row composes with the actual client at its
+    declared model/effort/ceiling — offline encode only, no SDK dispatch."""
+    view = role_config_v2.load_candidate_document()
+    assert view.activation == "INACTIVE"
+    assert len(view.roles) == 17
+    rows = [candidate for candidate in view.roles if candidate.role.value == role_name]
+    assert len(rows) == 1
+    row = rows[0]
+    client = _client(
+        monkeypatch,
+        model=row.model,
+        effort=row.effort,
+        max_tokens=row.max_output_tokens,
+    )
+    client._client.close()
+    client._client = _RejectingSdk()
+    prepared = client.prepare_request(_NON_ASCII_PROMPT, json_mode=json_mode)
+
+    # Expected request built from the verified input row plus the literal
+    # synthetic prompt — never from prepared.params or the encoder result.
+    expected: dict[str, Any] = {
+        "model": row.model,
+        "max_tokens": row.max_output_tokens,
+        "messages": [{"role": "user", "content": _NON_ASCII_PROMPT}],
+        "output_config": {"effort": row.effort},
+    }
+    if json_mode:
+        expected["system"] = _JSON_SYSTEM
+
+    assert prepared.model == row.model
+    assert prepared.max_tokens == row.max_output_tokens
+    assert prepared.transport == "stream"
+    assert "stream" not in prepared.params
+    for absent in ("temperature", "top_p", "thinking", "tools", "tool_choice"):
+        assert absent not in prepared.params
+    independent_size = len(
+        json.dumps(expected, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
+            "utf8"
+        )
+    )
+    assert prepared.payload_bytes == independent_size
+    assert dict(prepared.params) == expected
+
+    payload = _encode(dict(prepared.params), "stream")
+    expected_wire = dict(expected)
+    expected_wire["stream"] = True
+    assert payload == expected_wire
+
+
 def _client(
     monkeypatch: pytest.MonkeyPatch,
     *,
     model: str,
     effort: str | None,
+    max_tokens: int = 173,
 ) -> AnthropicLLMClient:
     monkeypatch.setenv("ANTHROPIC_API_KEY", _OFFLINE_KEY)
-    kwargs: dict[str, Any] = {"model": model, "max_tokens": 173}
+    kwargs: dict[str, Any] = {"model": model, "max_tokens": max_tokens}
     if effort is not None:
         kwargs["effort"] = effort
     return anthropic_client.AnthropicLLMClient(**kwargs)

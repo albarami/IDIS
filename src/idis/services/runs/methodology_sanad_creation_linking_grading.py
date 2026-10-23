@@ -48,8 +48,8 @@ from idis.services.runs.methodology_sanad_creation_helpers import (
 from idis.services.sanad.grader import grade_sanad_v2
 
 
-class InMemoryRunMethodologySanadCreationLinkingGradingService:
-    """Create, link, and grade run-scoped Sanads without durable persistence."""
+class CanonicalRunMethodologySanadCreationLinkingGradingService:
+    """Pure deterministic Sanad producer shared by durable and legacy boundaries."""
 
     def run(
         self,
@@ -454,3 +454,9 @@ class InMemoryRunMethodologySanadCreationLinkingGradingService:
             ),
         )
         return run_result, [], [], [], []
+
+
+class InMemoryRunMethodologySanadCreationLinkingGradingService(
+    CanonicalRunMethodologySanadCreationLinkingGradingService
+):
+    """Legacy compatibility name for the pure deterministic producer."""

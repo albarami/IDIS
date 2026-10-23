@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import re
 from hashlib import sha256
 from typing import Any
@@ -38,9 +39,12 @@ from idis.persistence.repositories.run_steps import (
     _run_steps_store,
 )
 from idis.persistence.repositories.runs import (
+    _LEGACY_COMPAT_CONTRACT_HASH,
     _in_memory_runs_store,
+    _resolve_run_contract_identity,
     clear_in_memory_runs_store,
 )
+from idis.pipeline.contract_registry import FULL_STRICT_V21_CONTRACT_HASH
 
 API_KEY = "slice75b-red-key"
 OTHER_API_KEY = "slice75b-red-other-key"
@@ -59,6 +63,23 @@ RUN_OTHER_TENANT = "66666666-6666-6666-6666-666666666666"
 
 DEAL_ID = "deadbeef-dead-beef-dead-beefdeadbeef"
 SECRET_DSN = "postgresql://user:secret@localhost:5432/idis"
+RUN_LEGACY_UNSAFE = "77777777-7777-7777-7777-777777777777"
+
+_FULL_STRICT_V21_VERSION = "full-strict-v21"
+_LEGACY_FULL_CONTRACT_VERSION = "full-v1"
+_LEGACY_SNAPSHOT_CONTRACT_VERSION = "snapshot-v1"
+_LEGACY_RESUME_ERROR_CODE = "LEGACY_RUN_RESUME_UNSAFE"
+_RESUME_IDENTITY_FIELD_NAMES = (
+    "pipeline_contract_version",
+    "pipeline_contract_hash",
+    "pipeline_resume_state",
+    "pipeline_resume_error_code",
+)
+_WORKER_HALF_REQUIRE_ENV = "IDIS_REQUIRE_SLICE75B_WORKER_HALF"
+_WORKER_HALF_NOT_EXECUTED_REASON = (
+    "Pinning v21 resume needs a real Task 7 completion service and a "
+    "qualified database, which belong to the Task 7 completion packet."
+)
 
 
 def _api_keys() -> dict[str, dict[str, Any]]:
@@ -82,6 +103,63 @@ def _api_keys() -> dict[str, dict[str, Any]]:
     }
 
 
+def _legacy_contract_version(mode: str) -> str:
+    """Return the closed pre-Task-7 version for a SNAPSHOT or FULL row."""
+    if mode == "SNAPSHOT":
+        return _LEGACY_SNAPSHOT_CONTRACT_VERSION
+    return _LEGACY_FULL_CONTRACT_VERSION
+
+
+def _resume_identity_fields(
+    *,
+    mode: str,
+    resume_state: str | None,
+) -> dict[str, str | None]:
+    """Return a complete contract tuple, or nothing when the seed has no identity.
+
+    ``None`` omits every identity field. ``RESUMABLE`` is the v21 admission
+    tuple and is refused unless ``mode`` is ``FULL``. ``NON_RESUMABLE`` and
+    ``HISTORICAL_TERMINAL`` use the repository rule in
+    ``_resolve_run_contract_identity``: legacy version and hash, with
+    ``LEGACY_RUN_RESUME_UNSAFE`` only on ``NON_RESUMABLE``.
+
+    Raises:
+        ValueError: ``RESUMABLE`` was requested for a mode other than ``FULL``,
+            or ``resume_state`` is not a recognized value.
+    """
+    if resume_state is None:
+        return {}
+    if resume_state == "RESUMABLE":
+        if mode != "FULL":
+            raise ValueError("RESUMABLE identity requires FULL mode")
+        version = _FULL_STRICT_V21_VERSION
+        contract_hash = FULL_STRICT_V21_CONTRACT_HASH
+        error_code = None
+    elif resume_state == "NON_RESUMABLE":
+        version = _legacy_contract_version(mode)
+        contract_hash = _LEGACY_COMPAT_CONTRACT_HASH
+        error_code = _LEGACY_RESUME_ERROR_CODE
+    elif resume_state == "HISTORICAL_TERMINAL":
+        version = _legacy_contract_version(mode)
+        contract_hash = _LEGACY_COMPAT_CONTRACT_HASH
+        error_code = None
+    else:
+        raise ValueError("pipeline_resume_state is not recognized")
+    resolved = _resolve_run_contract_identity(
+        mode=mode,
+        pipeline_contract_version=version,
+        pipeline_contract_hash=contract_hash,
+        pipeline_resume_state=resume_state,
+        pipeline_resume_error_code=error_code,
+    )
+    return {
+        "pipeline_contract_version": resolved[0],
+        "pipeline_contract_hash": resolved[1],
+        "pipeline_resume_state": resolved[2],
+        "pipeline_resume_error_code": resolved[3],
+    }
+
+
 def _seed_run(
     *,
     run_id: str,
@@ -90,7 +168,16 @@ def _seed_run(
     mode: str = "FULL",
     source: dict[str, Any] | None = None,
     cancel_requested_at: str | None = None,
+    resume_state: str | None = None,
 ) -> dict[str, Any]:
+    """Insert one in-memory run.
+
+    An omitted ``resume_state`` stamps no identity fields. Callers that need
+    the v21 admission tuple pass ``resume_state="RESUMABLE"``.
+
+    Raises:
+        ValueError: ``RESUMABLE`` was requested for a mode other than ``FULL``.
+    """
     run = {
         "run_id": run_id,
         "tenant_id": tenant_id,
@@ -102,10 +189,17 @@ def _seed_run(
         "source": source,
         "created_at": "2026-05-27T00:00:00Z",
     }
+    run.update(_resume_identity_fields(mode=mode, resume_state=resume_state))
     if cancel_requested_at is not None:
         run["cancel_requested_at"] = cancel_requested_at
     _in_memory_runs_store[run_id] = run
     return run
+
+
+def _assert_no_resume_identity(run: dict[str, Any]) -> None:
+    """Assert a row carries none of the four resume identity fields."""
+    stamped = [name for name in _RESUME_IDENTITY_FIELD_NAMES if name in run]
+    assert stamped == []
 
 
 def _client(
@@ -118,11 +212,16 @@ def _client(
     idempotency_store = (
         SqliteIdempotencyStore(in_memory=True) if isolate_idempotency_store else None
     )
-    app = create_app(
-        audit_sink=audit_sink or InMemoryAuditSink(),
-        idempotency_store=idempotency_store,
-        service_region="me-south-1",
-    )
+    # Slice75B tests request-time admission in an explicitly injected in-memory app;
+    # isolate only app composition so the outer strict flag is restored before requests.
+    with monkeypatch.context() as composition_env:
+        composition_env.delenv("IDIS_REQUIRE_FULL_LIVE", raising=False)
+        composition_env.delenv("IDIS_STRICT_DOTENV_PATH", raising=False)
+        app = create_app(
+            audit_sink=audit_sink or InMemoryAuditSink(),
+            idempotency_store=idempotency_store,
+            service_region="me-south-1",
+        )
     return TestClient(app)
 
 
@@ -322,7 +421,7 @@ def test_retry_failed_full_run_reuses_slice75a_strict_admission_helper(
     """Retry of a FAILED FULL run must call the Slice75A strict admission helper."""
     monkeypatch.setenv("IDIS_REQUIRE_FULL_LIVE", "1")
     client = _client(monkeypatch)
-    _seed_run(run_id=RUN_FAILED_FULL, status="FAILED")
+    _seed_run(run_id=RUN_FAILED_FULL, status="FAILED", resume_state="RESUMABLE")
 
     strict_helper = MagicMock(return_value=_PassingStrictReport())
     with patch(
@@ -345,7 +444,7 @@ def test_retry_failed_full_run_with_blocking_strict_stays_failed_and_logs_safe_b
     """Strict block on retry keeps the run FAILED and writes a safe ledger entry."""
     monkeypatch.setenv("IDIS_REQUIRE_FULL_LIVE", "1")
     client = _client(monkeypatch)
-    _seed_run(run_id=RUN_FAILED_FULL_BLOCKED, status="FAILED")
+    _seed_run(run_id=RUN_FAILED_FULL_BLOCKED, status="FAILED", resume_state="RESUMABLE")
 
     with _patch_strict_admission(_BlockingStrictReport()):
         response = client.post(
@@ -375,7 +474,7 @@ def test_retry_resume_strict_block_lifecycle_409_emits_safe_audit_event(
     monkeypatch.setenv("IDIS_REQUIRE_FULL_LIVE", "1")
     audit_sink = InMemoryAuditSink()
     client = _client(monkeypatch, audit_sink=audit_sink)
-    _seed_run(run_id=RUN_FAILED_FULL_BLOCKED, status="FAILED")
+    _seed_run(run_id=RUN_FAILED_FULL_BLOCKED, status="FAILED", resume_state="RESUMABLE")
 
     with _patch_strict_admission(_BlockingStrictReport()):
         response = client.post(
@@ -413,7 +512,7 @@ def test_retry_resume_strict_block_409_with_idempotency_key_replays_without_dupl
     monkeypatch.setenv("IDIS_REQUIRE_FULL_LIVE", "1")
     audit_sink = InMemoryAuditSink()
     client = _client(monkeypatch, isolate_idempotency_store=True, audit_sink=audit_sink)
-    _seed_run(run_id=RUN_FAILED_FULL_BLOCKED, status="FAILED")
+    _seed_run(run_id=RUN_FAILED_FULL_BLOCKED, status="FAILED", resume_state="RESUMABLE")
     strict_helper = MagicMock(return_value=_BlockingStrictReport())
     headers = {
         "X-IDIS-API-Key": API_KEY,
@@ -449,7 +548,7 @@ def test_retry_does_not_call_run_execution_service_execute_or_run_orchestrator(
     """Retry handler must requeue only; it must never execute through the canonical service."""
     monkeypatch.setenv("IDIS_REQUIRE_FULL_LIVE", "1")
     client = _client(monkeypatch)
-    _seed_run(run_id=RUN_FAILED_FULL, status="FAILED")
+    _seed_run(run_id=RUN_FAILED_FULL, status="FAILED", resume_state="RESUMABLE")
 
     with (
         _patch_strict_admission(_PassingStrictReport()),
@@ -515,6 +614,70 @@ def test_retry_not_retryable_409_without_lifecycle_mutation_emits_no_audit(
     assert audit_sink.events == []
 
 
+@pytest.mark.parametrize("action", ["retry", "resume"])
+@pytest.mark.parametrize(
+    "resume_state",
+    [
+        pytest.param(None, id="no-identity"),
+        pytest.param("NON_RESUMABLE", id="non-resumable"),
+        pytest.param("HISTORICAL_TERMINAL", id="historical-terminal"),
+    ],
+)
+def test_retry_resume_legacy_identity_is_409_without_strict_or_lifecycle(
+    monkeypatch: pytest.MonkeyPatch,
+    action: str,
+    resume_state: str | None,
+) -> None:
+    """Legacy rows refuse before strict admission, lifecycle audit, or a failed block."""
+    monkeypatch.setenv("IDIS_REQUIRE_FULL_LIVE", "1")
+    audit_sink = InMemoryAuditSink()
+    client = _client(monkeypatch, audit_sink=audit_sink)
+    _seed_run(
+        run_id=RUN_LEGACY_UNSAFE,
+        status="FAILED",
+        resume_state=resume_state,
+    )
+    stored = _in_memory_runs_store[RUN_LEGACY_UNSAFE]
+    if resume_state is None:
+        assert "pipeline_contract_version" not in stored
+        assert "pipeline_contract_hash" not in stored
+        assert "pipeline_resume_state" not in stored
+        assert "pipeline_resume_error_code" not in stored
+    elif resume_state == "NON_RESUMABLE":
+        assert stored["pipeline_contract_version"] == _LEGACY_FULL_CONTRACT_VERSION
+        assert stored["pipeline_contract_hash"] == _LEGACY_COMPAT_CONTRACT_HASH
+        assert stored["pipeline_resume_state"] == "NON_RESUMABLE"
+        assert stored["pipeline_resume_error_code"] == _LEGACY_RESUME_ERROR_CODE
+    else:
+        assert stored["pipeline_contract_version"] == _LEGACY_FULL_CONTRACT_VERSION
+        assert stored["pipeline_contract_hash"] == _LEGACY_COMPAT_CONTRACT_HASH
+        assert stored["pipeline_resume_state"] == "HISTORICAL_TERMINAL"
+        assert stored["pipeline_resume_error_code"] is None
+
+    strict_helper = MagicMock()
+    with (
+        patch(
+            "idis.services.runs.strict_full_live.build_strict_full_live_admission_report",
+            strict_helper,
+        ),
+        patch(
+            "idis.services.runs.lifecycle.RunLifecycleService.persist_failed_block",
+        ) as persist_failed_block,
+    ):
+        response = client.post(
+            f"/v1/runs/{RUN_LEGACY_UNSAFE}/{action}",
+            headers={"X-IDIS-API-Key": API_KEY},
+        )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "LEGACY_RUN_RESUME_UNSAFE"
+    assert _in_memory_runs_store[RUN_LEGACY_UNSAFE]["status"] == "FAILED"
+    assert InMemoryRunStepsRepository(TENANT_A).get_by_run_id(RUN_LEGACY_UNSAFE) == []
+    assert audit_sink.events == []
+    assert strict_helper.call_count == 0
+    assert persist_failed_block.call_count == 0
+
+
 def test_retry_not_retryable_409_with_idempotency_key_is_not_replayed_or_stored(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -567,6 +730,7 @@ def test_retry_invalid_persisted_run_source_fails_closed_as_invalid_run_source(
         run_id=RUN_FAILED_FULL_INVALID_SOURCE,
         status="FAILED",
         source={"type": "deal_documents", "document_ids": ["missing-doc"]},
+        resume_state="RESUMABLE",
     )
 
     response = client.post(
@@ -592,6 +756,7 @@ def test_retry_resume_invalid_source_lifecycle_409_emits_safe_audit_event(
         run_id=RUN_FAILED_FULL_INVALID_SOURCE,
         status="FAILED",
         source={"type": "deal_documents", "document_ids": ["missing-doc"]},
+        resume_state="RESUMABLE",
     )
 
     response = client.post(
@@ -634,6 +799,7 @@ def test_retry_resume_invalid_source_409_with_idempotency_key_replays_without_du
         run_id=RUN_FAILED_FULL_INVALID_SOURCE,
         status="FAILED",
         source={"type": "deal_documents", "document_ids": ["missing-doc"]},
+        resume_state="RESUMABLE",
     )
     headers = {
         "X-IDIS-API-Key": API_KEY,
@@ -674,7 +840,7 @@ def test_retry_resume_lifecycle_audit_hashes_idempotency_key(
     raw_idempotency_key = f"{action}-lifecycle-key-raw-secret"
     audit_sink = InMemoryAuditSink()
     client = _client(monkeypatch, isolate_idempotency_store=True, audit_sink=audit_sink)
-    _seed_run(run_id=RUN_FAILED_FULL_BLOCKED, status="FAILED")
+    _seed_run(run_id=RUN_FAILED_FULL_BLOCKED, status="FAILED", resume_state="RESUMABLE")
 
     with _patch_strict_admission(_BlockingStrictReport()):
         response = client.post(
@@ -708,7 +874,7 @@ def test_resume_is_alias_of_retry_and_reuses_strict_admission(
     """POST /v1/runs/{id}/resume must behave identically to /retry for FAILED FULL."""
     monkeypatch.setenv("IDIS_REQUIRE_FULL_LIVE", "1")
     client = _client(monkeypatch)
-    _seed_run(run_id=RUN_FAILED_FULL_ALIAS, status="FAILED")
+    _seed_run(run_id=RUN_FAILED_FULL_ALIAS, status="FAILED", resume_state="RESUMABLE")
 
     strict_helper = MagicMock(return_value=_PassingStrictReport())
     with patch(
@@ -749,29 +915,21 @@ def test_requeue_failed_clears_stale_cancel_requested_at_in_memory() -> None:
 def test_resume_then_worker_skips_completed_steps_via_existing_orchestrator_resume_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Resume requeues and worker runs through real execution/orchestrator path.
+    """HTTP resume of a FAILED FULL run requeues.
 
-    Contract covered:
-    - FAILED run with an already-COMPLETED step is resumed/requeued via /resume.
-    - Next worker cycle executes through real RunExecutionService + RunOrchestrator.
-    - Completed step is not rerun and not duplicated.
-    - Next incomplete step is dispatched.
-    - PipelineExecutor is still quarantined.
+    The worker half is a separate node. It records NOT_EXECUTED because
+    pinning the stored v21 resume needs a real Task 7 completion service
+    and a qualified database, which belong to the Task 7 completion packet.
     """
-    import asyncio
-
-    from idis.persistence.repositories.runs import InMemoryRunsRepository
-    from idis.pipeline.worker import PipelineWorker
-    from idis.services.runs.execution import RunExecutionService
-    from idis.services.runs.orchestrator import RunContext
 
     monkeypatch.setenv("IDIS_REQUIRE_FULL_LIVE", "1")
     client = _client(monkeypatch)
     _seed_run(
         run_id=RUN_FAILED_FULL,
         status="FAILED",
-        mode="SNAPSHOT",
+        mode="FULL",
         source=None,
+        resume_state="RESUMABLE",
     )
 
     completed_extract_step = RunStep(
@@ -803,163 +961,16 @@ def test_resume_then_worker_skips_completed_steps_via_existing_orchestrator_resu
     assert resume_resp.status_code == 202, resume_resp.text
     assert _in_memory_runs_store[RUN_FAILED_FULL]["status"] == "QUEUED"
 
-    monkeypatch.setenv("IDIS_REQUIRE_FULL_LIVE", "0")
 
-    runs_repo = InMemoryRunsRepository(TENANT_A)
-    run_steps_repo = InMemoryRunStepsRepository(TENANT_A)
-    audit_sink = InMemoryAuditSink()
-
-    extract_calls: list[str] = []
-    grade_calls: list[str] = []
-    calc_calls: list[str] = []
-
-    def counting_extract(
-        *,
-        run_id: str,
-        tenant_id: str,
-        deal_id: str,
-        documents: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        extract_calls.append(run_id)
-        return {
-            "status": "COMPLETED",
-            "created_claim_ids": ["claim-001"],
-            "chunk_count": 1,
-            "unique_claim_count": 1,
-            "conflict_count": 0,
-        }
-
-    def counting_grade(
-        *,
-        run_id: str,
-        tenant_id: str,
-        deal_id: str,
-        created_claim_ids: list[str],
-        audit_sink: Any,
-    ) -> dict[str, Any]:
-        grade_calls.append(run_id)
-        return {
-            "graded_count": len(created_claim_ids),
-            "failed_count": 0,
-            "total_defects": 0,
-            "all_failed": False,
-        }
-
-    def counting_calc(
-        *,
-        run_id: str,
-        tenant_id: str,
-        deal_id: str,
-        created_claim_ids: list[str],
-        calc_types: Any = None,
-    ) -> dict[str, Any]:
-        calc_calls.append(run_id)
-        return {"calc_ids": ["calc-001"], "reproducibility_hashes": ["hash-aaa"]}
-
-    def execution_service_factory(*, db_conn: Any, tenant_id: str) -> RunExecutionService:
-        return RunExecutionService(
-            audit_sink=audit_sink,
-            runs_repo=runs_repo,
-            run_steps_repo=run_steps_repo,
-        )
-
-    def run_context_factory(
-        *,
-        db_conn: Any,
-        tenant_id: str,
-        run_data: dict[str, Any],
-        audit_sink: Any,
-    ) -> RunContext:
-        return RunContext(
-            run_id=str(run_data["run_id"]),
-            tenant_id=tenant_id,
-            deal_id=str(run_data["deal_id"]),
-            mode="SNAPSHOT",
-            documents=[
-                {
-                    "document_id": "doc-001",
-                    "doc_type": "PDF",
-                    "document_name": "test.pdf",
-                    "spans": [
-                        {
-                            "span_id": "span-001",
-                            "text_excerpt": "Revenue was $5M.",
-                            "locator": {"page": 1},
-                            "span_type": "PAGE_TEXT",
-                        }
-                    ],
-                }
-            ],
-            preflight_corpus=[
-                {
-                    "tenant_id": tenant_id,
-                    "deal_id": str(run_data["deal_id"]),
-                    "document_id": "doc-001",
-                    "doc_id": "artifact-doc-001",
-                    "doc_type": "PDF",
-                    "parse_status": "PARSED",
-                    "document_name": "test.pdf",
-                    "sha256": "a" * 64,
-                    "uri": "deals/test.pdf",
-                    "metadata": {},
-                    "source_metadata": {},
-                    "spans": [
-                        {
-                            "span_id": "span-001",
-                            "tenant_id": tenant_id,
-                            "deal_id": str(run_data["deal_id"]),
-                            "document_id": "doc-001",
-                            "span_type": "PAGE_TEXT",
-                            "locator": {"page": 1},
-                            "text_excerpt": "Revenue was $5M.",
-                            "content_hash": "b" * 64,
-                        }
-                    ],
-                }
-            ],
-            extract_fn=counting_extract,
-            grade_fn=counting_grade,
-            calc_fn=counting_calc,
-        )
-
-    engine = MagicMock()
-    engine.connect.return_value.__enter__.return_value = MagicMock()
-
-    worker = PipelineWorker(
-        poll_interval=0,
-        tenant_ids=[TENANT_A],
-        execution_service_factory=execution_service_factory,
-        run_context_factory=run_context_factory,
-    )
-
-    with (
-        patch("idis.pipeline.worker.get_app_engine", return_value=engine),
-        patch(
-            "idis.pipeline.worker.get_runs_repository",
-            side_effect=lambda _conn, _tenant: runs_repo,
-        ),
-        patch(
-            "idis.pipeline.worker.get_run_steps_repository",
-            side_effect=lambda _conn, _tenant: run_steps_repo,
-        ),
-        patch("idis.pipeline.worker.set_tenant_local", create=True),
-    ):
-        asyncio.run(worker._process_queued_runs())
-
-    # Completed EXTRACT step should be skipped (existing resume contract).
-    assert extract_calls == []
-    # Next incomplete steps should dispatch through the real orchestrator path.
-    assert grade_calls == [RUN_FAILED_FULL]
-    assert calc_calls == [RUN_FAILED_FULL]
-
-    pipeline_module = importlib.import_module("idis.pipeline")
-    assert not hasattr(pipeline_module, "PipelineExecutor")
-
-    step_rows_after = InMemoryRunStepsRepository(TENANT_A).get_by_run_id(RUN_FAILED_FULL)
-    extract_rows = [s for s in step_rows_after if s.step_name == StepName.EXTRACT]
-    assert len(extract_rows) == 1, "already-COMPLETED EXTRACT row must not be duplicated"
-    assert extract_rows[0].step_id == completed_extract_step.step_id
-    assert extract_rows[0].status == StepStatus.COMPLETED
+def test_resume_worker_half_stored_v21_identity_not_executed(
+    record_property: Any,
+) -> None:
+    """Record the worker half instead of executing it or skipping it."""
+    reason = _WORKER_HALF_NOT_EXECUTED_REASON
+    record_property("worker_half", reason)
+    print(f"SLICE75B_WORKER_HALF NOT_EXECUTED: {reason}", flush=True)
+    if os.environ.get(_WORKER_HALF_REQUIRE_ENV) == "1":
+        pytest.fail(reason)
 
 
 def test_retry_after_stale_failed_run_lifecycle_step_can_still_succeed(
@@ -978,6 +989,7 @@ def test_retry_after_stale_failed_run_lifecycle_step_can_still_succeed(
         mode="FULL",
         source=None,
     )
+    _assert_no_resume_identity(_in_memory_runs_store[RUN_FAILED_FULL_BLOCKED])
     run_steps_repo = InMemoryRunStepsRepository(TENANT_A)
     runs_repo = InMemoryRunsRepository(TENANT_A)
     lifecycle_step = RunStep(
@@ -1173,6 +1185,7 @@ def test_cancel_running_sets_cancel_requested_at_and_orchestrator_stops_between_
     monkeypatch.setenv("IDIS_REQUIRE_FULL_LIVE", "0")
     client = _client(monkeypatch)
     _seed_run(run_id=RUN_RUNNING, status="RUNNING", mode="SNAPSHOT")
+    _assert_no_resume_identity(_in_memory_runs_store[RUN_RUNNING])
 
     cancel_resp = client.post(
         f"/v1/runs/{RUN_RUNNING}/cancel",
@@ -1315,6 +1328,7 @@ def test_execution_service_preserves_cancelled_status_after_mid_execution_cancel
     from idis.services.runs.orchestrator import RunContext
 
     _seed_run(run_id=RUN_RUNNING, status="QUEUED", mode="SNAPSHOT")
+    _assert_no_resume_identity(_in_memory_runs_store[RUN_RUNNING])
 
     run_steps_repo = InMemoryRunStepsRepository(TENANT_A)
     runs_repo = InMemoryRunsRepository(TENANT_A)
@@ -1439,6 +1453,7 @@ def test_execution_service_preserves_cancelled_status_when_step_cancels_then_rai
     from idis.services.runs.orchestrator import RunContext
 
     _seed_run(run_id=RUN_RUNNING, status="QUEUED", mode="SNAPSHOT")
+    _assert_no_resume_identity(_in_memory_runs_store[RUN_RUNNING])
     run_steps_repo = InMemoryRunStepsRepository(TENANT_A)
     runs_repo = InMemoryRunsRepository(TENANT_A)
     for step_name, step_order in [
@@ -1538,6 +1553,7 @@ def test_execution_service_preserves_cancelled_status_when_final_step_cancels_su
     from idis.services.runs.orchestrator import RunContext
 
     _seed_run(run_id=RUN_RUNNING, status="QUEUED", mode="SNAPSHOT")
+    _assert_no_resume_identity(_in_memory_runs_store[RUN_RUNNING])
     run_steps_repo = InMemoryRunStepsRepository(TENANT_A)
     runs_repo = InMemoryRunsRepository(TENANT_A)
     for step_name, step_order, summary in [
@@ -1980,6 +1996,7 @@ def test_retry_audit_and_ledger_metadata_is_leakage_safe(
         run_id=RUN_FAILED_FULL,
         status="FAILED",
         source={"type": "deal_documents", "document_ids": ["doc-strict"]},
+        resume_state="RESUMABLE",
     )
     # Seed the deal preflight corpus so the selected run-source document exists; the
     # route must execute the real retry path (not rely on idempotency replay) and the

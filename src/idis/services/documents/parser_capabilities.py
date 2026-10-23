@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import PurePath
 from typing import Any
 
@@ -106,6 +107,7 @@ _OCR_ERROR_REASON_CODES = {
     ParseErrorCode.OCR_TIMEOUT: "ocr_timeout",
     ParseErrorCode.OCR_UNAVAILABLE: "ocr_unavailable",
     ParseErrorCode.OCR_NO_TEXT_EXTRACTED: "ocr_no_text_extracted",
+    ParseErrorCode.OCR_RESCUE_NO_CONSENSUS: "ocr_rescue_no_consensus",
 }
 _MEDIA_ERROR_REASON_CODES = {
     ParseErrorCode.MEDIA_TRANSCRIPTION_UNAVAILABLE: "media_transcription_unavailable",
@@ -113,6 +115,20 @@ _MEDIA_ERROR_REASON_CODES = {
     ParseErrorCode.MEDIA_TRANSCRIPTION_FAILED: "media_transcription_failed",
     ParseErrorCode.MEDIA_DURATION_EXCEEDED: "media_duration_exceeded",
     ParseErrorCode.MEDIA_NO_TEXT_EXTRACTED: "media_no_text_extracted",
+    ParseErrorCode.MEDIA_FRAME_OCR_UNAVAILABLE: "media_frame_ocr_unavailable",
+    ParseErrorCode.MEDIA_FRAME_OCR_TIMEOUT: "media_frame_ocr_timeout",
+    ParseErrorCode.MEDIA_FRAME_OCR_FAILED: "media_frame_ocr_failed",
+    ParseErrorCode.MEDIA_FRAME_OCR_INCOMPLETE: "media_frame_ocr_incomplete",
+    ParseErrorCode.MEDIA_FRAME_SAMPLE_LIMIT_EXCEEDED: "media_frame_sample_limit_exceeded",
+    ParseErrorCode.MEDIA_NO_EXTRACTABLE_EVIDENCE: "media_no_extractable_evidence",
+}
+_SUCCESS_REASON_BY_FORMAT = {
+    "PDF": "pdf_parse_completed",
+    "XLSX": "xlsx_parse_completed",
+    "DOCX": "docx_parse_completed",
+    "PPTX": "pptx_parse_completed",
+    "HTML": "text_parse_completed",
+    "TEXT": "text_parse_completed",
 }
 
 
@@ -285,6 +301,29 @@ def triage_document(
             usable_without_conversion=False,
         )
 
+    if error_codes:
+        return ParserCapability(
+            file_type=file_type,
+            support_status=DocumentSupportStatus.CORRUPTED,
+            triage_status=DocumentTriageStatus.BLOCKED,
+            reason_codes=["parser_internal_error"],
+            usable_without_conversion=False,
+        )
+
+    if parse_result.warnings:
+        return ParserCapability(
+            file_type=file_type,
+            support_status=DocumentSupportStatus.PARTIALLY_SUPPORTED,
+            triage_status=DocumentTriageStatus.PARTIAL,
+            reason_codes=["parser_incomplete_warning"],
+            warnings=list(parse_result.warnings),
+            usable_without_conversion=False,
+        )
+
+    successful_extraction = _successful_parser_capability(parse_result)
+    if successful_extraction is not None:
+        return successful_extraction
+
     capability = capability_for_document(
         filename=resolved_filename,
         file_size_bytes=file_size_bytes,
@@ -294,6 +333,80 @@ def triage_document(
     if parse_result.warnings:
         capability.warnings.extend(parse_result.warnings)
     return capability
+
+
+def _successful_parser_capability(
+    parse_result: ParseResult,
+) -> ParserCapability | None:
+    """Promote only proven, non-empty parser outcomes to ingestion-ready."""
+    if not parse_result.success or parse_result.errors or parse_result.warnings:
+        return None
+    span_count = parse_result.metadata.get("span_count")
+    if not isinstance(span_count, int) or isinstance(span_count, bool) or span_count < 1:
+        return None
+
+    if parse_result.doc_type == "IMAGE" and parse_result.metadata.get("ocr_performed") is True:
+        return ParserCapability(
+            file_type="IMAGE",
+            parser_name="image_ocr",
+            support_status=DocumentSupportStatus.SUPPORTED,
+            triage_status=DocumentTriageStatus.READY,
+            reason_codes=["image_ocr_completed"],
+            warnings=list(parse_result.warnings),
+        )
+    if parse_result.doc_type == "MEDIA" and _has_completed_media_dual_track_proof(parse_result):
+        return ParserCapability(
+            file_type="MEDIA",
+            parser_name="media_multitrack",
+            support_status=DocumentSupportStatus.SUPPORTED,
+            triage_status=DocumentTriageStatus.READY,
+            reason_codes=["media_evidence_completed"],
+            warnings=list(parse_result.warnings),
+        )
+    reason = _SUCCESS_REASON_BY_FORMAT.get(parse_result.doc_type)
+    if reason is None:
+        return None
+    if parse_result.doc_type == "PDF" and parse_result.metadata.get("ocr_performed") is True:
+        reason = "pdf_ocr_completed"
+    baseline = _SUPPORTED_CAPABILITIES[parse_result.doc_type]
+    return ParserCapability(
+        file_type=parse_result.doc_type,
+        parser_name=baseline.parser_name,
+        support_status=DocumentSupportStatus.SUPPORTED,
+        triage_status=DocumentTriageStatus.READY,
+        reason_codes=[reason],
+        warnings=list(parse_result.warnings),
+    )
+
+
+def _has_completed_media_dual_track_proof(parse_result: ParseResult) -> bool:
+    metadata = parse_result.metadata
+    stt_receipt = metadata.get("media_stt_receipt")
+    frame_receipt = metadata.get("media_frame_ocr_receipt")
+    if (
+        metadata.get("media_transcription_performed") is not True
+        or metadata.get("media_frame_ocr_performed") is not True
+        or not isinstance(stt_receipt, Mapping)
+        or not isinstance(frame_receipt, Mapping)
+        or stt_receipt.get("schema_version") != "media-stt-receipt-v1"
+        or stt_receipt.get("status") != "completed"
+        or frame_receipt.get("schema_version") != "media-frame-ocr-receipt-v1"
+        or frame_receipt.get("status") != "completed"
+        or frame_receipt.get("sampling_policy") != "periodic-plus-scenes-v1"
+    ):
+        return False
+    span_count = metadata.get("span_count")
+    stt_span_count = stt_receipt.get("evidence_span_count")
+    frame_span_count = frame_receipt.get("evidence_span_count")
+    return (
+        type(span_count) is int
+        and type(stt_span_count) is int
+        and type(frame_span_count) is int
+        and stt_span_count >= 0
+        and frame_span_count >= 0
+        and stt_span_count + frame_span_count == span_count
+        and span_count > 0
+    )
 
 
 def _normalize_detected_format(

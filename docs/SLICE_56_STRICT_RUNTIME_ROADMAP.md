@@ -23,7 +23,7 @@ Acceptance criteria:
 - Private `real_example` harness strict mode blocks before upload when readiness fails.
 - Strict output includes machine-readable component inventory for every required component.
 - Dotenv values are explicit to strict mode only, process env overrides dotenv, and reports expose only source labels: `process`, `dotenv`, or `missing`.
-- Non-strict API and harness behavior remains unchanged.
+- Every API run, strict or non-strict, requires a frozen source package covering exactly the selected documents (refusal: 409 SOURCE_PACKAGE_REQUIRED). With it, a non-strict run still reaches the execution service without strict admission. Non-strict harness behavior remains unchanged.
 - The strict report contains no secret values, private paths, filenames, raw text, media content, or private data-room content.
 
 ## Slice 57: BYOL Enrichment Credential Wiring

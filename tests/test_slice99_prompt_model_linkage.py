@@ -126,12 +126,18 @@ def _codes(result: Any) -> set[str]:
 
 
 def test_canonical_runtime_prompt_surface_matches_api_constants() -> None:
-    from idis.api.routes import runs as runs_module
+    from idis.services.runs.step_runtime.roles import (
+        _DEBATE_PROMPT_IDS,
+        _EXTRACTION_PROMPT_ID,
+        _SCORING_PROMPT_ID,
+    )
+    from idis.services.runs.step_runtime.snapshot import _METHODOLOGY_EXTRACTION_PROMPT_ID
 
     expected = {
-        runs_module._EXTRACTION_PROMPT_ID,
-        runs_module._SCORING_PROMPT_ID,
-        *runs_module._DEBATE_PROMPT_IDS,
+        _EXTRACTION_PROMPT_ID,
+        _METHODOLOGY_EXTRACTION_PROMPT_ID,
+        _SCORING_PROMPT_ID,
+        *_DEBATE_PROMPT_IDS,
     }
     assert set(RUNTIME_PROMPT_IDS) == expected, (
         "RUNTIME_PROMPT_IDS must equal the prompt ids the API stamps into provenance; "
@@ -142,8 +148,8 @@ def test_canonical_runtime_prompt_surface_matches_api_constants() -> None:
 
 def test_runtime_stamped_versions_match_registry_and_artifacts_are_valid() -> None:
     """The (id, version) pairs the runtime stamps must resolve in the governed tree."""
-    from idis.api.routes import runs as runs_module
     from idis.services.prompts.validate_cli import validate_prompt_tree
+    from idis.services.runs.step_runtime import roles as roles_module
 
     registry = yaml.safe_load(
         (_REPO_ROOT / "prompts" / "registry.yaml").read_text(encoding="utf-8")
@@ -154,16 +160,16 @@ def test_runtime_stamped_versions_match_registry_and_artifacts_are_valid() -> No
         assert prompt_id in entries, f"runtime prompt '{prompt_id}' not registered"
 
     # extraction stamps the registry.yaml version at runtime
-    stamped_extraction = runs_module._prompt_registry_version(runs_module._EXTRACTION_PROMPT_ID)
-    assert stamped_extraction == entries[runs_module._EXTRACTION_PROMPT_ID]["version"]
+    stamped_extraction = roles_module._prompt_registry_version(roles_module._EXTRACTION_PROMPT_ID)
+    assert stamped_extraction == entries[roles_module._EXTRACTION_PROMPT_ID]["version"]
 
     # scoring stamps a fixed version constant: it must match the governed registry version
-    scoring_registry_version = entries[runs_module._SCORING_PROMPT_ID]["version"]
-    assert scoring_registry_version == runs_module._SCORING_PROMPT_VERSION
+    scoring_registry_version = entries[roles_module._SCORING_PROMPT_ID]["version"]
+    assert scoring_registry_version == roles_module._SCORING_PROMPT_VERSION
 
     # debate stamps the registry version of the arbiter family
-    stamped_debate = runs_module._prompt_registry_version(runs_module._DEBATE_PROMPT_VERSION_ID)
-    assert stamped_debate == entries[runs_module._DEBATE_PROMPT_VERSION_ID]["version"]
+    stamped_debate = roles_module._prompt_registry_version(roles_module._DEBATE_PROMPT_VERSION_ID)
+    assert stamped_debate == entries[roles_module._DEBATE_PROMPT_VERSION_ID]["version"]
 
     # and every runtime artifact is materialized + valid (no errors attributed to them)
     report = validate_prompt_tree(_REPO_ROOT / "prompts", _REPO_ROOT)
@@ -175,31 +181,31 @@ def test_runtime_stamped_versions_match_registry_and_artifacts_are_valid() -> No
 
 def test_extraction_and_role_provenance_stamp_prompt_and_model() -> None:
     """Provenance builders must stamp prompt_id + prompt_version + model (safe linkage)."""
-    from idis.api.routes import runs as runs_module
+    from idis.services.runs.step_runtime import roles as roles_module
 
-    selection = runs_module.ExtractorClientSelection(
+    selection = roles_module.ExtractorClientSelection(
         backend="deterministic", model=None, max_tokens=1024
     )
-    extraction = runs_module._build_extraction_provenance(
+    extraction = roles_module._build_extraction_provenance(
         selection=selection,
         strict_live_extraction_required=False,
         client=object(),
     )
-    assert extraction["prompt_id"] == runs_module._EXTRACTION_PROMPT_ID
-    assert extraction["prompt_version"] == runs_module._prompt_registry_version(
-        runs_module._EXTRACTION_PROMPT_ID
+    assert extraction["prompt_id"] == roles_module._EXTRACTION_PROMPT_ID
+    assert extraction["prompt_version"] == roles_module._prompt_registry_version(
+        roles_module._EXTRACTION_PROMPT_ID
     )
     assert "model" in extraction and "provider" in extraction
 
-    role = runs_module._build_role_client_provenance(
+    role = roles_module._build_role_client_provenance(
         selection=selection,
-        prompt_id=runs_module._SCORING_PROMPT_ID,
-        prompt_version=runs_module._SCORING_PROMPT_VERSION,
+        prompt_id=roles_module._SCORING_PROMPT_ID,
+        prompt_version=roles_module._SCORING_PROMPT_VERSION,
         strict_live_debate_backend_required=False,
         client=object(),
     )
-    assert role["prompt_id"] == runs_module._SCORING_PROMPT_ID
-    assert role["prompt_version"] == runs_module._SCORING_PROMPT_VERSION
+    assert role["prompt_id"] == roles_module._SCORING_PROMPT_ID
+    assert role["prompt_version"] == roles_module._SCORING_PROMPT_VERSION
     assert "model" in role and "provider" in role
 
 

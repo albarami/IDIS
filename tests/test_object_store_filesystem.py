@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import os
 import tempfile
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -115,6 +116,46 @@ class TestRoundtrip:
 
         result = store.get(tenant_a, key)
         assert result.body == data
+
+    def test_stream_retry_does_not_trust_same_size_corrupted_content(
+        self,
+        temp_storage_dir: Path,
+        tenant_a: str,
+    ) -> None:
+        """A metadata match cannot hide bit-rot in an existing stream version."""
+        from idis.storage.filesystem_store import FilesystemObjectStore
+
+        store = FilesystemObjectStore(base_dir=temp_storage_dir)
+        key = "test/stream-integrity.bin"
+        payload = b"fictional-stream-integrity-content" * 4096
+        expected_sha256 = hashlib.sha256(payload).hexdigest()
+        first = store.put_stream(
+            tenant_a,
+            key,
+            BytesIO(payload),
+            expected_sha256=expected_sha256,
+            expected_size_bytes=len(payload),
+        )
+
+        [content_path] = list(temp_storage_dir.rglob(f"{first.version_id}.data"))
+        corrupted = bytearray(content_path.read_bytes())
+        corrupted[len(corrupted) // 2] ^= 0x01
+        content_path.write_bytes(corrupted)
+
+        second = store.put_stream(
+            tenant_a,
+            key,
+            BytesIO(payload),
+            expected_sha256=expected_sha256,
+            expected_size_bytes=len(payload),
+        )
+
+        result = store.get(tenant_a, key)
+        assert second.version_id != first.version_id
+        assert result.metadata.version_id == second.version_id
+        assert result.metadata.sha256 == expected_sha256
+        assert hashlib.sha256(result.body).hexdigest() == expected_sha256
+        assert result.body == payload
 
     def test_binary_content(self, store: Any, tenant_a: str) -> None:
         """Should handle binary content with all byte values."""
@@ -479,10 +520,12 @@ class TestErrorHandling:
         key = "test/exists.txt"
         store.put(tenant_a, key, b"data")
 
+        # Malformed IDs are rejected before path construction; use a canonical missing ID.
+        missing_version = "00000000-0000-0000-0000-000000000001"
         with pytest.raises(ObjectNotFoundError) as exc_info:
-            store.get(tenant_a, key, version_id="nonexistent-version-id")
+            store.get(tenant_a, key, version_id=missing_version)
 
-        assert exc_info.value.version_id == "nonexistent-version-id"
+        assert exc_info.value.version_id == missing_version
 
     def test_head_nonexistent_object_raises_not_found(self, store: Any, tenant_a: str) -> None:
         """Head on nonexistent object should raise ObjectNotFoundError."""

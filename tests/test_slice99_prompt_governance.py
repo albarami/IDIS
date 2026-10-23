@@ -456,12 +456,12 @@ def test_runtime_referenced_prompts_are_registered_and_valid(tmp_path: Path) -> 
     registered in prompts/registry.yaml AND materialized AND valid."""
     import yaml as _yaml
 
-    from idis.api.routes import runs as runs_module
+    from idis.services.runs.step_runtime import roles as roles_module
 
     runtime_ids = {
-        runs_module._EXTRACTION_PROMPT_ID,
-        runs_module._SCORING_PROMPT_ID,
-        *runs_module._DEBATE_PROMPT_IDS,
+        roles_module._EXTRACTION_PROMPT_ID,
+        roles_module._SCORING_PROMPT_ID,
+        *roles_module._DEBATE_PROMPT_IDS,
     }
 
     registry = _yaml.safe_load(

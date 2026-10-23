@@ -29,6 +29,7 @@ from idis.api.routes.deals import clear_deals_store
 _TENANT_A = "11111111-1111-1111-1111-111111111111"
 _ADMIN = "admin-key-25"
 _ANALYST = "analyst-key-25"
+_CREATOR = "creator-key-25"
 
 
 def _api_keys() -> str:
@@ -43,7 +44,11 @@ def _api_keys() -> str:
         }
 
     return json.dumps(
-        {_ADMIN: _entry("admin-a", ["ADMIN"]), _ANALYST: _entry("analyst-a", ["ANALYST"])}
+        {
+            _ADMIN: _entry("admin-a", ["ADMIN"]),
+            _ANALYST: _entry("analyst-a", ["ANALYST"]),
+            _CREATOR: _entry("creator-a", ["PARTNER"]),
+        }
     )
 
 
@@ -66,7 +71,11 @@ def _hdr(key: str) -> dict[str, str]:
 
 
 def _create_deal(api: TestClient) -> str:
-    resp = api.post("/v1/deals", json={"name": "D", "company_name": "Acme"}, headers=_hdr(_ADMIN))
+    resp = api.post(
+        "/v1/deals",
+        json={"name": "D", "company_name": "Acme"},
+        headers=_hdr(_CREATOR),
+    )
     assert resp.status_code == 201, resp.text
     return resp.json()["deal_id"]
 

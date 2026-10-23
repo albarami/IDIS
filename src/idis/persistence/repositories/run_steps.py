@@ -15,6 +15,11 @@ from sqlalchemy import text
 
 from idis.models.run_step import RunStep, StepName
 from idis.persistence.db import is_postgres_configured, set_tenant_local
+from idis.persistence.repositories.runs import (
+    WorkerLeaseFencedError,
+    assert_in_memory_ownerless_write_allowed,
+    assert_in_memory_worker_lease,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy import Connection
@@ -31,13 +36,25 @@ class RunStepsRepo(Protocol):
     that accept either backend.
     """
 
-    def create(self, step: RunStep) -> RunStep: ...
+    def create(
+        self,
+        step: RunStep,
+        *,
+        lease_owner_id: str | None = None,
+        lease_fencing_token: int | None = None,
+    ) -> RunStep: ...
 
     def get_by_run_id(self, run_id: str) -> list[RunStep]: ...
 
     def get_step(self, run_id: str, step_name: StepName) -> RunStep | None: ...
 
-    def update(self, step: RunStep) -> RunStep: ...
+    def update(
+        self,
+        step: RunStep,
+        *,
+        lease_owner_id: str | None = None,
+        lease_fencing_token: int | None = None,
+    ) -> RunStep: ...
 
 
 _run_steps_store: dict[str, dict[str, Any]] = {}
@@ -62,7 +79,13 @@ class InMemoryRunStepsRepository:
         """
         self._tenant_id = tenant_id
 
-    def create(self, step: RunStep) -> RunStep:
+    def create(
+        self,
+        step: RunStep,
+        *,
+        lease_owner_id: str | None = None,
+        lease_fencing_token: int | None = None,
+    ) -> RunStep:
         """Persist a new RunStep record.
 
         Args:
@@ -76,6 +99,11 @@ class InMemoryRunStepsRepository:
         """
         if step.tenant_id != self._tenant_id:
             raise ValueError("Tenant mismatch in RunStep creation")
+        self._assert_worker_lease(
+            run_id=step.run_id,
+            lease_owner_id=lease_owner_id,
+            lease_fencing_token=lease_fencing_token,
+        )
         _run_steps_store[step.step_id] = step.model_dump()
         return step
 
@@ -120,7 +148,13 @@ class InMemoryRunStepsRepository:
                 return RunStep.model_validate(data)
         return None
 
-    def update(self, step: RunStep) -> RunStep:
+    def update(
+        self,
+        step: RunStep,
+        *,
+        lease_owner_id: str | None = None,
+        lease_fencing_token: int | None = None,
+    ) -> RunStep:
         """Update an existing RunStep record.
 
         Args:
@@ -137,8 +171,39 @@ class InMemoryRunStepsRepository:
             raise ValueError("Tenant mismatch in RunStep update")
         if step.step_id not in _run_steps_store:
             raise KeyError(f"RunStep {step.step_id} not found")
+        persisted = _run_steps_store[step.step_id]
+        if persisted.get("tenant_id") != self._tenant_id or persisted.get("run_id") != step.run_id:
+            raise WorkerLeaseFencedError("worker lease does not match the persisted step run")
+        self._assert_worker_lease(
+            run_id=step.run_id,
+            lease_owner_id=lease_owner_id,
+            lease_fencing_token=lease_fencing_token,
+        )
         _run_steps_store[step.step_id] = step.model_dump()
         return step
+
+    def _assert_worker_lease(
+        self,
+        *,
+        run_id: str,
+        lease_owner_id: str | None,
+        lease_fencing_token: int | None,
+    ) -> None:
+        """Fence a claimed-worker write while preserving legacy non-worker callers."""
+        if lease_owner_id is None and lease_fencing_token is None:
+            assert_in_memory_ownerless_write_allowed(
+                tenant_id=self._tenant_id,
+                run_id=run_id,
+            )
+            return
+        if lease_owner_id is None or lease_fencing_token is None:
+            raise WorkerLeaseFencedError("incomplete worker lease identity")
+        assert_in_memory_worker_lease(
+            tenant_id=self._tenant_id,
+            run_id=run_id,
+            lease_owner_id=lease_owner_id,
+            lease_fencing_token=lease_fencing_token,
+        )
 
 
 class PostgresRunStepsRepository:
@@ -162,7 +227,13 @@ class PostgresRunStepsRepository:
         self._tenant_id = tenant_id
         set_tenant_local(conn, tenant_id)
 
-    def create(self, step: RunStep) -> RunStep:
+    def create(
+        self,
+        step: RunStep,
+        *,
+        lease_owner_id: str | None = None,
+        lease_fencing_token: int | None = None,
+    ) -> RunStep:
         """Persist a new RunStep record.
 
         Args:
@@ -176,36 +247,67 @@ class PostgresRunStepsRepository:
         """
         if step.tenant_id != self._tenant_id:
             raise ValueError("Tenant mismatch in RunStep creation")
-        self._conn.execute(
-            text(
-                """
-                INSERT INTO run_steps
-                    (step_id, tenant_id, run_id, step_name, step_order,
-                     status, started_at, finished_at, retry_count,
-                     result_summary, error_code, error_message)
-                VALUES
-                    (:step_id, :tenant_id, :run_id, :step_name, :step_order,
-                     :status, :started_at, :finished_at, :retry_count,
-                     CAST(:result_summary AS JSONB), :error_code, :error_message)
-                """
+        if (lease_owner_id is None) != (lease_fencing_token is None):
+            raise WorkerLeaseFencedError("incomplete worker lease identity")
+        lease_predicate = """
+              AND (
+                  :lease_owner_id IS NULL
+                  AND runs.status <> 'RUNNING'
+                  OR :lease_owner_id IS NOT NULL
+                  AND runs.status = 'RUNNING'
+                  AND runs.lease_owner_id = :lease_owner_id
+                  AND runs.lease_fencing_token = :lease_fencing_token
+                  AND runs.lease_expires_at > statement_timestamp()
+              )
+        """
+        statement = f"""
+            WITH eligible_run AS (
+                SELECT runs.run_id
+                FROM runs
+                WHERE runs.tenant_id = :tenant_id
+                  AND runs.run_id = :run_id
+                  {lease_predicate}
+                FOR UPDATE
+            )
+            INSERT INTO run_steps
+                (step_id, tenant_id, run_id, step_name, step_order,
+                 status, started_at, finished_at, retry_count,
+                 result_summary, error_code, error_message,
+                 pipeline_contract_version, pipeline_contract_hash,
+                 semantic_rule_version, semantic_rule_hash)
+            SELECT
+                :step_id, :tenant_id, eligible_run.run_id, :step_name, :step_order,
+                :status, :started_at, :finished_at, :retry_count,
+                CAST(:result_summary AS JSONB), :error_code, :error_message,
+                :pipeline_contract_version, :pipeline_contract_hash,
+                :semantic_rule_version, :semantic_rule_hash
+            FROM eligible_run
+        """
+        params = {
+            "step_id": step.step_id,
+            "tenant_id": step.tenant_id,
+            "run_id": step.run_id,
+            "step_name": (
+                step.step_name.value if hasattr(step.step_name, "value") else step.step_name
             ),
-            {
-                "step_id": step.step_id,
-                "tenant_id": step.tenant_id,
-                "run_id": step.run_id,
-                "step_name": (
-                    step.step_name.value if hasattr(step.step_name, "value") else step.step_name
-                ),
-                "step_order": step.step_order,
-                "status": step.status.value if hasattr(step.status, "value") else step.status,
-                "started_at": step.started_at,
-                "finished_at": step.finished_at,
-                "retry_count": step.retry_count,
-                "result_summary": json.dumps(step.result_summary),
-                "error_code": step.error_code,
-                "error_message": step.error_message,
-            },
-        )
+            "step_order": step.step_order,
+            "status": step.status.value if hasattr(step.status, "value") else step.status,
+            "started_at": step.started_at,
+            "finished_at": step.finished_at,
+            "retry_count": step.retry_count,
+            "result_summary": json.dumps(step.result_summary),
+            "error_code": step.error_code,
+            "error_message": step.error_message,
+            "pipeline_contract_version": step.pipeline_contract_version,
+            "pipeline_contract_hash": step.pipeline_contract_hash,
+            "semantic_rule_version": step.semantic_rule_version,
+            "semantic_rule_hash": step.semantic_rule_hash,
+            "lease_owner_id": lease_owner_id,
+            "lease_fencing_token": lease_fencing_token,
+        }
+        result = self._conn.execute(text(statement), params)
+        if result.rowcount != 1:
+            raise WorkerLeaseFencedError("worker lease fenced before step creation")
         return step
 
     def get_by_run_id(self, run_id: str) -> list[RunStep]:
@@ -225,10 +327,12 @@ class PostgresRunStepsRepository:
                 """
                 SELECT step_id, tenant_id, run_id, step_name, step_order,
                        status, started_at, finished_at, retry_count,
-                       result_summary, error_code, error_message
+                       result_summary, error_code, error_message,
+                       pipeline_contract_version, pipeline_contract_hash,
+                       semantic_rule_version, semantic_rule_hash
                 FROM run_steps
                 WHERE run_id = :run_id
-                ORDER BY step_order
+                ORDER BY step_order, step_id
                 """
             ),
             {"run_id": run_id},
@@ -253,7 +357,9 @@ class PostgresRunStepsRepository:
                 """
                 SELECT step_id, tenant_id, run_id, step_name, step_order,
                        status, started_at, finished_at, retry_count,
-                       result_summary, error_code, error_message
+                       result_summary, error_code, error_message,
+                       pipeline_contract_version, pipeline_contract_hash,
+                       semantic_rule_version, semantic_rule_hash
                 FROM run_steps
                 WHERE run_id = :run_id AND step_name = :step_name
                 """
@@ -265,7 +371,13 @@ class PostgresRunStepsRepository:
             return None
         return self._row_to_model(row)
 
-    def update(self, step: RunStep) -> RunStep:
+    def update(
+        self,
+        step: RunStep,
+        *,
+        lease_owner_id: str | None = None,
+        lease_fencing_token: int | None = None,
+    ) -> RunStep:
         """Update an existing RunStep record.
 
         Args:
@@ -279,9 +391,30 @@ class PostgresRunStepsRepository:
         """
         if step.tenant_id != self._tenant_id:
             raise ValueError("Tenant mismatch in RunStep update")
-        self._conn.execute(
+        if (lease_owner_id is None) != (lease_fencing_token is None):
+            raise WorkerLeaseFencedError("incomplete worker lease identity")
+        lease_predicate = """
+              AND (
+                  :lease_owner_id IS NULL
+                  AND runs.status <> 'RUNNING'
+                  OR :lease_owner_id IS NOT NULL
+                  AND runs.status = 'RUNNING'
+                  AND runs.lease_owner_id = :lease_owner_id
+                  AND runs.lease_fencing_token = :lease_fencing_token
+                  AND runs.lease_expires_at > statement_timestamp()
+              )
+        """
+        result = self._conn.execute(
             text(
-                """
+                f"""
+                WITH eligible_run AS (
+                    SELECT runs.run_id
+                    FROM runs
+                    WHERE runs.tenant_id = :tenant_id
+                      AND runs.run_id = :run_id
+                      {lease_predicate}
+                    FOR UPDATE
+                )
                 UPDATE run_steps SET
                     status = :status,
                     started_at = :started_at,
@@ -290,11 +423,16 @@ class PostgresRunStepsRepository:
                     result_summary = CAST(:result_summary AS JSONB),
                     error_code = :error_code,
                     error_message = :error_message
-                WHERE step_id = :step_id
+                FROM eligible_run
+                WHERE run_steps.step_id = :step_id
+                  AND run_steps.tenant_id = :tenant_id
+                  AND run_steps.run_id = eligible_run.run_id
                 """
             ),
             {
                 "step_id": step.step_id,
+                "run_id": step.run_id,
+                "tenant_id": step.tenant_id,
                 "status": step.status.value if hasattr(step.status, "value") else step.status,
                 "started_at": step.started_at,
                 "finished_at": step.finished_at,
@@ -302,8 +440,12 @@ class PostgresRunStepsRepository:
                 "result_summary": json.dumps(step.result_summary),
                 "error_code": step.error_code,
                 "error_message": step.error_message,
+                "lease_owner_id": lease_owner_id,
+                "lease_fencing_token": lease_fencing_token,
             },
         )
+        if result.rowcount != 1:
+            raise WorkerLeaseFencedError("worker lease fenced before step update")
         return step
 
     def _row_to_model(self, row: Any) -> RunStep:
@@ -333,6 +475,10 @@ class PostgresRunStepsRepository:
             result_summary=result_summary or {},
             error_code=row.error_code,
             error_message=row.error_message,
+            pipeline_contract_version=str(row.pipeline_contract_version),
+            pipeline_contract_hash=str(row.pipeline_contract_hash),
+            semantic_rule_version=str(row.semantic_rule_version),
+            semantic_rule_hash=str(row.semantic_rule_hash),
         )
 
 

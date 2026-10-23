@@ -217,14 +217,14 @@ class _ConnSpy(_Spy):
 def test_deliverable_produced_emits_via_run_full_deliverables(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from idis.api.routes import runs as runs_route
+    from idis.services.runs.step_runtime import deliverables as deliverables_module
     from tests.test_deliverables_generator import _make_bundle, _make_context, _make_scorecard
 
     spy = _ConnSpy()
     monkeypatch.setattr(webhook_lifecycle, "notify_webhook_lifecycle", spy)
     sentinel_conn = object()
 
-    summary = runs_route._run_full_deliverables(
+    summary = deliverables_module._run_full_deliverables(
         run_id=_RUN,
         tenant_id=_TENANT,
         deal_id=_DEAL,
@@ -243,7 +243,7 @@ def test_deliverable_produced_emits_via_run_full_deliverables(
 def test_deliverable_failed_emits_via_run_full_deliverables(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from idis.api.routes import runs as runs_route
+    from idis.services.runs.step_runtime import deliverables as deliverables_module
 
     spy = _ConnSpy()
     monkeypatch.setattr(webhook_lifecycle, "notify_webhook_lifecycle", spy)
@@ -256,7 +256,7 @@ def test_deliverable_failed_emits_via_run_full_deliverables(
         "idis.deliverables.generator.DeliverablesGenerator.generate", _generate_boom
     )
     with pytest.raises(RuntimeError, match="generation boom"):  # failure still propagates
-        runs_route._run_full_deliverables(
+        deliverables_module._run_full_deliverables(
             run_id=_RUN,
             tenant_id=_TENANT,
             deal_id=_DEAL,

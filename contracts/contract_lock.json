@@ -1,7 +1,8 @@
 {
   "files": {
-    "openapi/IDIS_OpenAPI_v6_3.yaml": "e36402889fc0b89edb51859b2da907bbc1c0bcb3358b64340e5dc0aa0ebe1d6c",
-    "schemas/audit_event.schema.json": "ccaf1b3022c4c26b30a703ea4504cf5983e355c4f9cc3cbd425e12e97e293330",
+    "contracts/full_strict_v21_reviewed_preimage_v1.json": "2eb504ab750e9c3c96a5eeada13b22aad36c8772369c21e65d0e93705ff9cffd",
+    "openapi/IDIS_OpenAPI_v6_3.yaml": "775c91fb08c122b845f58483755d0ce323653bc32c4a44049c42c7c547ef0745",
+    "schemas/audit_event.schema.json": "03e44dcece5952081d1a25394c99421e52181ce69ea0067fa529e43ebe241a6f",
     "schemas/calc_sanad.schema.json": "10af14aa1d0329ef9de386adb702e3b55797b73c731150aade441af40297e3a5",
     "schemas/claim.schema.json": "9411359acdaa19d25871a5493325b4f1bfea6407a2c5016b895ba6ac4b849586",
     "schemas/debate_state.schema.json": "cbd226aca114a6fc9437b8a81d2acc95519dbf1c5d01c8868894442b56ef1c17",
@@ -9,10 +10,14 @@
     "schemas/evidence_item.schema.json": "aa39517176d8123d6e386f6899be2eaab6746b763bac6f79ae2d223bce6c0e04",
     "schemas/extraction/extract_claims_input.json": "26df2513a87add5b802e3da868e41dfccc1e995be47d60ebbb0187c5411ff30e",
     "schemas/extraction/extract_claims_output.json": "0d6dc96ce5444bff3e28b43c022c9274c276c8f2c096636ebd0ddd62d3b64dde",
+    "schemas/extraction/methodology_question_extraction_input.json": "d655fbb04b562cb30085f54ead325d717188906caa5bdf2da346f0f1c64d0489",
+    "schemas/extraction/methodology_question_extraction_output.json": "3b6cd80be37c55ddd649314d6a6b3d2cce361e27cafcfd9500097ce5bb2a1168",
     "schemas/muhasabah_record.schema.json": "de2b5fc12253c5feb65ef234550bebdc50152c669f6afcbc43ed747d55b0fa1d",
     "schemas/sanad.schema.json": "98d9633e62298969f5177241e834ef5246d20a205fe423436ba073d9c04f29b3",
     "schemas/transmission_node.schema.json": "88a8c3094aa39ea9305fa840d5005df8a67629446aabdad501c3b95f12d64aaa",
-    "schemas/value_struct.schema.json": "ba7e858fddade215599fce8d6c4a0f26af80d67e7ec984980e2d95fea2d118a6"
+    "schemas/value_struct.schema.json": "ba7e858fddade215599fce8d6c4a0f26af80d67e7ec984980e2d95fea2d118a6",
+    "src/idis/methodology/mappings/commercial_dd_v1_question_categories.json": "71a6ad372cc9c08a5bafc451a08fce194786beea98b35304804b0943ae16d32e",
+    "src/idis/methodology/mappings/commercial_dd_v1_question_categories.schema.json": "6735e9b3fc4adce6e46103e04319eb36569caaf4a9e5d0c335a0647704c2f6b7"
   },
   "lock_version": 1,
   "openapi_surface": {
@@ -389,7 +394,8 @@
           "404",
           "409",
           "413",
-          "415"
+          "415",
+          "422"
         ]
       }
     },
@@ -620,6 +626,32 @@
         ]
       }
     },
+    "/v1/documents/{docId}/content": {
+      "get": {
+        "operation_id": "streamDocumentContent",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401",
+          "403",
+          "404",
+          "409",
+          "503"
+        ]
+      }
+    },
+    "/v1/documents/{docId}/content-integrity": {
+      "get": {
+        "operation_id": "getDocumentContentIntegrity",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401",
+          "404",
+          "409"
+        ]
+      }
+    },
     "/v1/documents/{docId}/ingest": {
       "post": {
         "operation_id": "ingestDocument",
@@ -770,6 +802,42 @@
           "401",
           "403",
           "404"
+        ]
+      }
+    },
+    "/v1/methodology-versions": {
+      "get": {
+        "operation_id": "listMethodologyVersions",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401"
+        ]
+      }
+    },
+    "/v1/methodology-versions/import": {
+      "post": {
+        "operation_id": "importMethodologyVersion",
+        "required_request_fields": [
+          "methodology_type"
+        ],
+        "responses": [
+          "201",
+          "400",
+          "401",
+          "409"
+        ]
+      }
+    },
+    "/v1/methodology-versions/{methodology_version_record_id}/freeze": {
+      "post": {
+        "operation_id": "freezeMethodologyVersion",
+        "required_request_fields": [],
+        "responses": [
+          "200",
+          "401",
+          "404",
+          "409"
         ]
       }
     },

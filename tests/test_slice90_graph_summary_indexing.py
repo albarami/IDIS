@@ -16,7 +16,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from idis.api.routes.runs import _run_full_rag_evidence
 from idis.services.rag.constants import VECTOR_EMBEDDING_DIMENSIONS
 from idis.services.rag.embedding_health import EmbeddingHealthCheck
 from idis.services.rag.indexing import (
@@ -25,6 +24,7 @@ from idis.services.rag.indexing import (
     index_graph_summaries_for_deal,
 )
 from idis.services.rag.pgvector_health import PgvectorHealthCheck
+from idis.services.runs.step_runtime.evidence import _run_full_rag_evidence
 from tests.test_slice63_rag_full_wiring import DEAL_ID, RUN_ID, TENANT_ID, _documents
 from tests.test_slice90_calc_output_indexing import (
     _FAKE_VECTOR,

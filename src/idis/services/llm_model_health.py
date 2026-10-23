@@ -194,7 +194,7 @@ def _has_value(env: Mapping[str, str], key: str) -> bool:
 def _default_anthropic_client_factory(api_key: str) -> Any:
     import anthropic
 
-    return anthropic.Anthropic(api_key=api_key)
+    return anthropic.Anthropic(api_key=api_key, max_retries=0)
 
 
 def check_llm_model_health(

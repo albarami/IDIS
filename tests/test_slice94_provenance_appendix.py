@@ -256,8 +256,10 @@ def test_provenance_builder_type_filters_values() -> None:
 
 
 def test_export_path_threads_run_provenance() -> None:
-    runs_src = Path("src/idis/api/routes/runs.py").read_text(encoding="utf-8")
-    assert "run_provenance=run_provenance" in runs_src
+    deliverables_src = Path("src/idis/services/runs/step_runtime/deliverables.py").read_text(
+        encoding="utf-8"
+    )
+    assert "run_provenance=run_provenance" in deliverables_src
     orchestrator_src = Path("src/idis/services/runs/orchestrator.py").read_text(encoding="utf-8")
     assert '"debate_provenance": accumulated.get("debate_provenance")' in orchestrator_src
     assert '"layer2_provenance": accumulated.get("layer2_provenance")' in orchestrator_src

@@ -409,7 +409,11 @@ export const idis = {
 
   // Runs
   runs: {
-    start: (dealId: string, data: { mode: "SNAPSHOT" | "FULL" }, idempotencyKey?: string) =>
+    start: (
+      dealId: string,
+      data: { mode: "SNAPSHOT" | "FULL"; strict_preflight_proof_id?: string },
+      idempotencyKey?: string
+    ) =>
       request<{ run_id: string; status: string }>(`/v1/deals/${dealId}/runs`, {
         method: "POST",
         body: data,

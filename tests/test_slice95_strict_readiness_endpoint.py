@@ -13,9 +13,11 @@ pinned to this worktree's src for every run.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -41,7 +43,14 @@ _KEYS = {
     }
 }
 
-_TOP_FIELDS = {"required", "may_proceed", "blocker_count", "blocking_components", "components"}
+_TOP_FIELDS = {
+    "required",
+    "may_proceed",
+    "blocker_count",
+    "profile_hmac_sha256",
+    "blocking_components",
+    "components",
+}
 _COMPONENT_FIELDS = {
     "component_name",
     "status",
@@ -79,6 +88,7 @@ def test_strict_readiness_returns_safe_review(client: TestClient) -> None:
     assert isinstance(body["may_proceed"], bool)
     assert isinstance(body["blocker_count"], int)
     assert isinstance(body["components"], list) and body["components"]
+    assert body["profile_hmac_sha256"] is None
     for component in body["components"]:
         assert set(component) == _COMPONENT_FIELDS
         assert isinstance(component["required_env_vars"], list)
@@ -103,6 +113,26 @@ def test_strict_readiness_review_model_excludes_internal_fields() -> None:
     for internal in _INTERNAL_FIELDS:
         assert internal not in StrictReadinessReview.model_fields
         assert internal not in StrictReadinessComponentReview.model_fields
+
+
+def test_server_profile_identity_is_one_way_and_exact() -> None:
+    from idis.api.routes.readiness import _safe_server_profile_hmac_sha256
+
+    base_hmac = "a" * 64
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                strict_runtime_profile=SimpleNamespace(base_profile_hmac=base_hmac)
+            )
+        )
+    )
+
+    assert (
+        _safe_server_profile_hmac_sha256(request)
+        == hashlib.sha256(base_hmac.encode("ascii")).hexdigest()
+    )
+    request.app.state.strict_runtime_profile.base_profile_hmac = "A" * 64
+    assert _safe_server_profile_hmac_sha256(request) is None
 
 
 def test_readiness_schemas_forbid_extra_in_static_and_generated_spec() -> None:

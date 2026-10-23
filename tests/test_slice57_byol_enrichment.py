@@ -32,8 +32,10 @@ from idis.services.enrichment.service import (
     create_default_enrichment_service,
 )
 from idis.services.runs.strict_full_live import build_strict_full_live_readiness_report
+from tests.strict_runtime_test_support import RecordingPostgresAuditSink
 
 TENANT_ID = "tenant-slice57"
+_DEAL_COMPANY_LABEL = "Fabrikam Holdings Ltd"
 SECRET_PROCESS_VALUE = "PROCESS_TOKEN_VALUE_SHOULD_NOT_LEAK"
 SECRET_DOTENV_VALUE = "DOTENV_TOKEN_VALUE_SHOULD_NOT_LEAK"
 
@@ -240,9 +242,7 @@ def test_default_enrichment_service_can_receive_injected_credential_repo() -> No
 def test_provider_matrix_covers_registered_public_byol_and_not_registered_providers() -> None:
     registry = _build_default_registry()
     registered_provider_ids = [descriptor.provider_id for descriptor in registry.list_providers()]
-    assert len(registered_provider_ids) == 15
-    assert len(registered_provider_ids) == len(set(registered_provider_ids))
-    assert set(registered_provider_ids) == {
+    expected_registered_provider_ids = {
         "sec_edgar",
         "companies_house",
         "github",
@@ -259,6 +259,9 @@ def test_provider_matrix_covers_registered_public_byol_and_not_registered_provid
         "wayback",
         "google_news_rss",
     }
+    assert len(registered_provider_ids) == len(expected_registered_provider_ids)
+    assert len(registered_provider_ids) == len(set(registered_provider_ids))
+    assert set(registered_provider_ids) == expected_registered_provider_ids
 
     report = build_strict_full_live_readiness_report(
         env=_full_byol_env(),
@@ -270,7 +273,7 @@ def test_provider_matrix_covers_registered_public_byol_and_not_registered_provid
     registered_rows = [
         item for item in report.enrichment_provider_matrix if item.registry_status == "registered"
     ]
-    assert len(registered_rows) == 15
+    assert len(registered_rows) == len(expected_registered_provider_ids)
     assert matrix["sec_edgar"].requires_byol is False
     assert matrix["sec_edgar"].credential_repo_status == "not_required"
     assert matrix["sec_edgar"].health_status == "not_checked"
@@ -413,8 +416,8 @@ def test_strict_readiness_distinguishes_env_present_not_loaded_and_tenant_missin
 def test_strict_full_enrichment_fails_closed_on_provider_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import idis.api.routes.runs as runs_module
     import idis.services.enrichment.service as enrichment_service_module
+    from idis.services.runs.step_runtime import enrichment as enrichment_module
 
     registry = EnrichmentProviderRegistry()
     registry.register(_FakeConnector(should_raise=True), requires_byol=True)
@@ -440,12 +443,14 @@ def test_strict_full_enrichment_fails_closed_on_provider_error(
     )
 
     with pytest.raises(RuntimeError, match="Strict enrichment provider failed: companies_house"):
-        runs_module._run_full_enrichment(
+        enrichment_module._run_full_enrichment(
             run_id="00000000-0000-4000-8000-000000000057",
             tenant_id=TENANT_ID,
             deal_id="safe-public-company",
+            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
             created_claim_ids=[],
             calc_ids=[],
+            audit_sink=RecordingPostgresAuditSink(),
         )
 
 
@@ -473,7 +478,7 @@ def test_service_provider_exception_details_are_redacted() -> None:
         request=EnrichmentRequest(
             tenant_id=TENANT_ID,
             entity_type="COMPANY",
-            query={"company_name": "safe-public-company"},
+            query={"company_name": _DEAL_COMPANY_LABEL},
         ),
     )
 
@@ -492,8 +497,8 @@ def test_service_provider_exception_details_are_redacted() -> None:
 def test_strict_full_enrichment_public_provider_error_uses_generic_wording(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import idis.api.routes.runs as runs_module
     import idis.services.enrichment.service as enrichment_service_module
+    from idis.services.runs.step_runtime import enrichment as enrichment_module
 
     registry = EnrichmentProviderRegistry()
     registry.register(
@@ -515,12 +520,14 @@ def test_strict_full_enrichment_public_provider_error_uses_generic_wording(
     )
 
     with pytest.raises(RuntimeError, match="Strict enrichment provider failed: sec_edgar") as exc:
-        runs_module._run_full_enrichment(
+        enrichment_module._run_full_enrichment(
             run_id="00000000-0000-4000-8000-000000000061",
             tenant_id=TENANT_ID,
             deal_id="safe-public-company",
+            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
             created_claim_ids=[],
             calc_ids=[],
+            audit_sink=RecordingPostgresAuditSink(),
         )
     assert "BYOL" not in str(exc.value)
 
@@ -528,8 +535,8 @@ def test_strict_full_enrichment_public_provider_error_uses_generic_wording(
 def test_strict_full_enrichment_fails_closed_on_blocked_missing_byol(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import idis.api.routes.runs as runs_module
     import idis.services.enrichment.service as enrichment_service_module
+    from idis.services.runs.step_runtime import enrichment as enrichment_module
 
     registry = EnrichmentProviderRegistry()
     registry.register(
@@ -563,20 +570,22 @@ def test_strict_full_enrichment_fails_closed_on_blocked_missing_byol(
     )
 
     with pytest.raises(RuntimeError, match="Strict enrichment provider blocked: companies_house"):
-        runs_module._run_full_enrichment(
+        enrichment_module._run_full_enrichment(
             run_id="00000000-0000-4000-8000-000000000060",
             tenant_id=TENANT_ID,
             deal_id="safe-public-company",
+            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
             created_claim_ids=[],
             calc_ids=[],
+            audit_sink=RecordingPostgresAuditSink(),
         )
 
 
 def test_non_strict_full_enrichment_keeps_best_effort_on_provider_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import idis.api.routes.runs as runs_module
     import idis.services.enrichment.service as enrichment_service_module
+    from idis.services.runs.step_runtime import enrichment as enrichment_module
 
     registry = EnrichmentProviderRegistry()
     registry.register(_FakeConnector(should_raise=True), requires_byol=True)
@@ -601,10 +610,11 @@ def test_non_strict_full_enrichment_keeps_best_effort_on_provider_error(
         raising=False,
     )
 
-    result = runs_module._run_full_enrichment(
+    result = enrichment_module._run_full_enrichment(
         run_id="00000000-0000-4000-8000-000000000058",
         tenant_id=TENANT_ID,
         deal_id="safe-public-company",
+        deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
         created_claim_ids=[],
         calc_ids=[],
     )
@@ -615,8 +625,8 @@ def test_non_strict_full_enrichment_keeps_best_effort_on_provider_error(
 
 
 def test_full_enrichment_preserves_provenance_refs(monkeypatch: pytest.MonkeyPatch) -> None:
-    import idis.api.routes.runs as runs_module
     import idis.services.enrichment.service as enrichment_service_module
+    from idis.services.runs.step_runtime import enrichment as enrichment_module
 
     registry = EnrichmentProviderRegistry()
     registry.register(_FakeConnector(), requires_byol=True)
@@ -640,10 +650,11 @@ def test_full_enrichment_preserves_provenance_refs(monkeypatch: pytest.MonkeyPat
         raising=False,
     )
 
-    result = runs_module._run_full_enrichment(
+    result = enrichment_module._run_full_enrichment(
         run_id="00000000-0000-4000-8000-000000000059",
         tenant_id=TENANT_ID,
         deal_id="safe-public-company",
+        deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
         created_claim_ids=[],
         calc_ids=[],
     )

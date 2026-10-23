@@ -13,6 +13,7 @@ from typing import Any
 from idis.analysis.models import AgentReport, AnalysisBundle, AnalysisContext
 from idis.analysis.no_free_facts import AnalysisNoFreeFactsValidator
 from idis.analysis.registry import AnalysisAgentRegistry
+from idis.audit.canonical import build_canonical_audit_event
 from idis.audit.sink import AuditSink, AuditSinkError
 from idis.validators.muhasabah import validate_muhasabah
 
@@ -177,14 +178,40 @@ class AnalysisEngine:
         Raises:
             AuditSinkError: If the audit sink fails.
         """
-        event = {
-            "event_type": event_type,
-            "timestamp": datetime.now(UTC).isoformat(),
-            **data,
+        canonical_type = f"integration.{event_type}"
+        safe: dict[str, object] = {
+            key: data[key]
+            for key in (
+                "agent_ids",
+                "agent_id",
+                "agent_type",
+                "confidence",
+                "agent_count",
+                "error_type",
+            )
+            if key in data
         }
+        if canonical_type.endswith(".failed") and "error_type" not in safe:
+            safe["error_type"] = "AGENT_EXECUTION_FAILED"
+        event = build_canonical_audit_event(
+            tenant_id=str(data["tenant_id"]),
+            event_type=canonical_type,
+            severity="HIGH" if canonical_type.endswith(".failed") else "LOW",
+            summary=f"Analysis operation recorded: {canonical_type}",
+            actor_id="idis-analysis-engine",
+            request_id=str(data["run_id"]),
+            method="POST",
+            path=f"/internal/analysis/runs/{data['run_id']}",
+            status_code=422 if canonical_type.endswith(".failed") else 200,
+            resource_type="run",
+            resource_id=str(data["run_id"]),
+            deal_id=str(data["deal_id"]),
+            safe=safe,
+            refs=[f"deal_id:{data['deal_id']}"],
+        )
         try:
             self._audit_sink.emit(event)
         except AuditSinkError:
             raise
         except Exception as exc:
-            raise AuditSinkError(f"Audit sink failure for event '{event_type}': {exc}") from exc
+            raise AuditSinkError("AUDIT_FAILURE: analysis operation was not recorded") from exc

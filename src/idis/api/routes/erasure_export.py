@@ -19,12 +19,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from idis.api.auth import RequireTenantContext
 from idis.audit.sink import AuditSink
 from idis.compliance.compliance_export import build_compliance_export
-from idis.compliance.erasure import (
-    execute_erasure,
-    get_erasure_executor,
-    request_erasure,
-)
+from idis.compliance.erasure import request_erasure
 from idis.compliance.retention import HoldTarget, block_deletion_if_held
+from idis.compliance.task7_erasure import execute_erasure_for_api
 
 router = APIRouter(prefix="/v1", tags=["Erasure"])
 
@@ -106,20 +103,21 @@ def execute_erasure_request(
     def _deal_hold_checker(tenant_id: str, deal_id: str) -> None:
         block_deletion_if_held(tenant_ctx, HoldTarget.DEAL, deal_id)
 
-    executed = execute_erasure(
+    executed = execute_erasure_for_api(
         tenant_ctx,
         request_id,
         _sink(request),
-        executor=get_erasure_executor(),
         hold_checker=_deal_hold_checker,
+        client_ip=request.client.host if request.client else "unknown",
+        user_agent=request.headers.get("User-Agent", "unknown"),
     )
     request.state.audit_resource_id = executed.request_id
-    executed_at = executed.executed_at
-    assert executed_at is not None  # execute_erasure always stamps it on success
+    if executed.terminal_lineage_proof is not None:
+        request.state.task7_erasure_terminal_lineage_proof = executed.terminal_lineage_proof
     return ErasureExecuteResponse(
         request_id=executed.request_id,
-        status=executed.status.value,
-        executed_at=executed_at.isoformat().replace("+00:00", "Z"),
+        status=executed.status,
+        executed_at=executed.executed_at.isoformat().replace("+00:00", "Z"),
         counts=dict(executed.counts),
     )
 

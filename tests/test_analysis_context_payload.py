@@ -96,13 +96,16 @@ def test_deterministic_analysis_uses_claim_summaries_for_sections() -> None:
 def test_deterministic_analysis_synthesizes_sections_and_risk_refs() -> None:
     """Local analysis should not turn noisy sorted claims into raw deliverable bullets."""
     context_payload = {
-        "deal_metadata": {"deal_id": "deal-001", "company_name": "Roamless"},
+        "deal_metadata": {
+            "deal_id": "deal-001",
+            "company_name": "Fictional Signalworks",
+        },
         "claim_registry": {
             "claim-001-noise": {
                 "claim_id": "claim-001-noise",
                 "claim_text": (
-                    "ORIG CO NAME:STRIPE ORIG ID:4270465600 DESC DATE: "
-                    "TRACE#:111000022356425 IND NAME:MYNE TECHNOLOGIES INC"
+                    "ORIG CO NAME:FICTIONAL PAYMENT RAIL ORIG ID:9000000001 DESC DATE: "
+                    "TRACE#:999000011223344 IND NAME:FICTIONAL PAYEE SYSTEMS INC"
                 ),
                 "claim_class": "FINANCIAL",
                 "source_summary": "Bank statement, span bank-1",
@@ -111,7 +114,7 @@ def test_deterministic_analysis_synthesizes_sections_and_risk_refs() -> None:
             "claim-market": {
                 "claim_id": "claim-market",
                 "claim_text": (
-                    "Roamless provides an API for platforms looking to resell "
+                    "Fictional Signalworks provides an API for platforms looking to resell "
                     "eSIM connectivity to their own users."
                 ),
                 "claim_class": "TRACTION",
@@ -139,7 +142,7 @@ def test_deterministic_analysis_synthesizes_sections_and_risk_refs() -> None:
     section = report["analysis_sections"]["market_and_traction_evidence"]
 
     assert isinstance(section, dict)
-    assert "Roamless provides an API" in section["content"]
+    assert "Fictional Signalworks provides an API" in section["content"]
     assert "ORIG CO NAME" not in section["content"]
     assert section["claim_refs"] == ["claim-market"]
     assert report["risks"][0]["claim_ids"] == ["claim-market"]
@@ -148,12 +151,16 @@ def test_deterministic_analysis_synthesizes_sections_and_risk_refs() -> None:
 def test_deterministic_analysis_cleans_noisy_claims_into_investor_paragraph() -> None:
     """Local analysis should synthesize clean claims instead of concatenating fragments."""
     context_payload = {
-        "deal_metadata": {"deal_id": "deal-001", "company_name": "Roamless"},
+        "deal_metadata": {
+            "deal_id": "deal-001",
+            "company_name": "Fictional Signalworks",
+        },
         "claim_registry": {
             "claim-bank-noise": {
                 "claim_id": "claim-bank-noise",
                 "claim_text": (
-                    "ORIG CO NAME:STRIPE ORIG ID:4270465600 DESC DATE: TRACE#:111000022356425"
+                    "ORIG CO NAME:FICTIONAL PAYMENT RAIL ORIG ID:9000000001 "
+                    "DESC DATE: TRACE#:999000011223344"
                 ),
                 "claim_class": "FINANCIAL",
                 "source_summary": "Bank statement, span bank-1",
@@ -216,7 +223,10 @@ def test_deterministic_analysis_cleans_noisy_claims_into_investor_paragraph() ->
 def test_deterministic_analysis_reports_missing_evidence_when_only_noise_exists() -> None:
     """If every candidate is noise, local analysis should say evidence is missing."""
     context_payload = {
-        "deal_metadata": {"deal_id": "deal-001", "company_name": "Roamless"},
+        "deal_metadata": {
+            "deal_id": "deal-001",
+            "company_name": "Fictional Signalworks",
+        },
         "claim_registry": {
             "claim-noise": {
                 "claim_id": "claim-noise",
@@ -251,7 +261,10 @@ def test_deterministic_analysis_reports_missing_evidence_when_only_noise_exists(
 def test_deterministic_risk_register_wording_is_specific_and_clean() -> None:
     """Risk wording should be readable and grounded, not generic boilerplate."""
     context_payload = {
-        "deal_metadata": {"deal_id": "deal-001", "company_name": "Roamless"},
+        "deal_metadata": {
+            "deal_id": "deal-001",
+            "company_name": "Fictional Signalworks",
+        },
         "claim_registry": {
             "claim-risk": {
                 "claim_id": "claim-risk",
@@ -294,14 +307,18 @@ def test_deterministic_risk_register_wording_is_specific_and_clean() -> None:
 def test_deterministic_technical_analysis_excludes_bank_wire_noise() -> None:
     """Bank wires mentioning the company should not become technical diligence."""
     context_payload = {
-        "deal_metadata": {"deal_id": "deal-001", "company_name": "Roamless"},
+        "deal_metadata": {
+            "deal_id": "deal-001",
+            "company_name": "Fictional Signalworks",
+        },
         "claim_registry": {
             "claim-bank-wire": {
                 "claim_id": "claim-bank-wire",
                 "claim_text": (
                     "ONLINE INTERNATIONAL WIRE TRANSFER A/C: FOREIGN CUR BUS ACCT BK "
-                    "ORG: 00000000933802115 MYNE TECHNOLOGIES INC. BEN:/TR0900134000 "
-                    "BUSINESS EXPENSES/OCMT/EUR1034,00/EXCH/0.8904/TRN: 3519900289RE"
+                    "ORG: 99999999000000001 FICTIONAL PAYEE SYSTEMS INC. "
+                    "BEN:/FX0000000000 BUSINESS EXPENSES/OCMT/EUR4321,00/"
+                    "EXCH/1.2345/TRN: 9999900000ZZ"
                 ),
                 "claim_class": "OTHER",
                 "source_summary": "Bank statement, span wire-1",
@@ -339,13 +356,16 @@ def test_deterministic_technical_analysis_excludes_bank_wire_noise() -> None:
 def test_deterministic_technical_analysis_reports_missing_when_only_ocr_noise_exists() -> None:
     """Technical sections should not force OCR/contact fragments into prose."""
     context_payload = {
-        "deal_metadata": {"deal_id": "deal-001", "company_name": "Roamless"},
+        "deal_metadata": {
+            "deal_id": "deal-001",
+            "company_name": "Fictional Signalworks",
+        },
         "claim_registry": {
             "claim-contact-contract": {
                 "claim_id": "claim-contact-contract",
                 "claim_text": (
-                    "MYNE TECHNOLOGIES INC. 1401 Pennsylvania Ave. Unit 105, "
-                    "Wilmington DE 19806 United States E-mail: finance@roamless.com "
+                    "FICTIONAL PAYEE SYSTEMS INC. 999 Fictional Avenue Unit 101, "
+                    "Example City ZZ 00000 Fictionland E-mail: finance@fictional.invalid "
                     "4.11 During the term of this agreement or upon termination"
                 ),
                 "claim_class": "FINANCIAL",
@@ -372,9 +392,10 @@ def test_deterministic_technical_analysis_reports_missing_when_only_ocr_noise_ex
             "claim-chips-credit": {
                 "claim_id": "claim-chips-credit",
                 "claim_text": (
-                    "CHIPS CREDIT VIA: WELLS FARGO BANK, N.A./0509 B/O: REVO CAPITAL "
-                    "FUND II B.V. REF: NBNF=MYNE TECHNOLOGIES INC. WILMINGTON DE "
-                    "19806-4125 US/AC-00000000933 ORG=/NL61UGBI8263368898"
+                    "CHIPS CREDIT VIA: FICTIONAL NATIONAL BANK, N.A./9999 B/O: "
+                    "FICTIONAL FUND II B.V. REF: NBNF=FICTIONAL PAYEE SYSTEMS INC. "
+                    "EXAMPLE CITY ZZ 00000-0000 XX/AC-99999999999 "
+                    "ORG=/ZZ00FICT0000000000"
                 ),
                 "claim_class": "OTHER",
                 "source_summary": "Bank statement, span chips-1",
@@ -384,7 +405,8 @@ def test_deterministic_technical_analysis_reports_missing_when_only_ocr_noise_ex
                 "claim_id": "claim-ocr-event",
                 "claim_text": (
                     "ExP-lore toI)ics like 5G, AI, 6G, APis and immersive technolo~ "
-                    "straight from the Ericsson booth, at the world's most influential "
+                    "straight from the Fictional Network Systems booth, at the world's "
+                    "most influential "
                     "connectivicy. event."
                 ),
                 "claim_class": "OTHER",
@@ -408,7 +430,7 @@ def test_deterministic_technical_analysis_reports_missing_when_only_ocr_noise_ex
     assert section["claim_refs"] == []
     assert report["muhasabah"]["is_subjective"] is True
     assert report["risks"] == []
-    assert "MYNE TECHNOLOGIES INC. 1401 Pennsylvania" not in section["content"]
+    assert "FICTIONAL PAYEE SYSTEMS INC. 999 Fictional Avenue" not in section["content"]
     assert "entemrises" not in section["content"]
     assert "MomentMoment" not in section["content"]
     assert "CHIPS CREDIT" not in section["content"]

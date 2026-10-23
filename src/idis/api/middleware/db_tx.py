@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 from typing import Any
 
 from starlette.requests import Request
@@ -36,6 +37,18 @@ logger = logging.getLogger(__name__)
 # read-model GET into a 503. Keep this set exact-match and minimal — every entry weakens tenant
 # SET LOCAL / in-tx audit for that path, so only routes that touch no tenant data belong here.
 _DB_TX_EXEMPT_PATHS = frozenset({"/v1/strict-readiness"})
+_DOCUMENT_CONTENT_STREAM_PATH = re.compile(
+    r"^/v1/documents/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+    r"[0-9a-f]{4}-[0-9a-f]{12}/content$",
+    re.IGNORECASE,
+)
+
+
+def _is_read_only_document_stream(scope: Scope, path: str) -> bool:
+    """Admit only the exact authenticated raw-content GET for pass-through."""
+    return (
+        scope.get("method") == "GET" and _DOCUMENT_CONTENT_STREAM_PATH.fullmatch(path) is not None
+    )
 
 
 def _open_connection() -> tuple[Any, Any]:
@@ -145,15 +158,66 @@ class DBTransactionMiddleware:
 
         response_status: int | None = None
         response_messages: list[Any] = []
+        stream_passthrough = _is_read_only_document_stream(scope, path)
+        transaction_settled = False
+        stream_commit_failed = False
 
         async def send_wrapper(message: Any) -> None:
-            nonlocal response_status
+            nonlocal response_status, stream_commit_failed, transaction_settled
             if message["type"] == "http.response.start":
                 response_status = message.get("status", 500)
-            response_messages.append(message)
+            if not stream_passthrough:
+                response_messages.append(message)
+                return
+
+            if stream_commit_failed:
+                return
+            if message["type"] == "http.response.start":
+                if response_status is not None and response_status < 500:
+                    try:
+                        await asyncio.to_thread(_commit, trans)
+                        logger.debug(
+                            "Committed DB lookup before document stream for request %s",
+                            request_id,
+                        )
+                    except Exception as exc:
+                        logger.error(
+                            "Failed to commit transaction: %s",
+                            exc,
+                            extra={"request_id": request_id},
+                        )
+                        with contextlib.suppress(Exception):
+                            await asyncio.to_thread(_rollback, trans)
+                        transaction_settled = True
+                        stream_commit_failed = True
+                        error_response = make_error_response_no_request(
+                            code="DATABASE_COMMIT_FAILED",
+                            message="Database transaction commit failed",
+                            http_status=500,
+                            request_id=request_id,
+                            details=None,
+                        )
+                        await error_response(scope, receive, send)
+                        return
+                else:
+                    with contextlib.suppress(Exception):
+                        await asyncio.to_thread(_rollback, trans)
+                transaction_settled = True
+                await send(message)
+                return
+            if not transaction_settled:
+                raise RuntimeError("document stream body started before transaction finality")
+            await send(message)
 
         try:
             await self.app(scope, receive, send_wrapper)
+
+            if stream_passthrough:
+                if not transaction_settled:
+                    with contextlib.suppress(Exception):
+                        await asyncio.to_thread(_rollback, trans)
+                    transaction_settled = True
+                return
 
             if response_status is not None and response_status < 500:
                 try:
@@ -200,8 +264,9 @@ class DBTransactionMiddleware:
                 e,
                 extra={"request_id": request_id},
             )
-            with contextlib.suppress(Exception):
-                await asyncio.to_thread(_rollback, trans)
+            if not transaction_settled:
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(_rollback, trans)
             raise
 
         finally:

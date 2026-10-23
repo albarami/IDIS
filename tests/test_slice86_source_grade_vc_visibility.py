@@ -52,6 +52,7 @@ from tests.test_slice86_enrichment_ledger_cache_visibility import _service
 
 _TIMESTAMP = "2026-06-11T00:00:00Z"
 _LEAK_MARKERS = ("sk-s86-vc-LEAK-1", "/var/secret/s86-vc", "C:\\secret\\s86vc")
+_DEAL_COMPANY_LABEL = "Tailspin Toys Ltd"
 
 _ENRICHMENT_EVIDENCE = {
     "enrichment_ledger": {
@@ -162,7 +163,7 @@ def test_grade_is_not_persisted_into_enrichment_provenance() -> None:
 
 
 def test_ledger_rows_carry_source_grade() -> None:
-    from idis.api.routes.runs import _run_full_enrichment
+    from idis.services.runs.step_runtime.enrichment import _run_full_enrichment
 
     env = _env_without("IDIS_REQUIRE_FULL_LIVE", "IDIS_STRICT_DOTENV_PATH")
     with (
@@ -176,6 +177,7 @@ def test_ledger_rows_carry_source_grade() -> None:
             created_claim_ids=[],
             calc_ids=[],
             db_conn=None,
+            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
         )
     grades = {
         row["provider_id"]: row["source_grade"] for row in summary["enrichment_ledger"]["providers"]
@@ -185,7 +187,7 @@ def test_ledger_rows_carry_source_grade() -> None:
 
 
 def test_red_provider_grades_c_with_byol_d_without() -> None:
-    from idis.api.routes.runs import _run_full_enrichment
+    from idis.services.runs.step_runtime.enrichment import _run_full_enrichment
 
     # RED + BYOL credentials present -> C (warm service whose repo holds the credentials).
     registry = EnrichmentProviderRegistry()
@@ -210,6 +212,7 @@ def test_red_provider_grades_c_with_byol_d_without() -> None:
             created_claim_ids=[],
             calc_ids=[],
             db_conn=None,
+            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
         )
     (row,) = summary["enrichment_ledger"]["providers"]
     assert row["status"] == "HIT"
@@ -235,6 +238,7 @@ def test_red_provider_grades_c_with_byol_d_without() -> None:
             created_claim_ids=[],
             calc_ids=[],
             db_conn=None,
+            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
         )
     (row,) = summary["enrichment_ledger"]["providers"]
     assert row["status"] == "BLOCKED_MISSING_BYOL"
@@ -311,8 +315,8 @@ def test_export_sanitizes_bogus_evidence_fields_leak_free(tmp_path: Path) -> Non
 
 
 def test_deliverables_step_and_orchestrator_thread_enrichment_evidence() -> None:
-    from idis.api.routes.runs import _run_full_deliverables
     from idis.services.runs import orchestrator
+    from idis.services.runs.step_runtime.deliverables import _run_full_deliverables
 
     assert "enrichment_evidence" in inspect.signature(_run_full_deliverables).parameters
     orchestrator_source = inspect.getsource(orchestrator)

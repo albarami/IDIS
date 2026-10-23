@@ -137,12 +137,12 @@ def test_methodology_service_stays_pure_persistence_is_in_wrapper() -> None:
         assert token not in methodology_src, token
 
     # Task 2 (G1 closed): durable persistence is the FULL-path wrapper's job, wired into the run.
-    from idis.api.routes import runs as runs_routes
     from idis.services.runs import steps as run_steps
+    from idis.services.runs.step_runtime import snapshot as snapshot_module
 
-    assert hasattr(runs_routes, "_run_full_methodology_deterministic_calculation")
+    assert hasattr(snapshot_module, "_run_full_methodology_deterministic_calculation")
     assert "get_calculations_repository" in inspect.getsource(
-        runs_routes._run_full_methodology_deterministic_calculation
+        snapshot_module._run_full_methodology_deterministic_calculation
     )
     assert "methodology_deterministic_calculation_fn" in inspect.getsource(
         run_steps.build_run_context
@@ -235,12 +235,14 @@ def test_memo_financials_agent_driven_plus_calc_fed_financial_table() -> None:
 
 
 def test_graph_and_rag_full_step_seams_feed_calc() -> None:
-    runs_src = (_SRC / "api" / "routes" / "runs.py").read_text(encoding="utf-8")
+    evidence_src = (_SRC / "services" / "runs" / "step_runtime" / "evidence.py").read_text(
+        encoding="utf-8"
+    )
     # Task 5: graph projection feeds PERSISTED calcs through the existing project_claim_sanad seam.
-    assert "_graph_calculations_by_claim" in runs_src
-    assert "calculations=claim_calculations" in runs_src
+    assert "_graph_calculations_by_claim" in evidence_src
+    assert "calculations=claim_calculations" in evidence_src
     # Task 5: the RAG step additively surfaces deterministic calc evidence.
-    assert "rag_calc_evidence" in runs_src
+    assert "rag_calc_evidence" in evidence_src
 
     # The retrieval modules do no calc COMPUTATION — no CalcRunner/CalcEngine — so calc feeding
     # stays at the step-orchestration layer. They MAY surface calc IDs already present in graph

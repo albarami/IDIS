@@ -35,6 +35,7 @@ from idis.services.enrichment.models import (
 from idis.services.enrichment.registry import EnrichmentProviderRegistry
 from idis.services.enrichment.rights_gate import EnvironmentMode
 from idis.services.enrichment.service import EnrichmentService
+from tests.strict_runtime_test_support import RecordingPostgresAuditSink
 from tests.test_slice86_enrichment_execution_provenance_characterization import (
     TENANT_ID,
     _env_without,
@@ -43,6 +44,7 @@ from tests.test_slice86_enrichment_execution_provenance_characterization import 
 )
 
 _LEAK_MARKERS = ("sk-s86-ledger-LEAK-1", "/var/secret/s86-ledger", "C:\\secret\\s86l")
+_DEAL_COMPANY_LABEL = "Alpine Ski House Ltd"
 
 _ROW_FIELDS = {
     "provider_id",
@@ -82,44 +84,55 @@ def _request() -> EnrichmentRequest:
 
 
 def _run_step(*, strict: bool, registry_factory: Any = None, service: Any = None) -> dict[str, Any]:
-    from idis.api.routes.runs import _run_full_enrichment
+    from contextlib import ExitStack
+
+    from idis.services.runs.step_runtime.enrichment import _run_full_enrichment
 
     env = _env_without("IDIS_REQUIRE_FULL_LIVE", "IDIS_STRICT_DOTENV_PATH")
-    patches = [patch.dict(os.environ, env, clear=True)]
-    if registry_factory is not None:
-        patches.append(
-            patch("idis.services.enrichment.service._build_default_registry", registry_factory)
-        )
-    if service is not None:
-        patches.append(
-            patch(
-                "idis.services.enrichment.service.create_default_enrichment_service",
-                lambda **_kw: service,
+    with ExitStack() as stack:
+        stack.enter_context(patch.dict(os.environ, env, clear=True))
+        if registry_factory is not None:
+            stack.enter_context(
+                patch("idis.services.enrichment.service._build_default_registry", registry_factory)
             )
-        )
-    if strict:
-        patches.append(
-            patch("idis.api.routes.runs.is_strict_full_live_required", return_value=True)
-        )
-    with patches[0], patches[1]:
-        if len(patches) == 3:
-            with patches[2]:
-                return _run_full_enrichment(
-                    run_id="run-1",
-                    tenant_id=TENANT_ID,
-                    deal_id="deal-1",
-                    created_claim_ids=[],
-                    calc_ids=[],
-                    db_conn=None,
+        if service is not None:
+            stack.enter_context(
+                patch(
+                    "idis.services.enrichment.service.create_default_enrichment_service",
+                    lambda **_kw: service,
                 )
-        return _run_full_enrichment(
-            run_id="run-1",
-            tenant_id=TENANT_ID,
-            deal_id="deal-1",
-            created_claim_ids=[],
-            calc_ids=[],
-            db_conn=None,
-        )
+            )
+        enrichment_strict = None
+        common_strict = None
+        if strict:
+            enrichment_strict = stack.enter_context(
+                patch(
+                    "idis.services.runs.step_runtime.enrichment.is_strict_full_live_required",
+                    return_value=True,
+                )
+            )
+            common_strict = stack.enter_context(
+                patch(
+                    "idis.services.runs.step_runtime.common.is_strict_full_live_required",
+                    return_value=True,
+                )
+            )
+        try:
+            summary = _run_full_enrichment(
+                run_id="run-1",
+                tenant_id=TENANT_ID,
+                deal_id="deal-1",
+                created_claim_ids=[],
+                calc_ids=[],
+                db_conn=None,
+                audit_sink=RecordingPostgresAuditSink(),
+                deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
+            )
+        finally:
+            if strict:
+                assert enrichment_strict is not None and enrichment_strict.called
+                assert common_strict is not None and common_strict.called
+        return summary
 
 
 # --- from_cache: additive field, set ONLY on cache-hit results ---
@@ -200,12 +213,12 @@ def test_ledger_counts_cache_hits_via_warm_service() -> None:
     registry.register(_CachingConnector("warm_provider", EnrichmentStatus.HIT))
     service = _service(registry)
     # Warm the cache out-of-band with the EXACT request shape the step builds (the cache key
-    # includes tenant + query; the step uses deal_id as company_name), then run the step
+    # includes tenant + query; the step queries the deal company label), then run the step
     # against the SAME service instance.
     step_request = EnrichmentRequest(
         tenant_id=TENANT_ID,
         entity_type=EntityType.COMPANY,
-        query=EnrichmentQuery(company_name="deal-1"),
+        query=EnrichmentQuery(company_name=_DEAL_COMPANY_LABEL),
         purpose=EnrichmentPurpose.DUE_DILIGENCE,
     )
     warmed = service.enrich(provider_id="warm_provider", request=step_request)

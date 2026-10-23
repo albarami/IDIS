@@ -40,7 +40,12 @@ from idis.compliance.byok import BYOKPolicyRegistry, configure_key
 from idis.idempotency.store import SqliteIdempotencyStore
 from idis.models.document import ParseStatus
 from idis.services.ingestion import IngestionService
-from idis.services.ingestion.service import IngestionResult, UploadIngestionPhaseRecorder
+from idis.services.ingestion.service import (
+    IngestionError,
+    IngestionErrorCode,
+    IngestionResult,
+    UploadIngestionPhaseRecorder,
+)
 from idis.storage.compliant_store import ComplianceEnforcedStore
 from idis.storage.filesystem_store import FilesystemObjectStore
 from tests.abac_seed import seed_deal_access
@@ -412,7 +417,9 @@ class TestUploadDocumentBytes:
             def __init__(self) -> None:
                 self.calls: list[dict[str, Any]] = []
 
-            def ingest_bytes(self, **kwargs: Any) -> IngestionResult:
+            def ingest_file(self, **kwargs: Any) -> IngestionResult:
+                # Task 4 controlled drift: public uploads now cross the staged-file boundary.
+                kwargs["staged_bytes"] = Path(kwargs["source_path"]).read_bytes()
                 self.calls.append(kwargs)
                 validated_sha256 = kwargs["validated_sha256"]
                 return IngestionResult(
@@ -448,7 +455,8 @@ class TestUploadDocumentBytes:
         assert len(recorder.calls) == 1
         call = recorder.calls[0]
         assert call["validated_sha256"].value == expected_sha256
-        assert call["data"] == pdf_data
+        assert call["staged_bytes"] == pdf_data
+        assert call["size_bytes"] == len(pdf_data)
         assert call["filename"] == "uploaded.pdf"
         assert "root" not in call
         assert "folder_path" not in json.dumps(call, default=str)
@@ -717,7 +725,7 @@ class TestUploadDocumentBytes:
         api_key_a: str,
         deal_id: str,
     ) -> None:
-        """Post-ingestion parser failures return the durable failed summary safely."""
+        """Post-ingestion parser failures fail the upload with a safe terminal code."""
         response = _wired_app_context["client"].post(
             f"/v1/deals/{deal_id}/documents/upload",
             headers={
@@ -728,13 +736,155 @@ class TestUploadDocumentBytes:
             content=b"%PDF-private corrupt bytes that must not be echoed",
         )
 
-        assert response.status_code == 201
+        # Task 4 controlled drift: a durable FAILED parse cannot look like upload success.
+        assert response.status_code == 422
         body = response.json()
-        assert body["document_id"]
-        assert body["parse_status"] == "FAILED"
+        assert body["code"] == "DOCUMENT_UNREADABLE"
         body_text = json.dumps(body)
         assert "private corrupt bytes" not in body_text
         assert "spans" not in body
+
+    def test_upload_returns_explicit_201_for_failed_zero_span_confirmed_no_substantive_content(
+        self,
+        _wired_app_context: dict[str, Any],
+        api_key_a: str,
+        deal_id: str,
+    ) -> None:
+        """Only the signed terminal disposition can cross the generic 422 branch."""
+
+        class ConfirmedIllegibilityService:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, Any]] = []
+
+            def ingest_file(self, **kwargs: Any) -> IngestionResult:
+                self.calls.append(kwargs)
+                return IngestionResult(
+                    success=False,
+                    artifact_id=uuid.uuid4(),
+                    document_id=uuid.uuid4(),
+                    doc_type="PDF",
+                    span_count=0,
+                    sha256="a" * 64,
+                    storage_uri="tenant-safe/confirmed-illegible.pdf",
+                    parse_status=ParseStatus.FAILED,
+                    terminal_disposition="DOCUMENT_NO_SUBSTANTIVE_CONTENT_CONFIRMED",
+                    errors=[],
+                )
+
+        service = ConfirmedIllegibilityService()
+        client = _wired_app_context["client"]
+        client.app.state.ingestion_service = service
+        source_tree_fingerprint = "b" * 64
+
+        response = client.post(
+            f"/v1/deals/{deal_id}/documents/upload",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "X-IDIS-Source-Tree-Fingerprint": source_tree_fingerprint,
+                "Content-Type": "application/octet-stream",
+            },
+            params={
+                "filename": "company-001-document-00001.pdf",
+                "doc_type": "DATA_ROOM_FILE",
+            },
+            content=_create_minimal_pdf(),
+        )
+
+        assert response.status_code == 201
+        body = response.json()
+        assert body["parse_status"] == "FAILED"
+        assert body["terminal_disposition"] == "DOCUMENT_NO_SUBSTANTIVE_CONTENT_CONFIRMED"
+        assert "spans" not in body
+        assert service.calls[0]["metadata"]["source_tree_fingerprint"] == (source_tree_fingerprint)
+
+    def test_upload_surfaces_signed_attestation_mismatch_as_exact_fail_closed_code(
+        self,
+        _wired_app_context: dict[str, Any],
+        api_key_a: str,
+        deal_id: str,
+    ) -> None:
+        """A rejected signed binding is never collapsed into a generic 400."""
+
+        class RejectedAttestationService:
+            def ingest_file(self, **_kwargs: Any) -> IngestionResult:
+                return IngestionResult(
+                    success=False,
+                    errors=[
+                        IngestionError(
+                            code=IngestionErrorCode.NO_SUBSTANTIVE_CONTENT_ATTESTATION_FAILED,
+                            message="Document illegibility attestation was not admitted",
+                            details={
+                                "attestation_error_code": (
+                                    "DOCUMENT_NO_SUBSTANTIVE_CONTENT_ATTESTATION_MISMATCH"
+                                )
+                            },
+                        )
+                    ],
+                )
+
+        client = _wired_app_context["client"]
+        client.app.state.ingestion_service = RejectedAttestationService()
+        response = client.post(
+            f"/v1/deals/{deal_id}/documents/upload",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "X-IDIS-Source-Tree-Fingerprint": "b" * 64,
+                "Content-Type": "application/octet-stream",
+            },
+            params={
+                "filename": "company-001-document-00001.pdf",
+                "doc_type": "DATA_ROOM_FILE",
+            },
+            content=_create_minimal_pdf(),
+        )
+
+        assert response.status_code == 422
+        assert response.json()["code"] == "DOCUMENT_NO_SUBSTANTIVE_CONTENT_ATTESTATION_MISMATCH"
+
+    @pytest.mark.parametrize(
+        "governance_code",
+        ["GOVERNANCE_SIGNATURE_INVALID", "GOVERNANCE_SIGNER_UNTRUSTED"],
+    )
+    def test_upload_preserves_governance_attestation_failure_as_exact_422(
+        self,
+        _wired_app_context: dict[str, Any],
+        api_key_a: str,
+        deal_id: str,
+        governance_code: str,
+    ) -> None:
+        """Signature and trust-root failures remain stable admission errors."""
+
+        class RejectedGovernanceService:
+            def ingest_file(self, **_kwargs: Any) -> IngestionResult:
+                return IngestionResult(
+                    success=False,
+                    errors=[
+                        IngestionError(
+                            code=IngestionErrorCode.NO_SUBSTANTIVE_CONTENT_ATTESTATION_FAILED,
+                            message="Signed terminal attestation was not admitted",
+                            details={"attestation_error_code": governance_code},
+                        )
+                    ],
+                )
+
+        client = _wired_app_context["client"]
+        client.app.state.ingestion_service = RejectedGovernanceService()
+        response = client.post(
+            f"/v1/deals/{deal_id}/documents/upload",
+            headers={
+                "X-IDIS-API-Key": api_key_a,
+                "X-IDIS-Source-Tree-Fingerprint": "b" * 64,
+                "Content-Type": "application/octet-stream",
+            },
+            params={
+                "filename": "company-001-document-00001.pdf",
+                "doc_type": "DATA_ROOM_FILE",
+            },
+            content=_create_minimal_pdf(),
+        )
+
+        assert response.status_code == 422
+        assert response.json()["code"] == governance_code
 
     def test_upload_idempotency_replays_same_bytes_and_rejects_collision(
         self,

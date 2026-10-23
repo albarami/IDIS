@@ -8,7 +8,7 @@ It inspects repository code/config and writes a local report under `.local_repor
 from __future__ import annotations
 
 import argparse
-import re
+import ast
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
@@ -81,6 +81,7 @@ def collect_wiring_inventory(repo_root: Path) -> WiringInventory:
             "api_worker_path_comparison": _api_worker_path_comparison(files),
             "snapshot_steps": _snapshot_steps(files),
             "full_steps": _full_steps(files),
+            "run_pipeline_composition_root": _run_pipeline_composition_root(files),
             "ingestion_service": _ingestion_service(files),
             "persisted_ingestion_corpus": _persisted_ingestion_corpus(root, files),
             "unified_run_document_loader": _unified_run_document_loader(files),
@@ -501,6 +502,8 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "src/idis/services/runs/execution.py",
         "src/idis/services/runs/orchestrator.py",
         "src/idis/services/runs/steps.py",
+        "src/idis/services/runs/snapshot_postgres_output_staging.py",
+        "src/idis/services/runs/strict_full_live.py",
         "src/idis/pipeline/worker.py",
         "src/idis/pipeline/executor.py",
         "src/idis/services/ingestion/service.py",
@@ -611,12 +614,43 @@ def _load_relevant_files(root: Path) -> dict[str, str]:
         "tests/test_api_upload_to_run_smoke_postgres.py",
         "tests/test_api_default_upload_ingestion_postgres.py",
         "tests/test_api_full_run_step_name_postgres.py",
+        "tests/test_api_selected_multidocument_full_acceptance_postgres.py",
         "tests/test_api_full_run_durable_evidence_postgres.py",
         "tests/test_api_sanad_auto_grade_persistence_postgres.py",
         "tests/test_run_document_loader.py",
         "pyproject.toml",
     ]
+    relative_paths.extend(_step_runtime_allowlist_paths(root))
     return {path: _read(root / path) for path in relative_paths}
+
+
+def _step_runtime_allowlist_paths(root: Path) -> list[str]:
+    """Return step_runtime modules, or one absent path so `_read` yields empty text."""
+    directory = root / "src/idis/services/runs/step_runtime"
+    absent = "src/idis/services/runs/step_runtime/__init__.py"
+    if not directory.is_dir():
+        return [absent]
+    discovered = sorted(
+        path.relative_to(root).as_posix() for path in directory.glob("*.py") if path.is_file()
+    )
+    return discovered or [absent]
+
+
+def _runs_and_step_runtime_text(files: dict[str, str]) -> str:
+    """Combine runs.py with step_runtime sources without touching other API text."""
+    parts = [files.get("src/idis/api/routes/runs.py", "")]
+    prefix = "src/idis/services/runs/step_runtime/"
+    for path in sorted(files):
+        normalized = path.replace("\\", "/")
+        if normalized.startswith(prefix) and normalized.endswith(".py"):
+            parts.append(files[path])
+    return "\n".join(parts)
+
+
+def _source_defines_function(source: str, function_name: str) -> bool:
+    """Return True when a source line starts with `def function_name(`."""
+    prefix = f"def {function_name}("
+    return any(line.lstrip().startswith(prefix) for line in source.splitlines())
 
 
 def _read(path: Path) -> str:
@@ -634,15 +668,57 @@ def _contains(files: dict[str, str], path: str, needle: str) -> bool:
     return needle in files.get(path, "")
 
 
+def _top_level_function_source(source: str, function_name: str) -> str:
+    """Return one top-level function, or empty text when that function is absent."""
+    marker = f"def {function_name}("
+    start = source.find(marker)
+    if start < 0:
+        return ""
+    next_function = source.find("\ndef ", start + len(marker))
+    if next_function < 0:
+        return source[start:]
+    return source[start:next_function]
+
+
 def _discover_provider_ids(root: Path) -> list[str]:
-    """Discover enrichment provider IDs without calling external providers."""
-    connector_dir = root / "src/idis/services/enrichment/connectors"
-    provider_ids: set[str] = set()
-    for connector in connector_dir.glob("*.py"):
-        if connector.name == "__init__.py":
+    """Parse provider IDs from the authoritative catalog without importing it."""
+    catalog_path = root / "src/idis/services/enrichment/task9/provider_catalog.py"
+    try:
+        tree = ast.parse(catalog_path.read_text(encoding="utf-8"), filename=str(catalog_path))
+    except (OSError, SyntaxError, UnicodeError) as exc:
+        raise RuntimeError("authoritative provider catalog is unavailable") from exc
+
+    catalog_values: list[ast.expr] | None = None
+    for statement in tree.body:
+        if not isinstance(statement, ast.Assign):
             continue
-        text = _read(connector)
-        provider_ids.update(re.findall(r'PROVIDER_ID\s*=\s*"([^"]+)"', text))
+        if any(
+            isinstance(target, ast.Name) and target.id == "_PROVIDER_SPECS"
+            for target in statement.targets
+        ):
+            if catalog_values is not None or not isinstance(statement.value, (ast.List, ast.Tuple)):
+                raise RuntimeError("authoritative provider catalog shape is invalid")
+            catalog_values = list(statement.value.elts)
+
+    if not catalog_values:
+        raise RuntimeError("authoritative provider catalog is empty")
+
+    provider_ids: list[str] = []
+    for value in catalog_values:
+        if (
+            not isinstance(value, ast.Call)
+            or not isinstance(value.func, ast.Name)
+            or value.func.id != "_spec"
+            or not value.args
+            or not isinstance(value.args[0], ast.Constant)
+            or not isinstance(value.args[0].value, str)
+            or not value.args[0].value
+        ):
+            raise RuntimeError("authoritative provider catalog row is invalid")
+        provider_ids.append(value.args[0].value)
+
+    if len(provider_ids) != len(set(provider_ids)):
+        raise RuntimeError("authoritative provider catalog contains duplicate provider IDs")
     return sorted(provider_ids)
 
 
@@ -744,6 +820,83 @@ def _full_steps(files: dict[str, str]) -> WiringItem:
             "RAG/graph inputs are not fed into analysis/debate context.",
         ],
     )
+
+
+def _run_pipeline_composition_root(files: dict[str, str]) -> WiringItem:
+    """Report the live count of route-private imports in the composition root."""
+    steps_text = files.get("src/idis/services/runs/steps.py", "")
+    route_private_import_count = _count_build_run_context_route_private_imports(steps_text)
+    evidence = (
+        "steps.build_run_context function-local import block names "
+        f"{route_private_import_count} route-private imports"
+    )
+    if route_private_import_count == 0:
+        return WiringItem(
+            key="run_pipeline_composition_root",
+            label="Run pipeline composition root",
+            status="WIRED",
+            summary=(
+                "steps.build_run_context composes the run pipeline without "
+                "importing route-private helpers."
+            ),
+            evidence=[evidence],
+            gaps=[],
+            phase_2_action="Phase 2.1",
+            metadata={"route_private_import_count": route_private_import_count},
+        )
+    return WiringItem(
+        key="run_pipeline_composition_root",
+        label="Run pipeline composition root",
+        status="PARTIAL",
+        summary=(
+            "steps.build_run_context still composes the run pipeline by importing "
+            "route-private helpers."
+        ),
+        evidence=[evidence],
+        gaps=[
+            "service-layer composition root still imports route-private helpers (Phase 2.1)",
+        ],
+        phase_2_action="Phase 2.1",
+        metadata={"route_private_import_count": route_private_import_count},
+    )
+
+
+def _count_build_run_context_route_private_imports(steps_source: str) -> int:
+    """Count idis.api.routes names imported inside build_run_context."""
+    if not steps_source.strip():
+        return 0
+    try:
+        tree = ast.parse(steps_source)
+    except SyntaxError as exc:
+        raise RuntimeError("steps.py could not be parsed for composition-root imports") from exc
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "build_run_context":
+            return _route_private_import_name_count(node)
+    return 0
+
+
+def _route_private_import_name_count(function: ast.AST) -> int:
+    skipped = _nested_scope_node_ids(function)
+    count = 0
+    for node in ast.walk(function):
+        if id(node) in skipped:
+            continue
+        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("idis.api.routes"):
+            count += len(node.names)
+        elif isinstance(node, ast.Import):
+            count += sum(1 for alias in node.names if alias.name.startswith("idis.api.routes"))
+    return count
+
+
+def _nested_scope_node_ids(function: ast.AST) -> set[int]:
+    skipped: set[int] = set()
+    for node in ast.walk(function):
+        if node is function:
+            continue
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            for inner in ast.walk(node):
+                skipped.add(id(inner))
+    return skipped
 
 
 def _ingestion_service(files: dict[str, str]) -> WiringItem:
@@ -1466,19 +1619,55 @@ def _methodology_extraction_execution_audit_contract(
 
 
 def _methodology_extraction_postgres_persistence(root: Path) -> WiringItem:
-    migrations_dir = root / "src/idis/persistence/migrations/versions"
-    has_migration = any(
-        "extraction_execution" in path.name or "methodology_extraction" in path.name
-        for path in migrations_dir.glob("*.py")
+    migration_path = (
+        root / "src/idis/persistence/migrations/versions/0037_durable_methodology_extraction.py"
     )
+    migration_text = _read(migration_path)
+    repository_text = _read(root / "src/idis/persistence/repositories/methodology_extraction.py")
+    has_task6_schema = migration_path.exists() and all(
+        token in migration_text
+        for token in (
+            'revision = "0037"',
+            "methodology_extraction_attempts",
+            "methodology_extraction_results",
+            "ENABLE ROW LEVEL SECURITY",
+            "FORCE ROW LEVEL SECURITY",
+        )
+    )
+    has_task6_repository = all(
+        token in repository_text
+        for token in (
+            "class PostgresMethodologyExtractionRepository",
+            "INSERT INTO methodology_extraction_attempts",
+            "INSERT INTO methodology_extraction_results",
+        )
+    )
+    has_task6_persistence = has_task6_schema and has_task6_repository
+    if has_task6_persistence:
+        summary = "Task 6 provides durable tenant-scoped methodology extraction execution storage."
+        evidence = [
+            "`0037_durable_methodology_extraction.py` creates tenant-scoped "
+            "`methodology_extraction_attempts` and `methodology_extraction_results` "
+            "with forced row-level security.",
+            "`PostgresMethodologyExtractionRepository` supplies durable attempt and "
+            "terminal-result writes.",
+        ]
+        gaps = [
+            "Static persistence wiring does not prove Task 12 prompt promotion, Gate A live "
+            "provider execution, or direct extraction API exposure."
+        ]
+    else:
+        summary = "Task 6 methodology extraction persistence is not fully detected."
+        evidence = []
+        gaps = ["Migration 0037 and its tenant-scoped attempt/result repository must both exist."]
     return WiringItem(
         key="methodology_extraction_postgres_persistence",
         label="Methodology extraction Postgres persistence",
-        status="PARTIAL" if has_migration else "DEFERRED",
-        summary="Methodology extraction execution persistence is intentionally deferred.",
-        evidence=["No Phase 2.5 methodology extraction execution migration is expected."],
-        gaps=["Future slice must define tenant-scoped persistence for execution results."],
-        phase_2_action="Phase 2.5",
+        status="PARTIAL" if has_task6_persistence else "DEFERRED",
+        summary=summary,
+        evidence=evidence,
+        gaps=gaps,
+        phase_2_action="Slice100 Task 6",
     )
 
 
@@ -2493,6 +2682,23 @@ def _data_room_ingestion_handoff_run_integration(
     )
 
 
+def _worker_narrows_frozen_run_source(worker_text: str) -> bool:
+    """True when the worker narrows by the legacy filter or the frozen reload.
+
+    The live mechanism is ``_load_worker_preflight_corpus`` calling
+    ``load_document_preflight_corpus_for_deal`` with
+    ``selected_document_ids=tuple(source.document_ids)`` and ``require_frozen=True``.
+    """
+    legacy_filter = "filter_preflight_corpus_by_run_source" in worker_text
+    frozen_reload = (
+        "_load_worker_preflight_corpus" in worker_text
+        and "load_document_preflight_corpus_for_deal" in worker_text
+        and "selected_document_ids=tuple(source.document_ids)" in worker_text
+        and "require_frozen=True" in worker_text
+    )
+    return legacy_filter or frozen_reload
+
+
 def _production_run_source_contract(root: Path, files: dict[str, str]) -> WiringItem:
     runs_text = files.get("src/idis/api/routes/runs.py", "")
     source_text = files.get("src/idis/models/run_source.py", "")
@@ -2510,7 +2716,7 @@ def _production_run_source_contract(root: Path, files: dict[str, str]) -> Wiring
         and "PATH_LIKE_RUN_FIELDS" in runs_text
         and "INVALID_RUN_SOURCE" in runs_text
         and "source:" in repo_text
-        and "filter_preflight_corpus_by_run_source" in worker_text
+        and _worker_narrows_frozen_run_source(worker_text)
         and "deal_metadata" in worker_text
         and "ADD COLUMN IF NOT EXISTS source JSONB" in migration_text
     )
@@ -2525,7 +2731,8 @@ def _production_run_source_contract(root: Path, files: dict[str, str]) -> Wiring
         evidence=[
             "Public runs API accepts strict mode plus deal_documents source only.",
             "Run source is persisted so worker and API hydrate the same selected corpus.",
-            "Worker applies persisted source filtering and loads deal metadata.",
+            "Worker reloads the frozen corpus through load_document_preflight_corpus_for_deal "
+            "using selected_document_ids from the persisted run source and loads deal metadata.",
             "Local folder paths remain harness-only and are rejected by run creation.",
         ],
         gaps=[
@@ -2617,7 +2824,7 @@ def _single_document_upload_intake(files: dict[str, str]) -> WiringItem:
         '"/v1/deals/{deal_id}/documents/upload"' in documents_text
         and "UPLOAD_CONTENT_TYPE" in documents_text
         and "application/octet-stream" in documents_text
-        and "ingest_bytes(" in upload_body
+        and ("ingest_file(" in upload_body or "ingest_bytes(" in upload_body)
         and "IngestionContext" in documents_text
         and "ComplianceEnforcedStore" in service_text
         and "uploadDealDocument" in openapi_text
@@ -2632,20 +2839,19 @@ def _single_document_upload_intake(files: dict[str, str]) -> WiringItem:
         summary=(
             "single-document upload intake boundary exists; clients can upload one raw "
             "supported document through existing compliance storage and ingestion while "
-            "folder upload, new storage backends, UI, OCR/media, and downstream layers "
+            "folder upload, new storage backends, UI, and downstream layers "
             "remain deferred."
         ),
         evidence=[
             "Upload endpoint requires application/octet-stream.",
             "Upload route validates filename, byte size, SHA256, content type, and deal scope.",
-            "Uploaded bytes flow through IngestionService.ingest_bytes and compliant storage.",
+            "Uploaded streams flow through IngestionService.ingest_file and compliant storage.",
             "Safe summaries expose durable document_id for RunSource.document_ids.",
         ],
         gaps=[
             "data-room folder upload remains deferred.",
             "durable data-room package table remains deferred.",
             "UI remains deferred.",
-            "OCR/media/image/HTML/TXT parsing remains deferred.",
             "new S3/Supabase storage implementation remains deferred.",
             "RAG/Neo4j remains deferred.",
             "Layer 2 remains deferred.",
@@ -2688,7 +2894,7 @@ def _api_upload_to_selected_run_smoke(files: dict[str, str]) -> WiringItem:
         '"/v1/deals/{deal_id}/documents/upload"' in documents_text
         and '"document_ids"' in run_source_text
         and "filter_preflight_corpus_by_run_source" in runs_text
-        and "filter_preflight_corpus_by_run_source" in worker_text
+        and _worker_narrows_frozen_run_source(worker_text)
         and "test_api_upload_list_get_selected_run_smoke_consumes_only_selected_document"
         in smoke_test_text
         and "test_api_selected_run_rejects_cross_deal_document_without_creating_run"
@@ -2697,9 +2903,8 @@ def _api_upload_to_selected_run_smoke(files: dict[str, str]) -> WiringItem:
         in smoke_test_text
         and "test_worker_context_factory_applies_persisted_run_source_filter" in worker_test_text
     )
-    worker_filters_persisted_source = (
-        "filter_preflight_corpus_by_run_source" in worker_text
-        and 'run_data.get("source")' in worker_text
+    worker_filters_persisted_source = _worker_narrows_frozen_run_source(worker_text) and (
+        'run_data.get("source")' in worker_text
     )
     return WiringItem(
         key="api_upload_to_selected_run_smoke",
@@ -2714,7 +2919,8 @@ def _api_upload_to_selected_run_smoke(files: dict[str, str]) -> WiringItem:
             "Smoke test uploads two supported documents through the existing upload endpoint.",
             "Smoke test verifies durable list/get summaries before run creation.",
             "Selected run uses existing RunSource source.document_ids filtering.",
-            "Worker parity test proves persisted runs.source filters queued context.",
+            "Worker reloads the frozen corpus by persisted source.document_ids "
+            "through _load_worker_preflight_corpus.",
         ],
         gaps=[
             "smoke boundary only; no new endpoint or production behavior is added.",
@@ -2739,12 +2945,20 @@ def _api_upload_to_selected_run_smoke(files: dict[str, str]) -> WiringItem:
 
 
 def _default_upload_ingestion_wiring(files: dict[str, str]) -> WiringItem:
-    runs_text = files.get("src/idis/api/routes/runs.py", "")
+    runs_and_step_runtime = _runs_and_step_runtime_text(files)
     main_text = files.get("src/idis/api/main.py", "")
     defaults_text = files.get("src/idis/services/ingestion/defaults.py", "")
     evidence_repo_text = files.get("src/idis/persistence/repositories/evidence.py", "")
     postgres_test_text = files.get("tests/test_api_default_upload_ingestion_postgres.py", "")
     full_run_step_name_test_text = files.get("tests/test_api_full_run_step_name_postgres.py", "")
+    multidocument_acceptance_test_text = files.get(
+        "tests/test_api_selected_multidocument_full_acceptance_postgres.py",
+        "",
+    )
+    preview_upload_helper_source = _top_level_function_source(
+        multidocument_acceptance_test_text,
+        "upload_and_bind_preview_members",
+    )
     full_run_durable_evidence_test_text = files.get(
         "tests/test_api_full_run_durable_evidence_postgres.py",
         "",
@@ -2776,14 +2990,15 @@ def _default_upload_ingestion_wiring(files: dict[str, str]) -> WiringItem:
     full_run_step_name_test_added = (
         "test_default_upload_selected_full_run_persists_long_step_name_without_sql_truncation"
         in full_run_step_name_test_text
-        and "documents/upload" in full_run_step_name_test_text
+        and "upload_and_bind_preview_members" in full_run_step_name_test_text
         and '"mode": "FULL"' in full_run_step_name_test_text
         and '"document_ids": [document_id]' in full_run_step_name_test_text
+        and "documents/upload" in preview_upload_helper_source
     )
     full_run_step_name_ci_added = "tests/test_api_full_run_step_name_postgres.py" in ci_text
     evidence_repo_wired = (
-        "get_evidence_repository(db_conn, tenant_id)" in runs_text
-        and "evidence_repo=evidence_repo" in runs_text
+        "get_evidence_repository(db_conn, tenant_id)" in runs_and_step_runtime
+        and "evidence_repo=evidence_repo" in runs_and_step_runtime
         and "PostgresEvidenceRepository" in evidence_repo_text
     )
     durable_evidence_test_added = (
@@ -3733,7 +3948,7 @@ def _rag_vector_retrieval(root: Path, files: dict[str, str]) -> WiringItem:
 def _rag_full_run_wiring_present(files: dict[str, str]) -> bool:
     run_step = files.get("src/idis/models/run_step.py", "")
     steps = files.get("src/idis/services/runs/steps.py", "")
-    runs = files.get("src/idis/api/routes/runs.py", "")
+    runs_and_step_runtime = _runs_and_step_runtime_text(files)
     orchestrator = files.get("src/idis/services/runs/orchestrator.py", "")
     product_bundle = files.get("src/idis/deliverables/product_bundle.py", "")
     indexing = files.get("src/idis/services/rag/indexing.py", "")
@@ -3743,7 +3958,7 @@ def _rag_full_run_wiring_present(files: dict[str, str]) -> bool:
             "RAG_EVIDENCE" in run_step,
             run_step.find("RAG_EVIDENCE") > run_step.find("GRAPH_EVIDENCE"),
             run_step.find("ENRICHMENT") > run_step.find("RAG_EVIDENCE"),
-            "_run_full_rag_evidence" in runs,
+            _source_defines_function(runs_and_step_runtime, "_run_full_rag_evidence"),
             "rag_fn=" in steps,
             "_execute_rag_evidence" in orchestrator,
             "_rag_package" in product_bundle,

@@ -26,7 +26,6 @@ import pytest
 
 from idis.analysis.agents.llm_specialist_agent import _build_context_payload
 from idis.analysis.models import AnalysisContext
-from idis.api.routes.runs import _run_full_analysis
 from idis.audit.sink import InMemoryAuditSink
 from idis.persistence.repositories.run_steps import (
     InMemoryRunStepsRepository,
@@ -34,6 +33,7 @@ from idis.persistence.repositories.run_steps import (
 )
 from idis.services.extraction.extractors.llm_client import DeterministicAnalysisLLMClient
 from idis.services.runs.orchestrator import RunContext, RunOrchestrator
+from idis.services.runs.step_runtime.analysis import _run_full_analysis
 from tests.test_slice63_rag_full_wiring import (
     DEAL_ID,
     RUN_ID,

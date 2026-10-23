@@ -23,6 +23,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Protocol
 
+from idis.audit.canonical import build_canonical_audit_event
 from idis.persistence.graph_repo import GraphProjectionError, GraphRepository
 from idis.persistence.neo4j_driver import is_neo4j_configured
 from idis.persistence.saga import DualWriteSagaExecutor
@@ -79,23 +80,28 @@ def _build_audit_event(
     Returns:
         Audit event dictionary.
     """
-    event: dict[str, Any] = {
-        "event_type": f"graph_projection.{entity_type}.{status.value}",
-        "tenant_id": tenant_id,
-        "severity": "HIGH" if status == ProjectionStatus.FAILED else "LOW",
-        "resource": {
-            "resource_type": entity_type,
-            "resource_id": entity_id,
-        },
-        "payload": {
+    failed = status in {ProjectionStatus.FAILED, ProjectionStatus.AUDIT_FAILURE}
+    resource_type = "claim" if entity_type == "claim_sanad" else entity_type
+    return build_canonical_audit_event(
+        tenant_id=tenant_id,
+        event_type=f"integration.graph_projection.{status.value}",
+        severity="HIGH" if failed else "LOW",
+        summary=f"Graph projection recorded: {status.value}",
+        actor_id="idis-graph-projection-service",
+        request_id=f"graph-projection:{entity_id}",
+        method="POST",
+        path="/internal/graph/projections",
+        status_code=502 if failed else 200,
+        resource_type=resource_type,
+        resource_id=entity_id,
+        safe={
             "projection_target": "neo4j",
             "status": status.value,
+            "entity_type": entity_type,
+            **({"failure_code": "GRAPH_PROJECTION_FAILED"} if error else {}),
         },
-        "occurred_at": datetime.now(UTC).isoformat(),
-    }
-    if error:
-        event["payload"]["error"] = error
-    return event
+        refs=[f"entity:{entity_type}:{entity_id}"],
+    )
 
 
 def _emit_audit_or_fail(
@@ -119,10 +125,7 @@ def _emit_audit_or_fail(
     try:
         audit_sink.emit(event)
     except Exception as exc:
-        raise RuntimeError(
-            f"Audit sink failure during graph projection "
-            f"(event_type={event.get('event_type')}): {exc}"
-        ) from exc
+        raise RuntimeError("AUDIT_FAILURE: graph projection audit emission failed") from exc
 
 
 class GraphProjectionService:

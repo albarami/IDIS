@@ -8,7 +8,6 @@ from typing import Any
 
 import pytest
 
-from idis.api.routes.runs import _run_full_graph_evidence
 from idis.audit.sink import InMemoryAuditSink
 from idis.deliverables.generator import DeliverablesGenerator
 from idis.deliverables.product_bundle import ProductBundleExporter
@@ -25,6 +24,7 @@ from idis.persistence.repositories.run_steps import (
 )
 from idis.services.graph.retrieval import GraphRetrievalService
 from idis.services.runs.orchestrator import RunContext, RunOrchestrator, RunStepBlockedError
+from idis.services.runs.step_runtime.evidence import _run_full_graph_evidence
 from idis.services.runs.strict_full_live import build_strict_full_live_readiness_report
 from idis.storage.filesystem_store import FilesystemObjectStore
 from tests.test_deliverables_generator import (
@@ -41,7 +41,7 @@ DEAL_ID = "33333333-3333-3333-3333-333333333333"
 
 
 class FakeNeo4jDriver:
-    """Small fake driver for health checks."""
+    """Small fake driver updated for Task 2's configured-database session proof."""
 
     def __init__(self, *, fail: bool = False) -> None:
         self.closed = False
@@ -52,6 +52,24 @@ class FakeNeo4jDriver:
             raise RuntimeError(
                 "cannot reach neo4j+s://secret-host.databases.neo4j.io as private_user"
             )
+
+    class _Session:
+        class _Result:
+            def consume(self) -> None:
+                return None
+
+        def __enter__(self) -> FakeNeo4jDriver._Session:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def run(self, _query: str) -> FakeNeo4jDriver._Session._Result:
+            return self._Result()
+
+    def session(self, *, database: str) -> FakeNeo4jDriver._Session:
+        assert database == "neo4j"
+        return self._Session()
 
     def close(self) -> None:
         self.closed = True
@@ -213,6 +231,7 @@ def test_neo4j_health_helper_uses_injected_driver_and_redacts_failures() -> None
             "NEO4J_URI": "neo4j+s://secret-host.databases.neo4j.io",
             "NEO4J_USERNAME": "private_user",
             "NEO4J_PASSWORD": "private_password",
+            "NEO4J_DATABASE": "neo4j",
         },
         driver_factory=lambda *_args, **_kwargs: FakeNeo4jDriver(fail=True),
     )
@@ -517,7 +536,10 @@ def test_projection_repository_exceptions_are_sanitized(
     def raising_graph_claims(**_kwargs: Any) -> list[dict[str, Any]]:
         raise RuntimeError("Neo4j projection repo failed for neo4j+s://secret-host private_user")
 
-    monkeypatch.setattr("idis.api.routes.runs._graph_claims", raising_graph_claims)
+    monkeypatch.setattr(
+        "idis.services.runs.step_runtime.evidence._graph_claims",
+        raising_graph_claims,
+    )
 
     summary = _run_full_graph_evidence(
         run_id=RUN_ID,

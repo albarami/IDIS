@@ -1,10 +1,12 @@
-"""No-DB public upload to selected run preflight contract tests."""
+"""Public upload/preflight component probes after genuine durable source freeze."""
 
 from __future__ import annotations
 
 import hashlib
 import io
 import json
+import uuid
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -21,6 +23,10 @@ from idis.audit.sink import InMemoryAuditSink
 from idis.idempotency.store import SqliteIdempotencyStore
 from idis.services.runs.document_preflight import InMemoryRunDocumentPreflightService
 from idis.services.runs.execution import RunExecutionResult
+from tests._cir04c3_required_frozen_preview import (
+    RequiredFrozenPreview,
+    required_frozen_preview,
+)
 from tests.abac_seed import seed_deal_access
 
 try:
@@ -36,13 +42,32 @@ API_KEY = "slice43-upload-run-key"
 TENANT_ID = "11111111-1111-4111-8111-111111111111"
 
 
-def test_uploaded_parsed_document_is_usable_in_selected_full_preflight(
+@pytest.fixture
+def preview_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[RequiredFrozenPreview]:
+    with required_frozen_preview(monkeypatch) as target:
+        yield target
+
+
+def test_uploaded_parsed_document_is_usable_in_selected_snapshot_preflight(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    preview_database: RequiredFrozenPreview,
+    request: pytest.FixtureRequest,
 ) -> None:
-    client, audit_sink = _client(tmp_path=tmp_path, monkeypatch=monkeypatch)
+    client, audit_sink = _client(
+        tmp_path=tmp_path, monkeypatch=monkeypatch, target=preview_database
+    )
+    request.addfinalizer(client.close)
+    tenant_id = client.app.state.fixture_tenant_id
     deal_id = _create_deal(client)
-    upload = _upload_pdf(client, deal_id=deal_id, filename="financial-model.pdf")
+    upload = _upload_pdf(client, deal_id=deal_id, filename="company-999-document-00001.pdf")
+    preview_database.package_public_uploads(
+        client,
+        api_key=API_KEY,
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        uploads=[upload],
+    )
     selected_document_id = upload["document_id"]
     captured_preflight: list[dict[str, Any]] = []
     captured_eligible: list[dict[str, Any]] = []
@@ -54,7 +79,7 @@ def test_uploaded_parsed_document_is_usable_in_selected_full_preflight(
         def execute(self, ctx: object) -> RunExecutionResult:
             corpus = list(ctx.preflight_corpus)  # type: ignore[attr-defined]
             result, eligible = InMemoryRunDocumentPreflightService().run(
-                tenant_id=TENANT_ID,
+                tenant_id=tenant_id,
                 deal_id=deal_id,
                 run_id=str(ctx.run_id),  # type: ignore[attr-defined]
                 corpus=corpus,
@@ -75,7 +100,7 @@ def test_uploaded_parsed_document_is_usable_in_selected_full_preflight(
         f"/v1/deals/{deal_id}/runs",
         headers={"X-IDIS-API-Key": API_KEY},
         json={
-            "mode": "FULL",
+            "mode": "SNAPSHOT",
             "source": {
                 "type": "deal_documents",
                 "document_ids": [selected_document_id],
@@ -98,11 +123,24 @@ def test_uploaded_parsed_document_is_usable_in_selected_full_preflight(
 def test_uploaded_document_ids_are_the_preflight_document_id_namespace(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    preview_database: RequiredFrozenPreview,
+    request: pytest.FixtureRequest,
 ) -> None:
-    client, _audit_sink = _client(tmp_path=tmp_path, monkeypatch=monkeypatch)
+    client, _audit_sink = _client(
+        tmp_path=tmp_path, monkeypatch=monkeypatch, target=preview_database
+    )
+    request.addfinalizer(client.close)
     deal_id = _create_deal(client)
-    first_upload = _upload_pdf(client, deal_id=deal_id, filename="financial-model.pdf")
-    second_upload = _upload_pdf(client, deal_id=deal_id, filename="cash-flow.pdf")
+    # Separate unselected staging upload; the selected one-file package is exact.
+    first_upload = _upload_pdf(client, deal_id=deal_id, filename="company-998-document-00001.pdf")
+    second_upload = _upload_pdf(client, deal_id=deal_id, filename="company-999-document-00001.pdf")
+    preview_database.package_public_uploads(
+        client,
+        api_key=API_KEY,
+        tenant_id=client.app.state.fixture_tenant_id,
+        deal_id=deal_id,
+        uploads=[second_upload],
+    )
     selected_document_id = second_upload["document_id"]
     captured_ids: list[str] = []
 
@@ -127,7 +165,7 @@ def test_uploaded_document_ids_are_the_preflight_document_id_namespace(
         f"/v1/deals/{deal_id}/runs",
         headers={"X-IDIS-API-Key": API_KEY},
         json={
-            "mode": "FULL",
+            "mode": "SNAPSHOT",
             "source": {
                 "type": "deal_documents",
                 "document_ids": [selected_document_id],
@@ -144,13 +182,16 @@ def _client(
     *,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    target: RequiredFrozenPreview,
 ) -> tuple[TestClient, InMemoryAuditSink]:
+    tenant_id = str(uuid.uuid4())
+    target.add_tenant(tenant_id, "me-south-1")
     monkeypatch.setenv(
         IDIS_API_KEYS_ENV,
         json.dumps(
             {
                 API_KEY: {
-                    "tenant_id": TENANT_ID,
+                    "tenant_id": tenant_id,
                     "actor_id": "slice43-actor",
                     "name": "Slice 43 Tenant",
                     "timezone": "UTC",
@@ -169,6 +210,7 @@ def _client(
         idempotency_store=SqliteIdempotencyStore(in_memory=True),
         service_region="me-south-1",
     )
+    app.state.fixture_tenant_id = tenant_id
     return TestClient(app, raise_server_exceptions=False), audit_sink
 
 
@@ -183,7 +225,7 @@ def _create_deal(client: TestClient) -> str:
     # Task 2.6: both tests drive this deal as the authorized actor (API_KEY -> "slice43-actor").
     # uploadDealDocument and startRun are ABAC deny-by-default, so seed the operating actor's
     # assignment through the app's default store before any deal-scoped call.
-    seed_deal_access(TENANT_ID, deal_id, "slice43-actor")
+    seed_deal_access(client.app.state.fixture_tenant_id, deal_id, "slice43-actor")
     return deal_id
 
 
@@ -211,7 +253,7 @@ def _upload_pdf(client: TestClient, *, deal_id: str, filename: str) -> dict[str,
 
 def _pdf_bytes() -> bytes:
     if not REPORTLAB_AVAILABLE:
-        pytest.skip("reportlab not installed")
+        pytest.fail("Required public PDF fixture dependency is unavailable")
     buffer = io.BytesIO()
     pdf_canvas = canvas.Canvas(buffer, pagesize=letter)
     pdf_canvas.drawString(72, 750, "financial model revenue schedule")

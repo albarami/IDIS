@@ -20,14 +20,14 @@ class TestRetrieveClaimsForDebateWiring:
 
     def test_uses_inmemory_when_db_conn_is_none(self) -> None:
         """Without db_conn, InMemory repos are used."""
-        from idis.api.routes.runs import _retrieve_claims_for_debate
+        from idis.services.runs.step_runtime.analysis import _retrieve_claims_for_debate
 
         result = _retrieve_claims_for_debate(TENANT, [], db_conn=None)
         assert result == []
 
     def test_uses_postgres_when_db_conn_provided(self) -> None:
         """With db_conn, Postgres ClaimsRepository is constructed."""
-        from idis.api.routes.runs import _retrieve_claims_for_debate
+        from idis.services.runs.step_runtime.analysis import _retrieve_claims_for_debate
 
         mock_conn = MagicMock()
         mock_claims_cls = MagicMock()
@@ -275,12 +275,17 @@ class TestSnapshotExtractionDbConn:
 
         with (
             patch("idis.services.claims.service.ClaimService") as mock_claim_svc,
-            patch("idis.api.routes.runs._get_extraction_prompt", return_value="prompt"),
             patch(
-                "idis.api.routes.runs._get_extraction_output_schema",
+                "idis.services.runs.step_runtime.snapshot._get_extraction_prompt",
+                return_value="prompt",
+            ) as mock_prompt,
+            patch(
+                "idis.services.runs.step_runtime.snapshot._get_extraction_output_schema",
                 return_value={},
-            ),
-            patch("idis.api.routes.runs._build_extraction_llm_client"),
+            ) as mock_schema,
+            patch(
+                "idis.services.runs.step_runtime.snapshot._build_extraction_llm_client"
+            ) as mock_client,
             patch("idis.services.extraction.pipeline.ExtractionPipeline.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(
@@ -291,7 +296,7 @@ class TestSnapshotExtractionDbConn:
                 conflict_count=0,
             )
 
-            from idis.api.routes.runs import _run_snapshot_extraction
+            from idis.services.runs.step_runtime.snapshot import _run_snapshot_extraction
 
             _run_snapshot_extraction(
                 run_id="r1",
@@ -301,6 +306,9 @@ class TestSnapshotExtractionDbConn:
                 db_conn=mock_conn,
             )
 
+            assert mock_prompt.called
+            assert mock_schema.called
+            assert mock_client.called
             mock_claim_svc.assert_called_once()
             call_kwargs = mock_claim_svc.call_args
             assert call_kwargs.kwargs.get("db_conn") is mock_conn
@@ -309,12 +317,17 @@ class TestSnapshotExtractionDbConn:
         """ClaimService gets db_conn=None when no connection."""
         with (
             patch("idis.services.claims.service.ClaimService") as mock_claim_svc,
-            patch("idis.api.routes.runs._get_extraction_prompt", return_value="prompt"),
             patch(
-                "idis.api.routes.runs._get_extraction_output_schema",
+                "idis.services.runs.step_runtime.snapshot._get_extraction_prompt",
+                return_value="prompt",
+            ) as mock_prompt,
+            patch(
+                "idis.services.runs.step_runtime.snapshot._get_extraction_output_schema",
                 return_value={},
-            ),
-            patch("idis.api.routes.runs._build_extraction_llm_client"),
+            ) as mock_schema,
+            patch(
+                "idis.services.runs.step_runtime.snapshot._build_extraction_llm_client"
+            ) as mock_client,
             patch("idis.services.extraction.pipeline.ExtractionPipeline.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(
@@ -325,7 +338,7 @@ class TestSnapshotExtractionDbConn:
                 conflict_count=0,
             )
 
-            from idis.api.routes.runs import _run_snapshot_extraction
+            from idis.services.runs.step_runtime.snapshot import _run_snapshot_extraction
 
             _run_snapshot_extraction(
                 run_id="r1",
@@ -334,6 +347,9 @@ class TestSnapshotExtractionDbConn:
                 documents=[{"doc_type": "TERM_SHEET", "spans": []}],
             )
 
+            assert mock_prompt.called
+            assert mock_schema.called
+            assert mock_client.called
             mock_claim_svc.assert_called_once()
             call_kwargs = mock_claim_svc.call_args
             assert call_kwargs.kwargs.get("db_conn") is None

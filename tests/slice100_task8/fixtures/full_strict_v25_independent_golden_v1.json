@@ -1,0 +1,107 @@
+{
+  "schema_version": "task8-v25-independent-golden-v1",
+  "derivation_authority": "HAND_WRITTEN_INDEPENDENT_VECTOR",
+  "requirement_vector_authority": {
+    "legal_vector_tuple": [
+      "legacy_empty",
+      "legacy_singleton",
+      "policy_empty",
+      "policy_singleton"
+    ],
+    "negative_vector_tuple": [
+      "legacy_four_field",
+      "policy_two_field",
+      "unknown_formula_type",
+      "ordinal_drift",
+      "scope_drift",
+      "undeclared_calculation_root",
+      "mixed_shapes",
+      "cross_version_join",
+      "duplicate_tuple"
+    ]
+  },
+  "dashboard_identity": {
+    "inputs": {
+      "tenant_id": "11111111-1111-4111-8111-111111111111",
+      "deal_id": "22222222-2222-4222-8222-222222222222",
+      "run_id": "33333333-3333-4333-8333-333333333333",
+      "pipeline_contract_version": "full-strict-v25",
+      "pipeline_contract_hash": "48cca9fa4a50a1a456493e36c696ddb888669fa023d25426bacc19b8fa0620ed",
+      "coverage_record_id": "mc_0123456789abcdef01234567",
+      "methodology_version_record_id": "44444444-4444-4444-8444-444444444444",
+      "methodology_question_record_id": "55555555-5555-4555-8555-555555555555",
+      "question_payload_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "row_disposition": "ANSWERED",
+      "disposition_reason_code": null,
+      "row_trace_prefix": [
+        1,
+        1,
+        "P&L",
+        11,
+        "P&L!E11",
+        "44444444-4444-4444-8444-444444444444",
+        "financial_dd:version",
+        "55555555-5555-4555-8555-555555555555",
+        "financial_dd:p-and-l:11",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      "result_records": [
+        [
+          "result",
+          "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        ]
+      ],
+      "answer_values": [
+        [
+          "answer",
+          "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        ]
+      ],
+      "task_gaps": [],
+      "calculations": [
+        [
+          "calculation",
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        ]
+      ],
+      "roots": [
+        {
+          "root_kind": "SANAD",
+          "root_ordinal": 2,
+          "root_output_object_id": "77777777-7777-4777-8777-777777777777",
+          "root_output_object_kind": "SANAD"
+        },
+        {
+          "root_kind": "RESULT",
+          "root_ordinal": 1,
+          "root_output_object_id": "66666666-6666-4666-8666-666666666666",
+          "root_output_object_kind": "METHODOLOGY_RESULT"
+        }
+      ]
+    },
+    "expected": {
+      "dashboard_row_id": "4a291772-271d-53f2-b89e-f20babf66a84",
+      "root_link_tuple": [
+        [
+          "RESULT",
+          1,
+          "66666666-6666-4666-8666-666666666666",
+          "METHODOLOGY_RESULT",
+          "f8eec9ba-d71f-52fd-9881-7fee6c4430ec"
+        ],
+        [
+          "SANAD",
+          2,
+          "77777777-7777-4777-8777-777777777777",
+          "SANAD",
+          "0b29e91b-4e02-5e4c-b684-7200a45b955a"
+        ]
+      ],
+      "root_projection_sha256": "686bebac0c21b17580846ff64a14b0e36804ce5c784b81f0254a0286e0df76cb",
+      "row_payload_sha256": "e9062ec462eddc7ba1cff1683945b088c254b85d8d0477848414cd97430aa95a",
+      "native_identity_sha256": "25dc77aa405f34e550f696a402009e19072574226eee0fb8ac83a982170ee5af",
+      "native_output_sha256": "4677fa132d73ed144766cd5f06d5761dceede5f45c8ab2283d0040343ea4019e",
+      "output_object_id": "07465919-ac99-5dca-9ba0-f381caf1ab2a"
+    }
+  }
+}

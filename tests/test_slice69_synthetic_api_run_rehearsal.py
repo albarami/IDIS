@@ -27,9 +27,19 @@ def _seed_synthetic_deal_access(monkeypatch: Any) -> None:
     the /v1/deals 201 response through the same TestClient.post seam the rehearsal tests already use
     and seed via the SAME default store the middleware consults (get_deal_assignment_store, Task
     2.6). Test-only: no production change, no policy weakening, no side store. The run itself is
-    still expected to be strict-blocked (409 STRICT_FULL_LIVE_BLOCKED) once ABAC passes.
+    is now expected to fail at Task-5 methodology admission before strict preflight; the
+    in-memory rehearsal must never fabricate durable CDD/FDD selections.
     """
     original_post = rehearsal.TestClient.post
+    original_create_app = rehearsal.create_app
+
+    def create_hermetic_app(*args: Any, **kwargs: Any) -> Any:
+        # The legacy rehearsal intentionally composes injected in-memory dependencies;
+        # restore its strict inputs immediately afterward for the request-time blocker.
+        with monkeypatch.context() as composition_env:
+            composition_env.delenv("IDIS_REQUIRE_FULL_LIVE", raising=False)
+            composition_env.delenv("IDIS_STRICT_DOTENV_PATH", raising=False)
+            return original_create_app(*args, **kwargs)
 
     def seeding_post(self: Any, url: str, *args: Any, **kwargs: Any) -> Any:
         response = original_post(self, url, *args, **kwargs)
@@ -46,6 +56,7 @@ def _seed_synthetic_deal_access(monkeypatch: Any) -> None:
         return response
 
     monkeypatch.setattr(rehearsal.TestClient, "post", seeding_post)
+    monkeypatch.setattr(rehearsal, "create_app", create_hermetic_app)
 
 
 def test_synthetic_api_run_rehearsal_requires_explicit_run_permission() -> None:
@@ -54,6 +65,7 @@ def test_synthetic_api_run_rehearsal_requires_explicit_run_permission() -> None:
 
     try:
         rehearsal.build_bounded_synthetic_api_run_rehearsal(
+            deal_stage="SERIES_A",
             dataset_root=Path("datasets/gdbs_full"),
             env={},
             max_cases=1,
@@ -82,6 +94,7 @@ def test_synthetic_api_run_rehearsal_requires_max_cases_before_api_posts(
 
     try:
         rehearsal.build_bounded_synthetic_api_run_rehearsal(
+            deal_stage="SERIES_A",
             dataset_root=Path("datasets/gdbs_full"),
             env={},
             max_cases=None,
@@ -111,6 +124,7 @@ def test_synthetic_api_run_rehearsal_requires_upload_permission_before_api_posts
 
     try:
         rehearsal.build_bounded_synthetic_api_run_rehearsal(
+            deal_stage="SERIES_A",
             dataset_root=Path("datasets/gdbs_full"),
             env={},
             max_cases=1,
@@ -142,6 +156,7 @@ def test_synthetic_api_run_rehearsal_rejects_multi_case_before_upload_or_run_pos
 
     try:
         rehearsal.build_bounded_synthetic_api_run_rehearsal(
+            deal_stage="SERIES_A",
             dataset_root=Path("datasets/gdbs_full"),
             env={},
             max_cases=2,
@@ -173,6 +188,7 @@ def test_synthetic_api_run_rehearsal_uses_public_run_api_with_deal_documents(
     monkeypatch.setattr(rehearsal.TestClient, "post", recording_post)
 
     report = rehearsal.build_bounded_synthetic_api_run_rehearsal(
+        deal_stage="SERIES_A",
         dataset_root=Path("datasets/gdbs_full"),
         env={},
         max_cases=1,
@@ -190,6 +206,7 @@ def test_synthetic_api_run_rehearsal_uses_public_run_api_with_deal_documents(
     assert run_url.startswith("/v1/deals/")
     assert run_payload == {
         "mode": "FULL",
+        "strict_preflight_proof_id": rehearsal.SYNTHETIC_STRICT_PREFLIGHT_PROOF_ID,
         "source": {
             "type": "deal_documents",
             "document_ids": uploaded_ids,
@@ -202,15 +219,16 @@ def test_synthetic_api_run_rehearsal_uses_public_run_api_with_deal_documents(
     assert not any("file://" in json.dumps(payload or {}) for _url, payload in posts)
 
 
-def test_synthetic_api_run_rehearsal_reports_strict_block_without_run_creation(
+def test_synthetic_api_run_rehearsal_reports_methodology_admission_failure_without_run_creation(
     tmp_path: Path,
 ) -> None:
-    """First Slice69 path should report strict FULL blocking, not runtime proof."""
+    """The legacy in-memory FULL path blocks at methodology admission, without a run."""
     from idis.evaluation.synthetic_strict_runtime_rehearsal import (
         build_bounded_synthetic_api_run_rehearsal,
     )
 
     report = build_bounded_synthetic_api_run_rehearsal(
+        deal_stage="SERIES_A",
         dataset_root=Path("datasets/gdbs_full"),
         env={},
         max_cases=1,
@@ -228,12 +246,13 @@ def test_synthetic_api_run_rehearsal_reports_strict_block_without_run_creation(
     assert report["api_upload_rehearsal"]["uploaded_document_count"] == 2
     assert report["run_attempt"] == {
         "enabled": True,
-        "status": "blocked",
-        "reason_code": "STRICT_FULL_LIVE_BLOCKED",
-        "http_status_code": 409,
+        "status": "failed_safe",
+        "reason_code": "INVALID_REQUEST",
+        "http_status_code": 400,
         "run_created": False,
     }
-    assert report["strict_runtime_blocked_reason_code"] == "STRICT_FULL_LIVE_BLOCKED"
+    assert "run_admission_blocked_reason_code" not in report
+    assert "strict_runtime_blocked_reason_code" not in report
     assert "run_id" not in report["run_attempt"]
     assert report["package_surface_verification"] == {
         "status": "not_run",
@@ -284,6 +303,7 @@ def test_synthetic_api_run_rehearsal_does_not_claim_block_when_run_is_accepted(
     )
 
     report = rehearsal.build_bounded_synthetic_api_run_rehearsal(
+        deal_stage="SERIES_A",
         dataset_root=Path("datasets/gdbs_full"),
         env={},
         max_cases=1,
@@ -358,6 +378,7 @@ def test_synthetic_api_run_rehearsal_isolates_ambient_run_env(
         encoding="utf-8",
     )
     monkeypatch.setenv("IDIS_REQUIRE_FULL_LIVE", "0")
+    monkeypatch.setenv("IDIS_PROCESS_ROLE", "worker")
     monkeypatch.setenv("IDIS_STRICT_DOTENV_PATH", str(private_dotenv))
     monkeypatch.setenv("IDIS_DATABASE_URL", ambient_database_url)
     monkeypatch.setenv("IDIS_API_KEYS", ambient_api_keys)
@@ -365,6 +386,7 @@ def test_synthetic_api_run_rehearsal_isolates_ambient_run_env(
     monkeypatch.setenv("IDIS_OBJECT_STORE_BASE_DIR", str(tmp_path / "ambient-objects"))
 
     report = build_bounded_synthetic_api_run_rehearsal(
+        deal_stage="SERIES_A",
         dataset_root=Path("datasets/gdbs_full"),
         env={},
         max_cases=1,
@@ -374,8 +396,9 @@ def test_synthetic_api_run_rehearsal_isolates_ambient_run_env(
     )
     serialized = json.dumps(report, sort_keys=True)
 
-    assert report["run_attempt"]["reason_code"] == "STRICT_FULL_LIVE_BLOCKED"
+    assert report["run_attempt"]["reason_code"] == "INVALID_REQUEST"
     assert os.environ["IDIS_REQUIRE_FULL_LIVE"] == "0"
+    assert os.environ["IDIS_PROCESS_ROLE"] == "worker"
     assert os.environ["IDIS_STRICT_DOTENV_PATH"] == str(private_dotenv)
     assert os.environ["IDIS_DATABASE_URL"] == ambient_database_url
     assert os.environ["IDIS_API_KEYS"] == ambient_api_keys
@@ -395,6 +418,7 @@ def test_synthetic_api_run_rehearsal_report_has_no_private_surface_leakage(
     )
 
     report = build_bounded_synthetic_api_run_rehearsal(
+        deal_stage="SERIES_A",
         dataset_root=Path("datasets/gdbs_full"),
         env={},
         max_cases=1,

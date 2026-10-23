@@ -2,6 +2,9 @@
 
 from idis.methodology.models import (
     AssignedAgent,
+    FddFormulaRequirement,
+    FddFormulaScope,
+    FddFormulaType,
     MethodologyQuestion,
     MethodologyRegistry,
     MethodologySourceTrace,
@@ -15,6 +18,9 @@ from idis.methodology.models import (
 
 __all__ = [
     "AssignedAgent",
+    "FddFormulaRequirement",
+    "FddFormulaScope",
+    "FddFormulaType",
     "MethodologyQuestion",
     "MethodologyRegistry",
     "MethodologySourceTrace",

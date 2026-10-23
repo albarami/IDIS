@@ -20,6 +20,7 @@ def test_harness_runs_nested_fixture_and_emits_safe_summary(tmp_path: Path) -> N
     _write_mixed_data_room(tmp_path)
 
     summary = run_data_room_harness(
+        stage="LATER",
         data_room_root=tmp_path,
         mode="FULL",
         tenant_id=TENANT_ID,
@@ -57,6 +58,7 @@ def test_harness_writes_optional_json_output(tmp_path: Path) -> None:
     output_path = tmp_path / "summary.json"
 
     summary = run_data_room_harness(
+        stage="LATER",
         data_room_root=tmp_path,
         mode="FULL",
         tenant_id=TENANT_ID,
@@ -79,6 +81,7 @@ def test_harness_reports_blocked_steps_without_forcing_success(tmp_path: Path) -
     (tmp_path / "Notes" / "export.csv").write_text("col1,col2\nsecret,1\n", encoding="utf-8")
 
     summary = run_data_room_harness(
+        stage="LATER",
         data_room_root=tmp_path,
         mode="FULL",
         tenant_id=TENANT_ID,
@@ -103,6 +106,7 @@ def test_real_example_acceptance_when_fixture_is_available() -> None:
         pytest.skip("real_example fixture is not available in this checkout")
 
     summary = run_data_room_harness(
+        stage="LATER",
         data_room_root=fixture_root,
         mode="FULL",
         tenant_id=TENANT_ID,

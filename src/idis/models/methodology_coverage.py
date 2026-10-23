@@ -229,6 +229,109 @@ class MethodologyCoverageRecordSummary(CoverageBaseModel):
         return value.strip()
 
 
+class SelectedMethodologyVersionSummary(CoverageBaseModel):
+    """Safe identity and integrity metadata for one selected frozen version."""
+
+    methodology_id: str
+    methodology_version_id: str
+    methodology_type: MethodologyType
+    source_hash: str
+    registry_hash: str
+    question_count: int = Field(gt=0)
+
+    @field_validator(
+        "methodology_id",
+        "methodology_version_id",
+        "source_hash",
+        "registry_hash",
+    )
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("field must not be blank")
+        return value.strip()
+
+
+class DurableMethodologyCoverageInitializationResult(CoverageBaseModel):
+    """Safe result for an immutable CDD+FDD selection and durable coverage write."""
+
+    status: MethodologyCoverageInitializationStatus
+    tenant_id: str
+    deal_id: str
+    run_id: str
+    selection_id: str
+    selected_methodologies: list[SelectedMethodologyVersionSummary]
+    coverage_record_ids: list[str]
+    methodology_question_ids: list[str]
+    coverage_records: list[MethodologyCoverageRecordSummary]
+    summary: MethodologyCoverageSummary
+
+    def to_deterministic_json(self) -> str:
+        """Serialize the durable initialization result deterministically."""
+        return json.dumps(self.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+
+    def to_run_step_summary(self) -> dict[str, object]:
+        """Return a compact result summary containing integrity metadata only."""
+        return {
+            "status": self.status.value,
+            "selection_id": self.selection_id,
+            "selected_methodologies": [
+                selected.model_dump(mode="json") for selected in self.selected_methodologies
+            ],
+            "coverage_record_ids": list(self.coverage_record_ids),
+            "methodology_question_ids": list(self.methodology_question_ids),
+            "coverage_records": [
+                record.model_dump(mode="json") for record in self.coverage_records
+            ],
+            "summary": {
+                "total_questions": self.summary.total_questions,
+                "by_status": dict(self.summary.by_status),
+                "by_methodology_type": dict(self.summary.by_methodology_type),
+            },
+        }
+
+    @field_validator("tenant_id", "deal_id", "run_id", "selection_id")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("field must not be blank")
+        return value.strip()
+
+    @field_validator("coverage_record_ids", "methodology_question_ids")
+    @classmethod
+    def _ids_not_empty_or_blank(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("list must not be empty")
+        cleaned = [item.strip() for item in value]
+        if any(not item for item in cleaned):
+            raise ValueError("list items must not be blank")
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("list items must be unique")
+        return cleaned
+
+    @model_validator(mode="after")
+    def _selection_and_summary_match(self) -> DurableMethodologyCoverageInitializationResult:
+        expected_types = {MethodologyType.COMMERCIAL_DD, MethodologyType.FINANCIAL_DD}
+        selected_types = {item.methodology_type for item in self.selected_methodologies}
+        if len(self.selected_methodologies) != 2 or selected_types != expected_types:
+            raise ValueError("selected methodologies must contain exactly one CDD and one FDD")
+        if sum(item.question_count for item in self.selected_methodologies) != len(
+            self.methodology_question_ids
+        ):
+            raise ValueError("selected question counts must match initialized questions")
+        if self.summary.tenant_id != self.tenant_id:
+            raise ValueError("summary tenant_id must match initialization result")
+        if self.summary.deal_id != self.deal_id:
+            raise ValueError("summary deal_id must match initialization result")
+        if self.summary.run_id != self.run_id:
+            raise ValueError("summary run_id must match initialization result")
+        if self.summary.total_questions != len(self.methodology_question_ids):
+            raise ValueError("summary total_questions must match initialized questions")
+        if len(self.coverage_records) != len(self.methodology_question_ids):
+            raise ValueError("coverage_records must match initialized questions")
+        return self
+
+
 class MethodologyCoverageInitializationResult(CoverageBaseModel):
     """Run-step-safe result for methodology coverage initialization."""
 

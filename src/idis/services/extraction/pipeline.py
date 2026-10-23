@@ -18,12 +18,13 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from idis.audit.sink import AuditSink, InMemoryAuditSink
+from idis.audit.canonical import build_canonical_audit_event
+from idis.audit.sink import AuditSink, AuditSinkError, InMemoryAuditSink
 from idis.persistence.repositories.claims import InMemoryEvidenceRepository
 from idis.persistence.repositories.evidence import EvidenceRepo
 from idis.services.claims.service import ClaimService, CreateClaimInput
@@ -97,6 +98,7 @@ class ExtractionPipeline:
         claim_service: ClaimService,
         evidence_repo: EvidenceRepo | None = None,
         audit_sink: AuditSink | None = None,
+        on_persistence_failure: Callable[[], None] | None = None,
     ) -> None:
         """Initialize the extraction pipeline.
 
@@ -118,6 +120,7 @@ class ExtractionPipeline:
             claim_service.tenant_id,
         )
         self._audit_sink = audit_sink or InMemoryAuditSink()
+        self._on_persistence_failure = on_persistence_failure
 
     def run(
         self,
@@ -172,7 +175,12 @@ class ExtractionPipeline:
                 self._emit_audit(
                     "extraction.chunking.failed",
                     tenant_id=tenant_id,
-                    details={"document_id": doc_id, "error": str(e)},
+                    details={
+                        "run_id": run_id,
+                        "deal_id": deal_id,
+                        "document_id": doc_id,
+                        "failure_code": "CHUNKING_FAILED",
+                    },
                 )
                 continue
 
@@ -202,6 +210,8 @@ class ExtractionPipeline:
                         "extraction.chunk.failed",
                         tenant_id=tenant_id,
                         details={
+                            "run_id": run_id,
+                            "deal_id": deal_id,
                             "chunk_id": chunk.chunk_id,
                             "error_code": err.code,
                             "attempt": err.attempt,
@@ -332,6 +342,8 @@ class ExtractionPipeline:
                 )
 
             except Exception as e:
+                if self._on_persistence_failure is not None:
+                    self._on_persistence_failure()
                 logger.error(
                     "Failed to persist claim '%s': %s",
                     claim.claim_text[:80],
@@ -407,16 +419,63 @@ class ExtractionPipeline:
             tenant_id: Tenant context.
             details: Event details dict.
         """
-        event = {
-            "event_type": event_type,
-            "tenant_id": tenant_id,
-            "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-            "details": details,
+        taxonomy = {
+            "extraction.pipeline.started": "integration.extraction.pipeline_started",
+            "extraction.chunking.failed": "integration.extraction.chunking_failed",
+            "extraction.chunk.failed": "integration.extraction.chunk_failed",
+            "extraction.pipeline.completed": "integration.extraction.pipeline_completed",
+            "evidence.created": "claim.evidence.created",
         }
+        canonical_type = taxonomy.get(event_type, event_type)
+        run_id = str(details.get("run_id") or "")
+        deal_id = str(details.get("deal_id") or "") or None
+        claim_id = str(details.get("claim_id") or "")
+        resource_type = "claim" if canonical_type.startswith("claim.") else "run"
+        resource_id = claim_id if resource_type == "claim" else run_id
+        if not resource_id:
+            raise AuditSinkError("Extraction audit resource correlation missing")
+        safe_keys = {
+            "run_id",
+            "claim_id",
+            "document_id",
+            "chunk_id",
+            "error_code",
+            "failure_code",
+            "doc_count",
+            "claim_count",
+            "evidence_count",
+            "status",
+            "attempt",
+        }
+        safe = {key: value for key, value in details.items() if key in safe_keys}
+        failed = canonical_type.endswith("failed")
+        refs = [
+            f"{key}:{details[key]}"
+            for key in ("document_id", "chunk_id", "claim_id")
+            if details.get(key)
+        ]
+        event = build_canonical_audit_event(
+            tenant_id=tenant_id,
+            event_type=canonical_type,
+            severity="HIGH" if failed else "LOW",
+            summary=f"Extraction operation recorded: {canonical_type}",
+            actor_id="idis-extraction-pipeline",
+            request_id=run_id or resource_id,
+            method="POST",
+            path=f"/internal/extraction/runs/{run_id or resource_id}",
+            status_code=422 if failed else 200,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            deal_id=deal_id,
+            safe=safe,
+            refs=refs,
+        )
         try:
             self._audit_sink.emit(event)
-        except Exception as e:
-            logger.warning("Failed to emit audit event: %s", e)
+        except AuditSinkError:
+            raise
+        except Exception as exc:
+            raise AuditSinkError("Extraction pipeline audit emission failed") from exc
 
 
 def _confidence_to_action(confidence: Decimal) -> str:

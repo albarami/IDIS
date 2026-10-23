@@ -34,6 +34,7 @@ from idis.services.enrichment.models import (
     EntityType,
 )
 from idis.services.enrichment.registry import EnrichmentProviderRegistry
+from tests.strict_runtime_test_support import RecordingPostgresAuditSink
 from tests.test_slice86_enrichment_conflict_checks import _IdentityConnector
 from tests.test_slice86_enrichment_execution_provenance_characterization import (
     TENANT_ID,
@@ -50,12 +51,13 @@ from tests.test_slice86_source_grade_vc_visibility import (
 _KEY = "sk-s86-acc-LEAK-0001"
 _PAYLOAD_MARKER = "NORMALIZED-PAYLOAD-LEAK-s86"
 _MARKERS = (_KEY, "/var/secret/s86-acc", "C:\\secret\\s86acc", _PAYLOAD_MARKER)
+_DEAL_COMPANY_LABEL = "Contoso Industrial Ltd"
 
 
 def _run_step(*, strict: bool, registry_factory: Any = None, service: Any = None) -> dict[str, Any]:
     from contextlib import ExitStack
 
-    from idis.api.routes.runs import _run_full_enrichment
+    from idis.services.runs.step_runtime.enrichment import _run_full_enrichment
 
     env = _env_without("IDIS_REQUIRE_FULL_LIVE", "IDIS_STRICT_DOTENV_PATH")
     with ExitStack() as stack:
@@ -71,17 +73,33 @@ def _run_step(*, strict: bool, registry_factory: Any = None, service: Any = None
                     lambda **_kw: service,
                 )
             )
-        stack.enter_context(
-            patch("idis.api.routes.runs.is_strict_full_live_required", return_value=strict)
+        enrichment_strict = stack.enter_context(
+            patch(
+                "idis.services.runs.step_runtime.enrichment.is_strict_full_live_required",
+                return_value=strict,
+            )
         )
-        return _run_full_enrichment(
-            run_id="run-1",
-            tenant_id=TENANT_ID,
-            deal_id="deal-1",
-            created_claim_ids=[],
-            calc_ids=[],
-            db_conn=None,
+        common_strict = stack.enter_context(
+            patch(
+                "idis.services.runs.step_runtime.common.is_strict_full_live_required",
+                return_value=strict,
+            )
         )
+        try:
+            summary = _run_full_enrichment(
+                run_id="run-1",
+                tenant_id=TENANT_ID,
+                deal_id="deal-1",
+                created_claim_ids=[],
+                calc_ids=[],
+                db_conn=None,
+                audit_sink=RecordingPostgresAuditSink(),
+                deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
+            )
+        finally:
+            assert enrichment_strict.called
+            assert common_strict.called
+        return summary
 
 
 # === A. Bullet 1: fatal in strict unless policy says optional ===
@@ -140,7 +158,7 @@ def test_acceptance_ledger_covers_all_outcomes_including_cache() -> None:
         request=EnrichmentRequest(
             tenant_id=TENANT_ID,
             entity_type=EntityType.COMPANY,
-            query=EnrichmentQuery(company_name="deal-1"),
+            query=EnrichmentQuery(company_name=_DEAL_COMPANY_LABEL),
             purpose=EnrichmentPurpose.DUE_DILIGENCE,
         ),
     )

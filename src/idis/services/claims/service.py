@@ -14,11 +14,12 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import BaseModel, Field, field_validator
 
-from idis.audit.sink import AuditSink, InMemoryAuditSink
+from idis.audit.canonical import build_canonical_audit_event
+from idis.audit.sink import AuditSink, AuditSinkError, InMemoryAuditSink
 from idis.models.claim import ClaimType
 from idis.persistence.repositories.claims import (
     ClaimsRepository,
@@ -122,6 +123,30 @@ class UpdateClaimInput(BaseModel):
     request_id: str | None = Field(default=None, description="Request correlation ID")
 
 
+class ClaimCreateWriter(Protocol):
+    """Only the validated create operation; all service reads stay unchanged."""
+
+    def create(
+        self,
+        *,
+        claim_id: str,
+        deal_id: str,
+        claim_class: str,
+        claim_text: str,
+        predicate: str | None = None,
+        value: dict[str, Any] | None = None,
+        sanad_id: str | None = None,
+        claim_grade: str = "D",
+        corroboration: dict[str, Any] | None = None,
+        claim_verdict: str = "UNVERIFIED",
+        claim_action: str = "VERIFY",
+        defect_ids: list[str] | None = None,
+        materiality: str = "MEDIUM",
+        ic_bound: bool = False,
+        primary_span_id: str | None = None,
+    ) -> dict[str, Any]: ...
+
+
 class ClaimService:
     """Service layer for claim operations with invariant enforcement.
 
@@ -140,6 +165,7 @@ class ClaimService:
         tenant_id: str,
         db_conn: Connection | None = None,
         audit_sink: AuditSink | None = None,
+        create_writer: ClaimCreateWriter | None = None,
     ) -> None:
         """Initialize ClaimService with tenant context.
 
@@ -152,6 +178,7 @@ class ClaimService:
         self._db_conn = db_conn
         self._audit_sink = audit_sink or InMemoryAuditSink()
         self._nff_validator = NoFreeFactsValidator()
+        self._create_writer = create_writer
 
         if db_conn is not None:
             self._claims_repo: ClaimsRepository | InMemoryClaimsRepository = ClaimsRepository(
@@ -177,22 +204,38 @@ class ClaimService:
         request_id: str | None = None,
     ) -> None:
         """Emit an audit event for claim operations with request correlation."""
-        event: dict[str, Any] = {
-            "event_type": event_type,
-            "tenant_id": self._tenant_id,
-            "resource_type": "claim",
-            "resource_id": claim_id,
-            "entity_type": "claim",
-            "entity_id": claim_id,
-            "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-            "details": details or {},
+        source = details or {}
+        safe: dict[str, object] = {
+            key: source[key] for key in ("claim_class", "fields_updated") if key in source
         }
-        if request_id:
-            event["request_id"] = request_id
+        deal_id = str(source["deal_id"]) if source.get("deal_id") else None
+        event = build_canonical_audit_event(
+            tenant_id=self._tenant_id,
+            event_type=event_type,
+            severity="MEDIUM",
+            summary=f"Claim mutation recorded: {event_type}",
+            actor_id="idis-claim-service",
+            request_id=request_id or f"{event_type}:{claim_id}",
+            method="DELETE" if event_type == "claim.deleted" else "POST",
+            path=f"/internal/claims/{claim_id}",
+            status_code=200,
+            resource_type="claim",
+            resource_id=claim_id,
+            deal_id=deal_id,
+            safe=safe,
+            refs=[f"deal_id:{deal_id}"] if deal_id else [],
+        )
         try:
+            db_conn = getattr(self, "_db_conn", None)
+            emit_in_tx = getattr(self._audit_sink, "emit_in_tx", None)
+            if db_conn is not None and callable(emit_in_tx):
+                emit_in_tx(db_conn, event)
+                return
             self._audit_sink.emit(event)
-        except Exception as e:
-            logger.warning("Failed to emit audit event: %s", e)
+        except AuditSinkError:
+            raise
+        except Exception as exc:
+            raise AuditSinkError("Claim audit emission failed") from exc
 
     def _validate_no_free_facts(
         self,
@@ -262,7 +305,8 @@ class ClaimService:
             primary_span_id=input_data.primary_span_id,
         )
 
-        claim_data = self._claims_repo.create(
+        writer = self._create_writer if self._create_writer is not None else self._claims_repo
+        claim_data = writer.create(
             claim_id=claim_id,
             deal_id=input_data.deal_id,
             claim_class=input_data.claim_class,

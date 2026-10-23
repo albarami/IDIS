@@ -26,6 +26,6 @@
     "Integrate Sanad chain building into pipeline",
     "Wire debate orchestration to deliverable generation",
     "Implement /v1/deals/{dealId}/runs full execution endpoint",
-    "Run: python scripts/gates/gate_3_gdbs_f.py --execute"
+    "Run: python scripts/gates/gate_3_gdbs_f.py --execute --deal-stage <DealStage>"
   ]
 }

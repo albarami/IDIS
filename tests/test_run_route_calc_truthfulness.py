@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from idis.api.routes.runs import _run_snapshot_calc
 from idis.models.deterministic_calculation import CalcType
 from idis.persistence.repositories.calculations import (
     InMemoryCalculationsRepository,
@@ -13,6 +12,7 @@ from idis.persistence.repositories.claims import (
     InMemorySanadsRepository,
     clear_all_claims_stores,
 )
+from idis.services.runs.step_runtime.snapshot import _run_snapshot_calc
 
 TENANT_ID = "11111111-1111-1111-1111-111111111111"
 DEAL_ID = "22222222-2222-2222-2222-222222222222"

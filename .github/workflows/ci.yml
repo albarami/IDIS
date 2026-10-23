@@ -1,54 +1,69 @@
 name: CI
-
+permissions:
+  contents: read
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
-
+env:
+  # --isolated ignores user settings; this also disables global/site pip config.
+  PIP_CONFIG_FILE: /dev/null
 jobs:
   ui-check:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js 20
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: ui/package-lock.json
-
+      - {"name": "Checkout code", "uses": "actions/checkout@v4"}
+      - {"name": "Set up Node.js 20", "uses": "actions/setup-node@v4", "with": {"node-version": "20", "cache": "npm", "cache-dependency-path": "ui/package-lock.json"}}
       - name: Install dependencies
         working-directory: ui
         run: npm ci
-
       - name: Run lint
         working-directory: ui
         run: npm run lint
-
       - name: Run typecheck
         working-directory: ui
         run: npm run typecheck
-
       - name: Run tests
         working-directory: ui
         run: npm run test
-
       - name: Build
         working-directory: ui
         run: npm run build
-
   check:
     runs-on: ubuntu-latest
-
+    environment: cir04-private-inputs
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    timeout-minutes: 360
+    concurrency:
+      group: cir04-private-check-${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: false
+    env:
+      # Public reviewed bootstrap pin, not an admission token or mutable repository variable.
+      IDIS_BOOTSTRAP_SHA256: 27789fd1966e1cf2ba1b0df847e8586af405ce46e99dfd067bb0fd4d9aaf78f0
+      IDIS_WORKFLOW_SHA: ${{ github.workflow_sha }}
     services:
+      # Public registry raw linux/amd64 manifest qualified; no mutable-image fallback.
+      postgres:
+        image: pgvector/pgvector:pg16@sha256:a97d77306ff47cc1d8add4d000cec2207da2e110746318df3137ce53c337ca30
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432/tcp
       # Slice96 DEC-A: a real Redis so the cross-replica rate-limit integration test
       # (test_real_redis_enforces_one_shared_bucket_across_replicas) runs here instead of skipping.
       redis:
-        image: redis:7-alpine
+        image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s
@@ -56,16 +71,44 @@ jobs:
           --health-retries 5
         ports:
           - 6379/tcp
-
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # reviewed v4 main + post
         with:
-          python-version: "3.11"
-
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+          set-safe-directory: false
+      - name: Validate genuine exact-run approval without recovery secret
+        id: private-admission
+        env:
+          IDIS_CI_READ_TOKEN: ${{ github.token }}
+        run: |
+          set +x
+          if [[ -v RUNNER_DEBUG || -v ACTIONS_STEP_DEBUG ]]; then exit 1; fi
+          for name in $(compgen -A variable GIT_TRACE); do unset "$name"; done
+          unset GIT_CURL_VERBOSE
+          umask 077
+          root="$RUNNER_TEMP/idis-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -m 700 "$root"
+          env -i PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null /usr/bin/git -c core.hooksPath=/dev/null -c protocol.file.allow=never -C "$GITHUB_WORKSPACE" cat-file blob "$GITHUB_SHA:scripts/ci_private_inputs.py" > "$root/bootstrap.py"
+          printf '%s  %s\n' "$IDIS_BOOTSTRAP_SHA256" "$root/bootstrap.py" | sha256sum --check --status
+          /usr/bin/python3 -I -S "$root/bootstrap.py" admit
+      - name: Fetch exact recovery raw blobs into private staging
+        id: private-fetch
+        env:
+          IDIS_RECOVERY_READ_KEY: ${{ secrets.IDIS_RECOVERY_READ_KEY }}
+        run: |
+          set +x
+          if [[ -v RUNNER_DEBUG || -v ACTIONS_STEP_DEBUG ]]; then exit 1; fi
+          for name in $(compgen -A variable GIT_TRACE); do unset "$name"; done
+          unset GIT_CURL_VERBOSE
+          umask 077
+          root="$RUNNER_TEMP/idis-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          env -i PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null /usr/bin/git -c core.hooksPath=/dev/null -c protocol.file.allow=never -C "$GITHUB_WORKSPACE" cat-file blob "$GITHUB_SHA:scripts/ci_private_inputs.py" > "$root/fetch-bootstrap.py"
+          printf '%s  %s\n' "$IDIS_BOOTSTRAP_SHA256" "$root/fetch-bootstrap.py" | sha256sum --check --status
+          /usr/bin/python3 -I -S "$root/fetch-bootstrap.py" fetch
+      - {"name": "Set up Python 3.11", "uses": "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065", "with": {"python-version": "3.11"}}
       - name: Install OCR and media system dependencies
         run: |
           sudo apt-get update
@@ -73,32 +116,76 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          python -m venv .venv
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple "pip==26.2.1"
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple -c requirements/constraints-py311.txt --build-constraint requirements/constraints-py311.txt -e ".[dev]" setuptools wheel
+          .venv/bin/python -m pip check
+          .venv/bin/python scripts/verify_dependency_resolution.py
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
-      - name: Provision Redis URL for the cross-replica rate-limit integration test (Slice96 DEC-A)
-        run: echo "IDIS_TEST_REDIS_URL=redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}/15" >> "$GITHUB_ENV"
-
-      - name: Validate prompt registry governance (Slice99)
-        run: python -m idis prompts validate --prompts-root prompts --repo-root . --out prompt_governance_report.json
-
-      - name: Verify OpenAPI/schema/client contract lock (Slice99)
-        run: python scripts/contract_lock.py verify --repo-root .
-
-      - name: Upload prompt governance report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: prompt-governance-report
-          path: prompt_governance_report.json
-          retention-days: 30
-
+      - {"name": "Enforce authorized migration ceiling before checks", "run": "python scripts/check_migration_ceiling.py"}
+      - name: Qualify exclusive required-caller database without global DB exports
+        id: required-callers-setup
+        env:
+          IDIS_PG_HOST: "127.0.0.1"
+          IDIS_PG_PORT: ${{ job.services.postgres.ports['5432'] }}
+          IDIS_CI_POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
+          PG_ADMIN_USER: postgres
+          PG_ADMIN_PASSWORD: postgres
+          IDIS_PG_APP_USER: idis_app
+          IDIS_PG_APP_PASSWORD: idis_app_pw
+        run: python scripts/pg_bootstrap_ci.py --required-preview check
+      - {"name": "Provision Redis URL for the cross-replica rate-limit integration test (Slice96 DEC-A)", "run": "echo \"IDIS_TEST_REDIS_URL=redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}/15\" >> \"$GITHUB_ENV\""}
+      - {"name": "Validate prompt registry governance (Slice99)", "run": "python -m idis prompts validate --prompts-root prompts --repo-root . --out prompt_governance_report.json"}
+      - {"name": "Verify OpenAPI/schema/client contract lock (Slice99)", "run": "python scripts/contract_lock.py verify --repo-root ."}
+      - {"name": "Upload prompt governance report", "if": "always()", "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02", "with": {"name": "prompt-governance-report", "path": "prompt_governance_report.json", "retention-days": 30}}
+      - name: Revalidate admission and overlay exact private bytes no-clobber
+        id: private-overlay
+        env:
+          IDIS_CI_READ_TOKEN: ${{ github.token }}
+        run: |
+          set +x
+          if [[ -v RUNNER_DEBUG || -v ACTIONS_STEP_DEBUG ]]; then exit 1; fi
+          for name in $(compgen -A variable GIT_TRACE); do unset "$name"; done
+          unset GIT_CURL_VERBOSE
+          umask 077
+          root="$RUNNER_TEMP/idis-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          env -i PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null /usr/bin/git -c core.hooksPath=/dev/null -c protocol.file.allow=never -C "$GITHUB_WORKSPACE" cat-file blob "$GITHUB_SHA:scripts/ci_private_inputs.py" > "$root/overlay-bootstrap.py"
+          printf '%s  %s\n' "$IDIS_BOOTSTRAP_SHA256" "$root/overlay-bootstrap.py" | sha256sum --check --status
+          /usr/bin/python3 -I -S "$root/overlay-bootstrap.py" overlay
+          env -i PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null /usr/bin/git -c core.hooksPath=/dev/null -c protocol.file.allow=never -C "$GITHUB_WORKSPACE" cat-file blob "$GITHUB_SHA:scripts/ci_private_inputs.py" > "$root/capture-bootstrap.py"
+          printf '%s  %s\n' "$IDIS_BOOTSTRAP_SHA256" "$root/capture-bootstrap.py" | sha256sum --check --status
+      - name: Derive labelled v27 staging bytes with existing tools
+        shell: /usr/bin/python3 -I -S -c "import os,sys; p=os.path.join(os.environ['RUNNER_TEMP'],'idis-ci-'+os.environ['GITHUB_RUN_ID']+'-'+os.environ['GITHUB_RUN_ATTEMPT'],'capture-bootstrap.py'); os.execv('/usr/bin/python3',['/usr/bin/python3','-I','-S',p,'prepare',sys.argv[1]])" "{0}"
+        run: |
+          mkdir -p .local_reports/slice100/task8/v27-candidate
+          python scripts/materialize_full_strict_v27_preimage.py --staging-output .local_reports/slice100/task8/v27-candidate/full_strict_v27_reviewed_preimage_v1.json
+          python scripts/generate_task8_v27_contract_fixtures.py --parent-artifact contracts/full_strict_v21_reviewed_preimage_v1.json --policy-artifact contracts/fdd_formula_policy_v2.json --reviewer-map docs/plans/2026-07-25-slice100-task8-fdd-formula-policy-v2-review-map.md --staged-artifact .local_reports/slice100/task8/v27-candidate/full_strict_v27_reviewed_preimage_v1.json --staging-output .local_reports/slice100/task8/v27-candidate/full_strict_v27_contract_hash_v1.json
+          python scripts/verify_full_strict_v27_fixture_independently.py --mode verify --parent contracts/full_strict_v21_reviewed_preimage_v1.json --policy contracts/fdd_formula_policy_v2.json --reviewer-map docs/plans/2026-07-25-slice100-task8-fdd-formula-policy-v2-review-map.md --artifact .local_reports/slice100/task8/v27-candidate/full_strict_v27_reviewed_preimage_v1.json --fixture .local_reports/slice100/task8/v27-candidate/full_strict_v27_contract_hash_v1.json
+          printf '%s\n' '4169371675ce32c2b4b459528dcdf21914887941d952648597bce59e49a8ac06  .local_reports/slice100/task8/v27-candidate/full_strict_v27_reviewed_preimage_v1.json' '78a3aedb04260cc56e98a2a9193ce489ca73bd4b5b95fc1486f676bfbd07b0cf  .local_reports/slice100/task8/v27-candidate/full_strict_v27_contract_hash_v1.json' | sha256sum --check --status
+      - name: Fetch exact historical commit before offline checks
+        id: historical-source-fetch
+        run: |
+          set -euo pipefail
+          env -i PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null /usr/bin/git -c core.hooksPath=/dev/null -c protocol.file.allow=never -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1 origin 17c2b3b265b3c09121febd90c61a368e827a00ab
+          env -i PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null /usr/bin/git -c core.hooksPath=/dev/null -c protocol.file.allow=never -C "$GITHUB_WORKSPACE" rev-parse --verify 17c2b3b265b3c09121febd90c61a368e827a00ab^{commit}
+          test "$(env -i PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null /usr/bin/git -c core.hooksPath=/dev/null -c protocol.file.allow=never -C "$GITHUB_WORKSPACE" rev-parse 17c2b3b265b3c09121febd90c61a368e827a00ab:src/idis/persistence/db.py)" = 4f9818e15368641d252607edcad29b0a57e1832f
+          test "$(env -i PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null /usr/bin/git -c core.hooksPath=/dev/null -c protocol.file.allow=never -C "$GITHUB_WORKSPACE" rev-parse 17c2b3b265b3c09121febd90c61a368e827a00ab:src/idis/models/run_step.py)" = 286209b55f4406921fa312b451be6f8c1ca5e330
       - name: Run all checks
+        shell: /usr/bin/python3 -I -S -c "import os,sys; p=os.path.join(os.environ['RUNNER_TEMP'],'idis-ci-'+os.environ['GITHUB_RUN_ID']+'-'+os.environ['GITHUB_RUN_ATTEMPT'],'capture-bootstrap.py'); os.execv('/usr/bin/python3',['/usr/bin/python3','-I','-S',p,'capture',sys.argv[1]])" "{0}"
         run: make check
-
+      - name: Remove only validated invocation-owned overlay files
+        if: always()
+        run: |
+          set +x
+          if [[ -v RUNNER_DEBUG || -v ACTIONS_STEP_DEBUG ]]; then exit 1; fi
+          root="$RUNNER_TEMP/idis-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          if [[ ! -d "$root" ]]; then exit 0; fi
+          env -i PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null /usr/bin/git -c core.hooksPath=/dev/null -c protocol.file.allow=never -C "$GITHUB_WORKSPACE" cat-file blob "$GITHUB_SHA:scripts/ci_private_inputs.py" > "$root/cleanup-bootstrap.py"
+          printf '%s  %s\n' "$IDIS_BOOTSTRAP_SHA256" "$root/cleanup-bootstrap.py" | sha256sum --check --status
+          /usr/bin/python3 -I -S "$root/cleanup-bootstrap.py" cleanup
   postgres-integration:
     runs-on: ubuntu-latest
-
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -113,18 +200,14 @@ jobs:
           --health-retries 5
         ports:
           - 5432/tcp
-
     env:
       PG_ADMIN_USER: postgres
       PG_ADMIN_PASSWORD: postgres
       IDIS_PG_APP_USER: idis_app
       IDIS_PG_APP_PASSWORD: idis_app_pw
       IDIS_PG_DB_NAME: idis_test
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
+      - {"name": "Checkout code", "uses": "actions/checkout@v4"}
       - name: Mask secrets
         run: |
           echo "::add-mask::${PG_ADMIN_PASSWORD}"
@@ -135,57 +218,665 @@ jobs:
           echo "IDIS_PG_HOST=127.0.0.1" >> "$GITHUB_ENV"
           echo "IDIS_PG_PORT=${{ job.services.postgres.ports['5432'] }}" >> "$GITHUB_ENV"
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
+      - {"name": "Set up Python 3.11", "uses": "actions/setup-python@v5", "with": {"python-version": "3.11"}}
       - name: Install dependencies
+        id: pg-install
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          python -m venv .venv
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple "pip==26.2.1"
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple -c requirements/constraints-py311.txt --build-constraint requirements/constraints-py311.txt -e ".[dev]" setuptools wheel
+          .venv/bin/python -m pip check
+          .venv/bin/python scripts/verify_dependency_resolution.py
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
+      # Gates the database phases: this step has no if, so a failure skips later default-gated steps.
+      - name: Install native OCR inputs
+        id: pg-native-inputs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg poppler-utils tesseract-ocr tesseract-ocr-eng
+
+      - {"name": "Enforce authorized migration ceiling before PostgreSQL bootstrap", "id": "pg-ceiling", "run": "python scripts/check_migration_ceiling.py"}
+      - name: Prepare exact migration 0038 roles on disposable CI
+        id: pg-roles
+        env:
+          IDIS_CI_ERASURE_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres
+          IDIS_REQUIRE_POSTGRES: "1"
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: |
+          python -m pytest -p pytest_socket tests/test_ci_erasure_role_preparation.py -q --disable-socket --allow-hosts=127.0.0.1,::1
+          python scripts/prepare_ci_erasure_roles.py --disposable-ci
 
       - name: Bootstrap PostgreSQL and export env
+        id: pg-bootstrap
         run: |
           python scripts/pg_bootstrap_ci.py --export-github-env 2>&1 | tee postgres_bootstrap.log
           exit ${PIPESTATUS[0]}
 
-      - name: Verify app role connectivity and security
-        run: python scripts/pg_bootstrap_ci.py --verify-only
-
+      - {"name": "Verify app role connectivity and security", "id": "pg-verify", "run": "python scripts/pg_bootstrap_ci.py --verify-only"}
+      - name: Set up independent exclusive C3 database before original tests
+        id: c3-setup
+        env:
+          IDIS_CI_POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
+        run: |
+          env -u IDIS_DATABASE_URL -u IDIS_DATABASE_ADMIN_URL -u IDIS_DATABASE_ERASURE_URL -u IDIS_ERASURE_DATABASE_URL -u IDIS_REQUIRE_POSTGRES python scripts/pg_bootstrap_ci.py --required-preview postgres
       - name: Run PostgreSQL integration tests
+        id: pg-tests
         env:
           IDIS_REQUIRE_POSTGRES: "1"
         run: |
           echo "=== Postgres Integration Tests (IDIS_REQUIRE_POSTGRES=1) ==="
           echo "Test files: test_postgres_rls_and_audit_immutability.py, test_api_deals_postgres.py, test_api_claims_postgres.py, test_postgres_break_attempts.py, test_api_run_observability_postgres.py, test_api_default_upload_ingestion_postgres.py, test_api_full_run_step_name_postgres.py, test_api_full_run_durable_evidence_postgres.py, test_api_selected_multidocument_full_acceptance_postgres.py, test_api_sanad_auto_grade_persistence_postgres.py, test_slice96_provider_budget_postgres.py (Slice96 DEC-C durable provider budget), test_slice96_idempotency_ttl_postgres.py (Slice96 DEC-E idempotency TTL cleanup), test_slice97_webhook_outbox_postgres.py (Slice97 durable webhook outbox), test_slice97_webhook_dispatcher_postgres.py (Slice97 webhook dispatcher), test_slice98_abac_durable_store_postgres.py, test_slice98_access_admin_api_postgres.py, test_slice98_break_glass_workflow_postgres.py, test_slice98_byok_legal_hold_postgres.py, test_slice98_durable_residency_postgres.py, test_slice98_erasure_export_postgres.py, test_slice98_retention_janitor_postgres.py (Slice98 durable auth/ABAC/compliance)"
-          pytest tests/test_postgres_rls_and_audit_immutability.py tests/test_api_deals_postgres.py tests/test_api_claims_postgres.py tests/test_postgres_break_attempts.py tests/test_api_run_observability_postgres.py tests/test_api_default_upload_ingestion_postgres.py tests/test_api_full_run_step_name_postgres.py tests/test_api_full_run_durable_evidence_postgres.py tests/test_api_selected_multidocument_full_acceptance_postgres.py tests/test_api_sanad_auto_grade_persistence_postgres.py tests/test_slice96_provider_budget_postgres.py tests/test_slice96_idempotency_ttl_postgres.py tests/test_slice97_webhook_outbox_postgres.py tests/test_slice97_webhook_dispatcher_postgres.py tests/test_slice98_abac_durable_store_postgres.py tests/test_slice98_access_admin_api_postgres.py tests/test_slice98_break_glass_workflow_postgres.py tests/test_slice98_byok_legal_hold_postgres.py tests/test_slice98_durable_residency_postgres.py tests/test_slice98_erasure_export_postgres.py tests/test_slice98_retention_janitor_postgres.py -v --junitxml=postgres_integration_pytest.xml 2>&1 | tee postgres_integration_pytest.log
+          pytest tests/test_postgres_rls_and_audit_immutability.py tests/test_api_deals_postgres.py tests/test_api_claims_postgres.py tests/test_postgres_break_attempts.py tests/test_api_run_observability_postgres.py tests/test_api_default_upload_ingestion_postgres.py tests/test_api_full_run_step_name_postgres.py tests/test_api_full_run_durable_evidence_postgres.py tests/test_api_selected_multidocument_full_acceptance_postgres.py tests/test_api_sanad_auto_grade_persistence_postgres.py tests/test_slice96_provider_budget_postgres.py tests/test_slice96_idempotency_ttl_postgres.py tests/test_slice97_webhook_outbox_postgres.py tests/test_slice97_webhook_dispatcher_postgres.py tests/test_slice98_abac_durable_store_postgres.py tests/test_slice98_access_admin_api_postgres.py tests/test_slice98_break_glass_workflow_postgres.py tests/test_slice98_byok_legal_hold_postgres.py tests/test_slice98_durable_residency_postgres.py tests/test_slice98_erasure_export_postgres.py tests/test_slice98_retention_janitor_postgres.py tests/slice100_task8/test_v27_sql_authority_postgres_census_red.py::test_v27_create_and_drop_disposable_database_against_postgres -v --junitxml=postgres_integration_pytest.xml 2>&1 | tee postgres_integration_pytest.log
           exit ${PIPESTATUS[0]}
 
-      - name: Upload bootstrap log artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: postgres-bootstrap-log
-          path: postgres_bootstrap.log
-          retention-days: 7
+      - name: Reject skipped tests in the original PostgreSQL invocation
+        id: pg-zero-skip
+        run: |
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse("postgres_integration_pytest.xml").getroot()
+          suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+          skipped = sum(int(suite.get("skipped", 0)) for suite in suites)
+          if skipped > 0:
+              raise SystemExit("REQUIRED_PYTEST_SKIPPED")
+          PY
 
-      - name: Upload pytest log artifact
-        if: always()
-        uses: actions/upload-artifact@v4
+      - name: Restore governed Linux Poppler prefix
+        id: pg-poppler-cache
+        if: ${{ !cancelled() && steps.pg-install.outcome == 'success' && steps.pg-ceiling.outcome == 'success' && steps.pg-roles.outcome == 'success' && steps.pg-bootstrap.outcome == 'success' && steps.pg-verify.outcome == 'success' && steps.c3-setup.outcome == 'success' }}
+        uses: actions/cache/restore@v4
         with:
-          name: postgres-integration-pytest-log
-          path: postgres_integration_pytest.log
-          retention-days: 7
+          path: poppler-linux-prefix
+          key: "poppler-linux-prefix-v1|Linux|X64|c18b40eb36b1a0c5b86e29ca054bf0770304583da4f2cdd42fe86eca6a20de48|e0ff366be570c7e30c5d354a51af83f76b6c2d05ee2bce73a43e68db8f9ae7fd"
 
-      - name: Upload pytest JUnit XML artifact
-        if: always()
-        uses: actions/upload-artifact@v4
+      - name: Build and admit the governed Linux Poppler prefix
+        id: pg-governed-poppler
+        if: ${{ !cancelled() && steps.pg-install.outcome == 'success' && steps.pg-ceiling.outcome == 'success' && steps.pg-roles.outcome == 'success' && steps.pg-bootstrap.outcome == 'success' && steps.pg-verify.outcome == 'success' && steps.c3-setup.outcome == 'success' }}
+        env:
+          POPPLER_LINUX_SOURCE_SHA256: c18b40eb36b1a0c5b86e29ca054bf0770304583da4f2cdd42fe86eca6a20de48
+          POPPLER_LINUX_SOURCE_SIZE_BYTES: "1992456"
+          POPPLER_LINUX_RECIPE_SHA256: e0ff366be570c7e30c5d354a51af83f76b6c2d05ee2bce73a43e68db8f9ae7fd
+          POPPLER_LINUX_PREFIX: /opt/idis-native/poppler-25.12.0
+          POPPLER_CACHE_HIT: ${{ steps.pg-poppler-cache.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          prefix_host="${GITHUB_WORKSPACE}/poppler-linux-prefix"
+          mkdir -p "${prefix_host}"
+          image="python:3.11-slim-bookworm@sha256:04cd27899595a99dfe77709d96f08876bf2ee99139ee2f0fe9ac948005034e5b"
+          cat > "${RUNNER_TEMP}/pg-governed-poppler-build.sh" <<'EOF'
+          set -euo pipefail
+          export PYTHONDONTWRITEBYTECODE=1
+          mkdir -p /opt/idis-poppler-build
+          python - <<'PY'
+          import hashlib
+          import urllib.request
+          from pathlib import Path
+
+          destination = Path("/opt/idis-poppler-build/poppler-25.12.0.tar.xz")
+          urllib.request.urlretrieve(
+              "https://poppler.freedesktop.org/poppler-25.12.0.tar.xz",
+              destination,
+          )
+          print("POPPLER_LINUX_SOURCE_SHA256=" + hashlib.sha256(destination.read_bytes()).hexdigest())
+          recipe = Path("/opt/idis-poppler-build/recipe-v2.json")
+          print("POPPLER_LINUX_RECIPE_SHA256=" + hashlib.sha256(recipe.read_bytes()).hexdigest())
+          PY
+          python "${GITHUB_WORKSPACE}/scripts/build_linux_poppler_prefix.py" \
+            --prefix /opt/idis-native/poppler-25.12.0 \
+            --recipe /opt/idis-poppler-build/recipe-v2.json \
+            --source /opt/idis-poppler-build/poppler-25.12.0.tar.xz \
+            --manifest-out /opt/idis-native/poppler-25.12.0/share/idis/poppler-linux-prefix-identity-v1.json
+          cp /opt/idis-poppler-build/poppler-25.12.0.tar.xz "${RUNNER_TEMP}/poppler-25.12.0.tar.xz"
+          EOF
+          cat > "${RUNNER_TEMP}/pg-governed-poppler-admit.sh" <<'EOF'
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          export PYTHONDONTWRITEBYTECODE=1
+          apt-mark hold libc6 liblzma5 libpcre2-8-0
+          python "${GITHUB_WORKSPACE}/scripts/build_linux_poppler_prefix.py" --install-runtime-closure
+          mkdir -p /tmp/idis-admit-checkout
+          find "${GITHUB_WORKSPACE}" -mindepth 1 -maxdepth 1 ! -name .venv ! -name poppler-linux-prefix -exec cp -a {} /tmp/idis-admit-checkout/ \;
+          cd /tmp/idis-admit-checkout
+          python -m venv "${RUNNER_TEMP}/idis-admit-venv"
+          "${RUNNER_TEMP}/idis-admit-venv/bin/python" -m pip --isolated install --index-url https://pypi.org/simple "pip==26.2.1"
+          "${RUNNER_TEMP}/idis-admit-venv/bin/python" -m pip --isolated install --index-url https://pypi.org/simple -c requirements/constraints-py311.txt --build-constraint requirements/constraints-py311.txt ".[dev]" setuptools wheel
+          "${RUNNER_TEMP}/idis-admit-venv/bin/python" -m pip check
+          "${RUNNER_TEMP}/idis-admit-venv/bin/python" scripts/verify_dependency_resolution.py
+          unset PYTHONPATH
+          "${RUNNER_TEMP}/idis-admit-venv/bin/python" - <<'PY'
+          import hashlib
+          import importlib.util
+          import os
+          import sys
+          from pathlib import Path
+
+          from idis.parsers.poppler_linux_runtime import admit_linux_poppler_prefix
+
+          prefix = Path("/opt/idis-native/poppler-25.12.0")
+          admit_linux_poppler_prefix(prefix)
+          manifest = prefix / "share/idis/poppler-linux-prefix-identity-v1.json"
+          print("POPPLER_LINUX_MANIFEST_SHA256=" + hashlib.sha256(manifest.read_bytes()).hexdigest())
+          print("POPPLER_LINUX_ADMISSION=ADMITTED")
+          workspace = Path(os.environ["GITHUB_WORKSPACE"])
+          recipe = workspace / "native/poppler/recipe-v2.json"
+          print("POPPLER_LINUX_RECIPE_SHA256=" + hashlib.sha256(recipe.read_bytes()).hexdigest())
+          source = Path(os.environ["POPPLER_SOURCE_ARCHIVE"]) if os.environ.get("POPPLER_SOURCE_ARCHIVE") else None
+          if source is not None and source.is_file():
+              print("POPPLER_LINUX_SOURCE_SHA256=" + hashlib.sha256(source.read_bytes()).hexdigest())
+          else:
+              print("POPPLER_LINUX_SOURCE_SHA256_PINNED=" + os.environ["POPPLER_LINUX_SOURCE_SHA256"])
+          spec = importlib.util.spec_from_file_location(
+              "poppler_prefix_build",
+              workspace / "scripts/build_linux_poppler_prefix.py",
+          )
+          if spec is None or spec.loader is None:
+              raise SystemExit(1)
+          module = importlib.util.module_from_spec(spec)
+          sys.modules[spec.name] = module
+          spec.loader.exec_module(module)
+          for suite, root in sorted(module.SNAPSHOT_ROOTS.items()):
+              print("POPPLER_LINUX_SNAPSHOT_ROOT_" + suite.upper().replace("-", "_") + "=" + root)
+          PY
+          EOF
+          if [[ "${POPPLER_CACHE_HIT}" != "true" ]]; then
+            docker run --rm \
+              -v "${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}:ro" \
+              -v "${RUNNER_TEMP}:${RUNNER_TEMP}" \
+              -v "${prefix_host}:/opt/idis-native/poppler-25.12.0" \
+              -v "${GITHUB_WORKSPACE}/native/poppler/recipe-v2.json:/opt/idis-poppler-build/recipe-v2.json:ro" \
+              -e GITHUB_WORKSPACE \
+              -e RUNNER_TEMP \
+              -w "${GITHUB_WORKSPACE}" \
+              "${image}" \
+              bash "${RUNNER_TEMP}/pg-governed-poppler-build.sh" \
+              | tee "${RUNNER_TEMP}/pg-governed-poppler-build.log"
+          fi
+          admit_prefix() {
+            docker run --rm \
+              -v "${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}:ro" \
+              -v "${RUNNER_TEMP}:${RUNNER_TEMP}" \
+              -v "${prefix_host}:/opt/idis-native/poppler-25.12.0:ro" \
+              -v "${prefix_host}:${GITHUB_WORKSPACE}/poppler-linux-prefix:ro" \
+              -e GITHUB_WORKSPACE \
+              -e RUNNER_TEMP \
+              -e PYTHONPATH="${GITHUB_WORKSPACE}/src" \
+              -e POPPLER_LINUX_SOURCE_SHA256 \
+              -e POPPLER_LINUX_RECIPE_SHA256 \
+              "$@" \
+              -w "${GITHUB_WORKSPACE}" \
+              "${image}" \
+              bash "${RUNNER_TEMP}/pg-governed-poppler-admit.sh"
+          }
+          if [[ "${POPPLER_CACHE_HIT}" != "true" && -f "${RUNNER_TEMP}/poppler-25.12.0.tar.xz" ]]; then
+            admit_prefix -e "POPPLER_SOURCE_ARCHIVE=${RUNNER_TEMP}/poppler-25.12.0.tar.xz" \
+              > "${RUNNER_TEMP}/pg-governed-poppler-admit.log"
+          else
+            admit_prefix > "${RUNNER_TEMP}/pg-governed-poppler-admit.log"
+          fi
+          cat "${RUNNER_TEMP}/pg-governed-poppler-admit.log"
+          admission_manifest_line="$(grep '^POPPLER_LINUX_MANIFEST_SHA256=' "${RUNNER_TEMP}/pg-governed-poppler-admit.log")"
+          if [[ "${POPPLER_CACHE_HIT}" != "true" ]]; then
+            build_manifest_line="$(grep '^POPPLER_LINUX_MANIFEST_SHA256=' "${RUNNER_TEMP}/pg-governed-poppler-build.log")"
+            printf '%s\n' "${build_manifest_line}"
+            printf '%s\n' "${admission_manifest_line}"
+            if [[ "${build_manifest_line}" != "${admission_manifest_line}" ]]; then
+              echo "pg-governed-poppler: build manifest line does not equal the admission line" >&2
+              exit 1
+            fi
+          fi
+          printf '%s\n' "${admission_manifest_line}" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Save governed Linux Poppler prefix
+        id: pg-poppler-cache-save
+        if: "${{ !cancelled() && steps.pg-install.outcome == 'success' && steps.pg-ceiling.outcome == 'success' && steps.pg-roles.outcome == 'success' && steps.pg-bootstrap.outcome == 'success' && steps.pg-verify.outcome == 'success' && steps.c3-setup.outcome == 'success' && steps.pg-governed-poppler.outcome == 'success' && steps.pg-poppler-cache.outputs.cache-hit != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}"
+        uses: actions/cache/save@v4
         with:
-          name: postgres-integration-pytest-xml
-          path: postgres_integration_pytest.xml
-          retention-days: 7
+          path: poppler-linux-prefix
+          key: "poppler-linux-prefix-v1|Linux|X64|c18b40eb36b1a0c5b86e29ca054bf0770304583da4f2cdd42fe86eca6a20de48|e0ff366be570c7e30c5d354a51af83f76b6c2d05ee2bce73a43e68db8f9ae7fd"
 
+      - name: Run required C2 and C3 PostgreSQL modules independently (REQUIRED)
+        id: c3-tests
+        if: ${{ !cancelled() && steps.pg-install.outcome == 'success' && steps.pg-ceiling.outcome == 'success' && steps.pg-roles.outcome == 'success' && steps.pg-bootstrap.outcome == 'success' && steps.pg-verify.outcome == 'success' && steps.c3-setup.outcome == 'success' }}
+        env:
+          IDIS_CI_POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          HOST_UID="$(id -u)"
+          HOST_GID="$(id -g)"
+          export HOST_UID HOST_GID
+          mkdir -p "${RUNNER_TEMP}/idis-c3-venv"
+          cat > "${RUNNER_TEMP}/idis-c3-inside.sh" <<'EOF'
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          manifest = Path(
+              "/opt/idis-native/poppler-25.12.0/share/idis/"
+              "poppler-linux-prefix-identity-v1.json"
+          )
+          digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+          print("POPPLER_LINUX_MANIFEST_SHA256=" + digest)
+          runner = Path(os.environ["RUNNER_TEMP"])
+          sources = []
+          build_log = runner / "pg-governed-poppler-build.log"
+          admit_log = runner / "pg-governed-poppler-admit.log"
+          if build_log.is_file():
+              sources.append(build_log)
+          if admit_log.is_file():
+              sources.append(admit_log)
+          if not sources:
+              raise SystemExit("POPPLER_LINUX_MANIFEST_SHA256 source log is absent")
+          observed = []
+          for source in sources:
+              found = [
+                  row.split("=", 1)[1]
+                  for row in source.read_text(encoding="utf-8", errors="replace").splitlines()
+                  if row.startswith("POPPLER_LINUX_MANIFEST_SHA256=")
+              ]
+              if len(found) != 1:
+                  raise SystemExit(
+                      "POPPLER_LINUX_MANIFEST_SHA256 count in "
+                      + source.name
+                      + " is "
+                      + str(len(found))
+                  )
+              observed.append(found[0])
+          if any(value != digest for value in observed):
+              raise SystemExit("POPPLER_LINUX_MANIFEST_SHA256 mismatch")
+          PY
+          export DEBIAN_FRONTEND=noninteractive
+          apt-mark hold libc6 liblzma5 libpcre2-8-0
+          python "${GITHUB_WORKSPACE}/scripts/build_linux_poppler_prefix.py" --install-runtime-closure
+          python - <<'PY'
+          import importlib.util
+          import os
+          import sys
+          from pathlib import Path
+
+          script = Path(os.environ["GITHUB_WORKSPACE"]) / "scripts/build_linux_poppler_prefix.py"
+          spec = importlib.util.spec_from_file_location("poppler_prefix_build", script)
+          if spec is None or spec.loader is None:
+              raise SystemExit(1)
+          module = importlib.util.module_from_spec(spec)
+          sys.modules[spec.name] = module
+          spec.loader.exec_module(module)
+          names = [body.package for body in module._runtime_closure_bodies()]
+          Path("/tmp/idis-closure-holds.txt").write_text(" ".join(names))
+          PY
+          apt-mark hold $(cat /tmp/idis-closure-holds.txt)
+          apt-get update
+          apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng
+          python "${GITHUB_WORKSPACE}/scripts/build_linux_poppler_prefix.py" --assert-runtime-closure
+          if command -v pdfinfo >/dev/null 2>&1 || command -v pdftoppm >/dev/null 2>&1; then echo "Poppler binaries must not be on PATH in the c3 container" >&2; exit 1; fi
+          if ! command -v setpriv >/dev/null 2>&1; then
+            echo "setpriv is required in the pinned image and was not found" >&2
+            exit 1
+          fi
+          exec setpriv --reuid="${HOST_UID}" --regid="${HOST_GID}" --clear-groups -- bash "${RUNNER_TEMP}/idis-c3-dropped.sh"
+          EOF
+          cat > "${RUNNER_TEMP}/idis-c3-dropped.sh" <<'EOF'
+          set -euo pipefail
+          export HOME="${RUNNER_TEMP}/idis-c3-home"
+          mkdir -p "${HOME}"
+          python -m venv "${GITHUB_WORKSPACE}/.venv"
+          "${GITHUB_WORKSPACE}/.venv/bin/python" -m pip --isolated install --index-url https://pypi.org/simple "pip==26.2.1"
+          "${GITHUB_WORKSPACE}/.venv/bin/python" -m pip --isolated install --index-url https://pypi.org/simple -c requirements/constraints-py311.txt --build-constraint requirements/constraints-py311.txt -e ".[dev]" setuptools wheel
+          "${GITHUB_WORKSPACE}/.venv/bin/python" -m pip check
+          "${GITHUB_WORKSPACE}/.venv/bin/python" scripts/verify_dependency_resolution.py
+          export PATH="${GITHUB_WORKSPACE}/.venv/bin:${PATH}"
+          env -u IDIS_DATABASE_URL -u IDIS_DATABASE_ADMIN_URL -u IDIS_DATABASE_ERASURE_URL -u IDIS_ERASURE_DATABASE_URL -u IDIS_REQUIRE_POSTGRES python scripts/pg_bootstrap_ci.py --run-required-preview-postgres
+          EOF
+          set +e
+          docker run --rm --network host \
+            -v "${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}" \
+            -v "${GITHUB_WORKSPACE}/poppler-linux-prefix:/opt/idis-native/poppler-25.12.0:ro" \
+            -v "${GITHUB_WORKSPACE}/poppler-linux-prefix:${GITHUB_WORKSPACE}/poppler-linux-prefix:ro" \
+            -v "${RUNNER_TEMP}/idis-c3-venv:${GITHUB_WORKSPACE}/.venv" \
+            -v "${RUNNER_TEMP}:${RUNNER_TEMP}" \
+            -e HOST_UID \
+            -e HOST_GID \
+            -e PG_ADMIN_USER \
+            -e PG_ADMIN_PASSWORD \
+            -e IDIS_PG_APP_USER \
+            -e IDIS_PG_APP_PASSWORD \
+            -e IDIS_PG_DB_NAME \
+            -e IDIS_PG_HOST \
+            -e IDIS_PG_PORT \
+            -e IDIS_CI_POSTGRES_SERVICE_ID \
+            -e GITHUB_RUN_ID \
+            -e GITHUB_RUN_ATTEMPT \
+            -e GITHUB_WORKSPACE \
+            -e RUNNER_TEMP \
+            -w "${GITHUB_WORKSPACE}" \
+            python:3.11-slim-bookworm@sha256:04cd27899595a99dfe77709d96f08876bf2ee99139ee2f0fe9ac948005034e5b \
+            bash "${RUNNER_TEMP}/idis-c3-inside.sh" \
+            2>&1 | tee c3_postgres_integration_pytest.log
+          exit ${PIPESTATUS[0]}
+
+      - name: Reject skipped tests in the required C2 and C3 invocation
+        id: c3-zero-skip
+        if: ${{ !cancelled() && steps.c3-tests.outcome == 'success' }}
+        run: |
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse("c3_postgres_integration_pytest.xml").getroot()
+          suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+          skipped = sum(int(suite.get("skipped", 0)) for suite in suites)
+          if skipped > 0:
+              raise SystemExit("REQUIRED_PYTEST_SKIPPED")
+          PY
+
+      - name: Run the Linux-Poppler closed list
+        id: c3-linux-poppler
+        if: ${{ !cancelled() && steps.pg-governed-poppler.outcome == 'success' }}
+        env:
+          IDIS_CI_POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          HOST_UID="$(id -u)"
+          HOST_GID="$(id -g)"
+          export HOST_UID HOST_GID
+          cat > "${RUNNER_TEMP}/idis-linux-poppler-inside.sh" <<'EOF'
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          manifest = Path(
+              "/opt/idis-native/poppler-25.12.0/share/idis/"
+              "poppler-linux-prefix-identity-v1.json"
+          )
+          digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+          print("POPPLER_LINUX_MANIFEST_SHA256=" + digest)
+          runner = Path(os.environ["RUNNER_TEMP"])
+          sources = []
+          build_log = runner / "pg-governed-poppler-build.log"
+          admit_log = runner / "pg-governed-poppler-admit.log"
+          if build_log.is_file():
+              sources.append(build_log)
+          if admit_log.is_file():
+              sources.append(admit_log)
+          if not sources:
+              raise SystemExit("POPPLER_LINUX_MANIFEST_SHA256 source log is absent")
+          observed = []
+          for source in sources:
+              found = [
+                  row.split("=", 1)[1]
+                  for row in source.read_text(encoding="utf-8", errors="replace").splitlines()
+                  if row.startswith("POPPLER_LINUX_MANIFEST_SHA256=")
+              ]
+              if len(found) != 1:
+                  raise SystemExit(
+                      "POPPLER_LINUX_MANIFEST_SHA256 count in "
+                      + source.name
+                      + " is "
+                      + str(len(found))
+                  )
+              observed.append(found[0])
+          if any(value != digest for value in observed):
+              raise SystemExit("POPPLER_LINUX_MANIFEST_SHA256 mismatch")
+          PY
+          export DEBIAN_FRONTEND=noninteractive
+          apt-mark hold libc6 liblzma5 libpcre2-8-0
+          python "${GITHUB_WORKSPACE}/scripts/build_linux_poppler_prefix.py" --install-runtime-closure
+          python - <<'PY'
+          import importlib.util
+          import os
+          import sys
+          from pathlib import Path
+
+          script = Path(os.environ["GITHUB_WORKSPACE"]) / "scripts/build_linux_poppler_prefix.py"
+          spec = importlib.util.spec_from_file_location("poppler_prefix_build", script)
+          if spec is None or spec.loader is None:
+              raise SystemExit(1)
+          module = importlib.util.module_from_spec(spec)
+          sys.modules[spec.name] = module
+          spec.loader.exec_module(module)
+          names = [body.package for body in module._runtime_closure_bodies()]
+          Path("/tmp/idis-closure-holds.txt").write_text(" ".join(names))
+          PY
+          apt-mark hold $(cat /tmp/idis-closure-holds.txt)
+          apt-get update
+          apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng
+          python "${GITHUB_WORKSPACE}/scripts/build_linux_poppler_prefix.py" --assert-runtime-closure
+          if command -v pdfinfo >/dev/null 2>&1 || command -v pdftoppm >/dev/null 2>&1; then echo "Poppler binaries must not be on PATH in the c3 container" >&2; exit 1; fi
+          if ! command -v setpriv >/dev/null 2>&1; then
+            echo "setpriv is required in the pinned image and was not found" >&2
+            exit 1
+          fi
+          exec setpriv --reuid="${HOST_UID}" --regid="${HOST_GID}" --clear-groups -- bash "${RUNNER_TEMP}/idis-linux-poppler-dropped.sh"
+          EOF
+          cat > "${RUNNER_TEMP}/idis-linux-poppler-dropped.sh" <<'EOF'
+          set -euo pipefail
+          export HOME="${RUNNER_TEMP}/idis-linux-poppler-home"
+          mkdir -p "${HOME}"
+          export PATH="${GITHUB_WORKSPACE}/.venv/bin:${PATH}"
+          python scripts/pg_bootstrap_ci.py --run-linux-poppler-closed-list
+          EOF
+          set +e
+          docker run --rm --network host \
+            -v "${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}" \
+            -v "${GITHUB_WORKSPACE}/poppler-linux-prefix:/opt/idis-native/poppler-25.12.0:ro" \
+            -v "${GITHUB_WORKSPACE}/poppler-linux-prefix:${GITHUB_WORKSPACE}/poppler-linux-prefix:ro" \
+            -v "${RUNNER_TEMP}/idis-c3-venv:${GITHUB_WORKSPACE}/.venv" \
+            -v "${RUNNER_TEMP}:${RUNNER_TEMP}" \
+            -e HOST_UID \
+            -e HOST_GID \
+            -e PG_ADMIN_USER \
+            -e PG_ADMIN_PASSWORD \
+            -e IDIS_PG_APP_USER \
+            -e IDIS_PG_APP_PASSWORD \
+            -e IDIS_PG_DB_NAME \
+            -e IDIS_PG_HOST \
+            -e IDIS_PG_PORT \
+            -e IDIS_CI_POSTGRES_SERVICE_ID \
+            -e GITHUB_RUN_ID \
+            -e GITHUB_RUN_ATTEMPT \
+            -e GITHUB_WORKSPACE \
+            -e RUNNER_TEMP \
+            -w "${GITHUB_WORKSPACE}" \
+            python:3.11-slim-bookworm@sha256:04cd27899595a99dfe77709d96f08876bf2ee99139ee2f0fe9ac948005034e5b \
+            bash "${RUNNER_TEMP}/idis-linux-poppler-inside.sh" \
+            2>&1 | tee c3_linux_poppler_pytest.log
+          exit ${PIPESTATUS[0]}
+
+      - name: Assert the Linux-Poppler closed list executed
+        id: c3-linux-poppler-count
+        if: ${{ !cancelled() && steps.pg-governed-poppler.outcome == 'success' }}
+        run: |
+          .venv/bin/python - <<'PY'
+          import subprocess
+          import sys
+          import xml.etree.ElementTree as ET
+
+          completed = subprocess.run(
+              [sys.executable, "-m", "tests._linux_poppler_gate", "--node-ids"],
+              check=True,
+              capture_output=True,
+              text=True,
+          )
+          expected = [line for line in completed.stdout.splitlines() if line]
+          if len(expected) == 0:
+              raise SystemExit("LINUX_POPPLER node id list is empty")
+
+          def listed(flag: str) -> list[str]:
+              completed = subprocess.run(
+                  [sys.executable, "-m", "tests._linux_poppler_gate", "--node-ids", flag],
+                  check=True,
+                  capture_output=True,
+                  text=True,
+              )
+              rows = [line for line in completed.stdout.splitlines() if line]
+              if len(rows) == 0:
+                  raise SystemExit("LINUX_POPPLER node id list is empty")
+              return rows
+
+          no_database = listed("--no-database-class")
+          database = listed("--database-class")
+          if set(no_database) & set(database) or set(no_database) | set(database) != set(expected):
+              raise SystemExit("LINUX_POPPLER identities differ")
+
+          def assert_file(path: str, class_ids: list[str]) -> list[str]:
+              root = ET.parse(path).getroot()
+              suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+              collected = sum(int(suite.get("tests", 0)) for suite in suites)
+              failed = sum(int(suite.get("failures", 0)) for suite in suites)
+              errors = sum(int(suite.get("errors", 0)) for suite in suites)
+              skipped = sum(int(suite.get("skipped", 0)) for suite in suites)
+              passed = collected - failed - errors - skipped
+              expected = class_ids
+              if (
+                  collected != len(expected)
+                  or passed != len(expected)
+                  or failed != 0
+                  or errors != 0
+                  or skipped != 0
+              ):
+                  raise SystemExit(
+                      "LINUX_POPPLER counts collected="
+                      + str(collected)
+                      + " passed="
+                      + str(passed)
+                      + " failed="
+                      + str(failed)
+                      + " errors="
+                      + str(errors)
+                      + " skipped="
+                      + str(skipped)
+                      + " expected="
+                      + str(len(expected))
+                  )
+              suffix = " <- tests/_linux_poppler_gate.py"
+              actual = []
+              for case in root.iter("testcase"):
+                  classname = (case.get("classname") or "").replace(suffix, "")
+                  name = (case.get("name") or "").replace(suffix, "")
+                  parts = classname.split(".")
+                  module_parts = []
+                  class_parts = []
+                  for part in parts:
+                      if class_parts or part[:1].isupper():
+                          class_parts.append(part)
+                      else:
+                          module_parts.append(part)
+                  node_id = "/".join(module_parts) + ".py"
+                  node_id = "::".join([node_id, *class_parts, name])
+                  actual.append(node_id)
+              if len(actual) != len(expected) or set(actual) != set(expected):
+                  raise SystemExit("LINUX_POPPLER identities differ")
+              not_executed = 0
+              for case in root.iter("testcase"):
+                  for prop in case.iter("property"):
+                      name_matches = prop.get("name") == "linux_poppler"
+                      if name_matches and "NOT_EXECUTED" in (prop.get("value") or ""):
+                          not_executed += 1
+              if not_executed != 0:
+                  raise SystemExit(
+                      "LINUX_POPPLER NOT_EXECUTED properties=" + str(not_executed)
+                  )
+              return actual
+
+          file_one = assert_file("c3_linux_poppler_pytest.xml", no_database)
+          file_two = assert_file("c3_linux_poppler_database_pytest.xml", database)
+          if set(file_one) & set(file_two) or set(file_one) | set(file_two) != set(expected):
+              raise SystemExit("LINUX_POPPLER identities differ")
+          PY
+
+      - name: Run required dev-0039 restart node
+        id: c3-dev0039-restart
+        if: ${{ !cancelled() && steps.pg-install.outcome == 'success' && steps.pg-ceiling.outcome == 'success' && steps.pg-roles.outcome == 'success' && steps.pg-bootstrap.outcome == 'success' && steps.pg-verify.outcome == 'success' && steps.c3-setup.outcome == 'success' }}
+        env:
+          IDIS_CI_POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
+        run: |
+          env -u IDIS_DATABASE_URL -u IDIS_DATABASE_ADMIN_URL -u IDIS_DATABASE_ERASURE_URL -u IDIS_ERASURE_DATABASE_URL -u IDIS_REQUIRE_POSTGRES python scripts/pg_bootstrap_ci.py --run-required-dev0039-restart 2>&1 | tee c3_dev0039_restart_pytest.log
+          exit ${PIPESTATUS[0]}
+      - name: Reject skipped tests in the required dev-0039 restart invocation
+        id: c3-dev0039-zero-skip
+        if: ${{ !cancelled() && steps.c3-dev0039-restart.outcome == 'success' }}
+        run: |
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse("c3_dev0039_restart_pytest.xml").getroot()
+          suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+          skipped = sum(int(suite.get("skipped", 0)) for suite in suites)
+          if skipped > 0:
+              raise SystemExit("REQUIRED_PYTEST_SKIPPED")
+          PY
+      - name: Run required dev-0039 historical restart node
+        id: dev0039-historical
+        if: ${{ !cancelled() && steps.pg-install.outcome == 'success' && steps.pg-ceiling.outcome == 'success' && steps.pg-roles.outcome == 'success' && steps.pg-bootstrap.outcome == 'success' && steps.pg-verify.outcome == 'success' && steps.c3-setup.outcome == 'success' }}
+        env:
+          IDIS_CI_POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
+        run: |
+          env -u IDIS_DATABASE_URL -u IDIS_DATABASE_ADMIN_URL -u IDIS_DATABASE_ERASURE_URL -u IDIS_ERASURE_DATABASE_URL -u IDIS_REQUIRE_POSTGRES python scripts/pg_bootstrap_ci.py --run-required-dev0039-historical 2>&1 | tee dev0039_historical_restart_pytest.log
+          exit ${PIPESTATUS[0]}
+      - name: Reject skipped tests in the required dev-0039 historical invocation
+        id: dev0039-historical-zero-skip
+        if: ${{ !cancelled() && steps.dev0039-historical.outcome == 'success' }}
+        run: |
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse("dev0039_historical_restart_pytest.xml").getroot()
+          suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+          skipped = sum(int(suite.get("skipped", 0)) for suite in suites)
+          if skipped > 0:
+              raise SystemExit("REQUIRED_PYTEST_SKIPPED")
+          PY
+
+      - name: Fence dev-only scripts out of the sdist and wheel
+        id: pg-archive-fence
+        if: ${{ !cancelled() && steps.pg-install.outcome == 'success' }}
+        run: |
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple -c requirements/constraints-py311.txt "hatchling==1.32.4"
+          .venv/bin/python -m pip show hatchling
+          .venv/bin/python -m hatchling build -t sdist -t wheel -d "$RUNNER_TEMP/idis-archive-fence"
+          .venv/bin/python - <<'PY'
+          import os
+          import tarfile
+          import zipfile
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "idis-archive-fence"
+          files = [path for path in root.iterdir() if path.is_file()]
+          sdists = [path for path in files if path.name.endswith(".tar.gz")]
+          wheels = [path for path in files if path.suffix == ".whl"]
+          if len(sdists) != 1 or len(wheels) != 1:
+              raise SystemExit(1)
+          if {path.name for path in files} != {sdists[0].name, wheels[0].name}:
+              raise SystemExit(1)
+
+          def names(path: Path) -> list[str]:
+              if path.name.endswith(".tar.gz"):
+                  with tarfile.open(path) as archive:
+                      return archive.getnames()
+              with zipfile.ZipFile(path) as archive:
+                  return archive.namelist()
+
+          def norm(name: str) -> str:
+              return name.replace(chr(92), "/").lstrip("./")
+
+          def dev_only(name: str) -> bool:
+              text = norm(name)
+              return text.startswith("scripts/dev_only/") or "/scripts/dev_only/" in "/" + text
+
+          def wheel_scripts(name: str) -> bool:
+              text = norm(name)
+              return text == "scripts" or text.startswith("scripts/") or "/scripts/" in "/" + text
+
+          for member in names(sdists[0]):
+              if dev_only(member):
+                  raise SystemExit(1)
+          for member in names(wheels[0]):
+              if dev_only(member) or wheel_scripts(member):
+                  raise SystemExit(1)
+          PY
+      - {"name": "Upload bootstrap log artifact", "if": "always()", "uses": "actions/upload-artifact@v4", "with": {"name": "postgres-bootstrap-log", "path": "postgres_bootstrap.log", "retention-days": 7}}
+      - {"name": "Upload pytest log artifact", "if": "always()", "uses": "actions/upload-artifact@v4", "with": {"name": "postgres-integration-pytest-log", "path": "postgres_integration_pytest.log\nc3_postgres_integration_pytest.log\nc3_dev0039_restart_pytest.log\ndev0039_historical_restart_pytest.log", "retention-days": 7}}
+      - {"name": "Upload pytest JUnit XML artifact", "if": "always()", "uses": "actions/upload-artifact@v4", "with": {"name": "postgres-integration-pytest-xml", "path": "postgres_integration_pytest.xml\nc3_postgres_integration_pytest.xml\nc3_dev0039_restart_pytest.xml\ndev0039_historical_restart_pytest.xml", "retention-days": 7}}
       - name: Write explicit pytest summary to job summary
         if: always()
         run: |
@@ -217,6 +908,45 @@ jobs:
               with open(summary_file, "a") as f:
                   f.write(f"## Postgres Integration Pytest Results\n\n")
                   f.write(f"[WARN] Could not parse JUnit XML: {e}\n\n")
+          with open(summary_file, "a") as f:
+              f.write("## Required C3 PostgreSQL Results\n\n")
+              f.write("Step outcome: ${{ steps.c3-tests.outcome }}\n\n")
+              try:
+                  root = ET.parse("c3_postgres_integration_pytest.xml").getroot()
+                  suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+                  if not suites:
+                      raise ValueError("missing suite")
+                  totals = {name: sum(int(s.get(name, 0)) for s in suites) for name in ("tests", "failures", "errors", "skipped")}
+                  passed = totals["tests"] - totals["failures"] - totals["errors"] - totals["skipped"]
+                  f.write(f"{passed} passed, {totals['failures']} failed, {totals['errors']} errors, {totals['skipped']} skipped.\n")
+              except Exception:
+                  f.write("NOT QUALIFIED: C3 XML absent or invalid; no passing result inferred.\n")
+          with open(summary_file, "a") as f:
+              f.write("## Required dev-0039 restart results\n\n")
+              f.write("Step outcome: ${{ steps.c3-dev0039-restart.outcome }}\n\n")
+              try:
+                  root = ET.parse("c3_dev0039_restart_pytest.xml").getroot()
+                  suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+                  if not suites:
+                      raise ValueError("missing suite")
+                  totals = {name: sum(int(s.get(name, 0)) for s in suites) for name in ("tests", "failures", "errors", "skipped")}
+                  passed = totals["tests"] - totals["failures"] - totals["errors"] - totals["skipped"]
+                  f.write(f"{passed} passed, {totals['failures']} failed, {totals['errors']} errors, {totals['skipped']} skipped.\n")
+              except Exception:
+                  f.write("NOT QUALIFIED: dev-0039 restart XML absent or invalid; no passing result inferred.\n")
+          with open(summary_file, "a") as f:
+              f.write("## Required dev-0039 historical results\n\n")
+              f.write("Step outcome: ${{ steps.dev0039-historical.outcome }}\n\n")
+              try:
+                  root = ET.parse("dev0039_historical_restart_pytest.xml").getroot()
+                  suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+                  if not suites:
+                      raise ValueError("missing suite")
+                  totals = {name: sum(int(s.get(name, 0)) for s in suites) for name in ("tests", "failures", "errors", "skipped")}
+                  passed = totals["tests"] - totals["failures"] - totals["errors"] - totals["skipped"]
+                  f.write(f"{passed} passed, {totals['failures']} failed, {totals['errors']} errors, {totals['skipped']} skipped.\n")
+              except Exception:
+                  f.write("NOT QUALIFIED: dev-0039 historical XML absent or invalid; no passing result inferred.\n")
           EOF
 
       - name: Write logs summary to job summary
@@ -234,27 +964,24 @@ jobs:
 
   evaluation-harness:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
+      - {"name": "Checkout code", "uses": "actions/checkout@v4"}
+      - {"name": "Set up Python 3.11", "uses": "actions/setup-python@v5", "with": {"python-version": "3.11"}}
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          python -m venv .venv
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple "pip==26.2.1"
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple -c requirements/constraints-py311.txt --build-constraint requirements/constraints-py311.txt -e ".[dev]" setuptools wheel
+          .venv/bin/python -m pip check
+          .venv/bin/python scripts/verify_dependency_resolution.py
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Run GDBS-S evaluation harness (validate mode + drift gate)
         run: |
           echo "=== Running GDBS-S Evaluation Harness (validate mode, drift-gated) ==="
           # gdbs_mini fixture + pinned baseline: any nonzero exit (drift, blocked, or a
           # missing/malformed baseline) fails this step directly under bash errexit (Slice99)
-          python -m idis test gdbs-s --dataset tests/fixtures/gdbs_mini --baseline tests/fixtures/gdbs_baseline/gdbs_mini_gdbs_s_baseline.json --out gdbs_s_report.json
+          python -m idis test gdbs-s --dataset tests/fixtures/gdbs_mini --deal-stage SEED --baseline tests/fixtures/gdbs_baseline/gdbs_mini_gdbs_s_baseline.json --out gdbs_s_report.json
           echo "[OK] GDBS-S validation + drift gate PASSED"
 
       - name: Display GDBS-S report
@@ -263,14 +990,7 @@ jobs:
           echo "=== GDBS-S Report ===" 
           cat gdbs_s_report.json 2>/dev/null || echo "No report file found"
 
-      - name: Upload GDBS-S report artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: gdbs-s-evaluation-report
-          path: gdbs_s_report.json
-          retention-days: 30
-
+      - {"name": "Upload GDBS-S report artifact", "if": "always()", "uses": "actions/upload-artifact@v4", "with": {"name": "gdbs-s-evaluation-report", "path": "gdbs_s_report.json", "retention-days": 30}}
       - name: Write evaluation summary to job summary
         if: always()
         run: |
@@ -284,77 +1004,1418 @@ jobs:
   # ===========================================================================
   container-build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build Docker image
-        uses: docker/build-push-action@v5
+      - {"name": "Checkout code", "uses": "actions/checkout@v4"}
+      - {"name": "Set up Docker Buildx", "uses": "docker/setup-buildx-action@v3"}
+      - {"name": "Build Docker image", "uses": "docker/build-push-action@v5", "with": {"context": ".", "file": "./Dockerfile", "push": false, "load": true, "tags": "idis:ci-${{ github.sha }}", "cache-from": "type=gha", "cache-to": "type=gha,mode=max"}}
+      - name: Set up Python 3.11 for composition
+        id: setup-composition
+        if: success()
+        uses: actions/setup-python@v5
         with:
-          context: .
-          file: ./Dockerfile
-          push: false
-          load: true
-          tags: idis:ci-${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Test container health check
+          python-version: "3.11"
+      - name: Install composition interpreter
+        id: install-composition
+        if: success()
         run: |
-          echo "=== Starting container for health check ==="
-          docker run -d --name idis-test -p 8000:8000 \
-            -e IDIS_SERVICE_REGION=us-east-1 \
-            idis:ci-${{ github.sha }}
-          
+          set -euo pipefail
+          python -m venv .venv
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple "pip==26.2.1"
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple -c requirements/constraints-py311.txt --build-constraint requirements/constraints-py311.txt -e ".[dev]" setuptools wheel
+          .venv/bin/python -m pip check
+          .venv/bin/python scripts/verify_dependency_resolution.py
+      - name: Reject image env names outside the reviewed allowlist
+        id: inspect-image-env
+        if: success()
+        run: |
+          set -euo pipefail
+          .venv/bin/python - <<'H1B_PY'
+          import hashlib
+          import importlib.util
+          import json
+          import os
+          import subprocess
+          import sys
+
+          spec = importlib.util.spec_from_file_location(
+              "ci_bootstrap_health", ".github/scripts/prepare_bootstrap_health.py"
+          )
+          helper = importlib.util.module_from_spec(spec)
+          sys.modules[spec.name] = helper
+          spec.loader.exec_module(helper)
+          raw = subprocess.check_output(
+              [
+                  "docker",
+                  "image",
+                  "inspect",
+                  "--format",
+                  "{{range .Config.Env}}{{println .}}{{end}}",
+                  "idis:ci-" + os.environ["GITHUB_SHA"],
+              ],
+              text=True,
+          )
+          names = sorted(
+              line.split("=", 1)[0] for line in raw.splitlines() if "=" in line
+          )
+          extra = sorted(set(names) - set(helper._IMAGE_CONTROL_NAMES))
+          print(
+              json.dumps(
+                  {
+                      "phase": "image-env",
+                      "extra_names": extra,
+                      "names_sha256": hashlib.sha256(
+                          ("\n".join(names) + "\n").encode()
+                      ).hexdigest(),
+                  },
+                  sort_keys=True,
+              )
+          )
+          if extra:
+              sys.exit(1)
+          H1B_PY
+      - name: Reject gate Task4 and unsigned envelopes before any container start
+        id: signature-and-gate-negatives
+        if: success()
+        run: |
+          set -euo pipefail
+          .venv/bin/python -m pytest -q --disable-socket \
+            tests/test_ci_bootstrap_health_composition.py::test_unsigned_deny_files_and_invalid_signatures_remain_canonically_rejected \
+            tests/test_ci_bootstrap_health_composition.py::test_only_unchanged_default_api_command_may_cross_consumer_boundary \
+            tests/test_ci_bootstrap_health_composition.py::test_zero_call_cap_does_not_become_full_budget_admission
+      - name: Restore pinned tiny.en model cache
+        id: model-cache
+        if: success()
+        uses: actions/cache/restore@v4
+        with:
+          path: model-cache/0d3d19a32d3338f10357c0889762bd8d64bbdeba
+          key: h1b-tiny-en-0d3d19a32d3338f10357c0889762bd8d64bbdeba-8a9f6ac2c61d339ea4f5a27d00934ea5fe83bcb0d25b67a01cd3b47b9e1adf34
+      - name: Fetch pinned tiny.en model on cache miss
+        id: model-fetch
+        if: "success() && steps.model-cache.outputs.cache-hit != 'true'"
+        run: |
+          set -euo pipefail
+          rev=0d3d19a32d3338f10357c0889762bd8d64bbdeba
+          dest="model-staging/${rev}"
+          mkdir -p "$dest"
+          base="https://huggingface.co/Systran/faster-whisper-tiny.en/resolve/${rev}"
+          curl --fail --location --silent --show-error --output "${dest}/README.md" "${base}/README.md"
+          curl --fail --location --silent --show-error --output "${dest}/config.json" "${base}/config.json"
+          curl --fail --location --silent --show-error --output "${dest}/model.bin" "${base}/model.bin"
+          curl --fail --location --silent --show-error --output "${dest}/tokenizer.json" "${base}/tokenizer.json"
+          curl --fail --location --silent --show-error --output "${dest}/vocabulary.txt" "${base}/vocabulary.txt"
+      - name: Verify pinned tiny.en hashes and install the model tree
+        id: model-verify
+        if: success()
+        run: |
+          set -euo pipefail
+          .venv/bin/python - <<'H1B_PY'
+          import hashlib
+          import json
+          import os
+          import shutil
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          from idis.parsers.media import fingerprint_local_faster_whisper_model
+
+          revision = "0d3d19a32d3338f10357c0889762bd8d64bbdeba"
+          linux_pin = "4b1662df734cdf3854f6a3de0a9fd9c3fdaadfa644d6c7471f5c63c9cb62f6e5"
+          windows_receipt = "47e043de5fce0c94a30e264cb503f65ccb69cf03b6db296fa14e937a0ab81aea"
+          manifest_sha256 = "8a9f6ac2c61d339ea4f5a27d00934ea5fe83bcb0d25b67a01cd3b47b9e1adf34"
+          expected = {
+              "README.md": (1323, "1b7816626bf0548e4b71a467f4112b4592924bc818e3117f19aefcc50ce4b6aa"),
+              "config.json": (2317, "14b1b421a90349bc551b881461426b561a874049cb9e4c4864f2ca384f6a7cc5"),
+              "model.bin": (75537502, "1a5afae06a4db91c975c9a9d78be5cc110ee4ea022ad57d55492e4550e936b2a"),
+              "tokenizer.json": (2128466, "929c5252409436dce1b38a75d1abbcb5e132d170d8e324e4e04ed915fa2d22df"),
+              "vocabulary.txt": (422309, "ff77588746d3a2595d32ab5b69ffd7b95ce2441ac57533cb66fc3eb575a115cf"),
+          }
+          cache_hit = os.environ.get("MODEL_CACHE_HIT") == "true"
+          staging = Path("model-staging") / revision
+          cached = Path("model-cache") / revision
+          source = cached if cache_hit else staging
+          if not source.is_dir():
+              sys.exit(1)
+          names = {path.name for path in source.iterdir()}
+          if names != set(expected):
+              sys.exit(1)
+          files = {}
+          for name, (size, digest) in expected.items():
+              path = source / name
+              if path.is_symlink() or not path.is_file() or path.stat().st_size != size:
+                  sys.exit(1)
+              observed = hashlib.sha256(path.read_bytes()).hexdigest()
+              if observed != digest:
+                  sys.exit(1)
+              files[name] = {"bytes": size, "sha256": digest}
+          fingerprint = fingerprint_local_faster_whisper_model(source)
+          if fingerprint != linux_pin:
+              sys.exit(1)
+          if not cache_hit:
+              cached.parent.mkdir(parents=True, exist_ok=True)
+              if cached.exists():
+                  shutil.rmtree(cached)
+              shutil.copytree(staging, cached)
+          destination = Path("/opt/idis-models") / revision
+          subprocess.check_call(["sudo", "-n", "install", "-d", "-m", "0755", str(destination)])
+          for name in expected:
+              subprocess.check_call(
+                  ["sudo", "-n", "install", "-m", "0644", str(cached / name), str(destination / name)]
+              )
+          run = os.environ["GITHUB_RUN_ID"]
+          run_root = Path("/opt/idis-ci-health") / run
+          subprocess.check_call(
+              ["sudo", "-n", "install", "-d", "-m", "0700", "-o", "1000", "-g", "1000", str(run_root)]
+          )
+          receipt = {
+              "files": files,
+              "model_tree_fingerprint_linux": linux_pin,
+              "model_tree_fingerprint_windows_receipt": windows_receipt,
+              "manifest_sha256": manifest_sha256,
+              "revision": revision,
+          }
+          encoded = json.dumps(receipt, sort_keys=True)
+          subprocess.run(
+              ["sudo", "-n", "tee", str(run_root / "model-verified.json")],
+              input=encoded.encode(),
+              stdout=subprocess.DEVNULL,
+              check=True,
+          )
+          subprocess.check_call(["sudo", "-n", "chmod", "0644", str(run_root / "model-verified.json")])
+          print(
+              json.dumps(
+                  {
+                      "phase": "model",
+                      "code": "PRESENT",
+                      "manifest_sha256": manifest_sha256,
+                      "model_tree_fingerprint_linux": linux_pin,
+                      "model_tree_fingerprint_windows_receipt": windows_receipt,
+                  },
+                  sort_keys=True,
+              )
+          )
+          H1B_PY
+        env:
+          MODEL_CACHE_HIT: ${{ steps.model-cache.outputs.cache-hit }}
+      - name: Save pinned tiny.en model cache
+        id: model-cache-save
+        if: "success() && steps.model-cache.outputs.cache-hit != 'true'"
+        uses: actions/cache/save@v4
+        with:
+          path: model-cache/0d3d19a32d3338f10357c0889762bd8d64bbdeba
+          key: h1b-tiny-en-0d3d19a32d3338f10357c0889762bd8d64bbdeba-8a9f6ac2c61d339ea4f5a27d00934ea5fe83bcb0d25b67a01cd3b47b9e1adf34
+      - name: Prepare synthetic profile as root for uid 1000
+        id: prepare-inputs
+        if: success()
+        run: |
+          set -euo pipefail
+          sudo install -d -m 0700 -o 1000 -g 1000 "/opt/idis-ci-health/${GITHUB_RUN_ID}"
+          sudo -n .venv/bin/python .github/scripts/prepare_bootstrap_health.py \
+            --synthetic-ci-health \
+            --authority AUTH-CI-HEALTH-20261017 \
+            --output-root "/opt/idis-ci-health/${GITHUB_RUN_ID}/inputs" \
+            --model-path /opt/idis-models/0d3d19a32d3338f10357c0889762bd8d64bbdeba \
+            --owner-uid 1000
+      - name: Mask maintenance secrets and separate that directory
+        id: mask-maintenance
+        if: success()
+        run: |
+          set -euo pipefail
+          sudo -n GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_SHA="$GITHUB_SHA" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" .venv/bin/python - <<'H1B_PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+          from urllib.parse import unquote, urlsplit
+
+          run = os.environ["GITHUB_RUN_ID"]
+          root = Path(f"/opt/idis-ci-health/{run}/inputs")
+          held = Path(f"/opt/idis-ci-health/{run}/maintenance")
+          os.replace(root / "maintenance", held)
+          payload = json.loads((held / "bootstrap.json").read_text())
+          admin = urlsplit(payload["IDIS_DATABASE_ADMIN_URL"])
+          password = unquote(admin.password or "")
+          print(f"::add-mask::{payload['IDIS_DATABASE_ADMIN_URL']}")
+          print(f"::add-mask::{password}")
+          for name in (
+              "application_password",
+              "erasure_password",
+              "redis_password",
+              "neo4j_password",
+          ):
+              print(f"::add-mask::{payload[name]}")
+          fields = (
+              ("POSTGRES_USER", "postgres"),
+              ("POSTGRES_PASSWORD", password),
+              ("REDIS_PASSWORD", payload["redis_password"]),
+          )
+          lines = []
+          for name, value in fields:
+              if not re.fullmatch(r"[A-Za-z0-9_-]+", value):
+                  raise SystemExit(1)
+              lines.append(name + "=" + value)
+          env_path = Path(f"/opt/idis-ci-health/{run}/datastore.env")
+          flags = os.O_CREAT + os.O_EXCL + os.O_WRONLY
+          fd = os.open(env_path, flags, 0o600)
+          with os.fdopen(fd, "w") as handle:
+              handle.write("\n".join(lines) + "\n")
+          print(json.dumps({"phase": "maintenance", "moved": True}, sort_keys=True))
+          H1B_PY
+      - name: Create the network-none namespace and disposable datastores
+        id: disposable-datastores
+        if: success()
+        run: |
+          set -euo pipefail
+          sudo -n GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_SHA="$GITHUB_SHA" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" .venv/bin/python - <<'H1B_PY'
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          run = os.environ["GITHUB_RUN_ID"]
+          image = "idis:ci-" + os.environ["GITHUB_SHA"]
+          holder = f"idis-h1b-netns-{run}"
+          env_path = Path(f"/opt/idis-ci-health/{run}/datastore.env")
+          child_env = os.environ.copy()
+          for line in env_path.read_text().splitlines():
+              name, value = line.split("=", 1)
+              child_env[name] = value
+          profile = Path(f"/opt/idis-ci-health/{run}/inputs/api/synthetic-bootstrap.env")
+          values = {}
+          for line in profile.read_text().splitlines():
+              name, raw = line.split("=", 1)
+              values[name] = json.loads(raw)
+          objects = Path(values["IDIS_OBJECT_STORE_BASE_DIR"])
+          if objects.parent.parent != Path("/var/lib/idis-ci-health"):
+              raise SystemExit(1)
+          objects.parent.mkdir(parents=True, exist_ok=True)
+          objects.mkdir(mode=0o700)
+          os.chmod(objects, 0o700)
+          os.chmod(objects.parent, 0o700)
+          os.chown(objects, 1000, 1000)
+          os.chown(objects.parent, 1000, 1000)
+          pointer = Path(f"/opt/idis-ci-health/{run}/object-store-parent")
+          pointer.write_text(str(objects.parent) + "\n")
+          os.chmod(pointer, 0o600)
+          Path(f"/opt/idis-ci-health/{run}/object-path").write_text(str(objects) + "\n")
+          subprocess.check_call(
+              [
+                  "docker", "run", "-d", "--name", holder,
+                  "--network", "none",
+                  "--entrypoint", "python", image,
+                  "-c", "import time; time.sleep(10000000)",
+              ]
+          )
+          mode = subprocess.check_output(
+              ["docker", "inspect", "--format", "{{.HostConfig.NetworkMode}}", holder],
+              text=True,
+          ).strip()
+          if mode != "none":
+              raise SystemExit(1)
+          subprocess.check_call(
+              [
+                  "docker", "run", "-d", "--name", f"idis-h1b-pg-{run}",
+                  "--network", f"container:{holder}",
+                  "-e", "POSTGRES_USER",
+                  "-e", "POSTGRES_PASSWORD",
+                  "pgvector/pgvector:pg16@sha256:a97d77306ff47cc1d8add4d000cec2207da2e110746318df3137ce53c337ca30",
+              ],
+              env=child_env,
+          )
+          redis_password = child_env["REDIS_PASSWORD"]
+          if not re.fullmatch(r"[A-Za-z0-9_-]+", redis_password):
+              raise SystemExit(1)
+          child_env["REDISCLI_AUTH"] = redis_password
+          redis_start = r"""sh -c 'printf "bind 127.0.0.1\nprotected-mode yes\nrequirepass %s\n" "$REDIS_PASSWORD" | exec redis-server -'"""
+          prefix = "sh -c '"
+          if not redis_start.startswith(prefix) or not redis_start.endswith("'"):
+              raise SystemExit(1)
+          if "|" not in redis_start or "PIPESTATUS" in redis_start:
+              raise SystemExit(1)
+          subprocess.check_call(
+              [
+                  "docker", "run", "-d", "--name", f"idis-h1b-redis-{run}",
+                  "--network", f"container:{holder}",
+                  "-e", "REDIS_PASSWORD",
+                  "-e", "REDISCLI_AUTH",
+                  "redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499",
+                  "sh", "-c", redis_start[len(prefix):-1],
+              ],
+              env=child_env,
+          )
+          print(json.dumps({"phase": "datastores", "started": True}, sort_keys=True))
+          H1B_PY
+      - name: Census loopback-only topology before the API start
+        id: topology-before
+        if: success()
+        run: |
+          set -euo pipefail
+          sudo -n GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_SHA="$GITHUB_SHA" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" .venv/bin/python - <<'H1B_PY'
+          import json
+          import os
+          import subprocess
+
+          run = os.environ["GITHUB_RUN_ID"]
+          holder = f"idis-h1b-netns-{run}"
+          script = (
+              "import pathlib,sys\n"
+              "names=sorted(p.name for p in pathlib.Path('/sys/class/net').iterdir())\n"
+              "if names!=['lo']:\n"
+              "    sys.exit(1)\n"
+              "rows=pathlib.Path('/proc/net/route').read_text().splitlines()[1:]\n"
+              "for row in rows:\n"
+              "    cols=row.split()\n"
+              "    if cols and cols[0]!='lo':\n"
+              "        sys.exit(1)\n"
+              "for row in pathlib.Path('/proc/net/ipv6_route').read_text().splitlines():\n"
+              "    cols=row.split()\n"
+              "    if cols and cols[-1]!='lo':\n"
+              "        sys.exit(1)\n"
+          )
+          result = subprocess.run(
+              ["docker", "exec", holder, "python", "-c", script],
+              check=False,
+          )
+          print(json.dumps({"phase": "topology-before", "only_lo": result.returncode == 0}, sort_keys=True))
+          if result.returncode != 0:
+              raise SystemExit(result.returncode)
+          H1B_PY
+      - name: Enforce authorized migration ceiling before bootstrap
+        id: migration-ceiling
+        if: success()
+        run: |
+          set -euo pipefail
+          .venv/bin/python scripts/check_migration_ceiling.py
+      - name: Create migration 0038 erasure roles on the postgres database
+        id: erasure-roles
+        if: success()
+        run: |
+          set -euo pipefail
+          sudo -n GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_SHA="$GITHUB_SHA" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" .venv/bin/python - <<'H1B_PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          run = os.environ["GITHUB_RUN_ID"]
+          image = "idis:ci-" + os.environ["GITHUB_SHA"]
+          holder = f"idis-h1b-netns-{run}"
+          workspace = os.environ["GITHUB_WORKSPACE"]
+          maintenance = f"/opt/idis-ci-health/{run}/maintenance"
+          container_script = r"""
+          import json, os, runpy, sys, time
+          from pathlib import Path
+          from urllib.parse import unquote, urlsplit
+          from sqlalchemy import create_engine, text
+          from sqlalchemy.exc import SQLAlchemyError
+          from sqlalchemy.pool import NullPool
+          payload = json.loads(Path("/maintenance/bootstrap.json").read_text())
+          admin = urlsplit(payload["IDIS_DATABASE_ADMIN_URL"])
+          password = unquote(admin.password or "")
+          os.environ["IDIS_CI_ERASURE_ADMIN_URL"] = (
+              "postgresql+psycopg2://postgres:" + password + "@127.0.0.1:5432/postgres"
+          )
+          url = os.environ["IDIS_CI_ERASURE_ADMIN_URL"]
+          deadline = time.time() + 90
+          ready = False
+          while time.time() < deadline:
+              try:
+                  engine = create_engine(url, poolclass=NullPool, connect_args={"connect_timeout": 2})
+                  with engine.connect() as connection:
+                      connection.execute(text("SELECT 1"))
+                  engine.dispose()
+                  ready = True
+                  break
+              except SQLAlchemyError:
+                  time.sleep(2)
+          if not ready:
+              print(json.dumps({"phase": "pg-ready", "code": "CI_HEALTH_DATASTORE_TIMEOUT"}, sort_keys=True))
+              raise SystemExit(1)
+          sys.argv = ["prepare_ci_erasure_roles.py", "--disposable-ci"]
+          runpy.run_path("/src/scripts/prepare_ci_erasure_roles.py", run_name="__main__")
+          """
+          log = Path(maintenance) / "erasure-roles.log"
+          result = subprocess.run(
+              [
+                  "docker", "run", "--rm", "--user", "0",
+                  "--network", f"container:{holder}",
+                  "-v", f"{workspace}:/src:ro",
+                  "-w", "/src",
+                  "-v", f"{maintenance}:/maintenance:ro",
+                  "--entrypoint", "/opt/venv/bin/python",
+                  image, "-c", container_script,
+              ],
+              stdout=subprocess.PIPE,
+              stderr=subprocess.STDOUT,
+              check=False,
+          )
+          log.write_bytes(result.stdout)
+          print(json.dumps({"phase": "erasure-roles", "exit": result.returncode}, sort_keys=True))
+          if result.returncode != 0:
+              raise SystemExit(result.returncode)
+          H1B_PY
+      - name: Bootstrap the sealed database to the packaged Alembic head
+        id: pg-bootstrap
+        if: success()
+        env:
+          IDIS_PG_HOST: "127.0.0.1"
+          IDIS_PG_PORT: "5432"
+          IDIS_PG_DB_NAME: idis_ci_health
+          PG_ADMIN_USER: postgres
+          IDIS_PG_APP_USER: idis_app
+        run: |
+          set -euo pipefail
+          sudo -n GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_SHA="$GITHUB_SHA" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" IDIS_PG_HOST="$IDIS_PG_HOST" IDIS_PG_PORT="$IDIS_PG_PORT" IDIS_PG_DB_NAME="$IDIS_PG_DB_NAME" PG_ADMIN_USER="$PG_ADMIN_USER" IDIS_PG_APP_USER="$IDIS_PG_APP_USER" .venv/bin/python - <<'H1B_PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          run = os.environ["GITHUB_RUN_ID"]
+          image = "idis:ci-" + os.environ["GITHUB_SHA"]
+          holder = f"idis-h1b-netns-{run}"
+          workspace = os.environ["GITHUB_WORKSPACE"]
+          maintenance = f"/opt/idis-ci-health/{run}/maintenance"
+          container_script = r"""
+          import json, os, runpy, sys
+          from pathlib import Path
+          from urllib.parse import unquote, urlsplit
+          payload = json.loads(Path("/maintenance/bootstrap.json").read_text())
+          admin = urlsplit(payload["IDIS_DATABASE_ADMIN_URL"])
+          os.environ["PG_ADMIN_PASSWORD"] = unquote(admin.password or "")
+          os.environ["IDIS_PG_APP_PASSWORD"] = payload["application_password"]
+          sys.argv = ["pg_bootstrap_ci.py"]
+          runpy.run_path("/src/scripts/pg_bootstrap_ci.py", run_name="__main__")
+          """
+          log = Path(maintenance) / "bootstrap.log"
+          result = subprocess.run(
+              [
+                  "docker", "run", "--rm", "--user", "0",
+                  "--network", f"container:{holder}",
+                  "-v", f"{workspace}:/src:ro",
+                  "-w", "/src",
+                  "-v", f"{maintenance}:/maintenance:ro",
+                  "--entrypoint", "/opt/venv/bin/python",
+                  "-e", "IDIS_PG_HOST",
+                  "-e", "IDIS_PG_PORT",
+                  "-e", "IDIS_PG_DB_NAME",
+                  "-e", "PG_ADMIN_USER",
+                  "-e", "IDIS_PG_APP_USER",
+                  image, "-c", container_script,
+              ],
+              stdout=subprocess.PIPE,
+              stderr=subprocess.STDOUT,
+              check=False,
+              env=os.environ.copy(),
+          )
+          log.write_bytes(result.stdout)
+          print(json.dumps({"phase": "pg-bootstrap", "exit": result.returncode}, sort_keys=True))
+          if result.returncode != 0:
+              raise SystemExit(result.returncode)
+          H1B_PY
+      - name: Qualify startup env and start the API
+        id: start-api
+        if: success()
+        run: |
+          set -euo pipefail
+          sudo -n GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_SHA="$GITHUB_SHA" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" .venv/bin/python - <<'H1B_PY'
+          import importlib.util
+          import json
+          import os
+          import re
+          import shutil
+          import subprocess
+          import sys
+          import time
+          from pathlib import Path
+
+          run = os.environ["GITHUB_RUN_ID"]
+          image = "idis:ci-" + os.environ["GITHUB_SHA"]
+          holder = f"idis-h1b-netns-{run}"
+          root = Path(f"/opt/idis-ci-health/{run}/inputs")
+          spec = importlib.util.spec_from_file_location(
+              "ci_bootstrap_health", ".github/scripts/prepare_bootstrap_health.py"
+          )
+          helper = importlib.util.module_from_spec(spec)
+          sys.modules[spec.name] = helper
+          spec.loader.exec_module(helper)
+          raw = subprocess.check_output(
+              [
+                  "docker", "image", "inspect",
+                  "--format", "{{range .Config.Env}}{{println .}}{{end}}",
+                  image,
+              ],
+              text=True,
+          )
+          image_defaults = {}
+          for line in raw.splitlines():
+              if "=" not in line:
+                  continue
+              name, value = line.split("=", 1)
+              if name not in helper._IMAGE_CONTROL_NAMES:
+                  raise SystemExit(1)
+              image_defaults[name] = value
+          defaults_path = Path(f"/opt/idis-ci-health/{run}/image-defaults.json")
+          defaults_path.write_text(json.dumps(image_defaults))
+          os.chown(defaults_path, 1000, 1000)
+          os.chmod(defaults_path, 0o400)
+          run_root = Path(f"/opt/idis-ci-health/{run}")
+          lib = run_root / "lib"
+          helper_copy = run_root / "prepare_bootstrap_health.py"
+          subprocess.check_call(
+              [
+                  "sudo", "-n", "install", "-m", "0644", "-o", "1000", "-g", "1000",
+                  ".github/scripts/prepare_bootstrap_health.py",
+                  str(helper_copy),
+              ]
+          )
+
+          def publish_file(source: Path, destination: Path) -> None:
+              if source.is_symlink() and source.is_dir():
+                  raise SystemExit(1)
+              if not source.is_file():
+                  raise SystemExit(1)
+              inside = destination.parent == lib or lib in destination.parents
+              if not inside:
+                  raise SystemExit(1)
+              destination.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copyfile(source, destination)
+              os.chown(destination, 1000, 1000)
+              os.chmod(destination, 0o644)
+              current = destination.parent
+              while current != run_root:
+                  os.chown(current, 1000, 1000)
+                  os.chmod(current, 0o755)
+                  current = current.parent
+
+          crypto_file = sys.modules["cryptography"].__file__
+          cffi_file = sys.modules["_cffi_backend"].__file__
+          idis_file = sys.modules["idis"].__file__
+          if crypto_file is None or cffi_file is None or idis_file is None:
+              raise SystemExit(1)
+          crypto_root = Path(crypto_file).resolve()
+          if crypto_root.name != "__init__.py":
+              raise SystemExit(1)
+          crypto_root = crypto_root.parent
+          for path in crypto_root.rglob("*"):
+              if "__pycache__" in path.parts or path.is_dir():
+                  continue
+              publish_file(path, lib / "cryptography" / path.relative_to(crypto_root))
+          cffi_path = Path(cffi_file).resolve()
+          publish_file(cffi_path, lib / cffi_path.name)
+          idis_root = Path(idis_file).resolve().parent
+          for relative in (
+              Path("__init__.py"),
+              Path("runtime") / "__init__.py",
+              Path("runtime") / "profile.py",
+              Path("runtime") / "secure_files.py",
+              Path("runtime") / "strict_auth.py",
+          ):
+              publish_file(idis_root / relative, lib / "idis" / relative)
+          qualify = r"""
+          import importlib.util, json, os
+          import sys
+          from pathlib import Path
+          run = os.environ["GITHUB_RUN_ID"]
+          spec = importlib.util.spec_from_file_location(
+              "ci_bootstrap_health",
+              f"/opt/idis-ci-health/{run}/prepare_bootstrap_health.py",
+          )
+          helper = importlib.util.module_from_spec(spec)
+          sys.modules[spec.name] = helper
+          spec.loader.exec_module(helper)
+          image_defaults = json.loads(Path(f"/opt/idis-ci-health/{run}/image-defaults.json").read_text())
+          root = Path(f"/opt/idis-ci-health/{run}/inputs")
+          startup = dict(image_defaults)
+          startup["IDIS_STRICT_DOTENV_PATH"] = str(root / "api" / "synthetic-bootstrap.env")
+          import hashlib
+          digest = hashlib.sha256((root / "manifest.json").read_bytes()).hexdigest()
+          helper.qualify_inputs(
+              helper.PreparedInputs(root=root, manifest_sha256=digest),
+              startup_env=startup,
+              image_defaults=image_defaults,
+          )
+          print(json.dumps({"phase": "qualify", "code": "OK"}, sort_keys=True))
+          """
+          script_path = Path(f"/opt/idis-ci-health/{run}/qualify.py")
+          script_path.write_text(qualify)
+          os.chown(script_path, 1000, 1000)
+          os.chmod(script_path, 0o500)
+          interpreter = os.path.realpath(sys.executable)
+          workspace = os.environ["GITHUB_WORKSPACE"]
+          for prefix in (workspace, "/home/runner"):
+              if (
+                  interpreter == prefix
+                  or interpreter.startswith(prefix + "/")
+                  or interpreter.startswith(prefix + os.sep)
+              ):
+                  raise SystemExit(1)
+          if not os.path.isfile(interpreter):
+              raise SystemExit(1)
+          subprocess.check_call(
+              [
+                  "sudo", "-n", "-u", "#1000",
+                  "GITHUB_RUN_ID=" + run,
+                  "PYTHONPATH=" + str(lib),
+                  interpreter,
+                  "-S",
+                  str(script_path),
+              ],
+              cwd=str(run_root),
+          )
+          dotenv = str(root / "api" / "synthetic-bootstrap.env")
+          objects = Path(f"/opt/idis-ci-health/{run}/object-path").read_text().strip()
+          model = "/opt/idis-models/0d3d19a32d3338f10357c0889762bd8d64bbdeba"
+          redis_name = f"idis-h1b-redis-{run}"
+          env_lines = Path(f"/opt/idis-ci-health/{run}/datastore.env").read_text().splitlines()
+          redis_password = ""
+          for line in env_lines:
+              name, value = line.split("=", 1)
+              if name == "REDIS_PASSWORD":
+                  redis_password = value
+          if not re.fullmatch(r"[A-Za-z0-9_-]+", redis_password):
+              raise SystemExit(1)
+          probe_env = os.environ.copy()
+          probe_env["REDISCLI_AUTH"] = redis_password
+          deadline = time.time() + 30
+          ready = False
+          while time.time() < deadline:
+              probe = subprocess.run(
+                  [
+                      "docker", "exec", "-e", "REDISCLI_AUTH", redis_name,
+                      "redis-cli", "-h", "127.0.0.1", "ping",
+                  ],
+                  env=probe_env,
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.DEVNULL,
+                  check=False,
+              )
+              if probe.returncode == 0:
+                  ready = True
+                  break
+              time.sleep(1)
+          if not ready:
+              print(json.dumps({"phase": "redis", "code": "CI_HEALTH_DATASTORE_TIMEOUT"}, sort_keys=True))
+              raise SystemExit(1)
+          api = f"idis-h1b-api-{run}"
+          child_env = os.environ.copy()
+          child_env["IDIS_STRICT_DOTENV_PATH"] = dotenv
+          subprocess.check_call(
+              [
+                  "docker", "run", "-d", "--name", api,
+                  "--network", f"container:{holder}",
+                  "--read-only",
+                  "--tmpfs", "/tmp:rw,nosuid,size=2147483648",
+                  "-v", f"{root}:{root}:ro",
+                  "-v", f"{model}:{model}:ro",
+                  "-v", f"{objects}:{objects}",
+                  "-e", "IDIS_STRICT_DOTENV_PATH",
+                  image,
+              ],
+              env=child_env,
+          )
+          expected = [
+              "python", "-m", "idis.runtime.strict_launcher", "api",
+              "--host", "0.0.0.0", "--port", "8000",
+              "--pid-file", "/tmp/idis-api.pid",
+          ]
+          inspected = json.loads(subprocess.check_output(["docker", "inspect", api], text=True))
+          entry = inspected[0] if isinstance(inspected, list) and inspected else {}
+          path = entry.get("Path") if isinstance(entry, dict) else None
+          args = entry.get("Args") if isinstance(entry, dict) else None
+          exact = (
+              isinstance(path, str)
+              and isinstance(args, list)
+              and all(isinstance(item, str) for item in args)
+              and [path, *args] == expected
+          )
+          print(json.dumps({"phase": "cmdline", "exact": exact}, sort_keys=True))
+          if not exact:
+              raise SystemExit(1)
+          H1B_PY
+      - name: Test container health check
+        id: container_health
+        if: success()
+        run: |
+          set -euo pipefail
+          api="idis-h1b-api-${GITHUB_RUN_ID}"
           echo "=== Waiting for container to start ==="
           sleep 10
-          
           echo "=== Checking health endpoint ==="
-          for i in {1..30}; do
-            if curl -sf http://localhost:8000/health; then
-              echo ""
+          ok=0
+          i=1
+          while [ "$i" -le 30 ]; do
+            if docker exec "$api" curl -sf http://127.0.0.1:8000/health > /tmp/idis-health-body.json; then
+              python3 -c 'import json; body=json.load(open("/tmp/idis-health-body.json")); assert body["status"]=="ok" and body["version"]=="6.3"'
               echo "[OK] Health check passed"
-              exit 0
+              ok=1
+              break
             fi
-            echo "Attempt $i: waiting..."
+            echo "Attempt ${i}: waiting..."
             sleep 2
+            i=$((i + 1))
           done
-          
+          log="/opt/idis-ci-health/${GITHUB_RUN_ID}/maintenance/api-container.log"
+          set +e
+          if docker container inspect "$api" >/dev/null 2>&1; then
+            sudo -n sh -c "docker logs '$api' > '$log' 2>&1"
+          else
+            ok=0
+          fi
+          sudo -n GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_SHA="$GITHUB_SHA" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" .venv/bin/python - <<'H1B_PY'
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          run = os.environ["GITHUB_RUN_ID"]
+          log = Path(f"/opt/idis-ci-health/{run}/maintenance/api-container.log")
+          text = log.read_text(errors="replace") if log.is_file() else ""
+          known = {
+              "POPPLER_RUNTIME_DRIFTED",
+              "POPPLER_RUNTIME_IDENTITY_INVALID",
+              "POPPLER_RUNTIME_UNAVAILABLE",
+              "POPPLER_RUNTIME_VERSION_MISMATCH",
+              "CI_HEALTH_AUDIT_QUERY_FAILED",
+              "CI_HEALTH_DATASTORE_TIMEOUT",
+              "CI_HEALTH_STARTUP_ENV_REJECTED",
+              "GOVERNANCE_SCHEMA_INVALID",
+              "STRICT_FULL_LIVE_BLOCKED",
+              "STRICT_LAUNCH_TARGET_INVALID",
+              "STRICT_PROCESS_ROLE_INVALID",
+              "STRICT_PROFILE_GENERATION_INVALID",
+              "STRICT_PROFILE_LOAD_FAILED",
+              "STRICT_PROFILE_MISMATCH",
+          }
+          poppler_codes = {
+              "POPPLER_RUNTIME_DRIFTED",
+              "POPPLER_RUNTIME_IDENTITY_INVALID",
+              "POPPLER_RUNTIME_UNAVAILABLE",
+              "POPPLER_RUNTIME_VERSION_MISMATCH",
+          }
+          found = [
+              token
+              for token in re.findall(r"[A-Z][A-Z0-9_]+", text)
+              if token in known
+          ]
+          code = next((token for token in reversed(found) if token in poppler_codes), None)
+          if code is None and found:
+              code = found[-1]
+          exit_code = subprocess.check_output(
+              [
+                  "docker", "inspect", "--format", "{{.State.ExitCode}}",
+                  f"idis-h1b-api-{run}",
+              ],
+              text=True,
+          ).strip()
+          Path(f"/opt/idis-ci-health/{run}/api-exit.json").write_text(
+              json.dumps({"code": code, "exit": int(exit_code)}, sort_keys=True)
+          )
+          H1B_PY
+          extract_status=$?
+          set -e
+          if [ "$ok" -eq 1 ] && [ "$extract_status" -eq 0 ]; then
+            exit 0
+          fi
           echo "[FAIL] Health check failed"
-          docker logs idis-test
           exit 1
 
+      - name: Run the loader negative in the step-21 image
+        id: loader-negative
+        if: "always() && steps.container_health.outcome != 'skipped'"
+        run: |
+          set -euo pipefail
+          cat > "${RUNNER_TEMP}/idis-loader-negative.sh" <<'EOF'
+          set -euo pipefail
+          mkdir -p /tmp/idis-pyc
+          python -m pip --isolated install --index-url https://pypi.org/simple \
+            -c "${GITHUB_WORKSPACE}/requirements/constraints-py311.txt" \
+            --target /tmp/idis-loader-pytest \
+            pytest
+          PYTHONPATH="/tmp/idis-loader-pytest" \
+            PYTHONDONTWRITEBYTECODE=1 \
+            PYTHONPYCACHEPREFIX=/tmp/idis-pyc \
+            python -m pytest -p no:cacheprovider -q \
+            --junitxml="${GITHUB_WORKSPACE}/loader_negative_pytest.xml" \
+            tests/slice100_task4/test_linux_poppler_loader_negative.py
+          EOF
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e HOME=/tmp \
+            -e IDIS_REQUIRE_LOADER_NEGATIVE=1 \
+            -e GITHUB_WORKSPACE \
+            -v "${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}" \
+            -v "${GITHUB_WORKSPACE}/tests:${GITHUB_WORKSPACE}/tests:ro" \
+            -v "${RUNNER_TEMP}:${RUNNER_TEMP}" \
+            -w "${GITHUB_WORKSPACE}" \
+            "idis:ci-${GITHUB_SHA}" \
+            bash "${RUNNER_TEMP}/idis-loader-negative.sh"
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse("loader_negative_pytest.xml").getroot()
+          suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+          tests = sum(int(suite.get("tests", 0)) for suite in suites)
+          failures = sum(int(suite.get("failures", 0)) for suite in suites)
+          errors = sum(int(suite.get("errors", 0)) for suite in suites)
+          skipped = sum(int(suite.get("skipped", 0)) for suite in suites)
+          if tests != 1 or failures != 0 or errors != 0 or skipped != 0:
+              raise SystemExit(
+                  "LOADER_NEGATIVE_COUNT "
+                  f"tests={tests} failures={failures} errors={errors} skipped={skipped}"
+              )
+          PY
+      - name: Record launch audit, topology, and maintenance absence
+        id: launch-proof
+        if: "always() && steps.start-api.outcome != 'skipped'"
+        env:
+          CONTAINER_HEALTH_OUTCOME: ${{ steps.container_health.outcome }}
+          IMAGE_ENV_OUTCOME: ${{ steps.inspect-image-env.outcome }}
+          MODEL_PRESENCE_OUTCOME: ${{ steps.model-verify.outcome }}
+          PROFILE_OUTCOME: ${{ steps.prepare-inputs.outcome }}
+          DATASTORES_OUTCOME: ${{ steps.disposable-datastores.outcome }}
+          TOPOLOGY_BEFORE_OUTCOME: ${{ steps.topology-before.outcome }}
+          MIGRATION_CEILING_OUTCOME: ${{ steps.migration-ceiling.outcome }}
+          ERASURE_ROLES_OUTCOME: ${{ steps.erasure-roles.outcome }}
+          PG_BOOTSTRAP_OUTCOME: ${{ steps.pg-bootstrap.outcome }}
+          API_START_OUTCOME: ${{ steps.start-api.outcome }}
+        run: |
+          set -euo pipefail
+          sudo -n GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_SHA="$GITHUB_SHA" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" CONTAINER_HEALTH_OUTCOME="$CONTAINER_HEALTH_OUTCOME" IMAGE_ENV_OUTCOME="$IMAGE_ENV_OUTCOME" MODEL_PRESENCE_OUTCOME="$MODEL_PRESENCE_OUTCOME" PROFILE_OUTCOME="$PROFILE_OUTCOME" DATASTORES_OUTCOME="$DATASTORES_OUTCOME" TOPOLOGY_BEFORE_OUTCOME="$TOPOLOGY_BEFORE_OUTCOME" MIGRATION_CEILING_OUTCOME="$MIGRATION_CEILING_OUTCOME" ERASURE_ROLES_OUTCOME="$ERASURE_ROLES_OUTCOME" PG_BOOTSTRAP_OUTCOME="$PG_BOOTSTRAP_OUTCOME" API_START_OUTCOME="$API_START_OUTCOME" .venv/bin/python - <<'H1B_PY'
+          import hashlib
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          run = os.environ["GITHUB_RUN_ID"]
+          image = "idis:ci-" + os.environ["GITHUB_SHA"]
+          holder = f"idis-h1b-netns-{run}"
+          api = f"idis-h1b-api-{run}"
+          present = subprocess.run(
+              ["docker", "container", "inspect", api],
+              stdout=subprocess.DEVNULL,
+              stderr=subprocess.DEVNULL,
+              check=False,
+          )
+          if present.returncode != 0:
+              print(json.dumps({"phase": "launch-proof", "api_created": False}, sort_keys=True))
+              raise SystemExit(1)
+          workspace = os.environ["GITHUB_WORKSPACE"]
+          maintenance = f"/opt/idis-ci-health/{run}/maintenance"
+          expected_files = {
+              "README.md": {"bytes": 1323, "sha256": "1b7816626bf0548e4b71a467f4112b4592924bc818e3117f19aefcc50ce4b6aa"},
+              "config.json": {"bytes": 2317, "sha256": "14b1b421a90349bc551b881461426b561a874049cb9e4c4864f2ca384f6a7cc5"},
+              "model.bin": {"bytes": 75537502, "sha256": "1a5afae06a4db91c975c9a9d78be5cc110ee4ea022ad57d55492e4550e936b2a"},
+              "tokenizer.json": {"bytes": 2128466, "sha256": "929c5252409436dce1b38a75d1abbcb5e132d170d8e324e4e04ed915fa2d22df"},
+              "vocabulary.txt": {"bytes": 422309, "sha256": "ff77588746d3a2595d32ab5b69ffd7b95ce2441ac57533cb66fc3eb575a115cf"},
+          }
+          linux_pin = "4b1662df734cdf3854f6a3de0a9fd9c3fdaadfa644d6c7471f5c63c9cb62f6e5"
+          windows_receipt = "47e043de5fce0c94a30e264cb503f65ccb69cf03b6db296fa14e937a0ab81aea"
+          census = (
+              "import pathlib,sys\n"
+              "names=sorted(p.name for p in pathlib.Path('/sys/class/net').iterdir())\n"
+              "if names!=['lo']:\n"
+              "    sys.exit(1)\n"
+              "rows=pathlib.Path('/proc/net/route').read_text().splitlines()[1:]\n"
+              "for row in rows:\n"
+              "    cols=row.split()\n"
+              "    if cols and cols[0]!='lo':\n"
+              "        sys.exit(1)\n"
+              "for row in pathlib.Path('/proc/net/ipv6_route').read_text().splitlines():\n"
+              "    cols=row.split()\n"
+              "    if cols and cols[-1]!='lo':\n"
+              "        sys.exit(1)\n"
+          )
+          topology = subprocess.run(
+              ["docker", "exec", holder, "python", "-c", census],
+              check=False,
+          )
+          inspected = json.loads(subprocess.check_output(["docker", "inspect", api], text=True))[0]
+          held = f"/opt/idis-ci-health/{run}/maintenance"
+          inputs = f"/opt/idis-ci-health/{run}/inputs"
+          visible = Path(inputs, "maintenance").exists()
+          for mount in inspected.get("Mounts", []):
+              source = mount.get("Source") or ""
+              destination = (mount.get("Destination") or "").rstrip("/")
+              if source == held or destination.endswith("/maintenance") or held in source:
+                  visible = True
+          query = r"""
+          import json, os, sys
+          from pathlib import Path
+          from urllib.parse import unquote, urlsplit
+          from sqlalchemy import create_engine, text
+          from sqlalchemy.exc import SQLAlchemyError
+          from sqlalchemy.pool import NullPool
+          payload = json.loads(Path("/maintenance/bootstrap.json").read_text())
+          admin = urlsplit(payload["IDIS_DATABASE_ADMIN_URL"])
+          password = unquote(admin.password or "")
+          url = "postgresql+psycopg2://postgres:" + password + "@127.0.0.1:5432/idis_ci_health"
+          sql = (
+              "SELECT COUNT(*) FILTER (WHERE event->'payload'->'safe'->>'command' = 'api'), "
+              "COUNT(*) FILTER (WHERE event->'payload'->'safe'->>'command' = 'gate') "
+              "FROM audit_events "
+              "WHERE event_type = 'integration.strict_launch.admitted'"
+          )
+          try:
+              engine = create_engine(url, poolclass=NullPool, connect_args={"connect_timeout": 5})
+              with engine.connect() as connection:
+                  api_rows, gate_rows = connection.execute(text(sql)).one()
+              engine.dispose()
+          except SQLAlchemyError:
+              sys.stderr.write("CI_HEALTH_AUDIT_QUERY_FAILED\n")
+              raise SystemExit(1)
+          sys.stdout.write(f"{int(api_rows)} {int(gate_rows)}\n")
+          """
+          counted = subprocess.run(
+              [
+                  "docker", "run", "--rm", "--user", "0",
+                  "--network", f"container:{holder}",
+                  "-v", f"{maintenance}:/maintenance:ro",
+                  "--entrypoint", "/opt/venv/bin/python",
+                  image, "-c", query,
+              ],
+              capture_output=True,
+              text=True,
+              check=False,
+          )
+          Path(maintenance, "launch-audit.log").write_text(counted.stderr)
+          line = counted.stdout.strip()
+          api_rows = -1
+          gate_rows = -1
+          if counted.returncode == 0 and line.count(" ") == 1:
+              api_text, gate_text = line.split(" ")
+              api_rows = int(api_text)
+              gate_rows = int(gate_text)
+          exit_path = Path(f"/opt/idis-ci-health/{run}/api-exit.json")
+          exit_info = json.loads(exit_path.read_text()) if exit_path.is_file() else {}
+          manifest = json.loads((Path(inputs) / "manifest.json").read_text())
+          verified = json.loads(Path(f"/opt/idis-ci-health/{run}/model-verified.json").read_text())
+          if verified.get("files") != expected_files:
+              raise SystemExit(1)
+          path = inspected.get("Path")
+          args = inspected.get("Args")
+          expected_cmd = [
+              "python", "-m", "idis.runtime.strict_launcher", "api",
+              "--host", "0.0.0.0", "--port", "8000",
+              "--pid-file", "/tmp/idis-api.pid",
+          ]
+          cmdline_exact = (
+              isinstance(path, str)
+              and isinstance(args, list)
+              and all(isinstance(item, str) for item in args)
+              and [path, *args] == expected_cmd
+          )
+          health_outcome = os.environ["CONTAINER_HEALTH_OUTCOME"]
+          receipt = {
+              "authority": "AUTH-CI-HEALTH-20261017",
+              "purpose": "container health with synthetic fixtures",
+              "provider_invocation_attempts": "NOT_EXECUTED",
+              "manifest_sha256": hashlib.sha256((Path(inputs) / "manifest.json").read_bytes()).hexdigest(),
+              "public_key_sha256": manifest["public_key_sha256"],
+              "api_launch_rows": api_rows,
+              "gate_launch_rows": gate_rows,
+              "code": exit_info.get("code"),
+              "api_exit": exit_info.get("exit"),
+              "maintenance_visible": visible,
+              "cmdline_exact": cmdline_exact,
+              "topology_after_only_lo": topology.returncode == 0,
+              "health_outcome": health_outcome,
+              "model_files": expected_files,
+              "model_tree_fingerprint_linux": linux_pin,
+              "model_tree_fingerprint_windows_receipt": windows_receipt,
+              "phases": {
+                  "image_env": os.environ["IMAGE_ENV_OUTCOME"],
+                  "model_presence": os.environ["MODEL_PRESENCE_OUTCOME"],
+                  "profile": os.environ["PROFILE_OUTCOME"],
+                  "datastores": os.environ["DATASTORES_OUTCOME"],
+                  "topology_before": os.environ["TOPOLOGY_BEFORE_OUTCOME"],
+                  "migration_ceiling": os.environ["MIGRATION_CEILING_OUTCOME"],
+                  "erasure_roles": os.environ["ERASURE_ROLES_OUTCOME"],
+                  "pg_bootstrap": os.environ["PG_BOOTSTRAP_OUTCOME"],
+                  "api_start": os.environ["API_START_OUTCOME"],
+                  "health": health_outcome,
+                  "poppler": exit_info.get("code"),
+              },
+          }
+          print(json.dumps(receipt, sort_keys=True))
+          if (
+              counted.returncode != 0
+              or api_rows < 1
+              or gate_rows != 0
+              or visible
+              or topology.returncode != 0
+              or not cmdline_exact
+          ):
+              raise SystemExit(1)
+          H1B_PY
+      - name: Record admission codes when the API is blocked
+        id: admission-codes
+        if: always() && steps.start-api.outcome != 'skipped'
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          sudo -n GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_SHA="$GITHUB_SHA" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" .venv/bin/python - <<'H1B_PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          run = os.environ["GITHUB_RUN_ID"]
+          image = "idis:ci-" + os.environ["GITHUB_SHA"]
+          holder = "idis-h1b-netns-" + run
+          root = Path("/opt/idis-ci-health/" + run)
+          maintenance = root / "maintenance"
+          inputs = root / "inputs"
+          model = "/opt/idis-models/0d3d19a32d3338f10357c0889762bd8d64bbdeba"
+          _ADMISSION_CODES = frozenset({
+              "AUDIT_EMIT_FAILED",
+              "AUDIT_FAILURE",
+              "AUTH_ACCEPTANCE_KEY_MISMATCH",
+              "AUTH_CANARY_KEY_MISMATCH",
+              "AUTH_CONFIG_BLOCKED",
+              "DATABASE_SCHEMA_NOT_READY",
+              "DATABASE_UNAVAILABLE",
+              "DOCUMENT_NO_SUBSTANTIVE_CONTENT_ATTESTATION_MANIFEST_INVALID",
+              "ERASURE_EXECUTOR_CONFIG_BLOCKED",
+              "ERASURE_EXECUTOR_DATABASE_MISMATCH",
+              "ERASURE_EXECUTOR_POSTURE_BLOCKED",
+              "ERASURE_EXECUTOR_UNAUTHORIZED",
+              "GOVERNANCE_ADMIN_UNAUTHORIZED",
+              "IDEMPOTENCY_NON_DURABLE_BLOCKED",
+              "IDEMPOTENCY_STORE_FAILED",
+              "MEDIA_LARGE_UPLOAD_UNSUPPORTED",
+              "OBJECT_STORE_HEALTH_BLOCKED",
+              "PROVIDER_BUDGET_CONFIG_BLOCKED",
+              "PROVIDER_BUDGET_PROVIDER_UNCONFIGURED",
+              "RATE_LIMIT_STORE_UNAVAILABLE",
+              "RESIDENCY_SERVICE_REGION_UNSET",
+              "RLS_HEALTH_BLOCKED",
+              "STRICT_FULL_LIVE_BLOCKED",
+              "STRICT_PROCESS_ROLE_INVALID",
+              "WATERMARK_BATCH_ATTESTATION_MISMATCH",
+              "WORKER_CLAIM_NOT_PROVEN",
+              "WORKER_LEASE_CONFIG_INVALID",
+              "WORKER_TENANT_SCOPE_MISSING",
+          })
+          _ADMISSION_COMPONENTS = frozenset({
+              "audit",
+              "auth",
+              "budgets",
+              "erasure_executor",
+              "idempotency",
+              "ingestion",
+              "object_store",
+              "postgres",
+              "redis",
+              "worker",
+          })
+          _POSTGRES_KEYS = frozenset({
+              "alembic_version",
+              "relforcerowsecurity",
+              "rolbypassrls",
+              "rolsuper",
+              "schema_at_head",
+          })
+
+          def _revision_id(value):
+              if isinstance(value, str) and value.isascii() and 0 < len(value) <= 64 and all(c.isalnum() or c == "_" for c in value):
+                  return value
+              return None
+
+          def _public_code(value):
+              if value is None:
+                  return None
+              if isinstance(value, str) and value in _ADMISSION_CODES:
+                  return value
+              return "UNLISTED"
+
+          def _public_checks(payload):
+              checks = payload.get("checks")
+              if not isinstance(checks, list):
+                  return None
+              public = []
+              for item in checks:
+                  if not isinstance(item, (list, tuple)) or len(item) != 2:
+                      return None
+                  component, code = item
+                  if not isinstance(component, str) or component not in _ADMISSION_COMPONENTS:
+                      return None
+                  if code is not None and not isinstance(code, str):
+                      return None
+                  public.append([component, _public_code(code)])
+              return public
+
+          def _public_postgres(raw):
+              if not isinstance(raw, dict) or not set(raw).issubset(_POSTGRES_KEYS):
+                  return None
+              public = {}
+              for name in ("relforcerowsecurity", "rolbypassrls", "rolsuper", "schema_at_head"):
+                  if name not in raw:
+                      continue
+                  if type(raw[name]) is not bool:
+                      return None
+                  public[name] = raw[name]
+              if "alembic_version" in raw:
+                  revision = _revision_id(raw["alembic_version"])
+                  if revision is not None:
+                      public["alembic_version"] = revision
+              return public
+
+          def _unavailable():
+              print(json.dumps({"code": "DIAGNOSTIC_UNAVAILABLE", "phase": "admission"}, sort_keys=True))
+              raise SystemExit(0)
+
+          try:
+              exit_info = json.loads((root / "api-exit.json").read_text(encoding="utf-8"))
+          except (OSError, UnicodeError, json.JSONDecodeError):
+              raise SystemExit(0)
+          if not isinstance(exit_info, dict) or exit_info.get("code") != "STRICT_FULL_LIVE_BLOCKED":
+              raise SystemExit(0)
+          try:
+              objects = (root / "object-path").read_text(encoding="utf-8").strip()
+              if not objects or "\n" in objects or "\r" in objects:
+                  _unavailable()
+              dotenv = str(inputs / "api" / "synthetic-bootstrap.env")
+              child_env = os.environ.copy()
+              child_env["IDIS_STRICT_DOTENV_PATH"] = dotenv
+              script = r"""
+          import json
+
+          from idis.persistence import db
+          from idis.runtime.dependency_probes import TENANT_RLS_TABLES, _expected_alembic_head
+          from idis.runtime.strict_launcher import (
+              _default_admission_runner,
+              load_profile_then_import_runtime,
+          )
+          from sqlalchemy import text
+
+          profile, _runtime = load_profile_then_import_runtime(command="api")
+          report = _default_admission_runner("api", profile, task4_ingestion_scope=True)()
+          checks = [[item.component, item.code] for item in report.checks]
+          payload = {"checks": checks, "phase": "admission"}
+
+          def _revision_id(value):
+              if isinstance(value, str) and value.isascii() and 0 < len(value) <= 64 and all(c.isalnum() or c == "_" for c in value):
+                  return value
+              return None
+
+          try:
+              head = _expected_alembic_head()
+              with db.begin_app_conn() as connection:
+                  revision_row = connection.execute(
+                      text("SELECT version_num FROM alembic_version")
+                  ).first()
+                  role_row = connection.execute(
+                      text(
+                          "SELECT rolsuper, rolbypassrls FROM pg_roles "
+                          "WHERE rolname = 'idis_app'"
+                      )
+                  ).first()
+                  table_rows = connection.execute(
+                      text(
+                          "SELECT c.relname, c.relforcerowsecurity "
+                          "FROM pg_catalog.pg_class AS c "
+                          "JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace "
+                          "WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')"
+                      )
+                  ).all()
+              revision = None
+              if revision_row is not None:
+                  revision = _revision_id(str(revision_row[0]))
+              forced = {}
+              for row in table_rows:
+                  forced[str(row[0])] = bool(row[1])
+              covered = True
+              for name in TENANT_RLS_TABLES:
+                  if forced.get(name) is not True:
+                      covered = False
+              postgres = {
+                  "relforcerowsecurity": covered,
+                  "schema_at_head": revision is not None and revision == head,
+              }
+              if role_row is not None:
+                  postgres["rolsuper"] = bool(role_row[0])
+                  postgres["rolbypassrls"] = bool(role_row[1])
+              if revision is not None:
+                  postgres["alembic_version"] = revision
+              payload["postgres"] = postgres
+          except Exception:
+              pass
+          print(json.dumps(payload, sort_keys=True))
+          """
+              completed = subprocess.run(
+                  [
+                      "docker",
+                      "run",
+                      "--rm",
+                      "--name", f"idis-ci-admission-codes-{run}",
+                      "--user", "1000",
+                      "--network", "container:" + holder,
+                      "--read-only",
+                      "--tmpfs", "/tmp:rw,nosuid,size=2147483648",
+                      "-v", inputs.as_posix() + ":" + inputs.as_posix() + ":ro",
+                      "-v", model + ":" + model + ":ro",
+                      "-v", objects + ":" + objects,
+                      "-e", "IDIS_STRICT_DOTENV_PATH",
+                      "--entrypoint", "/opt/venv/bin/python",
+                      image,
+                      "-c",
+                      script,
+                  ],
+                  env=child_env,
+                  capture_output=True,
+                  check=False,
+                  text=True,
+                  encoding="utf-8",
+                  errors="replace",
+                  timeout=480,
+              )
+              maintenance.mkdir(parents=True, exist_ok=True)
+              (maintenance / "admission-diagnostic.log").write_text(completed.stderr, encoding="utf-8")
+              if completed.returncode != 0:
+                  _unavailable()
+              text_out = completed.stdout.strip()
+              if not text_out or "\n" in text_out or "\r" in text_out:
+                  _unavailable()
+              payload = json.loads(text_out)
+              if not isinstance(payload, dict) or payload.get("phase") != "admission":
+                  _unavailable()
+              if not set(payload).issubset({"checks", "phase", "postgres"}):
+                  _unavailable()
+              checks = _public_checks(payload)
+              if checks is None:
+                  _unavailable()
+              public = {"checks": checks, "phase": "admission"}
+              if "postgres" in payload:
+                  postgres = _public_postgres(payload["postgres"])
+                  if postgres is None:
+                      _unavailable()
+                  public["postgres"] = postgres
+              print(json.dumps(public, sort_keys=True))
+          except SystemExit:
+              raise
+          except Exception:
+              _unavailable()
+          H1B_PY
       - name: Cleanup
+        id: cleanup
         if: always()
         run: |
-          docker stop idis-test || true
-          docker rm idis-test || true
+          set -euo pipefail
+          sudo -n GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_SHA="$GITHUB_SHA" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" .venv/bin/python - <<'H1B_PY'
+          import os
+          import shutil
+          import subprocess
+          from pathlib import Path
 
+          run = os.environ["GITHUB_RUN_ID"]
+          secret_root = Path(f"/opt/idis-ci-health/{run}")
+          errors = []
+
+          def unlink_file(path: Path, label: str) -> None:
+              if path.is_symlink():
+                  errors.append("refusing secret path")
+                  return
+              if path.exists():
+                  path.unlink()
+              if path.exists():
+                  errors.append(label)
+
+          unlink_file(secret_root / "datastore.env", "datastore.env remains")
+          unlink_file(secret_root / "redis.conf", "redis.conf remains")
+          for container in (*(f"idis-h1b-{name}-{run}" for name in ("api", "pg", "redis", "netns")), f"idis-ci-admission-codes-{run}"):
+              inspect = subprocess.run(
+                  ["docker", "container", "inspect", container],
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.DEVNULL,
+                  check=False,
+              )
+              if inspect.returncode == 0:
+                  removed = subprocess.run(
+                      ["docker", "rm", "-f", container],
+                      stdout=subprocess.DEVNULL,
+                      stderr=subprocess.DEVNULL,
+                      check=False,
+                  )
+                  if removed.returncode != 0:
+                      errors.append("docker rm failed")
+              again = subprocess.run(
+                  ["docker", "container", "inspect", container],
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.DEVNULL,
+                  check=False,
+              )
+              if again.returncode == 0:
+                  errors.append("container remains")
+          network = subprocess.run(
+              ["docker", "network", "inspect", f"idis-h1b-{run}"],
+              stdout=subprocess.DEVNULL,
+              stderr=subprocess.DEVNULL,
+              check=False,
+          )
+          if network.returncode == 0:
+              errors.append("network remains")
+          pointer = secret_root / "object-store-parent"
+          if pointer.is_symlink():
+              errors.append("refusing object path")
+          elif pointer.is_file():
+              parent = Path(pointer.read_text().strip())
+              root = Path("/var/lib/idis-ci-health")
+              if parent.parent != root or parent == root or parent.is_symlink():
+                  errors.append("refusing object path")
+              else:
+                  if parent.exists():
+                      shutil.rmtree(parent)
+                  if parent.exists():
+                      errors.append("object store remains")
+          for directory in (
+              secret_root,
+              Path(f"/var/lib/idis-ci-health/{run}"),
+          ):
+              if directory.is_symlink():
+                  errors.append("refusing run path")
+                  continue
+              if directory.exists():
+                  shutil.rmtree(directory)
+              if directory.exists():
+                  errors.append("run directory remains")
+          if "container remains" in errors:
+              raise SystemExit("container remains")
+          if errors:
+              raise SystemExit(errors[0])
+          H1B_PY
+      - {"name": "Set up Python 3.11 for release manifest", "uses": "actions/setup-python@v5", "with": {"python-version": "3.11"}}
       - name: Generate release manifest
         run: |
-          pip install --quiet pyyaml
-          python scripts/release_build.py --output release_manifest.json
+          python -m venv .venv
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple "pip==26.2.1"
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple -c requirements/constraints-py311.txt --build-constraint requirements/constraints-py311.txt pyyaml setuptools wheel
+          .venv/bin/python -m pip check
+          .venv/bin/python scripts/verify_dependency_resolution.py
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          .venv/bin/python scripts/release_build.py --output release_manifest.json
           echo "=== Release Manifest ==="
           cat release_manifest.json
-
-      - name: Upload release manifest artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-manifest
-          path: release_manifest.json
-          retention-days: 30
-
+      - {"name": "Upload release manifest artifact", "uses": "actions/upload-artifact@v4", "with": {"name": "release-manifest", "path": "release_manifest.json", "retention-days": 30}}
       - name: Write container build summary
         if: always()
+        env:
+          CONTAINER_HEALTH_OUTCOME: ${{ steps.container_health.outcome }}
         run: |
           echo "## Container Build Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Image:** idis:ci-${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Health Check:** [OK] Passed" >> $GITHUB_STEP_SUMMARY
+          case "${CONTAINER_HEALTH_OUTCOME:-}" in
+            success) health_status="[OK] Passed" ;;
+            failure) health_status="[FAIL] Failed" ;;
+            cancelled) health_status="[NOT PASSED] Cancelled" ;;
+            skipped) health_status="[NOT PASSED] Skipped" ;;
+            "") health_status="[NOT PASSED] Not run" ;;
+            *) health_status="[NOT PASSED] Unknown outcome" ;;
+          esac
+          echo "- **Health Check:** $health_status" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           if [ -f release_manifest.json ]; then
             echo "### Release Manifest" >> $GITHUB_STEP_SUMMARY
@@ -362,17 +2423,13 @@ jobs:
             cat release_manifest.json >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
           fi
-
   # ===========================================================================
   # Kubernetes Manifest Validation
   # ===========================================================================
   k8s-validate:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
+      - {"name": "Checkout code", "uses": "actions/checkout@v4"}
       - name: Install kubeconform
         run: |
           curl -sL https://github.com/yannh/kubeconform/releases/download/v0.6.4/kubeconform-linux-amd64.tar.gz | tar xz
@@ -385,22 +2442,16 @@ jobs:
             -kubernetes-version 1.29.0 \
             -strict \
             deploy/k8s/*.yaml | tee k8s_validation.json
-          
-          # Check for errors
+          exit ${PIPESTATUS[0]}
+      - name: Reject Kubernetes manifest status errors
+        run: |
           if grep -q '"status": "statusError"' k8s_validation.json || grep -q '"status": "statusInvalid"' k8s_validation.json; then
             echo "[FAIL] Kubernetes manifest validation failed"
             exit 1
           fi
           echo "[OK] All Kubernetes manifests are valid"
 
-      - name: Upload validation results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: k8s-validation-results
-          path: k8s_validation.json
-          retention-days: 7
-
+      - {"name": "Upload validation results", "if": "always()", "uses": "actions/upload-artifact@v4", "with": {"name": "k8s-validation-results", "path": "k8s_validation.json", "retention-days": 7}}
       - name: Write K8s validation summary
         if: always()
         run: |
@@ -421,29 +2472,23 @@ jobs:
   # ===========================================================================
   terraform-validate:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.5.0"
-
+      - {"name": "Checkout code", "uses": "actions/checkout@v4"}
+      - {"name": "Setup Terraform", "uses": "hashicorp/setup-terraform@v3", "with": {"terraform_version": "1.5.0"}}
       - name: Terraform Format Check
         id: fmt
         run: |
           cd deploy/terraform
           terraform fmt -check -recursive -diff
         continue-on-error: true
-
       - name: Terraform Init
+        id: init
         run: |
           cd deploy/terraform
           terraform init -backend=false
 
       - name: Terraform Validate
+        id: validate
         run: |
           cd deploy/terraform
           terraform validate
@@ -454,7 +2499,7 @@ jobs:
           echo "## Terraform Validation" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Format Check:** ${{ steps.fmt.outcome == 'success' && '[OK] Passed' || '[WARN] Needs formatting' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Validate:** [OK] Passed" >> $GITHUB_STEP_SUMMARY
+          echo "- **Validate:** ${{ steps.validate.outcome == 'success' && '[OK] Passed' || '[FAIL] Failed' }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Files Validated" >> $GITHUB_STEP_SUMMARY
           for f in deploy/terraform/*.tf; do
@@ -470,7 +2515,6 @@ jobs:
   # ===========================================================================
   backup-restore-drill:
     runs-on: ubuntu-latest
-
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -485,20 +2529,27 @@ jobs:
           --health-retries 5
         ports:
           - 5432/tcp
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
+      - {"name": "Checkout code", "uses": "actions/checkout@v4"}
+      - {"name": "Set up Python 3.11", "uses": "actions/setup-python@v5", "with": {"python-version": "3.11"}}
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          python -m venv .venv
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple "pip==26.2.1"
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple -c requirements/constraints-py311.txt --build-constraint requirements/constraints-py311.txt -e ".[dev]" setuptools wheel
+          .venv/bin/python -m pip check
+          .venv/bin/python scripts/verify_dependency_resolution.py
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
+      - {"name": "Enforce authorized migration ceiling before recovery drill", "run": "python scripts/check_migration_ceiling.py"}
+      - name: Prepare exact migration 0038 roles on disposable CI
+        env:
+          IDIS_CI_ERASURE_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres
+          IDIS_REQUIRE_POSTGRES: "1"
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: |
+          python -m pytest -p pytest_socket tests/test_ci_erasure_role_preparation.py -q --disable-socket --allow-hosts=127.0.0.1,::1
+          python scripts/prepare_ci_erasure_roles.py --disposable-ci
 
       - name: Provision app role and drill env
         run: |
@@ -536,7 +2587,6 @@ jobs:
           DRILL_PG_PORT: ${{ job.services.postgres.ports['5432'] }}
           DRILL_PG_ADMIN_PASSWORD: postgres
           DRILL_PG_APP_PASSWORD: idis_app_pw
-
       - name: Run the backup/restore drill (REQUIRED, cannot skip)
         env:
           IDIS_REQUIRE_POSTGRES: "1"
@@ -544,20 +2594,14 @@ jobs:
           pytest tests/test_slice99_backup_restore_postgres.py -v 2>&1 | tee backup_restore_drill.log
           exit ${PIPESTATUS[0]}
 
-      - name: Upload drill log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: backup-restore-drill-log
-          path: backup_restore_drill.log
-          retention-days: 30
-
+      - {"name": "Upload drill log", "if": "always()", "uses": "actions/upload-artifact@v4", "with": {"name": "backup-restore-drill-log", "path": "backup_restore_drill.log", "retention-days": 30}}
   # ===========================================================================
   # Release Promotion Gate (Slice99): aggregates every CI gate and verifies the
   # release manifest is COMPLETE (real sha256 for source, schemas, openapi,
   # dockerfile, kubernetes, terraform). Fails closed on any missing evidence.
   # ===========================================================================
   release-gate:
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     needs:
       - ui-check
@@ -568,34 +2612,66 @@ jobs:
       - k8s-validate
       - terraform-validate
       - backup-restore-drill
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Generate and completeness-check release manifest
+      - name: Fail unless every required job succeeded
         run: |
-          pip install --quiet pyyaml
-          python scripts/release_build.py --output release_manifest.json --require-complete
+          set -euo pipefail
+          failed=0
+          if [ "${{ needs.ui-check.result }}" != "success" ]; then
+            echo "ui-check"
+            failed=1
+          fi
+          if [ "${{ needs.check.result }}" != "success" ]; then
+            echo "check"
+            failed=1
+          fi
+          if [ "${{ needs.postgres-integration.result }}" != "success" ]; then
+            echo "postgres-integration"
+            failed=1
+          fi
+          if [ "${{ needs.evaluation-harness.result }}" != "success" ]; then
+            echo "evaluation-harness"
+            failed=1
+          fi
+          if [ "${{ needs.container-build.result }}" != "success" ]; then
+            echo "container-build"
+            failed=1
+          fi
+          if [ "${{ needs.k8s-validate.result }}" != "success" ]; then
+            echo "k8s-validate"
+            failed=1
+          fi
+          if [ "${{ needs.terraform-validate.result }}" != "success" ]; then
+            echo "terraform-validate"
+            failed=1
+          fi
+          if [ "${{ needs.backup-restore-drill.result }}" != "success" ]; then
+            echo "backup-restore-drill"
+            failed=1
+          fi
+          if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi
+      - {"name": "Checkout code", "uses": "actions/checkout@v4"}
+      - {"name": "Set up Python 3.11", "uses": "actions/setup-python@v5", "with": {"python-version": "3.11"}}
+      - name: Generate and completeness-check release manifest
+        id: release-manifest
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple "pip==26.2.1"
+          .venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple -c requirements/constraints-py311.txt --build-constraint requirements/constraints-py311.txt pyyaml setuptools wheel
+          .venv/bin/python -m pip check
+          .venv/bin/python scripts/verify_dependency_resolution.py
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          .venv/bin/python scripts/release_build.py --output release_manifest.json --require-complete
           echo "=== Release Manifest (gated) ==="
           cat release_manifest.json
 
-      - name: Upload gated release manifest
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-manifest-gated
-          path: release_manifest.json
-          retention-days: 90
-
+      - {"name": "Upload gated release manifest", "uses": "actions/upload-artifact@v4", "with": {"name": "release-manifest-gated", "path": "release_manifest.json", "retention-days": 90}}
       - name: Write release gate summary
         run: |
           echo "## Release Promotion Gate" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **All CI gates:** [OK] green (ui-check, check, postgres-integration, evaluation-harness, container-build, k8s-validate, terraform-validate, backup-restore-drill)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Recovery evidence:** [OK] backup/restore drill green (dedicated job)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Manifest completeness:** [OK] all checksum sections real" >> $GITHUB_STEP_SUMMARY
+          echo "- **All CI gates:** ${{ needs.ui-check.result == 'success' && needs.check.result == 'success' && needs.postgres-integration.result == 'success' && needs.evaluation-harness.result == 'success' && needs.container-build.result == 'success' && needs.k8s-validate.result == 'success' && needs.terraform-validate.result == 'success' && needs.backup-restore-drill.result == 'success' && '[OK] green' || '[FAIL] required job not success' }} (ui-check, check, postgres-integration, evaluation-harness, container-build, k8s-validate, terraform-validate, backup-restore-drill)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Recovery evidence:** ${{ needs.backup-restore-drill.result == 'success' && '[OK] backup/restore drill green (dedicated job)' || '[FAIL] backup/restore drill not success' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Manifest completeness:** ${{ steps.release-manifest.outcome == 'success' && '[OK] all checksum sections real' || '[FAIL] manifest not success' }}" >> $GITHUB_STEP_SUMMARY

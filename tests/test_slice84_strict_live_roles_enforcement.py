@@ -14,12 +14,25 @@ from __future__ import annotations
 
 import inspect
 import os
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 
-from idis.api.routes.runs import (
+from idis.debate.orchestrator import RoleRunners
+from idis.debate.roles.advocate import AdvocateRole
+from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
+from idis.services.extraction.extractors.llm_client import (
+    DeterministicAnalysisLLMClient,
+    DeterministicScoringLLMClient,
+)
+from idis.services.runs.step_runtime.analysis import (
+    _run_full_analysis,
+    _run_full_debate,
+    _run_full_scoring,
+)
+from idis.services.runs.step_runtime.roles import (
     STRICT_LIVE_ANALYSIS_PROVIDER_FAILED,
     STRICT_LIVE_ANALYSIS_REQUIRED,
     STRICT_LIVE_DEBATE_PROVIDER_FAILED,
@@ -30,17 +43,9 @@ from idis.api.routes.runs import (
     _build_analysis_llm_client,
     _build_debate_role_runners,
     _build_scoring_llm_client,
-    _run_full_analysis,
-    _run_full_debate,
-    _run_full_scoring,
 )
-from idis.debate.orchestrator import RoleRunners
-from idis.debate.roles.advocate import AdvocateRole
-from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
-from idis.services.extraction.extractors.llm_client import (
-    DeterministicAnalysisLLMClient,
-    DeterministicScoringLLMClient,
-)
+
+_DEAL_STAGE = "pre_seed"
 
 _LEAK_MARKERS = (
     "sk-LEAK123",
@@ -290,7 +295,7 @@ def test_full_steps_forward_strict_flag_to_builders() -> None:
         raise _StopForTest
 
     with (
-        patch("idis.api.routes.runs._build_analysis_llm_client", fake_analysis),
+        patch("idis.services.runs.step_runtime.analysis._build_analysis_llm_client", fake_analysis),
         pytest.raises(_StopForTest),
     ):
         _run_full_analysis(
@@ -304,7 +309,7 @@ def test_full_steps_forward_strict_flag_to_builders() -> None:
             strict_live_debate_backend_required=True,
         )
     with (
-        patch("idis.api.routes.runs._build_debate_role_runners", fake_debate),
+        patch("idis.services.runs.step_runtime.analysis._build_debate_role_runners", fake_debate),
         pytest.raises(_StopForTest),
     ):
         _run_full_debate(
@@ -317,7 +322,7 @@ def test_full_steps_forward_strict_flag_to_builders() -> None:
             strict_live_debate_backend_required=True,
         )
     with (
-        patch("idis.api.routes.runs._build_scoring_llm_client", fake_scoring),
+        patch("idis.services.runs.step_runtime.analysis._build_scoring_llm_client", fake_scoring),
         pytest.raises(_StopForTest),
     ):
         _run_full_scoring(
@@ -325,7 +330,7 @@ def test_full_steps_forward_strict_flag_to_builders() -> None:
             tenant_id="t",
             deal_id="d",
             analysis_bundle=object(),
-            analysis_context=object(),
+            analysis_context=SimpleNamespace(stage=_DEAL_STAGE),
             strict_live_debate_backend_required=True,
         )
     assert captured == {"analysis": True, "debate": True, "scoring": True}

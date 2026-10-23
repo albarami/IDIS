@@ -28,6 +28,32 @@ BEARER_PREFIX = "Bearer "
 IDIS_API_KEYS_ENV = "IDIS_API_KEYS_JSON"
 
 
+class _InvalidApiKeyRegistryJSON(ValueError):
+    """Internal marker for JSON that is valid only under permissive parser rules."""
+
+
+def _reject_duplicate_json_members(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _InvalidApiKeyRegistryJSON("duplicate JSON member")
+        result[key] = value
+    return result
+
+
+def _reject_nonfinite_json_constant(_value: str) -> None:
+    raise _InvalidApiKeyRegistryJSON("non-finite JSON number")
+
+
+def _parse_api_key_registry_json(raw: str) -> object:
+    """Parse the registry with the same duplicate/non-finite rules as strict admission."""
+    return json.loads(
+        raw,
+        object_pairs_hook=_reject_duplicate_json_members,
+        parse_constant=_reject_nonfinite_json_constant,
+    )
+
+
 class TenantContext(BaseModel):
     """Tenant context per OpenAPI TenantContext schema.
 
@@ -74,20 +100,23 @@ class ApiKeyRegistryValidationReport(BaseModel):
     reason_codes: list[str] = Field(default_factory=list)
 
 
-def _load_api_key_registry() -> dict[str, ApiKeyRecord]:
-    """Load API key registry from environment variable.
+def _load_api_key_registry(
+    env: Mapping[str, str] | None = None,
+) -> dict[str, ApiKeyRecord]:
+    """Load the API key registry from an explicit environment snapshot.
 
     Returns:
         Dict mapping API key strings to ApiKeyRecord objects.
         Returns empty dict if env var missing or invalid JSON.
     """
-    raw = os.environ.get(IDIS_API_KEYS_ENV)
+    values = os.environ if env is None else env
+    raw = values.get(IDIS_API_KEYS_ENV)
     if not raw:
         return {}
 
     try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
+        parsed = _parse_api_key_registry_json(raw)
+    except (json.JSONDecodeError, _InvalidApiKeyRegistryJSON, TypeError, ValueError):
         logger.warning("Failed to parse %s; treating as empty registry", IDIS_API_KEYS_ENV)
         return {}
 
@@ -146,8 +175,8 @@ def validate_api_key_registry_config(
         )
 
     try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
+        parsed = _parse_api_key_registry_json(raw)
+    except (json.JSONDecodeError, _InvalidApiKeyRegistryJSON, TypeError, ValueError):
         return ApiKeyRegistryValidationReport(
             status="invalid_json",
             valid_entry_count=0,
@@ -231,7 +260,20 @@ def _constant_time_lookup(
     return matched_record
 
 
-def _extract_tenant_from_api_key(request: Request) -> TenantContext:
+def _request_api_key_environment(request: Request) -> Mapping[str, str] | None:
+    """Return the immutable admitted profile values for a strict application."""
+    app = request.scope.get("app")
+    state = getattr(app, "state", None)
+    profile = getattr(state, "strict_runtime_profile", None)
+    values = getattr(profile, "values", None)
+    return values if isinstance(values, Mapping) else None
+
+
+def _extract_tenant_from_api_key(
+    request: Request,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> TenantContext:
     """Extract tenant context from X-IDIS-API-Key header.
 
     Raises:
@@ -245,7 +287,7 @@ def _extract_tenant_from_api_key(request: Request) -> TenantContext:
             message="Missing API key",
         )
 
-    registry = _load_api_key_registry()
+    registry = _load_api_key_registry(env)
     if not registry:
         raise IdisHttpError(
             status_code=401,
@@ -362,7 +404,10 @@ async def require_tenant_context(request: Request) -> TenantContext:
     if bearer_token:
         tenant_ctx = _extract_tenant_from_jwt(bearer_token)
     else:
-        tenant_ctx = _extract_tenant_from_api_key(request)
+        tenant_ctx = _extract_tenant_from_api_key(
+            request,
+            env=_request_api_key_environment(request),
+        )
 
     request.state.tenant_context = tenant_ctx
 
@@ -394,4 +439,7 @@ def authenticate_request(request: Request) -> TenantContext:
 
     if bearer_token:
         return _extract_tenant_from_jwt(bearer_token)
-    return _extract_tenant_from_api_key(request)
+    return _extract_tenant_from_api_key(
+        request,
+        env=_request_api_key_environment(request),
+    )

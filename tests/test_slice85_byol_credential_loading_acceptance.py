@@ -43,6 +43,7 @@ from idis.services.runs.strict_full_live import (
     build_strict_full_live_admission_report,
     build_strict_full_live_readiness_report,
 )
+from tests.strict_runtime_test_support import RecordingPostgresAuditSink
 from tests.test_slice85_byol_credential_loading_characterization import (
     TENANT_ID,
     _CapturingByolConnector,
@@ -59,6 +60,7 @@ _ENV_MARKERS = {
 }
 _ENC_KEY_MARKER = "acc-enc-key-LEAK-/var/secret/byol"
 _ALL_MARKERS = (*_ENV_MARKERS.values(), _ENC_KEY_MARKER)
+_DEAL_COMPANY_LABEL = "Adventure Works Ltd"
 
 
 def _env_without(*keys: str) -> dict[str, str]:
@@ -232,7 +234,7 @@ def _fake_byol_only_registry() -> Any:
 
 
 def test_acceptance_execution_backstop_fails_closed_in_strict_without_leak() -> None:
-    from idis.api.routes.runs import _run_full_enrichment
+    from idis.services.runs.step_runtime.enrichment import _run_full_enrichment
 
     env = _env_without(*_ENV_MARKERS, "IDIS_REQUIRE_FULL_LIVE", "IDIS_STRICT_DOTENV_PATH")
     env["IDIS_ENRICHMENT_ENCRYPTION_KEY"] = _ENC_KEY_MARKER
@@ -243,7 +245,14 @@ def test_acceptance_execution_backstop_fails_closed_in_strict_without_leak() -> 
             "idis.services.enrichment.service._build_default_registry",
             _fake_byol_only_registry,
         ),
-        patch("idis.api.routes.runs.is_strict_full_live_required", return_value=True),
+        patch(
+            "idis.services.runs.step_runtime.enrichment.is_strict_full_live_required",
+            return_value=True,
+        ) as enrichment_strict,
+        patch(
+            "idis.services.runs.step_runtime.common.is_strict_full_live_required",
+            return_value=True,
+        ) as common_strict,
         pytest.raises(RuntimeError) as exc_info,
     ):
         _run_full_enrichment(
@@ -253,7 +262,11 @@ def test_acceptance_execution_backstop_fails_closed_in_strict_without_leak() -> 
             created_claim_ids=[],
             calc_ids=[],
             db_conn=None,
+            audit_sink=RecordingPostgresAuditSink(),
+            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
         )
+    assert enrichment_strict.called
+    assert common_strict.called
     surfaced = f"{exc_info.value!s}|{exc_info.value!r}"
     assert "fake_byol" in surfaced  # provider id only
     for marker in _ALL_MARKERS:
@@ -261,7 +274,7 @@ def test_acceptance_execution_backstop_fails_closed_in_strict_without_leak() -> 
 
 
 def test_acceptance_non_strict_summary_is_unchanged_and_leak_free() -> None:
-    from idis.api.routes.runs import _run_full_enrichment
+    from idis.services.runs.step_runtime.enrichment import _run_full_enrichment
 
     env = _env_without(*_ENV_MARKERS, "IDIS_REQUIRE_FULL_LIVE", "IDIS_STRICT_DOTENV_PATH")
     with (
@@ -279,6 +292,7 @@ def test_acceptance_non_strict_summary_is_unchanged_and_leak_free() -> None:
             created_claim_ids=[],
             calc_ids=[],
             db_conn=None,
+            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
         )
     assert summary["provider_count"] == 1
     assert summary["blocked_count"] == 1

@@ -75,8 +75,10 @@ from idis.services.runs.strict_full_live import (
     build_strict_full_live_admission_report,
     build_strict_full_live_readiness_report,
 )
+from tests.strict_runtime_test_support import RecordingPostgresAuditSink
 
 TENANT_ID = "tenant-slice85"
+_DEAL_COMPANY_LABEL = "Wide World Importers Ltd"
 
 # Planted markers (never real credentials) — must never surface in any report/exception.
 _ENV_MARKERS = {
@@ -273,7 +275,7 @@ def _fake_byol_only_registry() -> EnrichmentProviderRegistry:
 
 
 def test_run_full_enrichment_strict_raises_on_missing_byol_without_leak() -> None:
-    from idis.api.routes.runs import _run_full_enrichment
+    from idis.services.runs.step_runtime.enrichment import _run_full_enrichment
 
     env = _env_without(*_ENV_MARKERS, "IDIS_REQUIRE_FULL_LIVE", "IDIS_STRICT_DOTENV_PATH")
     with (
@@ -283,7 +285,14 @@ def test_run_full_enrichment_strict_raises_on_missing_byol_without_leak() -> Non
             "idis.services.enrichment.service._build_default_registry",
             _fake_byol_only_registry,
         ),
-        patch("idis.api.routes.runs.is_strict_full_live_required", return_value=True),
+        patch(
+            "idis.services.runs.step_runtime.enrichment.is_strict_full_live_required",
+            return_value=True,
+        ) as enrichment_strict,
+        patch(
+            "idis.services.runs.step_runtime.common.is_strict_full_live_required",
+            return_value=True,
+        ) as common_strict,
         pytest.raises(RuntimeError) as exc_info,
     ):
         _run_full_enrichment(
@@ -293,7 +302,11 @@ def test_run_full_enrichment_strict_raises_on_missing_byol_without_leak() -> Non
             created_claim_ids=[],
             calc_ids=[],
             db_conn=None,
+            audit_sink=RecordingPostgresAuditSink(),
+            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
         )
+    assert enrichment_strict.called
+    assert common_strict.called
     # Note: with env markers present, the strict execution path bootstraps them into the
     # (in-memory) repo, so the block is the rights/credential outcome for the fake provider;
     # the exception must carry only the provider id, never a credential value.
@@ -304,7 +317,7 @@ def test_run_full_enrichment_strict_raises_on_missing_byol_without_leak() -> Non
 
 
 def test_run_full_enrichment_non_strict_counts_blocked_without_raise() -> None:
-    from idis.api.routes.runs import _run_full_enrichment
+    from idis.services.runs.step_runtime.enrichment import _run_full_enrichment
 
     env = _env_without(*_ENV_MARKERS, "IDIS_REQUIRE_FULL_LIVE", "IDIS_STRICT_DOTENV_PATH")
     with (
@@ -321,6 +334,7 @@ def test_run_full_enrichment_non_strict_counts_blocked_without_raise() -> None:
             created_claim_ids=[],
             calc_ids=[],
             db_conn=None,
+            deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
         )
     assert summary["provider_count"] == 1
     assert summary["blocked_count"] == 1  # BLOCKED_MISSING_BYOL swallowed, not raised
@@ -331,7 +345,7 @@ def test_run_full_enrichment_non_strict_counts_blocked_without_raise() -> None:
 
 
 def test_preflight_and_execution_share_repo_factory() -> None:
-    from idis.api.routes.runs import _run_full_enrichment
+    from idis.services.runs.step_runtime.enrichment import _run_full_enrichment
 
     execution_src = inspect.getsource(_run_full_enrichment)
     preflight_src = inspect.getsource(build_strict_full_live_admission_report)

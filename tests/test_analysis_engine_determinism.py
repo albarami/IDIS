@@ -154,9 +154,9 @@ class TestAuditEvents:
         engine.run(_make_context(), ["agent-1"])
 
         event_types = [e["event_type"] for e in sink.events]
-        assert "analysis.started" in event_types
-        assert "analysis.agent.completed" in event_types
-        assert "analysis.completed" in event_types
+        assert "integration.analysis.started" in event_types
+        assert "integration.analysis.agent.completed" in event_types
+        assert "integration.analysis.completed" in event_types
 
     def test_audit_sink_failure_is_fatal(self) -> None:
         """AuditSinkError must propagate (fail-closed)."""
@@ -197,8 +197,8 @@ class TestAuditEvents:
             engine.run(_make_context(), ["fail-agent"])
 
         event_types = [e["event_type"] for e in sink.events]
-        assert "analysis.started" in event_types
-        assert "analysis.failed" in event_types
+        assert "integration.analysis.started" in event_types
+        assert "integration.analysis.failed" in event_types
 
 
 class TestEngineFailClosed:

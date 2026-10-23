@@ -28,6 +28,7 @@ from sqlalchemy import text
 from idis.api.auth import IDIS_API_KEYS_ENV
 from idis.api.main import create_app
 from idis.persistence.db import set_tenant_local
+from tests._cir04c2_pg_helpers import create_sanad_evidence_parents
 from tests.abac_seed import seed_deal_access
 
 
@@ -484,6 +485,9 @@ class TestSanadsRepositoryPostgres:
             set_tenant_local(conn, TENANT_A_ID)
             _create_deal_in_postgres(conn, TENANT_A_ID, deal_id)
             _create_claim_in_postgres(conn, TENANT_A_ID, claim_id, deal_id)
+            primary_evidence_id, corroborating_evidence_id = create_sanad_evidence_parents(
+                conn, tenant_id=TENANT_A_ID, deal_id=deal_id, claim_id=claim_id
+            )
 
         with app_engine.begin() as conn:
             repo = SanadsRepository(conn, TENANT_A_ID)
@@ -491,8 +495,8 @@ class TestSanadsRepositoryPostgres:
                 sanad_id=sanad_id,
                 claim_id=claim_id,
                 deal_id=deal_id,
-                primary_evidence_id="evidence-001",
-                corroborating_evidence_ids=["evidence-002"],
+                primary_evidence_id=primary_evidence_id,
+                corroborating_evidence_ids=[corroborating_evidence_id],
                 transmission_chain=[
                     {
                         "node_id": "node-001",
@@ -517,7 +521,8 @@ class TestSanadsRepositoryPostgres:
 
         assert result is not None
         assert result["sanad_id"] == sanad_id
-        assert result["primary_evidence_id"] == "evidence-001"
+        assert result["primary_evidence_id"] == primary_evidence_id
+        assert result["corroborating_evidence_ids"] == [corroborating_evidence_id]
         assert result["computed"]["grade"] == "B"
 
     def test_sanads_cross_tenant_isolation(
@@ -536,6 +541,9 @@ class TestSanadsRepositoryPostgres:
             set_tenant_local(conn, TENANT_A_ID)
             _create_deal_in_postgres(conn, TENANT_A_ID, deal_id)
             _create_claim_in_postgres(conn, TENANT_A_ID, claim_id, deal_id)
+            primary_evidence_id, _ = create_sanad_evidence_parents(
+                conn, tenant_id=TENANT_A_ID, deal_id=deal_id, claim_id=claim_id
+            )
 
         with app_engine.begin() as conn:
             repo = SanadsRepository(conn, TENANT_A_ID)
@@ -543,7 +551,7 @@ class TestSanadsRepositoryPostgres:
                 sanad_id=sanad_id,
                 claim_id=claim_id,
                 deal_id=deal_id,
-                primary_evidence_id="evidence-001",
+                primary_evidence_id=primary_evidence_id,
             )
 
         with app_engine.begin() as conn:

@@ -238,8 +238,20 @@ class PromptVersioningService:
             audit_sink: Audit sink for event emission. Default InMemoryAuditSink.
             tenant_id: Tenant context for audit events.
         """
+        from idis.services.runs.strict_full_live import (
+            IDIS_STRICT_DOTENV_PATH_ENV,
+            is_strict_full_live_required,
+        )
+
+        if is_strict_full_live_required(dotenv_path=os.environ.get(IDIS_STRICT_DOTENV_PATH_ENV)):
+            from idis.audit.postgres_sink import PostgresAuditSink
+
+            if not isinstance(audit_sink, PostgresAuditSink):
+                raise RuntimeError(
+                    "AUDIT_FAILURE: strict prompt governance requires an injected PostgresAuditSink"
+                )
         self._registry = registry
-        self._audit_sink = audit_sink or InMemoryAuditSink()
+        self._audit_sink = audit_sink if audit_sink is not None else InMemoryAuditSink()
         self._tenant_id = tenant_id or SYSTEM_TENANT_ID
 
     def _emit_audit_event(

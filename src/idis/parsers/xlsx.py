@@ -190,10 +190,7 @@ def parse_xlsx(
                     total_cells += 1
 
                     if sheet_cells > limits.max_cells_per_sheet:
-                        warnings.append(
-                            f"Sheet '{sheet_name}': exceeded "
-                            f"{limits.max_cells_per_sheet} cells, truncated"
-                        )
+                        warnings.append("xlsx_sheet_cell_limit_truncated")
                         break
 
                     if total_cells > limits.max_total_cells:

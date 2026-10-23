@@ -20,6 +20,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from idis.audit.sink import AuditSinkError
+from idis.validators.audit_event_validator import validate_audit_event
 
 if TYPE_CHECKING:
     from sqlalchemy import Connection
@@ -65,16 +66,19 @@ class PostgresAuditSink:
         """
         from idis.persistence.db import begin_app_conn, set_tenant_local
 
-        tenant_id = event.get("tenant_id")
-        if not tenant_id or tenant_id == "unknown":
-            raise AuditSinkError("Cannot emit audit event without valid tenant_id")
+        self._validate_event(event)
+        tenant_id = event["tenant_id"]
 
         try:
             with begin_app_conn() as conn:
                 set_tenant_local(conn, tenant_id)
                 self._insert_event(conn, event)
+        except AuditSinkError:
+            raise
         except SQLAlchemyError as e:
-            raise AuditSinkError(f"Failed to emit audit event: {e}") from e
+            raise AuditSinkError("AUDIT_EMIT_FAILED") from e
+        except (TypeError, ValueError) as e:
+            raise AuditSinkError("Failed to serialize durable audit event") from e
 
     def emit_in_tx(self, conn: Connection, event: dict[str, Any]) -> None:
         """Emit an audit event within an existing transaction.
@@ -91,8 +95,21 @@ class PostgresAuditSink:
         """
         try:
             self._insert_event(conn, event)
+        except AuditSinkError:
+            raise
         except SQLAlchemyError as e:
-            raise AuditSinkError(f"Failed to emit audit event in transaction: {e}") from e
+            raise AuditSinkError("AUDIT_EMIT_FAILED") from e
+        except (TypeError, ValueError) as e:
+            raise AuditSinkError("Failed to serialize durable audit event") from e
+
+    @staticmethod
+    def _validate_event(event: dict[str, Any]) -> None:
+        """Reject invalid producer output without manufacturing missing context."""
+        validation = validate_audit_event(event)
+        if validation.passed:
+            return
+        codes = sorted({error.code for error in validation.errors})
+        raise AuditSinkError("Durable audit event validation failed: " + ",".join(codes))
 
     def _insert_event(self, conn: Connection, event: dict[str, Any]) -> None:
         """Insert audit event into database.
@@ -105,17 +122,13 @@ class PostgresAuditSink:
             SQLAlchemyError: If INSERT fails.
             AuditSinkError: If required fields are missing.
         """
-        event_id = event.get("event_id")
-        tenant_id = event.get("tenant_id")
-        occurred_at = event.get("occurred_at")
-        event_type = event.get("event_type")
+        self._validate_event(event)
+        event_id = event["event_id"]
+        tenant_id = event["tenant_id"]
+        occurred_at = event["occurred_at"]
+        event_type = event["event_type"]
 
-        if not all([event_id, tenant_id, occurred_at, event_type]):
-            raise AuditSinkError(
-                "Audit event missing required fields: event_id, tenant_id, occurred_at, event_type"
-            )
-
-        request_info = event.get("request", {})
+        request_info = event["request"]
         request_id = request_info.get("request_id")
         idempotency_key = request_info.get("idempotency_key_sha256")
 
@@ -124,8 +137,8 @@ class PostgresAuditSink:
             occurred_at_dt = datetime.fromisoformat(occurred_at.replace("Z", "+00:00"))
         elif isinstance(occurred_at, datetime):
             occurred_at_dt = occurred_at
-        else:
-            occurred_at_dt = datetime.now()
+        else:  # Defensive: validation already restricts this to an ISO-8601 string.
+            raise AuditSinkError("Durable audit occurrence time is invalid")
 
         event_json = json.dumps(event, sort_keys=True, separators=(",", ":"))
 

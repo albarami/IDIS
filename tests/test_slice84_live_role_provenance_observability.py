@@ -18,7 +18,13 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
-from idis.api.routes.runs import (
+from idis.models.debate import ArbiterDecision, DebateState, StopReason
+from idis.services.runs.step_runtime.analysis import (
+    _run_full_analysis,
+    _run_full_debate,
+    _run_full_scoring,
+)
+from idis.services.runs.step_runtime.roles import (
     AnalysisClientSelection,
     DebateRoleRunnerSelection,
     ScoringClientSelection,
@@ -26,11 +32,9 @@ from idis.api.routes.runs import (
     _build_debate_observability,
     _build_debate_provenance,
     _build_scoring_provenance,
-    _run_full_analysis,
-    _run_full_debate,
-    _run_full_scoring,
 )
-from idis.models.debate import ArbiterDecision, DebateState, StopReason
+
+_DEAL_STAGE = "Series B"
 
 _LEAK = (
     "sk-ant-LEAK",
@@ -273,7 +277,7 @@ def test_scoring_step_summary_includes_provenance() -> None:
             tenant_id="t",
             deal_id="d",
             analysis_bundle=object(),
-            analysis_context=object(),
+            analysis_context=SimpleNamespace(stage=_DEAL_STAGE),
         )
     assert summary["composite_score"] == 68.5  # existing fields unchanged
     assert summary["band"] == "MEDIUM"
@@ -314,7 +318,7 @@ def test_debate_step_summary_includes_provenance_and_observability() -> None:
 
 
 def test_task3_strict_codes_intact() -> None:
-    from idis.api.routes.runs import (
+    from idis.services.runs.step_runtime.roles import (
         STRICT_LIVE_ANALYSIS_REQUIRED,
         STRICT_LIVE_DEBATE_REQUIRED,
         STRICT_LIVE_SCORING_REQUIRED,

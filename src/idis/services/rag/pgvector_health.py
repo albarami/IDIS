@@ -72,7 +72,9 @@ class PgvectorHealthCheck(BaseModel):
 def _default_extension_probe(database_url: str) -> bool:
     from sqlalchemy import create_engine, text
 
-    engine = create_engine(database_url, pool_pre_ping=True)
+    from idis.persistence.db import _ensure_psycopg_driver
+
+    engine = create_engine(_ensure_psycopg_driver(database_url), pool_pre_ping=True)
     try:
         with engine.connect() as conn:
             row = conn.execute(

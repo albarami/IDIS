@@ -18,13 +18,13 @@ from unittest.mock import patch
 
 import pytest
 
-from idis.api.routes.runs import (
-    ExtractorClientSelection,
-    _build_extraction_llm_client,
-    _run_snapshot_extraction,
-)
 from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
 from idis.services.extraction.extractors.llm_client import DeterministicLLMClient
+from idis.services.runs.step_runtime.roles import (
+    ExtractorClientSelection,
+    _build_extraction_llm_client,
+)
+from idis.services.runs.step_runtime.snapshot import _run_snapshot_extraction
 
 _FAKE_KEY = "sk-ant-test-fake-key-for-unit-test"
 
@@ -153,7 +153,10 @@ def test_run_snapshot_extraction_forwards_factory_to_builder() -> None:
         raise _StopForTest
 
     with (
-        patch("idis.api.routes.runs._build_extraction_llm_client", fake_build),
+        patch(
+            "idis.services.runs.step_runtime.snapshot._build_extraction_llm_client",
+            fake_build,
+        ),
         pytest.raises(_StopForTest),
     ):
         _run_snapshot_extraction(

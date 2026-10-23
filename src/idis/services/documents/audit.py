@@ -31,6 +31,7 @@ DOCUMENT_CLASSIFICATION_AUDIT_EVENT_PAYLOAD_KEYS: set[str] = {
 _TRIAGE_EVENTS: dict[DocumentTriageStatus, str] = {
     DocumentTriageStatus.READY: "document.triage.completed",
     DocumentTriageStatus.PARTIAL: "document.triage.completed",
+    DocumentTriageStatus.EXCLUDED_CONFIRMED: "document.triage.completed",
     DocumentTriageStatus.BLOCKED: "document.triage.blocked",
     DocumentTriageStatus.CONVERSION_REQUIRED: "document.triage.conversion_required",
     DocumentTriageStatus.UNSUPPORTED_SOURCE: "document.triage.unsupported_source",

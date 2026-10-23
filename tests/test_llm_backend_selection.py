@@ -20,8 +20,8 @@ class TestExtractionBackendSelection:
 
     def test_default_env_returns_deterministic(self) -> None:
         """Unset IDIS_EXTRACT_BACKEND defaults to DeterministicLLMClient."""
-        from idis.api.routes.runs import _build_extraction_llm_client
         from idis.services.extraction.extractors.llm_client import DeterministicLLMClient
+        from idis.services.runs.step_runtime.roles import _build_extraction_llm_client
 
         env = {k: v for k, v in os.environ.items() if k != "IDIS_EXTRACT_BACKEND"}
         with patch.dict(os.environ, env, clear=True):
@@ -31,8 +31,8 @@ class TestExtractionBackendSelection:
 
     def test_explicit_deterministic_returns_deterministic(self) -> None:
         """IDIS_EXTRACT_BACKEND=deterministic returns DeterministicLLMClient."""
-        from idis.api.routes.runs import _build_extraction_llm_client
         from idis.services.extraction.extractors.llm_client import DeterministicLLMClient
+        from idis.services.runs.step_runtime.roles import _build_extraction_llm_client
 
         with patch.dict(os.environ, {"IDIS_EXTRACT_BACKEND": "deterministic"}, clear=False):
             client = _build_extraction_llm_client()
@@ -41,7 +41,7 @@ class TestExtractionBackendSelection:
 
     def test_anthropic_backend_missing_key_fails_closed(self) -> None:
         """IDIS_EXTRACT_BACKEND=anthropic without ANTHROPIC_API_KEY raises ValueError."""
-        from idis.api.routes.runs import _build_extraction_llm_client
+        from idis.services.runs.step_runtime.roles import _build_extraction_llm_client
 
         env = {
             "IDIS_EXTRACT_BACKEND": "anthropic",
@@ -56,8 +56,8 @@ class TestExtractionBackendSelection:
 
     def test_anthropic_backend_with_key_returns_anthropic_client(self) -> None:
         """IDIS_EXTRACT_BACKEND=anthropic with key returns AnthropicLLMClient."""
-        from idis.api.routes.runs import _build_extraction_llm_client
         from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
+        from idis.services.runs.step_runtime.roles import _build_extraction_llm_client
 
         env = {
             "IDIS_EXTRACT_BACKEND": "anthropic",
@@ -74,9 +74,9 @@ class TestDebateBackendSelection:
 
     def test_default_env_returns_deterministic_runners(self) -> None:
         """Unset IDIS_DEBATE_BACKEND defaults to deterministic RoleRunners."""
-        from idis.api.routes.runs import _build_debate_role_runners
         from idis.debate.orchestrator import RoleRunners
         from idis.debate.roles.advocate import AdvocateRole
+        from idis.services.runs.step_runtime.roles import _build_debate_role_runners
 
         env = {k: v for k, v in os.environ.items() if k != "IDIS_DEBATE_BACKEND"}
         with patch.dict(os.environ, env, clear=True):
@@ -87,9 +87,9 @@ class TestDebateBackendSelection:
 
     def test_explicit_deterministic_returns_deterministic_runners(self) -> None:
         """IDIS_DEBATE_BACKEND=deterministic returns deterministic RoleRunners."""
-        from idis.api.routes.runs import _build_debate_role_runners
         from idis.debate.orchestrator import RoleRunners
         from idis.debate.roles.advocate import AdvocateRole
+        from idis.services.runs.step_runtime.roles import _build_debate_role_runners
 
         with patch.dict(os.environ, {"IDIS_DEBATE_BACKEND": "deterministic"}, clear=False):
             runners = _build_debate_role_runners()
@@ -99,7 +99,7 @@ class TestDebateBackendSelection:
 
     def test_anthropic_backend_missing_key_fails_closed(self) -> None:
         """IDIS_DEBATE_BACKEND=anthropic without ANTHROPIC_API_KEY raises ValueError."""
-        from idis.api.routes.runs import _build_debate_role_runners
+        from idis.services.runs.step_runtime.roles import _build_debate_role_runners
 
         env = {
             "IDIS_DEBATE_BACKEND": "anthropic",
@@ -114,9 +114,9 @@ class TestDebateBackendSelection:
 
     def test_anthropic_backend_with_key_returns_llm_runners(self) -> None:
         """IDIS_DEBATE_BACKEND=anthropic with key returns LLMRoleRunner instances."""
-        from idis.api.routes.runs import _build_debate_role_runners
         from idis.debate.orchestrator import RoleRunners
         from idis.debate.roles.llm_role_runner import LLMRoleRunner
+        from idis.services.runs.step_runtime.roles import _build_debate_role_runners
 
         env = {
             "IDIS_DEBATE_BACKEND": "anthropic",

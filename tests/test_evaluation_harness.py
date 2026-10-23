@@ -126,7 +126,7 @@ class TestHarnessValidateMode:
 
     def test_validate_mode_with_valid_dataset_returns_pass(self) -> None:
         """Valid dataset should return PASS in validate mode."""
-        result = run_suite(FIXTURES_DIR, "gdbs-s", mode="validate")
+        result = run_suite(FIXTURES_DIR, "gdbs-s", deal_stage="GROWTH", mode="validate")
 
         assert result.status == GateStatus.PASS
         assert result.mode == "validate"
@@ -135,7 +135,7 @@ class TestHarnessValidateMode:
 
     def test_validate_mode_with_missing_dataset_returns_fail(self) -> None:
         """Missing dataset should return FAIL with exit code 1."""
-        result = run_suite(Path("/nonexistent"), "gdbs-s", mode="validate")
+        result = run_suite(Path("/nonexistent"), "gdbs-s", deal_stage="GROWTH", mode="validate")
 
         assert result.status == GateStatus.FAIL
         assert len(result.errors) > 0
@@ -143,7 +143,7 @@ class TestHarnessValidateMode:
 
     def test_validate_mode_with_unknown_suite_returns_fail(self) -> None:
         """Unknown suite should return FAIL with exit code 1."""
-        result = run_suite(FIXTURES_DIR, "gdbs-x", mode="validate")  # type: ignore[arg-type]
+        result = run_suite(FIXTURES_DIR, "gdbs-x", deal_stage="GROWTH", mode="validate")  # type: ignore[arg-type]
 
         assert result.status == GateStatus.FAIL
         assert get_exit_code(result) == 1
@@ -151,7 +151,9 @@ class TestHarnessValidateMode:
     def test_validate_mode_writes_output_file(self, tmp_path: Path) -> None:
         """Output file should be written when --out is specified."""
         out_path = tmp_path / "report.json"
-        result = run_suite(FIXTURES_DIR, "gdbs-s", mode="validate", out_path=out_path)
+        result = run_suite(
+            FIXTURES_DIR, "gdbs-s", deal_stage="GROWTH", mode="validate", out_path=out_path
+        )
 
         assert result.status == GateStatus.PASS
         assert out_path.exists()
@@ -169,7 +171,9 @@ class TestHarnessExecuteMode:
 
     def test_execute_mode_without_base_url_returns_blocked(self) -> None:
         """Execute mode without base_url should return BLOCKED."""
-        result = run_suite(FIXTURES_DIR, "gdbs-s", mode="execute", base_url=None)
+        result = run_suite(
+            FIXTURES_DIR, "gdbs-s", deal_stage="GROWTH", mode="execute", base_url=None
+        )
 
         assert result.status == GateStatus.BLOCKED
         assert "base_url not provided" in result.blockers[0]
@@ -180,6 +184,7 @@ class TestHarnessExecuteMode:
         result = run_suite(
             FIXTURES_DIR,
             "gdbs-s",
+            deal_stage="GROWTH",
             mode="execute",
             base_url="http://127.0.0.1:9",  # Port 9 is discard protocol, should fail
         )
@@ -195,6 +200,7 @@ class TestHarnessExecuteMode:
         result = run_suite(
             FIXTURES_DIR,
             "gdbs-s",
+            deal_stage="GROWTH",
             mode="execute",
             base_url="http://127.0.0.1:9",
         )
@@ -210,7 +216,7 @@ class TestSuiteResultSerialization:
 
     def test_result_to_dict_has_required_fields(self) -> None:
         """JSON output must have all required top-level fields."""
-        result = run_suite(FIXTURES_DIR, "gdbs-s", mode="validate")
+        result = run_suite(FIXTURES_DIR, "gdbs-s", deal_stage="GROWTH", mode="validate")
         data = result.to_dict()
 
         required_fields = [
@@ -230,7 +236,7 @@ class TestSuiteResultSerialization:
 
     def test_result_json_is_deterministic(self) -> None:
         """Same result should produce identical JSON across serializations."""
-        result = run_suite(FIXTURES_DIR, "gdbs-s", mode="validate")
+        result = run_suite(FIXTURES_DIR, "gdbs-s", deal_stage="GROWTH", mode="validate")
 
         json1 = json.dumps(result.to_dict(), sort_keys=True)
         json2 = json.dumps(result.to_dict(), sort_keys=True)
@@ -239,7 +245,7 @@ class TestSuiteResultSerialization:
 
     def test_cases_sorted_in_output(self) -> None:
         """Cases in JSON output must be sorted deterministically."""
-        result = run_suite(FIXTURES_DIR, "gdbs-s", mode="validate")
+        result = run_suite(FIXTURES_DIR, "gdbs-s", deal_stage="GROWTH", mode="validate")
         data = result.to_dict()
 
         case_ids = [(c["deal_id"], c["case_id"]) for c in data["cases"]]
@@ -251,7 +257,7 @@ class TestFormatSummary:
 
     def test_format_summary_includes_key_info(self) -> None:
         """Summary should include suite, mode, status, and hash."""
-        result = run_suite(FIXTURES_DIR, "gdbs-s", mode="validate")
+        result = run_suite(FIXTURES_DIR, "gdbs-s", deal_stage="GROWTH", mode="validate")
         summary = format_summary(result)
 
         assert "gdbs-s" in summary
@@ -260,7 +266,7 @@ class TestFormatSummary:
 
     def test_format_summary_shows_errors_when_present(self) -> None:
         """Summary should show errors for failed results."""
-        result = run_suite(Path("/nonexistent"), "gdbs-s", mode="validate")
+        result = run_suite(Path("/nonexistent"), "gdbs-s", deal_stage="GROWTH", mode="validate")
         summary = format_summary(result)
 
         assert "FAIL" in summary
@@ -277,7 +283,16 @@ class TestCLIIntegration:
         with tempfile.TemporaryDirectory() as tmp_dir:
             out_path = Path(tmp_dir) / "report.json"
             exit_code = main(
-                ["test", "gdbs-s", "--dataset", str(FIXTURES_DIR), "--out", str(out_path)]
+                [
+                    "test",
+                    "gdbs-s",
+                    "--deal-stage",
+                    "GROWTH",
+                    "--dataset",
+                    str(FIXTURES_DIR),
+                    "--out",
+                    str(out_path),
+                ]
             )
             assert exit_code == 0
 
@@ -285,7 +300,7 @@ class TestCLIIntegration:
         """CLI should exit 1 on missing dataset."""
         from idis.cli import main
 
-        exit_code = main(["test", "gdbs-s", "--dataset", "/nonexistent"])
+        exit_code = main(["test", "gdbs-s", "--deal-stage", "GROWTH", "--dataset", "/nonexistent"])
         assert exit_code == 1
 
     def test_cli_execute_unreachable_exit_2(self) -> None:
@@ -296,6 +311,8 @@ class TestCLIIntegration:
             [
                 "test",
                 "gdbs-s",
+                "--deal-stage",
+                "GROWTH",
                 "--dataset",
                 str(FIXTURES_DIR),
                 "--execute",
@@ -444,6 +461,7 @@ class TestExecuteCaseContract:
 
         result = _execute_case(
             case,
+            deal_stage="GROWTH",
             base_url="http://127.0.0.1:9",
             api_key=None,
             dataset_root=FIXTURES_DIR,
@@ -503,6 +521,7 @@ class TestExecuteCaseContract:
 
         result = _execute_case(
             case,
+            deal_stage="GROWTH",
             base_url="http://fake-host:9999",
             api_key="test-key",
             dataset_root=FIXTURES_DIR,
@@ -537,6 +556,7 @@ class TestExecuteCaseContract:
 
         result = _execute_case(
             case,
+            deal_stage="GROWTH",
             base_url="http://fake-host:9999",
             api_key=None,
             dataset_root=FIXTURES_DIR,
@@ -594,6 +614,7 @@ class TestExecuteCaseRunStatusClassification:
 
         result = _execute_case(
             case,
+            deal_stage="GROWTH",
             base_url="http://fake-host:9999",
             api_key="test-key",
             dataset_root=FIXTURES_DIR,
@@ -649,6 +670,7 @@ class TestExecuteCaseRunStatusClassification:
 
         result = _execute_case(
             case,
+            deal_stage="GROWTH",
             base_url="http://fake-host:9999",
             api_key="test-key",
             dataset_root=FIXTURES_DIR,
@@ -700,6 +722,7 @@ class TestExecuteCaseRunStatusClassification:
 
         result = _execute_case(
             case,
+            deal_stage="GROWTH",
             base_url="http://fake-host:9999",
             api_key="test-key",
             dataset_root=FIXTURES_DIR,
@@ -715,7 +738,7 @@ class TestMetrics:
 
     def test_validate_mode_has_case_metrics(self) -> None:
         """Validate mode should include case pass/fail counts."""
-        result = run_suite(FIXTURES_DIR, "gdbs-s", mode="validate")
+        result = run_suite(FIXTURES_DIR, "gdbs-s", deal_stage="GROWTH", mode="validate")
 
         assert "cases_total" in result.metrics
         assert "cases_passed" in result.metrics

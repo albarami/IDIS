@@ -161,6 +161,7 @@
             "integration",
             "webhook",
             "prompt",
+            "run",
             "data_room_package",
             "group",
             "session",
@@ -168,7 +169,8 @@
             "legal_hold",
             "retention_sweep",
             "erasure_request",
-            "compliance_export"
+            "compliance_export",
+            "methodology"
           ],
           "description": "Type of resource affected"
         },

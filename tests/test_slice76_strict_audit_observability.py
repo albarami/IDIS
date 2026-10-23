@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -29,6 +30,10 @@ from idis.services.runs.strict_full_live import (
     build_step_provenance,
 )
 from tests.abac_seed import seed_deal_access
+from tests.strict_runtime_test_support import (
+    RecordingPostgresAuditSink,
+    reviewed_strict_api_profile,
+)
 
 ALL_ENV_SOURCE_CLASSES = {
     EnvSourceClass.PROCESS_ENV,
@@ -36,6 +41,42 @@ ALL_ENV_SOURCE_CLASSES = {
     EnvSourceClass.MISSING,
     EnvSourceClass.UNKNOWN,
 }
+COMMERCIAL_DD_VERSION_RECORD_ID = "10000000-0000-4000-8000-000000000076"
+FINANCIAL_DD_VERSION_RECORD_ID = "20000000-0000-4000-8000-000000000076"
+
+
+def _full_run_request(**values: Any) -> dict[str, Any]:
+    return {
+        "mode": "FULL",
+        "methodology_selection": {
+            "commercial_dd_version_record_id": COMMERCIAL_DD_VERSION_RECORD_ID,
+            "financial_dd_version_record_id": FINANCIAL_DD_VERSION_RECORD_ID,
+        },
+        **values,
+    }
+
+
+class _LegacyMethodologySelectionsRepository:
+    """Minimal recorder preserving Slice76 audit assertions."""
+
+    def __init__(self) -> None:
+        self.create_calls: list[dict[str, Any]] = []
+
+    def create_run_selection(self, **kwargs: Any) -> dict[str, Any]:
+        self.create_calls.append(dict(kwargs))
+        return {"selection_id": "30000000-0000-4000-8000-000000000076"}
+
+
+@pytest.fixture(autouse=True)
+def _admit_fictional_methodology_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> _LegacyMethodologySelectionsRepository:
+    repository = _LegacyMethodologySelectionsRepository()
+    monkeypatch.setattr(
+        "idis.api.routes.runs._validate_full_methodology_selection",
+        lambda **_kwargs: repository,
+    )
+    return repository
 
 
 @pytest.fixture(autouse=True)
@@ -361,29 +402,19 @@ def _api_keys_json(tenant_id: str) -> str:
 
 
 def test_strict_mode_rejects_jsonl_only_audit_sink(tmp_path, monkeypatch) -> None:
-    """Strict mode with only a JSONL file sink and no Postgres must fail closed."""
-    from fastapi.testclient import TestClient
-
+    """Strict composition with only a JSONL sink must fail before serving requests."""
     from idis.api.main import create_app
     from idis.audit.sink import JsonlFileAuditSink
 
-    tenant_id = str(uuid.uuid4())
     audit_log_path = tmp_path / "strict_jsonl.jsonl"
-    monkeypatch.setenv("IDIS_API_KEYS_JSON", _api_keys_json(tenant_id))
     monkeypatch.setenv("IDIS_AUDIT_LOG_PATH", str(audit_log_path))
     monkeypatch.setenv("IDIS_REQUIRE_FULL_LIVE", "1")
 
-    app = create_app(audit_sink=JsonlFileAuditSink(str(audit_log_path)), service_region="us-east-1")
-    client = TestClient(app, raise_server_exceptions=False)
-
-    response = client.post(
-        "/v1/deals",
-        headers={"X-IDIS-API-Key": "test-api-key-c6", "Content-Type": "application/json"},
-        content=json.dumps(_DEAL_BODY),
-    )
-
-    assert response.status_code == 500
-    assert response.json()["code"] == "AUDIT_EMIT_FAILED"
+    with pytest.raises(RuntimeError, match="AUDIT_FAILURE"):
+        create_app(
+            audit_sink=JsonlFileAuditSink(str(audit_log_path)),
+            strict_profile=reviewed_strict_api_profile(tmp_path / "profile"),
+        )
     if audit_log_path.exists():
         assert audit_log_path.read_text().strip() == ""
 
@@ -420,19 +451,15 @@ def test_strict_mode_uses_postgres_audit_sink_when_available(tmp_path, monkeypat
     from fastapi.testclient import TestClient
 
     from idis.api.main import create_app
-    from idis.audit.sink import JsonlFileAuditSink
 
-    tenant_id = str(uuid.uuid4())
-    audit_log_path = tmp_path / "strict_durable.jsonl"
-    monkeypatch.setenv("IDIS_API_KEYS_JSON", _api_keys_json(tenant_id))
-    monkeypatch.setenv("IDIS_AUDIT_LOG_PATH", str(audit_log_path))
     monkeypatch.setenv("IDIS_REQUIRE_FULL_LIVE", "1")
 
-    postgres_sink = MagicMock()
+    profile = reviewed_strict_api_profile(tmp_path / "profile")
+    postgres_sink = RecordingPostgresAuditSink()
     app = create_app(
-        audit_sink=JsonlFileAuditSink(str(audit_log_path)),
-        postgres_audit_sink=postgres_sink,
-        service_region="us-east-1",
+        audit_sink=postgres_sink,
+        ingestion_service=object(),
+        strict_profile=profile,
     )
 
     @app.middleware("http")
@@ -443,14 +470,15 @@ def test_strict_mode_uses_postgres_audit_sink_when_available(tmp_path, monkeypat
     client = TestClient(app, raise_server_exceptions=False)
     response = client.post(
         "/v1/deals",
-        headers={"X-IDIS-API-Key": "test-api-key-c6", "Content-Type": "application/json"},
+        headers={
+            "X-IDIS-API-Key": profile.values["IDIS_REAL_EXAMPLE_API_KEY"],
+            "Content-Type": "application/json",
+        },
         content=json.dumps(_DEAL_BODY),
     )
 
     assert response.status_code == 201, response.text
-    assert postgres_sink.emit_in_tx.called
-    if audit_log_path.exists():
-        assert audit_log_path.read_text().strip() == ""
+    assert postgres_sink.transactional_events
 
 
 def test_worker_strict_audit_sink_is_fail_closed(monkeypatch) -> None:
@@ -503,7 +531,12 @@ def _cluster7_preflight_doc(*, deal_id: str, tenant_id: str) -> dict[str, Any]:
     }
 
 
-def _post_strict_blocked_full_run(monkeypatch: Any, *, report: Any = None) -> Any:
+def _post_strict_blocked_full_run(
+    monkeypatch: Any,
+    tmp_path: Path,
+    *,
+    report: Any = None,
+) -> Any:
     """POST a FULL run blocked by strict preflight; return the API response.
 
     The strict admission report is patched to ``report`` (default: a blocking
@@ -514,21 +547,25 @@ def _post_strict_blocked_full_run(monkeypatch: Any, *, report: Any = None) -> An
     from fastapi.testclient import TestClient
 
     from idis.api.main import create_app
-    from idis.audit.sink import InMemoryAuditSink
 
-    tenant_id = str(uuid.uuid4())
     monkeypatch.setenv("IDIS_REQUIRE_FULL_LIVE", "1")
-    monkeypatch.setenv("IDIS_API_KEYS_JSON", _api_keys_json(tenant_id))
+    profile = reviewed_strict_api_profile(tmp_path / "profile")
+    tenant_id = profile.values["IDIS_ACCEPTANCE_TENANT_ID"]
+    api_key = profile.values["IDIS_REAL_EXAMPLE_API_KEY"]
 
-    app = create_app(audit_sink=InMemoryAuditSink(), service_region="us-east-1")
+    app = create_app(
+        audit_sink=RecordingPostgresAuditSink(),
+        ingestion_service=object(),
+        strict_profile=profile,
+    )
     app.state.deal_documents = {}
     client = TestClient(app, raise_server_exceptions=False)
-    headers = {"X-IDIS-API-Key": "test-api-key-c6", "Content-Type": "application/json"}
+    headers = {"X-IDIS-API-Key": api_key, "Content-Type": "application/json"}
 
     create_resp = client.post("/v1/deals", headers=headers, content=json.dumps(_DEAL_BODY))
     assert create_resp.status_code == 201, create_resp.text
     deal_id = create_resp.json()["deal_id"]
-    seed_deal_access(tenant_id, deal_id, f"actor-{tenant_id[:8]}")
+    seed_deal_access(tenant_id, deal_id, "slice100-acceptance-service")
     app.state.deal_documents[deal_id] = [
         _cluster7_preflight_doc(deal_id=deal_id, tenant_id=tenant_id)
     ]
@@ -540,13 +577,17 @@ def _post_strict_blocked_full_run(monkeypatch: Any, *, report: Any = None) -> An
         return client.post(
             f"/v1/deals/{deal_id}/runs",
             headers=headers,
-            content=json.dumps({"mode": "FULL"}),
+            content=json.dumps(
+                _full_run_request(strict_preflight_proof_id="00000000-0000-4000-8000-000000000076")
+            ),
         )
 
 
-def test_api_start_run_strict_block_details_are_operator_safe(monkeypatch: Any) -> None:
+def test_api_start_run_strict_block_details_are_operator_safe(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
     """The strict-block 409 details must carry no paths, DSNs, env names, or raw text."""
-    response = _post_strict_blocked_full_run(monkeypatch)
+    response = _post_strict_blocked_full_run(monkeypatch, tmp_path)
 
     assert response.status_code == 409
     body = response.json()
@@ -571,9 +612,11 @@ def test_api_start_run_strict_block_details_are_operator_safe(monkeypatch: Any) 
         assert unsafe_key not in encoded
 
 
-def test_api_start_run_strict_block_preserves_structured_blockers(monkeypatch: Any) -> None:
+def test_api_start_run_strict_block_preserves_structured_blockers(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
     """The safe details must still preserve blocker count, names, and safe provenance."""
-    response = _post_strict_blocked_full_run(monkeypatch)
+    response = _post_strict_blocked_full_run(monkeypatch, tmp_path)
 
     assert response.status_code == 409
     details = response.json()["details"]["strict_full_live"]
@@ -596,12 +639,14 @@ def test_api_start_run_strict_block_preserves_structured_blockers(monkeypatch: A
     assert item["output_visibility_status"] == "not_visible"
 
 
-def test_api_start_run_strict_block_does_not_create_run_or_ledger(monkeypatch: Any) -> None:
+def test_api_start_run_strict_block_does_not_create_run_or_ledger(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
     """A strict-blocked start-run must not persist a run row or step ledger."""
     from idis.persistence.repositories.run_steps import _run_steps_store
     from idis.persistence.repositories.runs import _in_memory_runs_store
 
-    response = _post_strict_blocked_full_run(monkeypatch)
+    response = _post_strict_blocked_full_run(monkeypatch, tmp_path)
 
     assert response.status_code == 409
     assert "run_id" not in response.json()
@@ -647,9 +692,15 @@ def test_real_strict_report_provenance_count_matches_blocking_components() -> No
     assert {item.component_name for item in items} == set(report.blocking_components)
 
 
-def test_api_start_run_strict_block_real_report_has_non_empty_provenance(monkeypatch: Any) -> None:
+def test_api_start_run_strict_block_real_report_has_non_empty_provenance(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
     """The API 409 details for a real strict block must include safe provenance_items."""
-    response = _post_strict_blocked_full_run(monkeypatch, report=_real_blocking_report())
+    response = _post_strict_blocked_full_run(
+        monkeypatch,
+        tmp_path,
+        report=_real_blocking_report(),
+    )
 
     assert response.status_code == 409
     details = response.json()["details"]["strict_full_live"]

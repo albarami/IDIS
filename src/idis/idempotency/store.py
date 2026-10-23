@@ -76,6 +76,20 @@ class IdempotencyStoreError(Exception):
     pass
 
 
+class IdempotencyKeyConflictError(IdempotencyStoreError):
+    """Raised when an existing scope is reused with a different payload.
+
+    This is a durable contract conflict, not a storage outage.  Callers map it
+    to the stable ``IDEMPOTENCY_KEY_CONFLICT`` response instead of a generic
+    store failure.
+    """
+
+    code = "IDEMPOTENCY_KEY_CONFLICT"
+
+    def __init__(self) -> None:
+        super().__init__(self.code)
+
+
 class SqliteIdempotencyStore:
     """SQLite-backed idempotency store with thread-safe access.
 

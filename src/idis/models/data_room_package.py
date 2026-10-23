@@ -90,7 +90,9 @@ class DataRoomPackageFile(BaseModel):
     """Per-file ledger row — location stored as ``path_hash`` + safe ``extension`` only.
 
     Internal ``storage_uri`` and ``tenant_id``/``package_id``/``deal_id`` are
-    stored on the model but excluded from :meth:`safe_dict`. ``reason_codes`` and
+    stored on the model but excluded from :meth:`safe_dict`. Strict source-bound
+    responses may opt into the safe sequence needed for manifest reconciliation;
+    legacy responses retain their original shape. ``reason_codes`` and
     ``error_codes`` are normalised to safe lowercase tokens, sorted and de-duped.
     """
 
@@ -147,8 +149,8 @@ class DataRoomPackageFile(BaseModel):
                 raise ValueError("codes must be safe lowercase tokens (no paths or raw values)")
         return sorted(set(value))
 
-    def safe_dict(self) -> dict[str, Any]:
-        """Operator/public-safe row — no tenant/package/deal ids, sequence, or storage uri."""
+    def safe_dict(self, *, include_sequence: bool = False) -> dict[str, Any]:
+        """Return a safe row, optionally including strict-manifest order."""
         safe: dict[str, Any] = {
             "file_entry_id": str(self.file_entry_id),
             "path_hash": self.path_hash,
@@ -165,4 +167,6 @@ class DataRoomPackageFile(BaseModel):
             safe["doc_id"] = str(self.doc_id)
         if self.document_id is not None:
             safe["document_id"] = str(self.document_id)
+        if include_sequence:
+            safe["sequence"] = self.sequence
         return safe

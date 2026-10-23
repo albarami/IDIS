@@ -23,8 +23,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import idis.api.routes.runs as runs_mod
-from idis.api.routes.runs import _run_full_debate
+import idis.services.runs.step_runtime.analysis as analysis_mod
 from idis.audit.sink import InMemoryAuditSink
 from idis.debate.roles.llm_role_runner import DebateContext, LLMRoleRunner
 from idis.models.debate import DebateRole
@@ -33,6 +32,7 @@ from idis.persistence.repositories.run_steps import (
     clear_run_steps_store,
 )
 from idis.services.runs.orchestrator import RunContext, RunOrchestrator
+from idis.services.runs.step_runtime.analysis import _run_full_debate
 from tests.test_slice63_rag_full_wiring import (
     DEAL_ID,
     RUN_ID,
@@ -221,7 +221,7 @@ def test_run_full_debate_attaches_rag_section_to_context(
         captured["context"] = context
         raise _StopForTest
 
-    monkeypatch.setattr(runs_mod, "_build_debate_role_runners", fake_build_role_runners)
+    monkeypatch.setattr(analysis_mod, "_build_debate_role_runners", fake_build_role_runners)
     with pytest.raises(_StopForTest):
         _run_full_debate(
             run_id=RUN_ID,

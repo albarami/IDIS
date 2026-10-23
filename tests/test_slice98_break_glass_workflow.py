@@ -42,8 +42,10 @@ from idis.audit.sink import InMemoryAuditSink
 _TENANT = "11111111-1111-1111-1111-111111111111"
 _ADMIN_KEY = "bg-admin-key"
 _ANALYST_KEY = "bg-analyst-key"
+_CREATOR_KEY = "bg-creator-key"
 _ADMIN_ACTOR = "bg-admin-1"
 _ANALYST_ACTOR = "bg-analyst-1"
+_CREATOR_ACTOR = "bg-creator-1"
 _JUSTIFICATION = "Investor call in 10 minutes; need immediate deal access."
 _SECRET = "test-break-glass-secret-slice98"
 
@@ -63,6 +65,7 @@ def _api_keys_json() -> str:
         {
             _ADMIN_KEY: _entry(_ADMIN_ACTOR, ["ADMIN"]),
             _ANALYST_KEY: _entry(_ANALYST_ACTOR, ["ANALYST"]),
+            _CREATOR_KEY: _entry(_CREATOR_ACTOR, ["PARTNER"]),
         }
     )
 
@@ -241,7 +244,7 @@ def _create_deal(client: TestClient) -> str:
     resp = client.post(
         "/v1/deals",
         json={"name": "BG Deal", "company_name": "Acme"},
-        headers=_hdr(_ADMIN_KEY),
+        headers=_hdr(_CREATOR_KEY),
     )
     assert resp.status_code == 201, resp.text
     return str(resp.json()["deal_id"])

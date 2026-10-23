@@ -10,9 +10,16 @@ from unittest.mock import MagicMock, patch
 from scripts import process_queued_runs
 
 from idis.audit.sink import InMemoryAuditSink
-from idis.pipeline.worker import PipelineWorker
+from idis.pipeline.worker import PipelineWorker, WorkerLeaseConfig
 
 TENANT_C = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+
+
+class _TransactionalInMemoryAuditSink(InMemoryAuditSink):
+    """In-memory audit double supporting the durable in-transaction seam."""
+
+    def emit_in_tx(self, _conn: object, event: dict[str, Any]) -> None:
+        self.emit(event)
 
 
 def test_manual_queued_run_script_delegates_to_canonical_worker() -> None:
@@ -27,22 +34,44 @@ def test_manual_queued_run_script_drains_until_no_runs_remain(
     monkeypatch,
 ) -> None:
     """The manual processor should keep polling batches until the queue is drained."""
+    monkeypatch.setenv("IDIS_WORKER_LEASE_SECONDS", "60")
+    monkeypatch.setenv("IDIS_WORKER_HEARTBEAT_SECONDS", "20")
+    created_workers: list[CountingWorker] = []
 
     class CountingWorker:
-        def __init__(self, *, poll_interval: int, tenant_ids: list[str]) -> None:
+        def __init__(
+            self,
+            *,
+            poll_interval: int,
+            tenant_ids: list[str],
+            lease_config: WorkerLeaseConfig,
+        ) -> None:
+            assert poll_interval == 0
+            assert tenant_ids == ["tenant-1"]
+            assert lease_config == WorkerLeaseConfig(lease_seconds=60, heartbeat_seconds=20)
             self.calls = 0
 
         async def _process_queued_runs(self) -> int:
             self.calls += 1
             return 1 if self.calls == 1 else 0
 
-    worker = CountingWorker(poll_interval=0, tenant_ids=["tenant-1"])
-    monkeypatch.setattr(process_queued_runs, "get_worker_tenant_ids", lambda: ["tenant-1"])
-    monkeypatch.setattr(process_queued_runs, "PipelineWorker", lambda **kwargs: worker)
+    monkeypatch.setattr(
+        process_queued_runs,
+        "get_worker_tenant_ids",
+        lambda *, env: ["tenant-1"],
+    )
+
+    def worker_factory(**kwargs: Any) -> CountingWorker:
+        worker = CountingWorker(**kwargs)
+        created_workers.append(worker)
+        return worker
+
+    monkeypatch.setattr(process_queued_runs, "PipelineWorker", worker_factory)
 
     asyncio.run(process_queued_runs.process_all_queued())
 
-    assert worker.calls == 2
+    assert len(created_workers) == 1
+    assert created_workers[0].calls == 2
 
 
 def test_manual_queued_run_script_remains_thin_pipeline_worker_delegate() -> None:
@@ -74,8 +103,8 @@ def test_worker_excludes_cancelled_rows_and_runs_retried_queued_rows_via_executi
     the assertions exercise the actual queue-filter and claim contracts, not stubs.
     ``RunOrchestrator`` is mocked at the ``execution`` module binding so the test
     does not actually run the pipeline. Proves the worker:
-    - never passes CANCELLED rows to ``try_mark_running``
-    - claims and executes retried QUEUED rows through ``RunExecutionService``
+    - never includes CANCELLED rows in the atomic leased claim
+    - claims and executes retried QUEUED rows through ``execute_preclaimed``
     - constructs ``RunOrchestrator`` only via ``RunExecutionService``
     """
     from idis.persistence.repositories.run_steps import InMemoryRunStepsRepository
@@ -109,14 +138,19 @@ def test_worker_excludes_cancelled_rows_and_runs_retried_queued_rows_via_executi
     }
 
     real_repo = InMemoryRunsRepository(TENANT_C)
-    original_mark_running = real_repo.try_mark_running
-    mark_running_calls: list[str] = []
+    original_claim_queued_runs = real_repo.claim_queued_runs
+    claimed_run_ids: list[str] = []
+    legacy_mark_running = MagicMock(
+        side_effect=AssertionError("preclaimed worker execution must not mark RUNNING twice")
+    )
 
-    def tracking_mark_running(run_id: str) -> bool:
-        mark_running_calls.append(run_id)
-        return original_mark_running(run_id)
+    def tracking_claim_queued_runs(**kwargs: Any) -> list[dict[str, Any]]:
+        claimed = original_claim_queued_runs(**kwargs)
+        claimed_run_ids.extend(str(row["run_id"]) for row in claimed)
+        return claimed
 
-    real_repo.try_mark_running = tracking_mark_running  # type: ignore[method-assign]
+    real_repo.claim_queued_runs = tracking_claim_queued_runs  # type: ignore[method-assign]
+    real_repo.try_mark_running = legacy_mark_running  # type: ignore[method-assign]
 
     real_steps_repo = InMemoryRunStepsRepository(TENANT_C)
     audit_sink = InMemoryAuditSink()
@@ -139,6 +173,8 @@ def test_worker_excludes_cancelled_rows_and_runs_retried_queued_rows_via_executi
         ctx.run_id = run_data["run_id"]
         ctx.tenant_id = tenant_id
         ctx.mode = run_data["mode"]
+        ctx.lease_owner_id = run_data["lease_owner_id"]
+        ctx.lease_fencing_token = run_data["lease_fencing_token"]
         return ctx
 
     engine = MagicMock()
@@ -149,12 +185,17 @@ def test_worker_excludes_cancelled_rows_and_runs_retried_queued_rows_via_executi
         tenant_ids=[TENANT_C],
         execution_service_factory=real_execution_service_factory,
         run_context_factory=real_context_factory,
+        lease_config=WorkerLeaseConfig(lease_seconds=60, heartbeat_seconds=20),
     )
 
     try:
         with (
             patch("idis.pipeline.worker.get_app_engine", return_value=engine),
             patch("idis.pipeline.worker.get_runs_repository", return_value=real_repo),
+            patch(
+                "idis.pipeline.worker._default_worker_audit_sink",
+                return_value=_TransactionalInMemoryAuditSink(),
+            ),
             patch("idis.pipeline.worker.set_tenant_local", create=True),
             patch("idis.services.runs.execution.RunOrchestrator") as orch_class_mock,
         ):
@@ -165,12 +206,13 @@ def test_worker_excludes_cancelled_rows_and_runs_retried_queued_rows_via_executi
     finally:
         clear_in_memory_runs_store()
 
-    assert "cancelled-run-1" not in mark_running_calls, (
-        "CANCELLED rows must never be passed to try_mark_running"
+    assert "cancelled-run-1" not in claimed_run_ids, (
+        "CANCELLED rows must never be returned by the atomic leased claim"
     )
-    assert mark_running_calls == ["queued-retry-1"], (
-        "exactly the retried QUEUED row should be claimed by the worker via RunExecutionService"
+    assert claimed_run_ids == ["queued-retry-1"], (
+        "exactly the retried QUEUED row should be atomically leased by the worker"
     )
+    legacy_mark_running.assert_not_called()
     assert orch_class_mock.call_count == 1, (
         "RunExecutionService must instantiate RunOrchestrator exactly once for the retried run"
     )

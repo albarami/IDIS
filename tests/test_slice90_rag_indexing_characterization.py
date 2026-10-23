@@ -26,7 +26,6 @@ from pathlib import Path
 import pytest
 
 import idis.services.rag.indexing as indexing_mod
-from idis.api.routes.runs import _run_full_rag_evidence
 from idis.services.rag.constants import ALLOWED_EMBEDDING_BACKENDS, VECTOR_EMBEDDING_DIMENSIONS
 from idis.services.rag.embedding_health import (
     EmbeddingHealthCheck,
@@ -35,6 +34,7 @@ from idis.services.rag.embedding_health import (
 )
 from idis.services.rag.pgvector_health import PgvectorHealthCheck
 from idis.services.runs.orchestrator import RunStepBlockedError
+from idis.services.runs.step_runtime.evidence import _run_full_rag_evidence
 from tests.test_slice63_rag_full_wiring import DEAL_ID, RUN_ID, TENANT_ID, _documents
 
 _READINESS_DOC = Path("docs/architecture/strict_full_live_readiness.md")

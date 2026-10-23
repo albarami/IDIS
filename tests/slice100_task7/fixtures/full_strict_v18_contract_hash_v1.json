@@ -1,0 +1,224 @@
+{
+  "FULL_STRICT_V18_CONTRACT_HASH": "ad8e0a8fd012af34f34d8fd4b66643d2d31a8a4f436dd3a8021af9a188da378c",
+  "activation_assertions": {
+    "baseline_erasure_phase_count": 59,
+    "baseline_physical_table_count": 67,
+    "current_ddl_table_count": 34,
+    "edge_rule_count": 48,
+    "erasure_complete_relation_count": 86,
+    "erasure_current_relation_count": 48,
+    "erasure_future_relation_count": 38,
+    "expected_baseline_erasure_sha256": "b8d41d1c967252f69ea162ca2d5e2ad8fdd19a240bdc659f6dadaff86fd30033",
+    "expected_erasure_execution_sha256": "8eee73a2a2681dd527e64c5246025f7451ac5fb2e8550954dcb41ccc7add34a7",
+    "expected_materialized_erasure_sha256": "87cf4253d09f722ede64de549d50ba16555cd72239970ea4479c4a85d9275ca2",
+    "expected_usage_extractor_sha256": "e6542bb692bb4819712bc95bfdd23c2f66f7fd21fa15e0b7881057ff81eeeccc",
+    "expected_usage_route_sha256": "96cbe37825fca73179b8077d7a81fb235aaf057aff405342bac18b7cf365c616",
+    "future_child_table_count": 5,
+    "future_native_table_count": 18,
+    "future_reference_table_count": 15,
+    "materialized_erasure_phase_count": 66,
+    "materialized_physical_table_count": 72,
+    "semantic_hashes_unchanged": true,
+    "semantic_step_count": 28,
+    "usage_extractor_count": 19,
+    "usage_route_count": 1756
+  },
+  "artifact_sha256": "554409ac36f3defeceda209e9e59e7587e4df630b06b5dc049ba9958f60abd1c",
+  "component_hashes": {
+    "applicability_registry_hash": "bc1b042e0af957761491f293458f038247a9939302bb6a84c1957259554d0555",
+    "baseline_erasure_schedule_hash": "b8d41d1c967252f69ea162ca2d5e2ad8fdd19a240bdc659f6dadaff86fd30033",
+    "baseline_parent_authority_registry_hash": "3269dd9af23b720a63c90568e30c1a56641d452a6f10d980e099cb1295dd01fc",
+    "consumer_selector_registry_hash": "c1ee5fec499eb759776fd6da7be6445de0282d3fedddf3d3e69bfb9c6174917e",
+    "deliverable_registry_hash": "50e3716d51f18aca3ab1d676e2fb3313027039604603ff47ea0fa10ab2c6eff4",
+    "edge_manifest_hash": "bc50ef48b5caad56e963ebf07b29824a770665dfdb043d826cf71936cc4b9014",
+    "erasure_execution_registry_hash": "bc919d96e9b9e568c6bd1432c06515109ae37dc14995b8bdabee1a543a859635",
+    "future_child_authority_registry_hash": "c8e1d79650d79a463d8eedfc1607088fe01384ba3e86757fabba7180de4a51ed",
+    "future_native_authority_registry_hash": "4574d90bc8f397bdb9a667b05a5d9d80e00788c790d4988d675aca782b08e904",
+    "future_reference_authority_registry_hash": "a93c20010a2ddd9295f0e608aa79b63b2c7e6fcf9398512732326259db636c49",
+    "pipeline_contract_hash": "ad8e0a8fd012af34f34d8fd4b66643d2d31a8a4f436dd3a8021af9a188da378c",
+    "producer_selector_registry_hash": "3b23e5bfdee6fe78762412eec2e37430559f00833a698b17c14809876ca2d4f4",
+    "provider_registry_hash": "dbc2c3a42cbe336a7b8f237c46e90f87ca92e52a0ab37ff958564042b8766f4b",
+    "reviewed_preimage_artifact_hash": "f499fed24ade296f44f2905268a7b68d90172817e046eefa8520dd18879f47e6",
+    "rights_index_policy_registry_hash": "ad041ac654596094915408f0448220284ff63cb3d57df0042b0d02769f5cb28e",
+    "role_registry_hash": "e24fe48de85c035a09ae037fbdce7e24f301ea90dd64922d4d57600933419f49",
+    "schema_registry_hash": "811649e787cade6c36916b4901600522179d580434df4dab5da75ba10de61948",
+    "selector_registry_hash": "6790e8934378503acf48667f9fcc9b68780cc5c2e6cd640e4e143ae6fde5ec6a",
+    "semantic_step_vector_hash": "ee473f158a9e48dff845c7e498e8bd3eadde20ea68eeb698e7c3482c158182f6",
+    "sql_authority_registry_hash": "95e5543347f4c81589cfbeaddd7f38b7022c2ff3afec24849b227f42f10e5421",
+    "task7_ddl_registry_hash": "073d2b19f16c6e41529ac6aba970d8e09040094103d7951fd5520d88646aedcd",
+    "task7_erasure_schedule_hash": "87cf4253d09f722ede64de549d50ba16555cd72239970ea4479c4a85d9275ca2",
+    "usage_extractor_registry_hash": "e6542bb692bb4819712bc95bfdd23c2f66f7fd21fa15e0b7881057ff81eeeccc",
+    "usage_path_route_hash": "96cbe37825fca73179b8077d7a81fb235aaf057aff405342bac18b7cf365c616",
+    "uuid_namespace_registry_hash": "28899dde2a2e0626cb4594e70dbff619d21de25210a288f335c815a861f84198"
+  },
+  "fixture_schema": "full-strict-v18-contract-hash-fixture-v1",
+  "pipeline_contract_version": "full-strict-v18",
+  "postgres_authority_census": {
+    "admin_case_execution_count": 0,
+    "admin_fixture_helper_call_count": 36,
+    "admin_fixture_helper_projection_sha256": "4814fdf96bb6a699315befa47eada8074e1571e221f52afe44967d29e4db8f2a",
+    "application_case_execution_count": 219,
+    "application_direct_helper_execute_count": 0,
+    "case_outcome_count": 219,
+    "case_result_sha256": "ce6e7b4f5a45167a1c20479d452cddd38283b1e8d8b13e7a134e707b157a6f4a",
+    "catalog_projection_sha256": "16d93750a34bcf8193a0fde34e2c2a1f276ad231fdbeeb7e7c18c93f093a3f5c",
+    "complete_execution_sha256": "820c9b22de9c0f143140aef43f6e41d4c8ed0aeeafa253bfdf81bffc89e96f68",
+    "constructor_roundtrip_sha256": "628311e90a872eb682f40c4d93f0d6be69d7c09210d34aa6de808dae55d4cf30",
+    "constructor_schema_proof_count": 4,
+    "current_guard_target_count": 73,
+    "current_guard_target_event_count": 193,
+    "current_routine_catalog_count": 24,
+    "direct_sql_rejection_count": 73,
+    "guard_acl_projection_sha256": "e9132f7ac9defba1d795496ab5f95089252c31170495fa89f3daf6b652ba7973",
+    "guard_owner_column_acl_count": 424,
+    "guard_owner_column_acl_relation_count": 36,
+    "illegal_rejection_count": 73,
+    "legal_execution_count": 73,
+    "manifest_parity_sha256": "4ee670512eb003e47a4e54dacdc1ceaf727924b4b91ac27b32711dce8b7a71e0",
+    "materialization_source_manifest_sha256": "6c610392b89b0d6d8a3bea72a45cd17dcdadbf6da3dd66a46064c8759fa560d2",
+    "pg_trigger_inventory_sha256": "87923ff2e98dc4ddd6d8b6b792fff5a961babcf05f0ab3861d61b581e05a22d2",
+    "public_direct_helper_execute_count": 0,
+    "receipt_equality_execution_proof_sha256": "afaf9918e2db369ae140b92bd337780ef7cf4b5b0fcad066a5b39ca2a73822f8",
+    "rls_context_proof_sha256": "94b71717ac85a45dfb0b1922a4e9ad00b56ab03b013c51c474a04a8c1fddcb4e",
+    "source_admission_execution_proof_sha256": "5005048976a4d958f3def191e93a570fc5f2a4c6c0c1e6c722eea16dde495f2f",
+    "trigger_event_coverage_sha256": "fe6a2a1c899d39a245393cb11717a787c3e28a9cb77c7b2d99c65da07b324cfa",
+    "unexpected_outcome_count": 0
+  },
+  "section_hashes": [
+    {
+      "name": "metadata",
+      "ordinal": 0,
+      "sha256": "5bb47c646655ca5dfb18abd6f7cd0edc6d1aa2702b378a6c10a88430b2ce8142"
+    },
+    {
+      "name": "canonicalization_contract",
+      "ordinal": 1,
+      "sha256": "c610c8b3bf4b8e19ffdf4db4230a5351271e822f316fd1897d13d29835040d6c"
+    },
+    {
+      "name": "tuple_schema_registry",
+      "ordinal": 2,
+      "sha256": "feee55d0eeeeb769d4fe7eb657b676b22b04cc608188af4e2f0f949d05c0d8d0"
+    },
+    {
+      "name": "digest_recipe_registry",
+      "ordinal": 3,
+      "sha256": "ec12ccbf776f004a2af25649ce0499cf746997423e7aeda4e4d3ca974ebc4571"
+    },
+    {
+      "name": "uuid_namespace_registry",
+      "ordinal": 4,
+      "sha256": "5dee7847237118201608ffd4aef6a99c2a7778d8154505990759ad138af5627f"
+    },
+    {
+      "name": "schema_registry",
+      "ordinal": 5,
+      "sha256": "2d7d48e246a45be060904163392101ad12dd96fb93d0f8dc9ea38eb50dcf84bb"
+    },
+    {
+      "name": "semantic_step_registry",
+      "ordinal": 6,
+      "sha256": "c3f88439d006dbf86bd53e93be509f01f65c255574993d65fcba467a516f68f0"
+    },
+    {
+      "name": "current_ddl_registry",
+      "ordinal": 7,
+      "sha256": "68df8944cd9bdda6294832675ec08bf98c38f1a2a1189758cc2f6b7d31b3be5b"
+    },
+    {
+      "name": "baseline_parent_authority_registry",
+      "ordinal": 8,
+      "sha256": "36320b2bdd6ffe165a8af2ff6da8ca9a7884f634a60aaabc9a85ab7fa05ad792"
+    },
+    {
+      "name": "future_native_authority_registry",
+      "ordinal": 9,
+      "sha256": "b76bcdb35e31e94b16ce536d8dde88fea94939c6649d893c18a679626fbc9d91"
+    },
+    {
+      "name": "future_reference_authority_registry",
+      "ordinal": 10,
+      "sha256": "c11abd81be74988d26cdee57bbe8fca2e5665ba7e1fee05833c17ea068d5e245"
+    },
+    {
+      "name": "future_child_authority_registry",
+      "ordinal": 11,
+      "sha256": "7d6087b28aa28ad3fbaadb40a74c42a998d78839cb01fff887c888f6ed047dbd"
+    },
+    {
+      "name": "sql_authority_registry",
+      "ordinal": 12,
+      "sha256": "61b2156ec49815df5afa99fd177976d91631bb7560fa39beca79020fb6340481"
+    },
+    {
+      "name": "erasure_execution_registry",
+      "ordinal": 13,
+      "sha256": "278dfae809445df7e21c8cea5fc640d86f2ee88cfd71e191a7d996cc626357f6"
+    },
+    {
+      "name": "provider_registry",
+      "ordinal": 14,
+      "sha256": "43371023cdc4b39dd60d45a4d38d3100cc7fab1ef73b7cdca9462fb046eda086"
+    },
+    {
+      "name": "rights_index_policy_registry",
+      "ordinal": 15,
+      "sha256": "9c3b759b3f7d1b7ccca4568de18c12dba754214675154bc0b97f5fa598106d39"
+    },
+    {
+      "name": "role_registry",
+      "ordinal": 16,
+      "sha256": "0e11e8758dda0846d9dfe8db6a67f00ec30a0cd146d5ba9ccf3567376ebc0934"
+    },
+    {
+      "name": "deliverable_registry",
+      "ordinal": 17,
+      "sha256": "8e058e325eef60fa89639dcb898a003ba42d69335eac2d0d9ed97e985e092a75"
+    },
+    {
+      "name": "producer_selector_registry",
+      "ordinal": 18,
+      "sha256": "bf87e29d1560fa7355131afae0443c48e93b59982259f7b3e10dac659a8011a2"
+    },
+    {
+      "name": "consumer_selector_registry",
+      "ordinal": 19,
+      "sha256": "679b68ecec2d8cc645d966c2b6f57920a994c2f17a13c9d87c61353befb3082b"
+    },
+    {
+      "name": "applicability_registry",
+      "ordinal": 20,
+      "sha256": "b480564d5c75cb7a48ab00eea42eeaa89e2bc17f4fe5a9443236a0d3623dabb6"
+    },
+    {
+      "name": "edge_rule_registry",
+      "ordinal": 21,
+      "sha256": "9d8acc4ef18a4e928a7108ce84dbe1ae30599fa0a56054d8b7880f9a8d985884"
+    },
+    {
+      "name": "usage_route_registry",
+      "ordinal": 22,
+      "sha256": "c97e0903e546cfe800520a25f40c11556f5bd25aa9d88e23a6c0279b4e152899"
+    },
+    {
+      "name": "usage_extractor_registry",
+      "ordinal": 23,
+      "sha256": "78c515afec20a0b790a48a90fbbbd9c71a5c9db523599d9912abc6b8b0c65176"
+    },
+    {
+      "name": "erasure_baseline",
+      "ordinal": 24,
+      "sha256": "067532baa954e12abbe630ebf1f260a737048da6d4776fb2a5cae5485618d44d"
+    },
+    {
+      "name": "erasure_materialized",
+      "ordinal": 25,
+      "sha256": "60a385781e3eeac0b1dfd505632975e9529a7f8f7120246fc99ea01f7537cfa4"
+    },
+    {
+      "name": "activation_assertions",
+      "ordinal": 26,
+      "sha256": "b5607834108cae3655b9de1e9439cfc338964739d05faca4116eca2d0981d6ce"
+    }
+  ]
+}

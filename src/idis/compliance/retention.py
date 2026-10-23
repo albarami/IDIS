@@ -18,10 +18,12 @@ from __future__ import annotations
 import hashlib
 import logging
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
 from idis.api.errors import IdisHttpError
 from idis.validators.audit_event_validator import validate_audit_event
@@ -31,6 +33,21 @@ if TYPE_CHECKING:
     from idis.audit.sink import AuditSink
 
 logger = logging.getLogger(__name__)
+
+
+ERASURE_TENANT_ADVISORY_LOCK_CONTRACT_V1: Final = (
+    "erasure-tenant-advisory-lock-v1",
+    "PostgreSQL-16",
+    "pg_catalog.hashtextextended",
+    "idis-task7-erasure-tenant-lock-v1:",
+    0,
+    "pg_catalog.pg_advisory_xact_lock",
+)
+_ERASURE_TENANT_ADVISORY_LOCK_SQL: Final = (
+    "SELECT pg_catalog.pg_advisory_xact_lock("
+    "pg_catalog.hashtextextended("
+    "'idis-task7-erasure-tenant-lock-v1:' || CAST(:tenant_id AS text), 0))"
+)
 
 
 class HoldTarget(StrEnum):
@@ -153,6 +170,12 @@ class LegalHoldStore(Protocol):
         ...
 
 
+class _LegalHoldLiftStore(Protocol):
+    def get_for_tenant(self, tenant_id: str, hold_id: str) -> LegalHold | None: ...
+
+    def update(self, hold: LegalHold) -> None: ...
+
+
 class LegalHoldRegistry:
     """In-memory twin of the legal-hold store (tests and non-Postgres deployments).
 
@@ -223,14 +246,37 @@ class PostgresLegalHoldRegistry:
 
     Stores hash-only reasons (the core never persists plaintext hold reasons). Reads fail CLOSED
     (403 LEGAL_HOLD_RESOLUTION_FAILED) so a DB outage can never read as "no active hold = delete
-    allowed"; writes fail loudly (500) and, being single-statement transactions, leave no durable
-    state behind on failure. RLS makes cross-tenant holds invisible (uniform miss, no oracle).
+    allowed"; writes fail loudly (500) and acquire the hash-bound tenant advisory lock before
+    mutation. A composed lift keeps that lock, its read, and its update in one transaction. RLS
+    makes cross-tenant holds invisible (uniform miss, no oracle).
     """
 
     _SELECT = (
         "SELECT hold_id, tenant_id, target_type, target_id, reason_hash, reason_length, "
         "applied_at, applied_by, lifted_at, lifted_by FROM legal_holds"
     )
+
+    @contextmanager
+    def locked_for_tenant(self, tenant_id: str) -> Iterator[_BoundPostgresLegalHoldRegistry]:
+        """Bind hold reads/writes to one tenant-locked database transaction."""
+        from sqlalchemy import text
+
+        from idis.persistence.db import begin_app_conn, set_tenant_local
+
+        try:
+            with begin_app_conn() as conn:
+                set_tenant_local(conn, tenant_id)
+                conn.execute(text(_ERASURE_TENANT_ADVISORY_LOCK_SQL), {"tenant_id": tenant_id})
+                yield _BoundPostgresLegalHoldRegistry(conn, tenant_id, self._SELECT)
+        except IdisHttpError:
+            raise
+        except Exception as e:
+            logger.error("PostgresLegalHoldRegistry locked mutation failed: %s", type(e).__name__)
+            raise IdisHttpError(
+                status_code=500,
+                code="LEGAL_HOLD_WRITE_FAILED",
+                message="Legal hold could not be persisted",
+            ) from e
 
     def _read(self, tenant_id: str, sql: str, params: dict[str, str]) -> list[Any]:
         from sqlalchemy import text
@@ -281,6 +327,7 @@ class PostgresLegalHoldRegistry:
         try:
             with begin_app_conn() as conn:
                 set_tenant_local(conn, tenant_id)
+                conn.execute(text(_ERASURE_TENANT_ADVISORY_LOCK_SQL), {"tenant_id": tenant_id})
                 conn.execute(text(sql), params)
         except Exception as e:
             logger.error("PostgresLegalHoldRegistry write failed: %s", type(e).__name__)
@@ -331,6 +378,73 @@ class PostgresLegalHoldRegistry:
                 "lifted_by": hold.lifted_by,
             },
         )
+
+
+class _BoundPostgresLegalHoldRegistry:
+    """Transaction-bound hold store used by composed durable mutations."""
+
+    def __init__(self, connection: Any, tenant_id: str, select_sql: str) -> None:
+        self._connection = connection
+        self._tenant_id = tenant_id
+        self._select_sql = select_sql
+
+    def _require_tenant(self, tenant_id: str) -> None:
+        if tenant_id != self._tenant_id:
+            raise IdisHttpError(
+                status_code=403,
+                code="LEGAL_HOLD_RESOLUTION_FAILED",
+                message="Access denied.",
+            )
+
+    def get_for_tenant(self, tenant_id: str, hold_id: str) -> LegalHold | None:
+        from sqlalchemy import text
+
+        self._require_tenant(tenant_id)
+        try:
+            rows = list(
+                self._connection.execute(
+                    text(
+                        f"{self._select_sql} WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                        "AND hold_id = CAST(:hold_id AS uuid)"
+                    ),
+                    {"tenant_id": tenant_id, "hold_id": hold_id},
+                )
+            )
+        except Exception as e:
+            logger.error("PostgresLegalHoldRegistry read failed: %s", type(e).__name__)
+            raise IdisHttpError(
+                status_code=403,
+                code="LEGAL_HOLD_RESOLUTION_FAILED",
+                message="Access denied.",
+            ) from e
+        return _row_to_hold(rows[0]) if rows else None
+
+    def update(self, hold: LegalHold) -> None:
+        from sqlalchemy import text
+
+        self._require_tenant(hold.tenant_id)
+        try:
+            self._connection.execute(
+                text(
+                    "UPDATE legal_holds "
+                    "SET lifted_at = :lifted_at, lifted_by = :lifted_by "
+                    "WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                    "AND hold_id = CAST(:hold_id AS uuid)"
+                ),
+                {
+                    "tenant_id": hold.tenant_id,
+                    "hold_id": hold.hold_id,
+                    "lifted_at": hold.lifted_at,
+                    "lifted_by": hold.lifted_by,
+                },
+            )
+        except Exception as e:
+            logger.error("PostgresLegalHoldRegistry write failed: %s", type(e).__name__)
+            raise IdisHttpError(
+                status_code=500,
+                code="LEGAL_HOLD_WRITE_FAILED",
+                message="Legal hold could not be persisted",
+            ) from e
 
 
 _registry: LegalHoldStore | None = None
@@ -580,7 +694,24 @@ def lift_hold(
                        500 if audit fails.
     """
     reg = registry or get_legal_hold_registry()
-    existing = reg.get_for_tenant(tenant_ctx.tenant_id, hold_id)
+    if isinstance(reg, PostgresLegalHoldRegistry):
+        with reg.locked_for_tenant(tenant_ctx.tenant_id) as locked_registry:
+            return _lift_hold_with_store(
+                tenant_ctx,
+                hold_id,
+                audit_sink,
+                locked_registry,
+            )
+    return _lift_hold_with_store(tenant_ctx, hold_id, audit_sink, reg)
+
+
+def _lift_hold_with_store(
+    tenant_ctx: TenantContext,
+    hold_id: str,
+    audit_sink: AuditSink | None,
+    registry: _LegalHoldLiftStore,
+) -> LegalHold:
+    existing = registry.get_for_tenant(tenant_ctx.tenant_id, hold_id)
 
     if existing is None:
         raise IdisHttpError(
@@ -618,7 +749,7 @@ def lift_hold(
 
     _emit_critical_audit_or_fail(audit_sink, event, "lift_hold")
 
-    reg.update(lifted_hold)
+    registry.update(lifted_hold)
 
     logger.info(
         "Legal hold lifted: hold_id=%s, target=%s/%s",

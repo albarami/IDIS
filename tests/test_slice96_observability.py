@@ -93,7 +93,7 @@ def test_emit_run_signal_shape_and_safe() -> None:
     )
     assert len(sink.events) == 1
     event = sink.events[0]
-    assert event["event_type"] == "run.claimed"
+    assert event["event_type"] == "worker.run_claimed_observed"
     assert event["tenant_id"] == _TENANT
     assert event["payload"]["safe"] == {"run_id": _RUN, "mode": "SNAPSHOT"}
     _assert_safe_shape(event)

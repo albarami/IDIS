@@ -13,22 +13,12 @@ from __future__ import annotations
 import dataclasses
 import inspect
 import os
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 
-from idis.api.routes.runs import (
-    AnalysisClientSelection,
-    DebateRoleRunnerSelection,
-    ScoringClientSelection,
-    _build_analysis_llm_client,
-    _build_debate_role_runners,
-    _build_scoring_llm_client,
-    _run_full_analysis,
-    _run_full_debate,
-    _run_full_scoring,
-)
 from idis.debate.orchestrator import RoleRunners
 from idis.debate.roles.advocate import AdvocateRole
 from idis.debate.roles.llm_role_runner import LLMRoleRunner
@@ -37,8 +27,22 @@ from idis.services.extraction.extractors.llm_client import (
     DeterministicAnalysisLLMClient,
     DeterministicScoringLLMClient,
 )
+from idis.services.runs.step_runtime.analysis import (
+    _run_full_analysis,
+    _run_full_debate,
+    _run_full_scoring,
+)
+from idis.services.runs.step_runtime.roles import (
+    AnalysisClientSelection,
+    DebateRoleRunnerSelection,
+    ScoringClientSelection,
+    _build_analysis_llm_client,
+    _build_debate_role_runners,
+    _build_scoring_llm_client,
+)
 
 _FAKE_KEY = "sk-ant-test-fake-key-for-unit-test"
+_DEAL_STAGE = "series_a"
 
 
 def _env_without(*keys: str) -> dict[str, str]:
@@ -193,7 +197,7 @@ def test_run_full_analysis_forwards_factory() -> None:
         raise _StopForTest
 
     with (
-        patch("idis.api.routes.runs._build_analysis_llm_client", fake_build),
+        patch("idis.services.runs.step_runtime.analysis._build_analysis_llm_client", fake_build),
         pytest.raises(_StopForTest),
     ):
         _run_full_analysis(
@@ -222,7 +226,7 @@ def test_run_full_debate_forwards_factory() -> None:
         raise _StopForTest
 
     with (
-        patch("idis.api.routes.runs._build_debate_role_runners", fake_build),
+        patch("idis.services.runs.step_runtime.analysis._build_debate_role_runners", fake_build),
         pytest.raises(_StopForTest),
     ):
         _run_full_debate(
@@ -248,7 +252,7 @@ def test_run_full_scoring_forwards_factory() -> None:
         raise _StopForTest
 
     with (
-        patch("idis.api.routes.runs._build_scoring_llm_client", fake_build),
+        patch("idis.services.runs.step_runtime.analysis._build_scoring_llm_client", fake_build),
         pytest.raises(_StopForTest),
     ):
         _run_full_scoring(
@@ -256,7 +260,7 @@ def test_run_full_scoring_forwards_factory() -> None:
             tenant_id="t",
             deal_id="d",
             analysis_bundle=object(),
-            analysis_context=object(),
+            analysis_context=SimpleNamespace(stage=_DEAL_STAGE),
             scoring_client_factory=sentinel,
         )
     assert captured["f"] is sentinel

@@ -119,8 +119,10 @@ def test_visibility_model_exposes_only_safe_fields() -> None:
 
 
 def test_deliverables_wiring_threads_layer2_evidence_and_categories() -> None:
-    runs_src = Path("src/idis/api/routes/runs.py").read_text(encoding="utf-8")
-    assert "layer2_evidence=layer2_evidence" in runs_src
+    deliverables_src = Path("src/idis/services/runs/step_runtime/deliverables.py").read_text(
+        encoding="utf-8"
+    )
+    assert "layer2_evidence=layer2_evidence" in deliverables_src
     orchestrator_src = Path("src/idis/services/runs/orchestrator.py").read_text(encoding="utf-8")
     # The deliverables layer2_evidence dict now threads the category/severity histograms.
     assert '"by_finding_type": accumulated.get("by_finding_type")' in orchestrator_src

@@ -7,9 +7,10 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
+import httpx2
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -23,6 +24,7 @@ from idis.api.routes.runs import clear_runs_store
 from idis.audit.sink import InMemoryAuditSink
 from idis.deliverables.artifact_catalog import resolve_content_type
 from idis.evaluation.benchmarks.gdbs import load_gdbs_suite
+from idis.evaluation.types import deal_stage_for_request
 from idis.idempotency.store import SqliteIdempotencyStore
 from idis.models.run_step import FULL_STEPS
 from idis.persistence.db import get_app_engine
@@ -32,6 +34,7 @@ from idis.services.runs.strict_full_live import build_strict_full_live_readiness
 MAX_SYNTHETIC_REHEARSAL_CASES = 20
 SYNTHETIC_API_REHEARSAL_API_KEY = "slice68-synthetic-api-upload-key"
 SYNTHETIC_API_REHEARSAL_TENANT_ID = "11111111-1111-4111-8111-111111111111"
+SYNTHETIC_STRICT_PREFLIGHT_PROOF_ID = "69696969-6969-4969-8969-696969696969"
 SYNTHETIC_FULL_EXECUTION_LIVE_PROVIDER_ENV_KEYS = (
     "ANTHROPIC_API_KEY",
     "IDIS_EXTRACT_BACKEND",
@@ -140,10 +143,12 @@ def build_bounded_synthetic_api_upload_rehearsal(
     env: dict[str, str],
     max_cases: int | None,
     allow_synthetic_api_upload: bool,
+    deal_stage: str | None,
     object_store_base_dir: Path | None = None,
     repo_root: Path | None = None,
 ) -> dict[str, Any]:
     """Upload a bounded GDBS-F case through the public API upload boundary only."""
+    resolved_stage = deal_stage_for_request(deal_stage)
     if max_cases is None or max_cases <= 0:
         raise SyntheticRehearsalScopeError("SYNTHETIC_MAX_CASES_REQUIRED")
     if max_cases > MAX_SYNTHETIC_REHEARSAL_CASES:
@@ -198,6 +203,7 @@ def build_bounded_synthetic_api_upload_rehearsal(
         dataset_root=resolved_dataset_root,
         selected_cases=selected_cases,
         object_store_base_dir=object_store_base_dir,
+        deal_stage=resolved_stage,
     )
     upload_report.update(upload_result)
     _assert_no_report_leakage(report)
@@ -211,10 +217,12 @@ def build_bounded_synthetic_api_run_rehearsal(
     max_cases: int | None,
     allow_synthetic_api_upload: bool,
     allow_synthetic_run: bool,
+    deal_stage: str | None,
     object_store_base_dir: Path | None = None,
     repo_root: Path | None = None,
 ) -> dict[str, Any]:
-    """Attempt a bounded GDBS-F FULL run only to prove strict blocking."""
+    """Attempt a bounded GDBS-F FULL run and record its earliest fail-closed gate."""
+    resolved_stage = deal_stage_for_request(deal_stage)
     if not allow_synthetic_run:
         raise SyntheticRehearsalScopeError("SYNTHETIC_RUN_NOT_ALLOWED")
 
@@ -234,6 +242,7 @@ def build_bounded_synthetic_api_run_rehearsal(
         raise SyntheticRehearsalScopeError("SYNTHETIC_API_UPLOAD_NOT_ALLOWED")
 
     upload_result, run_attempt = _upload_and_attempt_strict_blocked_run_via_api(
+        deal_stage=resolved_stage,
         dataset_root=resolved_dataset_root,
         selected_cases=selected_cases,
         object_store_base_dir=object_store_base_dir,
@@ -260,11 +269,11 @@ def build_bounded_synthetic_api_run_rehearsal(
             "verified": False,
         },
     }
-    if (
-        run_attempt.get("status") == "blocked"
-        and run_attempt.get("reason_code") == "STRICT_FULL_LIVE_BLOCKED"
-    ):
-        report["strict_runtime_blocked_reason_code"] = "STRICT_FULL_LIVE_BLOCKED"
+    if run_attempt.get("status") == "blocked":
+        reason_code = run_attempt.get("reason_code")
+        report["run_admission_blocked_reason_code"] = reason_code
+        if reason_code == "STRICT_FULL_LIVE_BLOCKED":
+            report["strict_runtime_blocked_reason_code"] = reason_code
     _assert_no_report_leakage(report)
     return report
 
@@ -276,10 +285,12 @@ def build_bounded_synthetic_full_execution_rehearsal(
     max_cases: int | None,
     allow_synthetic_api_upload: bool,
     allow_synthetic_execution: bool,
+    deal_stage: str | None,
     object_store_base_dir: Path | None = None,
     repo_root: Path | None = None,
 ) -> dict[str, Any]:
-    """Execute one bounded GDBS-F FULL run as a non-approval synthetic rehearsal."""
+    """Attempt one bounded GDBS-F FULL run as a non-approval synthetic rehearsal."""
+    resolved_stage = deal_stage_for_request(deal_stage)
     if not allow_synthetic_execution:
         raise SyntheticRehearsalScopeError("SYNTHETIC_EXECUTION_NOT_ALLOWED")
 
@@ -304,6 +315,7 @@ def build_bounded_synthetic_full_execution_rehearsal(
         dataset_root=resolved_dataset_root,
         selected_cases=selected_cases,
         object_store_base_dir=object_store_base_dir,
+        deal_stage=resolved_stage,
     )
     report = {
         "synthetic_rehearsal_only": True,
@@ -337,10 +349,12 @@ def build_bounded_synthetic_package_surface_rehearsal(
     allow_synthetic_api_upload: bool,
     allow_synthetic_execution: bool,
     allow_synthetic_package_surface_verification: bool,
+    deal_stage: str | None,
     object_store_base_dir: Path | None = None,
     repo_root: Path | None = None,
 ) -> dict[str, Any]:
     """Prove one synthetic FULL run creates same-run durable package surfaces."""
+    resolved_stage = deal_stage_for_request(deal_stage)
     if not allow_synthetic_package_surface_verification:
         raise SyntheticRehearsalScopeError("SYNTHETIC_PACKAGE_SURFACE_VERIFICATION_NOT_ALLOWED")
     if not allow_synthetic_execution:
@@ -371,6 +385,7 @@ def build_bounded_synthetic_package_surface_rehearsal(
             dataset_root=resolved_dataset_root,
             selected_cases=selected_cases,
             object_store_base_dir=object_store_base_dir,
+            deal_stage=resolved_stage,
         )
     )
     report = {
@@ -446,14 +461,14 @@ def verify_package_surfaces(
     """Verify synthetic final package list, manifest review, downloads, and hashes."""
     headers = {"X-IDIS-API-Key": api_key}
     listed_response = client.get(f"/v1/deals/{deal_id}/deliverables", headers=headers)
-    listed_response.raise_for_status()
+    _raise_safe_api_error(listed_response, reason_code="SYNTHETIC_PACKAGE_LIST_FAILED")
     listed = listed_response.json()["items"]
 
     manifest_response = client.get(
         f"/v1/deals/{deal_id}/runs/{run_id}/product-bundle/manifest",
         headers=headers,
     )
-    manifest_response.raise_for_status()
+    _raise_safe_api_error(manifest_response, reason_code="SYNTHETIC_PACKAGE_MANIFEST_FAILED")
     manifest = manifest_response.json()
     artifacts = [artifact for artifact in manifest["artifacts"] if isinstance(artifact, dict)]
     rows_by_type_format = {
@@ -476,7 +491,7 @@ def verify_package_surfaces(
         response = client.get(f"/v1/deliverables/{row['deliverable_id']}/content", headers=headers)
         try:
             response.raise_for_status()
-        except httpx.HTTPStatusError:
+        except (httpx.HTTPStatusError, httpx2.HTTPStatusError):
             download_failures.append(
                 {
                     "artifact": artifact_key,
@@ -610,6 +625,7 @@ def _upload_selected_gdbs_cases_via_api(
     dataset_root: Path,
     selected_cases: list[Any],
     object_store_base_dir: Path | None,
+    deal_stage: str,
 ) -> dict[str, Any]:
     if object_store_base_dir is None:
         with tempfile.TemporaryDirectory(prefix="idis_slice68_upload_") as tmp_dir:
@@ -617,6 +633,7 @@ def _upload_selected_gdbs_cases_via_api(
                 dataset_root=dataset_root,
                 selected_cases=selected_cases,
                 object_store_base_dir=Path(tmp_dir),
+                deal_stage=deal_stage,
             )
 
     previous_api_keys = os.environ.get(IDIS_API_KEYS_ENV)
@@ -651,6 +668,7 @@ def _upload_selected_gdbs_cases_via_api(
                 client=client,
                 dataset_root=dataset_root,
                 selected_cases=selected_cases,
+                deal_stage=deal_stage,
             )
     finally:
         _restore_env(IDIS_API_KEYS_ENV, previous_api_keys)
@@ -664,6 +682,7 @@ def _upload_and_attempt_strict_blocked_run_via_api(
     dataset_root: Path,
     selected_cases: list[Any],
     object_store_base_dir: Path | None,
+    deal_stage: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     if object_store_base_dir is None:
         with tempfile.TemporaryDirectory(prefix="idis_slice69_run_") as tmp_dir:
@@ -671,11 +690,13 @@ def _upload_and_attempt_strict_blocked_run_via_api(
                 dataset_root=dataset_root,
                 selected_cases=selected_cases,
                 object_store_base_dir=Path(tmp_dir),
+                deal_stage=deal_stage,
             )
 
     previous_api_keys = os.environ.get(IDIS_API_KEYS_ENV)
     previous_database_url = os.environ.get("IDIS_DATABASE_URL")
     previous_require_full_live = os.environ.get("IDIS_REQUIRE_FULL_LIVE")
+    previous_process_role = os.environ.get("IDIS_PROCESS_ROLE")
     previous_strict_dotenv_path = os.environ.get("IDIS_STRICT_DOTENV_PATH")
     previous_object_store_backend = os.environ.get("IDIS_OBJECT_STORE_BACKEND")
     previous_object_store_base = os.environ.get("IDIS_OBJECT_STORE_BASE_DIR")
@@ -694,6 +715,7 @@ def _upload_and_attempt_strict_blocked_run_via_api(
         )
         os.environ.pop("IDIS_DATABASE_URL", None)
         os.environ["IDIS_REQUIRE_FULL_LIVE"] = "1"
+        os.environ["IDIS_PROCESS_ROLE"] = "api"
         os.environ.pop("IDIS_STRICT_DOTENV_PATH", None)
         os.environ["IDIS_OBJECT_STORE_BACKEND"] = "filesystem"
         os.environ["IDIS_OBJECT_STORE_BASE_DIR"] = str(object_store_base_dir)
@@ -709,6 +731,7 @@ def _upload_and_attempt_strict_blocked_run_via_api(
                 client=client,
                 dataset_root=dataset_root,
                 selected_cases=selected_cases,
+                deal_stage=deal_stage,
             )
             run_attempt = _attempt_strict_blocked_run_with_client(
                 client=client,
@@ -720,6 +743,7 @@ def _upload_and_attempt_strict_blocked_run_via_api(
         _restore_env(IDIS_API_KEYS_ENV, previous_api_keys)
         _restore_env("IDIS_DATABASE_URL", previous_database_url)
         _restore_env("IDIS_REQUIRE_FULL_LIVE", previous_require_full_live)
+        _restore_env("IDIS_PROCESS_ROLE", previous_process_role)
         _restore_env("IDIS_STRICT_DOTENV_PATH", previous_strict_dotenv_path)
         _restore_env("IDIS_OBJECT_STORE_BACKEND", previous_object_store_backend)
         _restore_env("IDIS_OBJECT_STORE_BASE_DIR", previous_object_store_base)
@@ -730,6 +754,7 @@ def _upload_and_execute_non_strict_full_via_api(
     dataset_root: Path,
     selected_cases: list[Any],
     object_store_base_dir: Path | None,
+    deal_stage: str,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     if object_store_base_dir is None:
         with tempfile.TemporaryDirectory(prefix="idis_slice70_full_run_") as tmp_dir:
@@ -737,6 +762,7 @@ def _upload_and_execute_non_strict_full_via_api(
                 dataset_root=dataset_root,
                 selected_cases=selected_cases,
                 object_store_base_dir=Path(tmp_dir),
+                deal_stage=deal_stage,
             )
 
     previous_api_keys = os.environ.get(IDIS_API_KEYS_ENV)
@@ -785,17 +811,25 @@ def _upload_and_execute_non_strict_full_via_api(
                 client=client,
                 dataset_root=dataset_root,
                 selected_cases=selected_cases,
+                deal_stage=deal_stage,
             )
             execution_result = _execute_non_strict_full_run_with_client(
                 client=client,
                 deal_id=deal_id,
                 document_ids=[item["document_id"] for item in upload_result["uploaded_documents"]],
             )
-            package_surface = _same_run_package_surface_status(
-                client=client,
-                deal_id=deal_id,
-                run_id=str(execution_result.get("run_id") or ""),
-            )
+            if execution_result.get("run_created") is True:
+                package_surface = _same_run_package_surface_status(
+                    client=client,
+                    deal_id=deal_id,
+                    run_id=str(execution_result.get("run_id") or ""),
+                )
+            else:
+                package_surface = {
+                    "status": "not_run",
+                    "verified": False,
+                    "reason_code": str(execution_result.get("reason_code")),
+                }
             return upload_result, execution_result, package_surface
     finally:
         _restore_env(IDIS_API_KEYS_ENV, previous_api_keys)
@@ -814,6 +848,7 @@ def _upload_execute_and_verify_package_surfaces_via_api(
     dataset_root: Path,
     selected_cases: list[Any],
     object_store_base_dir: Path | None,
+    deal_stage: str,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     if object_store_base_dir is None:
         with tempfile.TemporaryDirectory(prefix="idis_slice71_package_") as tmp_dir:
@@ -821,6 +856,7 @@ def _upload_execute_and_verify_package_surfaces_via_api(
                 dataset_root=dataset_root,
                 selected_cases=selected_cases,
                 object_store_base_dir=Path(tmp_dir),
+                deal_stage=deal_stage,
             )
 
     previous_api_keys = os.environ.get(IDIS_API_KEYS_ENV)
@@ -867,6 +903,7 @@ def _upload_execute_and_verify_package_surfaces_via_api(
                 client=client,
                 dataset_root=dataset_root,
                 selected_cases=selected_cases,
+                deal_stage=deal_stage,
             )
             execution_result = _execute_non_strict_full_run_with_client(
                 client=client,
@@ -895,11 +932,13 @@ def _upload_selected_gdbs_cases_with_client(
     client: TestClient,
     dataset_root: Path,
     selected_cases: list[Any],
+    deal_stage: str,
 ) -> dict[str, Any]:
     upload_result, _deal_ids = _upload_selected_gdbs_cases_core_with_client(
         client=client,
         dataset_root=dataset_root,
         selected_cases=selected_cases,
+        deal_stage=deal_stage,
     )
     return upload_result
 
@@ -909,6 +948,7 @@ def _upload_selected_gdbs_cases_core_with_client(
     client: TestClient,
     dataset_root: Path,
     selected_cases: list[Any],
+    deal_stage: str,
 ) -> tuple[dict[str, Any], list[str]]:
     artifact_types: set[str] = set()
     artifact_formats: set[str] = set()
@@ -919,7 +959,11 @@ def _upload_selected_gdbs_cases_core_with_client(
         deal_response = client.post(
             "/v1/deals",
             headers=headers,
-            json={"name": case.case_id, "company_name": case.case_id},
+            json={
+                "name": case.case_id,
+                "company_name": case.case_id,
+                "stage": deal_stage_for_request(deal_stage),
+            },
         )
         _raise_safe_api_error(deal_response, reason_code="SYNTHETIC_API_DEAL_CREATE_FAILED")
         deal_id = str(deal_response.json()["deal_id"])
@@ -949,7 +993,7 @@ def _upload_selected_gdbs_cases_core_with_client(
                     },
                     content=data,
                 )
-            except httpx.HTTPStatusError as exc:
+            except (httpx.HTTPStatusError, httpx2.HTTPStatusError) as exc:
                 status_code = exc.response.status_code if exc.response is not None else 0
                 raise SyntheticRehearsalScopeError(
                     f"SYNTHETIC_API_UPLOAD_FAILED:status_code={status_code}"
@@ -980,6 +1024,7 @@ def _upload_selected_gdbs_cases_for_run_with_client(
     client: TestClient,
     dataset_root: Path,
     selected_cases: list[Any],
+    deal_stage: str,
 ) -> tuple[dict[str, Any], str]:
     if len(selected_cases) != 1:
         raise SyntheticRehearsalScopeError("SYNTHETIC_RUN_SINGLE_CASE_ONLY")
@@ -987,6 +1032,7 @@ def _upload_selected_gdbs_cases_for_run_with_client(
         client=client,
         dataset_root=dataset_root,
         selected_cases=selected_cases,
+        deal_stage=deal_stage,
     )
     if len(deal_ids) != 1:
         raise SyntheticRehearsalScopeError("SYNTHETIC_RUN_DEAL_SELECTION_INVALID")
@@ -1004,6 +1050,7 @@ def _attempt_strict_blocked_run_with_client(
         headers={"X-IDIS-API-Key": SYNTHETIC_API_REHEARSAL_API_KEY},
         json={
             "mode": "FULL",
+            "strict_preflight_proof_id": SYNTHETIC_STRICT_PREFLIGHT_PROOF_ID,
             "source": {
                 "type": "deal_documents",
                 "document_ids": document_ids,
@@ -1230,7 +1277,7 @@ def _verified_same_run_package_surface_status(
         response = client.get(f"/v1/deliverables/{row['deliverable_id']}/content", headers=headers)
         try:
             response.raise_for_status()
-        except httpx.HTTPStatusError:
+        except (httpx.HTTPStatusError, httpx2.HTTPStatusError):
             download_failures.append(
                 {"artifact": artifact_key, "status_code": response.status_code}
             )
@@ -1298,10 +1345,19 @@ def _require_available_postgres_for_synthetic_package_surface() -> None:
         raise SyntheticRehearsalScopeError("SYNTHETIC_POSTGRES_UNAVAILABLE") from exc
 
 
-def _raise_safe_api_error(response: httpx.Response, *, reason_code: str) -> None:
+class _StatusResponse(Protocol):
+    """Only the status surface shared by legacy HTTPX and current TestClient."""
+
+    @property
+    def status_code(self) -> int: ...
+
+    def raise_for_status(self) -> object: ...
+
+
+def _raise_safe_api_error(response: _StatusResponse, *, reason_code: str) -> None:
     try:
         response.raise_for_status()
-    except httpx.HTTPStatusError:
+    except (httpx.HTTPStatusError, httpx2.HTTPStatusError):
         raise SyntheticRehearsalScopeError(
             f"{reason_code}:status_code={response.status_code}"
         ) from None

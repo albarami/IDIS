@@ -16,9 +16,10 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+import pytest
+
 from idis.analysis.scoring.models import Stage
 from idis.analysis.scoring.stage_packs import get_stage_pack
-from idis.api.routes.runs import _build_layer2_provenance
 from idis.audit.sink import InMemoryAuditSink
 from idis.deliverables.generator import DeliverablesGenerator
 from idis.models.layer2_durability import Layer2ChallengeRow, Layer2FindingRow
@@ -32,6 +33,7 @@ from idis.services.runs.layer2_ic_challenge import (
     Layer2ICLLMRunner,
     RunLayer2ICChallengeService,
 )
+from idis.services.runs.step_runtime.roles import _build_layer2_provenance
 from idis.services.runs.strict_full_live import (
     StrictComponentStatus,
     build_strict_full_live_readiness_report,
@@ -47,6 +49,8 @@ TENANT_ID = "11111111-1111-1111-1111-111111111111"
 DEAL_ID = "33333333-3333-3333-3333-333333333333"
 RUN_ID = "22222222-2222-2222-2222-222222222222"
 _TIMESTAMP = "2026-01-01T00:00:00Z"
+# The live fixture carries no admitted-deal stage. This slice gives it SERIES_A.
+FIXTURE_STAGE = Stage.SERIES_A
 
 _CONFIGURED_ENV = {
     "IDIS_DEBATE_BACKEND": "anthropic",
@@ -97,6 +101,62 @@ def _run_live_layer2() -> tuple[dict[str, Any], Any, Layer2ICLLMRunner, Layer2IC
     return summary, record, challenger, arbiter
 
 
+def _routed_stage_emphasis(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Return stage emphasis from the FULL route given the fixture stage snapshot."""
+    from idis.services.runs.step_runtime.layer2 import _run_full_layer2_ic_challenge
+
+    response = _layer2_response(
+        supported_claim_ids=["claim-a"],
+        supported_calc_ids=["calc-a"],
+        extra_content={"category": "market_risk"},
+    )
+    challenger = Layer2ICLLMRunner(
+        role="ic_challenger", llm_client=_FakeClient(response), system_prompt="SECRET_PROMPT"
+    )
+    arbiter = Layer2ICLLMRunner(
+        role="ic_arbiter", llm_client=_FakeClient(response), system_prompt="SECRET_PROMPT"
+    )
+    monkeypatch.delenv("IDIS_STRICT_DOTENV_PATH", raising=False)
+    monkeypatch.delenv("IDIS_REQUIRE_FULL_LIVE", raising=False)
+    for key, value in _CONFIGURED_ENV.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("IDIS_REQUIRE_FULL_LIVE", "true")
+
+    clients: list[object] = []
+
+    def _build(**_kwargs: Any) -> tuple[Layer2ICLLMRunner, Layer2ICLLMRunner]:
+        return challenger, arbiter
+
+    def _client(**_kwargs: Any) -> object:
+        client = object()
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr(
+        "idis.services.runs.layer2_ic_challenge.build_live_layer2_ic_runners",
+        _build,
+    )
+    monkeypatch.setattr(
+        "idis.services.runs.step_runtime.layer2._new_budgeted_llm_client",
+        _client,
+    )
+    clear_in_memory_layer2_challenge_store()
+    result = _run_full_layer2_ic_challenge(
+        run_id=RUN_ID,
+        tenant_id=TENANT_ID,
+        deal_id=DEAL_ID,
+        debate_summary={"debate_id": "debate-001", "muhasabah_passed": True},
+        created_claim_ids=["claim-a"],
+        calc_ids=["calc-a"],
+        graph_evidence={"graph_retrieval": {"retrieval_ids": ["graph-ref-1"]}},
+        rag_evidence={"rag_retrieval": {"match_ids": ["rag-ref-1"]}},
+        enrichment_refs={"enrich-ref-1": {"provider_id": "companies_house"}},
+        deal_metadata={"stage": FIXTURE_STAGE.value},
+    )
+    assert len(clients) == 2
+    return result["stage_emphasis"]
+
+
 def _layer2_evidence_from_summary(summary: dict[str, Any]) -> dict[str, Any]:
     """Build the deliverables layer2_evidence block the way the orchestrator does."""
     return {
@@ -144,7 +204,7 @@ def test_acceptance_layer2_distinct_durable_proven_visible() -> None:
     # (3) DURABLE — the safe challenge + finding rows persist and roundtrip, carrying the
     # category taxonomy + scorecard-safe stage emphasis.
     repo = InMemoryLayer2ChallengeRepository(TENANT_ID)
-    repo.upsert_challenge(Layer2ChallengeRow.from_record(record))
+    repo.upsert_challenge(Layer2ChallengeRow.from_record(record, stage=FIXTURE_STAGE))
     for finding in record.findings:
         repo.upsert_finding(
             Layer2FindingRow.from_finding(
@@ -159,7 +219,7 @@ def test_acceptance_layer2_distinct_durable_proven_visible() -> None:
     findings = repo.list_findings(run_id=RUN_ID)
     assert [c["challenge_id"] for c in challenges] == [record.layer2_challenge_id]
     assert challenges[0]["safe_summary"]["by_category"] == {"market_risk": 1}
-    assert challenges[0]["safe_summary"]["stage_emphasis"]["stage"] == "SEED"
+    assert challenges[0]["safe_summary"]["stage_emphasis"]["stage"] == FIXTURE_STAGE.value
     assert findings[0]["category"] == "market_risk"
 
     # (4) VISIBLE — the safe Layer-2 block surfaces in BOTH the IC memo and QA brief, with no
@@ -188,19 +248,21 @@ def test_acceptance_layer2_distinct_durable_proven_visible() -> None:
 # --- Category + stage-emphasis behavior (Task 6) ---
 
 
-def test_acceptance_category_and_stage_emphasis_behavior() -> None:
+def test_acceptance_category_and_stage_emphasis_behavior(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     summary, _record, _challenger, _arbiter = _run_live_layer2()
 
     assert summary["by_category"] == {"market_risk": 1}
-    stage_emphasis = summary["stage_emphasis"]
-    assert stage_emphasis["stage"] == "SEED"
+    stage_emphasis = _routed_stage_emphasis(monkeypatch)
+    assert stage_emphasis["stage"] == FIXTURE_STAGE.value
     # The emphasis reuses the scoring stage-pack weights read-only; market_risk maps to the
     # MARKET_ATTRACTIVENESS dimension.
     from idis.analysis.scoring.models import ScoreDimension
 
-    seed = get_stage_pack(Stage.SEED)
+    pack = get_stage_pack(FIXTURE_STAGE)
     assert stage_emphasis["weighted_by_category"]["market_risk"] == round(
-        1 * seed.weights[ScoreDimension.MARKET_ATTRACTIVENESS], 6
+        1 * pack.weights[ScoreDimension.MARKET_ATTRACTIVENESS], 6
     )
     # Scorecard is never touched by the emphasis (no scorecard fields ride along).
     for forbidden in ("composite_score", "score_band", "routing", "dimension_scores"):

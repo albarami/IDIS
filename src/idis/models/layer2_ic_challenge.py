@@ -150,6 +150,10 @@ class Layer2ICChallengeRecord(BaseModel):
     findings: list[Layer2ICChallengeFinding] = Field(default_factory=list)
     unresolved_question_count: int = Field(..., ge=0)
     muhasabah_passed: bool
+    stage: Stage | None = Field(
+        default=None,
+        description="Resolved scoring stage supplied by the caller for emphasis",
+    )
 
     @field_validator(
         "tenant_id",
@@ -201,16 +205,21 @@ class Layer2ICChallengeRecord(BaseModel):
             muhasabah_passed=self.muhasabah_passed,
         )
 
-    def to_run_step_summary(self, stage: Stage = Stage.SEED) -> dict[str, Any]:
+    def to_run_step_summary(self, stage: Stage | None = None) -> dict[str, Any]:
         """Return safe Layer 2 run-step visibility.
 
-        ``stage`` selects the stage-weighted category emphasis (DEC-E); it defaults to
-        ``Stage.SEED`` to mirror the scoring step's default stage.
+        ``stage`` selects the stage-weighted category emphasis. An explicit
+        argument wins; otherwise the stage stored on the record is used. When
+        the caller has supplied neither, emphasis stays on ``Stage.SEED``.
         """
         # Lazy import breaks the models<->emphasis import cycle (emphasis imports the
         # category enum defined above); the emphasis reuses stage_packs read-only.
         from idis.services.runs.layer2_stage_emphasis import apply_layer2_stage_emphasis
 
+        resolved = stage if stage is not None else self.stage
+        if resolved is None:
+            # Documented bound: non-FULL callers with no stage emphasize SEED.
+            resolved = Stage.SEED
         shell = self.to_shell()
         by_severity = counter(finding.severity for finding in self.findings)
         by_type = counter(finding.finding_type for finding in self.findings)
@@ -231,7 +240,7 @@ class Layer2ICChallengeRecord(BaseModel):
             "by_finding_type": by_type,
             "by_severity": by_severity,
             "by_category": by_category,
-            "stage_emphasis": apply_layer2_stage_emphasis(stage, by_category),
+            "stage_emphasis": apply_layer2_stage_emphasis(resolved, by_category),
             "challenge_shells": [shell.model_dump(mode="json")],
         }
 

@@ -120,7 +120,10 @@ def test_postgres_try_complete_running_sql_only_completes_running_runs(
 
     joined_sql = "\n".join(conn.executed_sql)
     assert "UPDATE runs" in joined_sql
-    assert "WHERE run_id = :run_id AND status = 'RUNNING'" in joined_sql
+    # Lease fencing legitimately expands this predicate; pin its semantics, not SQL formatting.
+    assert "status = 'RUNNING'" in joined_sql
+    assert "lease_owner_id IS NULL" in joined_sql
+    assert "lease_expires_at IS NULL" in joined_sql
 
 
 def test_postgres_try_complete_active_sql_completes_queued_or_running_runs(
@@ -156,7 +159,11 @@ def test_postgres_try_complete_active_sql_completes_queued_or_running_runs(
 
     joined_sql = "\n".join(conn.executed_sql)
     assert "UPDATE runs" in joined_sql
-    assert "WHERE run_id = :run_id AND status IN ('QUEUED', 'RUNNING')" in joined_sql
+    # Lease fencing legitimately expands this predicate; pin its semantics, not SQL formatting.
+    assert "status IN ('QUEUED', 'RUNNING')" in joined_sql
+    assert "status = 'QUEUED'" in joined_sql
+    assert "lease_owner_id IS NULL" in joined_sql
+    assert "lease_expires_at IS NULL" in joined_sql
     assert "RETURNING run_id" in joined_sql
 
 
@@ -283,6 +290,10 @@ def test_migration_0018_allows_cancelled_status_and_cancel_requested_at(
     clean_tables: None,
 ) -> None:
     """Alembic head includes 0018, CANCELLED status, and cancel_requested_at."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    import idis.persistence.migrations as migrations_pkg
     from idis.persistence.db import set_tenant_local
 
     deal_id = str(uuid.uuid4())
@@ -292,7 +303,9 @@ def test_migration_0018_allows_cancelled_status_and_cancel_requested_at(
     with app_engine.begin() as conn:
         set_tenant_local(conn, TENANT_A_ID)
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert version == "0018"
+        config = Config()
+        config.set_main_option("script_location", os.path.dirname(migrations_pkg.__file__))
+        assert version == ScriptDirectory.from_config(config).get_current_head()
 
         cancel_column_count = conn.execute(
             text(
@@ -340,33 +353,36 @@ def test_postgres_runs_repository_cancel_requeue_and_queue_scope(
     """Postgres run transitions honor CANCELLED semantics and queue filtering."""
     from idis.persistence.db import set_tenant_local
 
-    deal_id = str(uuid.uuid4())
+    queued_deal_id = str(uuid.uuid4())
+    running_deal_id = str(uuid.uuid4())
+    failed_deal_id = str(uuid.uuid4())
     queued_run_id = str(uuid.uuid4())
     running_run_id = str(uuid.uuid4())
     failed_run_id = str(uuid.uuid4())
 
     with app_engine.begin() as conn:
         set_tenant_local(conn, TENANT_A_ID)
-        _insert_deal(conn, tenant_id=TENANT_A_ID, deal_id=deal_id)
+        for deal_id in (queued_deal_id, running_deal_id, failed_deal_id):
+            _insert_deal(conn, tenant_id=TENANT_A_ID, deal_id=deal_id)
         _insert_run(
             conn,
             tenant_id=TENANT_A_ID,
             run_id=queued_run_id,
-            deal_id=deal_id,
+            deal_id=queued_deal_id,
             status="QUEUED",
         )
         _insert_run(
             conn,
             tenant_id=TENANT_A_ID,
             run_id=running_run_id,
-            deal_id=deal_id,
+            deal_id=running_deal_id,
             status="RUNNING",
         )
         _insert_run(
             conn,
             tenant_id=TENANT_A_ID,
             run_id=failed_run_id,
-            deal_id=deal_id,
+            deal_id=failed_deal_id,
             status="FAILED",
         )
 

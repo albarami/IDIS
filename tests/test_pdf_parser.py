@@ -298,8 +298,9 @@ class TestPDFParserFailClosed:
         result = parse_pdf(pdf_bytes)
 
         assert result.success is False
-        assert [error.code for error in result.errors] == [ParseErrorCode.NO_TEXT_EXTRACTED]
-        assert result.errors[0].details == {"pages": 1}
+        # Task 4: image-only PDFs cannot look like a completed no-text parse.
+        assert [error.code for error in result.errors] == [ParseErrorCode.OCR_UNAVAILABLE]
+        assert result.errors[0].details == {}
 
 
 class TestPDFParserLimits:

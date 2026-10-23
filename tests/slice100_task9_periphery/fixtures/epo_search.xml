@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ops:world-patent-data xmlns:ops="http://ops.epo.org" xmlns:exchange="http://www.epo.org/exchange">
+  <ops:biblio-search total-result-count="42">
+    <ops:query syntax="CQL">pa=Microsoft</ops:query>
+    <ops:range begin="1" end="1" />
+    <ops:search-result>
+      <exchange:exchange-documents>
+        <exchange:exchange-document country="EP" doc-number="0000001" kind="A1">
+          <exchange:bibliographic-data>
+            <exchange:publication-reference>
+              <exchange:document-id document-id-type="docdb">
+                <exchange:country>EP</exchange:country>
+                <exchange:doc-number>0000001</exchange:doc-number>
+                <exchange:kind>A1</exchange:kind>
+              </exchange:document-id>
+              <exchange:document-id document-id-type="epodoc">
+                <exchange:doc-number>EP0000001</exchange:doc-number>
+              </exchange:document-id>
+            </exchange:publication-reference>
+            <exchange:parties>
+              <exchange:applicants>
+                <exchange:applicant sequence="2" data-format="original">
+                  <exchange:applicant-name><exchange:name>MICROSOFT CORP</exchange:name></exchange:applicant-name>
+                </exchange:applicant>
+                <exchange:applicant sequence="1" data-format="epodoc">
+                  <exchange:applicant-name><exchange:name>MICROSOFT CORPORATION</exchange:name></exchange:applicant-name>
+                </exchange:applicant>
+              </exchange:applicants>
+            </exchange:parties>
+            <exchange:invention-title lang="fr">Titre public de brevet</exchange:invention-title>
+            <exchange:invention-title lang="en">Public patent title</exchange:invention-title>
+          </exchange:bibliographic-data>
+        </exchange:exchange-document>
+      </exchange:exchange-documents>
+    </ops:search-result>
+  </ops:biblio-search>
+</ops:world-patent-data>

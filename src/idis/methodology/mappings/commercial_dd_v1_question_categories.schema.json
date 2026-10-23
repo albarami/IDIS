@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://idis.local/schemas/methodology/commercial_dd_v1_question_categories.schema.json",
+  "title": "Governed Commercial-DD question category map",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "mapping_version",
+    "methodology_id",
+    "methodology_version_id",
+    "methodology_source_sha256",
+    "imported_registry_sha256",
+    "classifier_version",
+    "classifier_reachable_categories",
+    "classifier_reachable_categories_sha256",
+    "questions"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "minLength": 1},
+    "mapping_version": {"type": "string", "minLength": 1},
+    "methodology_id": {"type": "string", "minLength": 1},
+    "methodology_version_id": {"type": "string", "minLength": 1},
+    "methodology_source_sha256": {"$ref": "#/$defs/lowercaseSha256"},
+    "imported_registry_sha256": {"$ref": "#/$defs/lowercaseSha256"},
+    "classifier_version": {"type": "string", "minLength": 1},
+    "classifier_reachable_categories": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/productiveCddCategory"}
+    },
+    "classifier_reachable_categories_sha256": {"$ref": "#/$defs/lowercaseSha256"},
+    "questions": {
+      "type": "array",
+      "minItems": 21,
+      "maxItems": 21,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "methodology_question_id",
+          "methodology_question_sha256",
+          "categories"
+        ],
+        "properties": {
+          "methodology_question_id": {
+            "type": "string",
+            "pattern": "^mq_commercial_dd_[a-z0-9_]+_0001$"
+          },
+          "methodology_question_sha256": {"$ref": "#/$defs/lowercaseSha256"},
+          "categories": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {"$ref": "#/$defs/productiveCddCategory"}
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "lowercaseSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "productiveCddCategory": {
+      "type": "string",
+      "enum": [
+        "business_plan_assumptions",
+        "commercial_contracts",
+        "commercial_risks",
+        "competitive_landscape",
+        "customer_evidence",
+        "gtm_distribution",
+        "management_team",
+        "market_research",
+        "pricing_unit_economics",
+        "product_technology",
+        "sales_pipeline"
+      ]
+    }
+  }
+}

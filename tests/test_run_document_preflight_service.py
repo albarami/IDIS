@@ -59,7 +59,20 @@ def test_ready_document_is_eligible_and_kept_for_extraction() -> None:
         tenant_id=TENANT_ID,
         deal_id=DEAL_ID,
         run_id=RUN_ID,
-        corpus=[_document(doc_type="DOCX", spans=[_span(text="ARR was $5M.")])],
+        corpus=[
+            _document(
+                doc_type="DOCX",
+                metadata={
+                    "parser_doc_type": "DOCX",
+                    "detected_format": "DOCX",
+                    "parser_runtime_status": "completed",
+                    "span_count": 1,
+                    "parse_error_codes": [],
+                    "parse_warning_codes": [],
+                },
+                spans=[_span(text="ARR was $5M.")],
+            )
+        ],
     )
 
     assert result.status == DocumentPreflightStatus.COMPLETED
@@ -85,6 +98,7 @@ def test_parser_limit_errors_map_to_too_large(error_code: ParseErrorCode) -> Non
         run_id=RUN_ID,
         corpus=[
             _document(
+                doc_type="XLSX",
                 parse_status="FAILED",
                 metadata={
                     "parse_error_codes": [error_code.value],
@@ -157,3 +171,21 @@ def test_run_step_summary_does_not_include_raw_span_text() -> None:
     assert "Highly sensitive raw revenue sentence" not in str(summary)
     assert "text_excerpt" not in str(summary)
     assert summary["source_spans_by_document_id"]["doc-1"][0]["content_hash"] == "b" * 64
+
+
+def test_run_step_summary_preserves_explicit_legacy_null_span_hash() -> None:
+    """The shared envelope preserves legacy rows for later strict-path rejection."""
+    service = InMemoryRunDocumentPreflightService()
+    span = _span()
+    span["content_hash"] = None
+
+    result, _eligible_documents = service.run(
+        tenant_id=TENANT_ID,
+        deal_id=DEAL_ID,
+        run_id=RUN_ID,
+        corpus=[_document(spans=[span])],
+    )
+
+    summary = result.to_run_step_summary()
+
+    assert summary["source_spans_by_document_id"]["doc-1"][0]["content_hash"] is None

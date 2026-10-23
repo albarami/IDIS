@@ -63,6 +63,7 @@ from idis.services.rag.pgvector_health import (
 
 IDIS_REQUIRE_FULL_LIVE_ENV = "IDIS_REQUIRE_FULL_LIVE"
 IDIS_STRICT_DOTENV_PATH_ENV = "IDIS_STRICT_DOTENV_PATH"
+IDIS_PROCESS_ROLE_ENV = "IDIS_PROCESS_ROLE"
 STRICT_FULL_LIVE_BLOCKED = "STRICT_FULL_LIVE_BLOCKED"
 OCR_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"})
 
@@ -114,6 +115,7 @@ TRACKED_ENV_VARS: tuple[str, ...] = (
     "IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER",
     "IDIS_DATABASE_URL",
     "IDIS_DATABASE_ADMIN_URL",
+    "IDIS_ERASURE_DATABASE_URL",
     "IDIS_API_KEYS_JSON",
     "IDIS_API_KEYS",
     "IDIS_OBJECT_STORE_BACKEND",
@@ -167,6 +169,7 @@ STRICT_ENV_EXAMPLE_REQUIRED_NAMES: tuple[str, ...] = (
     "IDIS_STRICT_DOTENV_PATH",
     "IDIS_DATABASE_URL",
     "IDIS_DATABASE_ADMIN_URL",
+    "IDIS_ERASURE_DATABASE_URL",
     "IDIS_API_KEYS_JSON",
     "IDIS_OBJECT_STORE_BACKEND",
     "IDIS_OBJECT_STORE_BASE_DIR",
@@ -321,6 +324,31 @@ def is_strict_full_live_required(
     )
     value = str(env_source.effective_env.get(IDIS_REQUIRE_FULL_LIVE_ENV, "")).strip().lower()
     return value in {"1", "true", "yes", "on"}
+
+
+def require_strict_process_role(
+    expected_role: str,
+    *,
+    env: Mapping[str, str] | None = None,
+    dotenv_path: str | Path | None = None,
+) -> None:
+    """Require one exact process role when strict full-live mode is enabled.
+
+    The role is launcher-injected process metadata, rather than part of the
+    base strict-profile HMAC.  Reading it only from the process environment
+    prevents a dotenv value from silently turning an API process into a
+    combined API/worker process.
+    """
+    process_env = os.environ if env is None else env
+    if not is_strict_full_live_required(env=process_env, dotenv_path=dotenv_path):
+        return
+
+    role = str(process_env.get(IDIS_PROCESS_ROLE_ENV, "")).strip().lower()
+    if expected_role not in {"api", "worker"} or role != expected_role:
+        raise RuntimeError(
+            "STRICT_PROCESS_ROLE_INVALID: strict full-live process role must be "
+            f"exactly {expected_role!r}"
+        )
 
 
 def build_strict_full_live_admission_report(
@@ -628,13 +656,14 @@ def _supported_parsers_extraction(env: Mapping[str, str]) -> StrictComponentRead
             required_env_vars=missing,
             evidence=(
                 "src/idis/parsers/registry.py; "
-                "src/idis/api/routes/runs.py:_build_extraction_llm_client"
+                "src/idis/services/runs/step_runtime/roles.py:_build_extraction_llm_client"
             ),
             may_proceed=False,
         )
     return _live(
         "supported_parsers_extraction",
-        "src/idis/parsers/registry.py; src/idis/api/routes/runs.py:_build_extraction_llm_client",
+        "src/idis/parsers/registry.py; "
+        "src/idis/services/runs/step_runtime/roles.py:_build_extraction_llm_client",
     )
 
 
@@ -907,7 +936,7 @@ def _debate_layer_2_ic_challenge(
             required_env_vars=missing,
             evidence=(
                 "src/idis/services/runs/layer2_ic_challenge.py; "
-                "src/idis/api/routes/runs.py:_run_full_layer2_ic_challenge"
+                "src/idis/services/runs/step_runtime/layer2.py:_run_full_layer2_ic_challenge"
             ),
             may_proceed=False,
         )
@@ -925,7 +954,8 @@ def _debate_layer_2_ic_challenge(
         )
     evidence = (
         "src/idis/services/runs/layer2_ic_challenge.py:Layer2ICLLMRunner; "
-        "src/idis/api/routes/runs.py:_run_full_layer2_ic_challenge:_build_layer2_provenance"
+        "src/idis/services/runs/step_runtime/layer2.py:_run_full_layer2_ic_challenge; "
+        "src/idis/services/runs/step_runtime/roles.py:_build_layer2_provenance"
     )
     # Either debate model (challenger=default, arbiter) failing health blocks strict FULL.
     if (
@@ -999,7 +1029,7 @@ def _rag_foundation_layer(
         return _live(
             "rag_evidence_retrieval",
             "src/idis/services/rag/indexing.py; src/idis/services/rag/retrieval.py; "
-            "src/idis/api/routes/runs.py:_run_full_rag_evidence; "
+            "src/idis/services/runs/step_runtime/evidence.py:_run_full_rag_evidence; "
             "src/idis/services/runs/steps.py:rag_fn; "
             "src/idis/deliverables/product_bundle.py:_rag_package",
         )
@@ -1671,25 +1701,31 @@ def _build_component_inventory(
             "Anthropic extraction",
             model_health=extract_model_health,
             evidence=[
-                "src/idis/api/routes/runs.py",
+                "src/idis/services/runs/step_runtime/roles.py",
                 "src/idis/services/extraction/extractors/anthropic_client.py",
             ],
         ),
         _inventory_llm_item(
             "Anthropic debate",
             model_health=debate_model_health,
-            evidence=["src/idis/api/routes/runs.py", "src/idis/debate/roles/llm_role_runner.py"],
+            evidence=[
+                "src/idis/services/runs/step_runtime/roles.py",
+                "src/idis/debate/roles/llm_role_runner.py",
+            ],
         ),
         _inventory_llm_item(
             "Anthropic analysis",
             model_health=analysis_model_health,
-            evidence=["src/idis/api/routes/runs.py", "src/idis/analysis/agents/__init__.py"],
+            evidence=[
+                "src/idis/services/runs/step_runtime/roles.py",
+                "src/idis/analysis/agents/__init__.py",
+            ],
         ),
         _inventory_llm_item(
             "Anthropic scoring",
             model_health=scoring_model_health,
             evidence=[
-                "src/idis/api/routes/runs.py",
+                "src/idis/services/runs/step_runtime/roles.py",
                 "src/idis/analysis/scoring/llm_scorecard_runner.py",
             ],
         ),
@@ -1822,7 +1858,7 @@ def _build_component_inventory(
             evidence=[
                 "src/idis/persistence/graph_consistency.py",
                 "src/idis/persistence/graph_repo.py",
-                "src/idis/api/routes/runs.py",
+                "src/idis/services/runs/step_runtime/evidence.py",
             ],
         ),
         _inventory_item(
@@ -1873,7 +1909,7 @@ def _build_component_inventory(
                 "src/idis/services/rag/retrieval.py",
                 "src/idis/services/rag/embedding_health.py",
                 "src/idis/services/rag/pgvector_health.py",
-                "src/idis/api/routes/runs.py:_run_full_rag_evidence",
+                "src/idis/services/runs/step_runtime/evidence.py:_run_full_rag_evidence",
                 "src/idis/deliverables/product_bundle.py:_rag_package",
             ],
         ),
@@ -1886,7 +1922,10 @@ def _build_component_inventory(
             output_visible=True,
             blocker="Live Anthropic provenance is not fully health-checked in strict inventory.",
             slice_name="Slice 56",
-            evidence=["src/idis/debate/orchestrator.py", "src/idis/api/routes/runs.py"],
+            evidence=[
+                "src/idis/debate/orchestrator.py",
+                "src/idis/services/runs/step_runtime/analysis.py",
+            ],
         ),
         _inventory_item(
             "Layer 2 IC challenge",
@@ -1913,7 +1952,7 @@ def _build_component_inventory(
             evidence=[
                 "src/idis/services/runs/layer2_ic_challenge.py",
                 "src/idis/models/layer2_ic_challenge.py",
-                "src/idis/api/routes/runs.py:_run_full_layer2_ic_challenge",
+                "src/idis/services/runs/step_runtime/layer2.py:_run_full_layer2_ic_challenge",
                 "src/idis/deliverables/product_bundle.py:_layer2_package",
             ],
         ),
@@ -1926,7 +1965,10 @@ def _build_component_inventory(
             output_visible=True,
             blocker="Generation is in-run; durable product export is separate.",
             slice_name="Slice 59",
-            evidence=["src/idis/deliverables/generator.py", "src/idis/api/routes/runs.py"],
+            evidence=[
+                "src/idis/deliverables/generator.py",
+                "src/idis/services/runs/step_runtime/deliverables.py",
+            ],
         ),
         _inventory_item(
             "product export",
@@ -2474,8 +2516,8 @@ def _layer2_ic_challenge_code_path_wired() -> bool:
         if not hasattr(model_module, "Layer2ICChallengeRecord"):
             return False
 
-        runs_module = import_module("idis.api.routes.runs")
-        if not hasattr(runs_module, "_run_full_layer2_ic_challenge"):
+        layer2_module = import_module("idis.services.runs.step_runtime.layer2")
+        if not hasattr(layer2_module, "_run_full_layer2_ic_challenge"):
             return False
         orchestrator_module = import_module("idis.services.runs.orchestrator")
         dispatch_source = inspect.getsource(orchestrator_module.RunOrchestrator._dispatch_step)
@@ -2511,13 +2553,14 @@ def _layer2_live_runner_construction_wired() -> bool:
         import inspect
         from importlib import import_module
 
-        runs_module = import_module("idis.api.routes.runs")
-        route_source = inspect.getsource(runs_module._run_full_layer2_ic_challenge)
+        layer2_module = import_module("idis.services.runs.step_runtime.layer2")
+        route_source = inspect.getsource(layer2_module._run_full_layer2_ic_challenge)
         # Slice96 DEC-C: the live challenger/arbiter clients are constructed via the single
         # budget-wrapping helper (_new_budgeted_llm_client), which builds a live AnthropicLLMClient
         # under the per-tenant/provider hard cap -- so proof of live wiring is the helper call in
         # the route plus the helper itself constructing an AnthropicLLMClient.
-        live_client_source = inspect.getsource(runs_module._new_budgeted_llm_client)
+        roles_module = import_module("idis.services.runs.step_runtime.roles")
+        live_client_source = inspect.getsource(roles_module._new_budgeted_llm_client)
         service_module = import_module("idis.services.runs.layer2_ic_challenge")
         # ``run`` delegates to ``run_with_record`` (Slice93), which holds the strict branch.
         service_source = inspect.getsource(
@@ -2568,8 +2611,8 @@ def _rag_code_path_wired() -> bool:
         if "_run_full_rag_evidence" not in steps_source or "rag_fn=" not in steps_source:
             return False
 
-        runs_module = import_module("idis.api.routes.runs")
-        if not hasattr(runs_module, "_run_full_rag_evidence"):
+        evidence_module = import_module("idis.services.runs.step_runtime.evidence")
+        if not hasattr(evidence_module, "_run_full_rag_evidence"):
             return False
 
         orchestrator_module = import_module("idis.services.runs.orchestrator")

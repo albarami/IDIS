@@ -220,7 +220,7 @@ class TestBuildScoringLLMClientWiring:
     ) -> None:
         monkeypatch.delenv("IDIS_DEBATE_BACKEND", raising=False)
 
-        from idis.api.routes.runs import _build_scoring_llm_client
+        from idis.services.runs.step_runtime.roles import _build_scoring_llm_client
 
         client = _build_scoring_llm_client()
         assert isinstance(client, DeterministicScoringLLMClient)
@@ -230,7 +230,7 @@ class TestBuildScoringLLMClientWiring:
     ) -> None:
         monkeypatch.setenv("IDIS_DEBATE_BACKEND", "deterministic")
 
-        from idis.api.routes.runs import _build_scoring_llm_client
+        from idis.services.runs.step_runtime.roles import _build_scoring_llm_client
 
         client = _build_scoring_llm_client()
         assert isinstance(client, DeterministicScoringLLMClient)

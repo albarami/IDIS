@@ -16,10 +16,11 @@ Design requirements (v6.3 API Contracts §4.1):
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import threading
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
@@ -31,6 +32,7 @@ from starlette.types import ASGIApp
 from idis.api.error_model import make_error_response_no_request
 from idis.audit.sink import AuditSink
 from idis.idempotency.store import (
+    IdempotencyKeyConflictError,
     IdempotencyRecord,
     IdempotencyStoreError,
     ScopeKey,
@@ -52,6 +54,10 @@ logger = logging.getLogger(__name__)
 IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
 IDEMPOTENCY_REPLAY_HEADER = "X-IDIS-Idempotency-Replay"
 IDEMPOTENT_METHODS = {"POST", "PATCH"}
+_UPLOAD_OPERATION_ID = "uploadDealDocument"
+_CONFIRMED_NO_SUBSTANTIVE_CONTENT_DISPOSITION = "DOCUMENT_NO_SUBSTANTIVE_CONTENT_CONFIRMED"
+_CONFIRMED_NO_SUBSTANTIVE_CONTENT_RECEIPT_KEY = "document_no_substantive_content_receipt"
+_SUPERSEDED_TERMINAL_RECEIPT_KEYS = frozenset({"document_illegibility_receipt"})
 
 
 def _build_error_response(
@@ -98,6 +104,128 @@ def _compute_request_fingerprint(payload_sha256: str, canonical_query: str) -> s
         return payload_sha256
     fingerprint_input = f"body={payload_sha256}\nquery={canonical_query}".encode()
     return f"sha256:{hashlib.sha256(fingerprint_input).hexdigest()}"
+
+
+def _cached_confirmed_no_substantive_content_body(
+    record: IdempotencyRecord,
+) -> dict[str, object] | None:
+    """Route governed terminal/page receipts to durable replay validation."""
+
+    if record.status_code != 201:
+        return None
+    if record.media_type.split(";", maxsplit=1)[0].strip().lower() != "application/json":
+        raise ValueError("cached upload 201 is not JSON")
+    try:
+        decoded = json.loads(record.body_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise ValueError("cached upload 201 is malformed") from None
+    if not isinstance(decoded, dict):
+        raise ValueError("cached upload 201 is not an object")
+    terminal_disposition = decoded.get("terminal_disposition")
+    metadata = decoded.get("metadata")
+    metadata_keys = set(metadata) if isinstance(metadata, dict) else set()
+    if metadata_keys & _SUPERSEDED_TERMINAL_RECEIPT_KEYS:
+        raise ValueError("superseded terminal receipt")
+    if terminal_disposition is None:
+        if _CONFIRMED_NO_SUBSTANTIVE_CONTENT_RECEIPT_KEY in metadata_keys:
+            receipt = (
+                metadata.get(_CONFIRMED_NO_SUBSTANTIVE_CONTENT_RECEIPT_KEY)
+                if isinstance(metadata, Mapping)
+                else None
+            )
+            if (
+                not isinstance(receipt, Mapping)
+                or receipt.get("schema_version") != "document-no-substantive-content-receipt-v2"
+                or receipt.get("whole_document_terminal") is not False
+            ):
+                raise ValueError("terminal receipt without terminal disposition")
+            if decoded.get("parse_status") != "PARSED":
+                raise ValueError("cached upload 201 is not an admitted parsed response")
+            return decoded
+        if decoded.get("parse_status") != "PARSED":
+            raise ValueError("cached upload 201 is not an admitted parsed response")
+        return None
+    if terminal_disposition != _CONFIRMED_NO_SUBSTANTIVE_CONTENT_DISPOSITION:
+        raise ValueError("unknown terminal disposition")
+    return decoded
+
+
+def _validate_confirmed_no_substantive_content_replay(
+    *,
+    request: Request,
+    record: IdempotencyRecord,
+    body: Mapping[str, object],
+    tenant_id: str,
+    db_conn: object,
+) -> None:
+    """Re-read the tenant/RLS corpus and prove a terminal upload remains admissible."""
+
+    from idis.api.document_upload_replay import validate_upload_replay_invariant
+    from idis.persistence.repositories.documents import PostgresDocumentsRepository
+    from idis.services.ingestion.no_substantive_content_attestation import (
+        VerifiedDocumentNoSubstantiveContentAttestation,
+        VerifiedDocumentNoSubstantiveContentAttestationManifest,
+    )
+
+    document_id = body.get("document_id")
+    if not isinstance(document_id, str):
+        raise RuntimeError("terminal replay document binding is missing")
+
+    repository = PostgresDocumentsRepository(db_conn, tenant_id)  # type: ignore[arg-type]
+    durable_document = repository.get_document(document_id)
+    if not isinstance(durable_document, dict):
+        raise RuntimeError("terminal replay durable document is missing")
+
+    deal_id = durable_document.get("deal_id")
+    if not isinstance(deal_id, str):
+        raise RuntimeError("terminal replay deal binding is missing")
+    spans = repository.list_spans_by_document(deal_id=deal_id, document_id=document_id)
+    current_document: dict[str, object] = {
+        **durable_document,
+        "span_count": len(spans),
+        "spans": spans,
+    }
+
+    source_metadata = durable_document.get("source_metadata")
+    if not isinstance(source_metadata, Mapping):
+        raise RuntimeError("terminal replay source binding is missing")
+    source_tree_fingerprint = source_metadata.get("source_tree_fingerprint")
+    upload_filename = source_metadata.get("upload_filename")
+    safe_alias = durable_document.get("document_name")
+    content_sha256 = durable_document.get("sha256")
+    if (
+        not isinstance(source_tree_fingerprint, str)
+        or not isinstance(upload_filename, str)
+        or not isinstance(safe_alias, str)
+        or upload_filename != safe_alias
+        or not isinstance(content_sha256, str)
+    ):
+        raise RuntimeError("terminal replay source binding is invalid")
+
+    app_state = getattr(getattr(request.scope.get("app"), "state", None), "ingestion_service", None)
+    attestation = getattr(app_state, "_no_substantive_content_attestation", None)
+    if not isinstance(
+        attestation,
+        (
+            VerifiedDocumentNoSubstantiveContentAttestation,
+            VerifiedDocumentNoSubstantiveContentAttestationManifest,
+        ),
+    ):
+        raise RuntimeError("terminal replay current attestation is unavailable")
+    validate_upload_replay_invariant(
+        cached_response={
+            "status_code": record.status_code,
+            "media_type": record.media_type,
+            "body": body,
+        },
+        durable_document=current_document,
+        attestation=attestation,
+        tenant_id=tenant_id,
+        source_tree_fingerprint=source_tree_fingerprint,
+        safe_alias=safe_alias,
+        content_sha256=content_sha256,
+        now=datetime.now(UTC),
+    )
 
 
 class IdempotencyMiddleware(BaseHTTPMiddleware):
@@ -282,6 +410,9 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         # "app" degrades to no sink instead of raising KeyError and breaking the request.
         app_obj = request.scope.get("app")
         cleanup_audit_sink = getattr(getattr(app_obj, "state", None), "audit_sink", None)
+        task4_ingestion_scope = (
+            getattr(getattr(app_obj, "state", None), "task4_ingestion_scope", False) is True
+        )
         if use_postgres and postgres_store is not None:
             self._maybe_cleanup(scope_key.tenant_id, postgres_store, cleanup_audit_sink)
         else:
@@ -307,6 +438,82 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
 
         if existing_record is not None:
             if existing_record.payload_sha256 == payload_sha256:
+                try:
+                    confirmed_no_substantive_content_body = (
+                        _cached_confirmed_no_substantive_content_body(existing_record)
+                        if operation_id == _UPLOAD_OPERATION_ID and method == "POST"
+                        else None
+                    )
+                except ValueError:
+                    logger.error(
+                        "Durable document-upload replay used an invalid terminal contract",
+                        extra={"request_id": request_id},
+                    )
+                    return _build_error_response(
+                        500,
+                        "IDEMPOTENCY_REPLAY_INVARIANT_FAILED",
+                        "Stored document-upload response failed its durable invariant",
+                        request_id,
+                    )
+                if confirmed_no_substantive_content_body is not None:
+                    try:
+                        if not use_postgres or postgres_store is None or db_conn is None:
+                            raise RuntimeError("terminal replay requires durable admission")
+                        _validate_confirmed_no_substantive_content_replay(
+                            request=request,
+                            record=existing_record,
+                            body=confirmed_no_substantive_content_body,
+                            tenant_id=scope_key.tenant_id,
+                            db_conn=db_conn,
+                        )
+                    except Exception:
+                        # Do not log exception text: driver and trust-proof failures can
+                        # contain the raw idempotency key or source bindings.
+                        logger.error(
+                            "Durable document-upload replay invariant proof failed",
+                            extra={"request_id": request_id},
+                        )
+                        return _build_error_response(
+                            500,
+                            "IDEMPOTENCY_REPLAY_INVARIANT_FAILED",
+                            "Stored document-upload response failed its durable invariant",
+                            request_id,
+                        )
+                if (
+                    task4_ingestion_scope
+                    and use_postgres
+                    and operation_id == "createDeal"
+                    and method == "POST"
+                ):
+                    try:
+                        from idis.api import deal_creator_replay
+
+                        outcome = deal_creator_replay.repair_create_deal_replay(
+                            db_conn,
+                            scope_key=scope_key,
+                            record=existing_record,
+                        )
+                    except Exception:
+                        # Never log the exception: a DB driver may include the raw
+                        # idempotency-key bind in its diagnostic representation.
+                        logger.error(
+                            "Durable createDeal replay invariant proof failed",
+                            extra={"request_id": request_id},
+                        )
+                        return _build_error_response(
+                            500,
+                            "IDEMPOTENCY_REPLAY_INVARIANT_FAILED",
+                            "Stored createDeal response failed its durable invariant",
+                            request_id,
+                        )
+                    if outcome.repaired:
+                        # AuditMiddleware is outside this middleware and shares the
+                        # same DBTransactionMiddleware connection.  These request-local
+                        # markers cause one truthful assignment event before commit.
+                        request.state.audit_resource_id = outcome.deal_id
+                        request.state.audit_event_type_override = "rbac.assignment.created"
+                        request.state.audit_severity_override = "MEDIUM"
+                        request.state.audit_idempotency_replay_repair_occurred = True
                 response = Response(
                     content=existing_record.body_bytes,
                     status_code=existing_record.status_code,
@@ -352,6 +559,13 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
                         postgres_store.put(scope_key, record, conn=db_conn)
                     else:
                         store.put(scope_key, record)
+                except IdempotencyKeyConflictError:
+                    return _build_error_response(
+                        409,
+                        "IDEMPOTENCY_KEY_CONFLICT",
+                        "Idempotency key already used with different payload",
+                        request_id,
+                    )
                 except IdempotencyStoreError as e:
                     logger.error(
                         "Failed to store idempotency record: %s",
@@ -372,13 +586,20 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
                     headers=dict(response.headers),
                 )
 
-            except Exception as e:
-                logger.warning(
-                    "Failed to read response body for idempotency storage: %s",
-                    str(e),
+            except Exception:
+                # The route may already have staged database mutations.  Returning its
+                # success response here would let DBTransactionMiddleware commit without
+                # a replay record, so every unexpected capture/store failure is terminal.
+                logger.error(
+                    "Unexpected post-route idempotency persistence failure",
                     extra={"request_id": request_id},
                 )
-                return response
+                return _build_error_response(
+                    500,
+                    "IDEMPOTENCY_STORE_FAILED",
+                    "Idempotency store is unavailable",
+                    request_id,
+                )
 
         return response
 

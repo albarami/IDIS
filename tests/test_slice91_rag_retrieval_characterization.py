@@ -35,9 +35,9 @@ import json
 from dataclasses import fields as dataclass_fields
 from pathlib import Path
 
-import idis.api.routes.runs as runs_mod
 import idis.deliverables.product_bundle as product_bundle_mod
 import idis.services.rag.retrieval as retrieval_mod
+import idis.services.runs.step_runtime.evidence as evidence_mod
 from idis.analysis.agents.llm_specialist_agent import _build_context_payload as _analysis_payload
 from idis.analysis.models import AnalysisBundle, AnalysisContext
 from idis.analysis.scoring.llm_scorecard_runner import _build_context_payload as _scoring_payload
@@ -198,7 +198,7 @@ def test_readiness_doc_reconciled_slice91_rag_consumption() -> None:
 
 
 def test_strict_rag_blocked_gates_unchanged_no_new_runtime_gate() -> None:
-    runs_src = Path(runs_mod.__file__).read_text(encoding="utf-8")
+    evidence_src = Path(evidence_mod.__file__).read_text(encoding="utf-8")
     for code in (
         "RAG_CONFIG_BLOCKED",
         "RAG_HEALTH_BLOCKED",
@@ -206,7 +206,7 @@ def test_strict_rag_blocked_gates_unchanged_no_new_runtime_gate() -> None:
         "RAG_INDEXING_BLOCKED",
         "RAG_PROBE_RETRIEVAL_BLOCKED",
     ):
-        assert code in runs_src
+        assert code in evidence_src
     # Runtime proof (DEC-D) is a summary/readiness signal, not a new strict gate.
-    assert "RAG_RUNTIME_PROOF_BLOCKED" not in runs_src
-    assert "RAG_RETRIEVAL_PROOF_BLOCKED" not in runs_src
+    assert "RAG_RUNTIME_PROOF_BLOCKED" not in evidence_src
+    assert "RAG_RETRIEVAL_PROOF_BLOCKED" not in evidence_src

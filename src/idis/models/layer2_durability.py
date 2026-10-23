@@ -16,6 +16,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from idis.analysis.scoring.models import Stage
 from idis.models.layer2_ic_challenge import (
     Layer2ICChallengeFinding,
     Layer2ICChallengeRecord,
@@ -37,13 +38,25 @@ class Layer2ChallengeRow(BaseModel):
     safe_summary: dict[str, Any] = Field(default_factory=dict)
 
     @classmethod
-    def from_record(cls, record: Layer2ICChallengeRecord) -> Layer2ChallengeRow:
-        """Whitelist-convert the in-memory challenge record into its durable safe row."""
+    def from_record(
+        cls,
+        record: Layer2ICChallengeRecord,
+        stage: Stage | None = None,
+    ) -> Layer2ChallengeRow:
+        """Whitelist-convert the in-memory challenge record into its durable safe row.
+
+        ``stage`` is the resolved scoring stage. An explicit argument wins;
+        otherwise the stage stored on the record is used. When the caller has
+        supplied neither, emphasis stays on ``Stage.SEED``.
+        """
         # Local import breaks the models<->emphasis import cycle; the emphasis reuses the
         # scoring stage_packs read-only and never touches the scorecard.
-        from idis.analysis.scoring.models import Stage
         from idis.services.runs.layer2_stage_emphasis import apply_layer2_stage_emphasis
 
+        resolved = stage if stage is not None else record.stage
+        if resolved is None:
+            # Documented bound: non-FULL callers with no stage emphasize SEED.
+            resolved = Stage.SEED
         by_category = counter(finding.category.value for finding in record.findings)
         safe_summary = {
             "claim_ids": list(record.claim_ids),
@@ -58,7 +71,7 @@ class Layer2ChallengeRow(BaseModel):
             "by_finding_type": counter(finding.finding_type for finding in record.findings),
             "by_severity": counter(finding.severity for finding in record.findings),
             "by_category": by_category,
-            "stage_emphasis": apply_layer2_stage_emphasis(Stage.SEED, by_category),
+            "stage_emphasis": apply_layer2_stage_emphasis(resolved, by_category),
         }
         return cls(
             tenant_id=record.tenant_id,

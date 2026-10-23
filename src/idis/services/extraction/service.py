@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
-from idis.audit.sink import AuditSink, InMemoryAuditSink
+from idis.audit.sink import AuditSink, AuditSinkError, InMemoryAuditSink
 from idis.services.claims.service import ClaimService, CreateClaimInput
 from idis.validators.extraction_gate import (
     ExtractionGateInput,
@@ -290,8 +290,10 @@ class ExtractionService:
         }
         try:
             self._audit_sink.emit(event)
-        except Exception as e:
-            logger.warning("Failed to emit audit event: %s", e)
+        except AuditSinkError:
+            raise
+        except Exception as exc:
+            raise AuditSinkError("Extraction service audit emission failed") from exc
 
     def _validate_extraction_gate(
         self,

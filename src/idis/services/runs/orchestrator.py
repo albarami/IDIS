@@ -15,16 +15,20 @@ No FastAPI globals. All dependencies injected via constructor or execute().
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from idis.services.runs.snapshot_postgres_output_staging import SnapshotOutputCompositionPort
 
 from idis.audit.sink import AuditSink, AuditSinkError
 from idis.methodology.models import MethodologyRegistry
@@ -38,7 +42,6 @@ from idis.models.calc_materialization import (
 from idis.models.calc_sanad import SanadGrade as CalcSanadGrade
 from idis.models.claim_materialization import (
     MaterializedClaimSourceRef,
-    MethodologyOutputClaimMaterializationRunResult,
     RunScopedMaterializedClaim,
     RunScopedMaterializedClaimShell,
 )
@@ -60,7 +63,6 @@ from idis.models.defect import CureProtocol, DefectSeverity, DefectStatus, Defec
 from idis.models.deterministic_calculation import CalcType
 from idis.models.document_preflight import DocumentPreflightResult
 from idis.models.evidence_item_materialization import (
-    MethodologyEvidenceItemMaterializationRunResult,
     RunScopedEvidenceItemRecord,
     RunScopedEvidenceItemShell,
     RunScopedEvidenceProvenanceRef,
@@ -82,13 +84,12 @@ from idis.models.external_intelligence_conflict_check_plan_materialization impor
 from idis.models.extraction_execution import (
     MethodologyExtractionExecutionReason,
     MethodologyExtractionExecutionResult,
-    MethodologyExtractionExecutionRunResult,
     MethodologyExtractionExecutionStatus,
     MethodologyExtractionExecutionSummary,
     MethodologyTaskExecutionResult,
     MethodologyTaskExecutionStatus,
 )
-from idis.models.extraction_task import ExtractionTask, ExtractionTaskPlanningRunResult
+from idis.models.extraction_task import ExtractionTaskPlanningRunResult, PlannedExtractionTask
 from idis.models.layer2_readiness_package_materialization import (
     MethodologyLayer2ReadinessPackageConstructionStatus,
     MethodologyLayer2ReadinessPackageRunResult,
@@ -98,6 +99,7 @@ from idis.models.layer2_readiness_package_materialization import (
     RunScopedLayer2ReadinessPackageSummary,
 )
 from idis.models.methodology_coverage import (
+    DurableMethodologyCoverageInitializationResult,
     MethodologyCoverageInitializationResult,
     MethodologyCoverageRecord,
 )
@@ -112,7 +114,6 @@ from idis.models.run_step import (
 )
 from idis.models.sanad import SanadGrade
 from idis.models.sanad_materialization import (
-    MethodologySanadMaterializationRunResult,
     RunScopedSanadDefectRecord,
     RunScopedSanadDefectShell,
     RunScopedSanadGradeRecord,
@@ -135,6 +136,13 @@ from idis.models.validated_evidence_package_materialization import (
 from idis.observability.runtime_signals import RUN_CANCELLED as RUN_CANCELLED_EVENT
 from idis.observability.runtime_signals import emit_run_signal
 from idis.persistence.repositories.run_steps import RunStepsRepo
+from idis.persistence.repositories.runs import _resolve_run_contract_identity
+from idis.pipeline.contract_registry import (
+    PIPELINE_CONTRACTS,
+    PipelineContractError,
+    PipelineContractSpec,
+    require_pipeline_contract_for_admission,
+)
 from idis.validators.audit_event_validator import validate_audit_event
 
 logger = logging.getLogger(__name__)
@@ -160,6 +168,12 @@ SENSITIVE_AUDIT_RESULT_KEY_PARTS = frozenset(
         "uri",
     }
 )
+
+
+def canonical_result_summary_sha256(result_summary: dict[str, Any]) -> str:
+    """Hash the canonical JSON form persisted in ``RunStep.result_summary``."""
+    canonical = json.dumps(result_summary, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 class RunStepBlockedError(ValueError):
@@ -221,11 +235,16 @@ class RunContext:
     documents: list[dict[str, Any]]
     extract_fn: Callable[..., dict[str, Any]]
     grade_fn: Callable[..., dict[str, Any]]
+    pipeline_contract_version: str | None = None
+    pipeline_contract_hash: str | None = None
+    pipeline_resume_state: str | None = None
     created_by_actor_id: str | None = None
     created_by_actor_type: str | None = None
+    strict_preflight_proof_id: str | None = None
     deal_metadata: dict[str, Any] | None = None
     data_room_root_path: str | Path | None = None
     preflight_corpus: list[dict[str, Any]] = field(default_factory=list)
+    document_preflight_summary: dict[str, Any] | None = None
     data_room_inventory_fn: (
         Callable[
             ...,
@@ -246,69 +265,39 @@ class RunContext:
     document_preflight_fn: (
         Callable[..., tuple[DocumentPreflightResult, list[dict[str, Any]]]] | None
     ) = None
+    no_substantive_content_receipt_verifier: Callable[[Mapping[str, Any]], bool] | None = None
     methodology_registry: MethodologyRegistry | None = None
     methodology_registry_loader_fn: Callable[[], MethodologyRegistry] | None = None
     methodology_coverage_init_fn: (
         Callable[
-            ..., tuple[MethodologyCoverageInitializationResult, list[MethodologyCoverageRecord]]
+            ...,
+            tuple[
+                MethodologyCoverageInitializationResult
+                | DurableMethodologyCoverageInitializationResult,
+                list[MethodologyCoverageRecord],
+            ],
         ]
         | None
     ) = None
+    methodology_coverage_rehydrate_fn: Callable[..., list[MethodologyCoverageRecord]] | None = None
     methodology_coverage_records: list[MethodologyCoverageRecord] = field(default_factory=list)
-    methodology_extraction_task_planning_fn: (
-        Callable[..., tuple[ExtractionTaskPlanningRunResult, list[ExtractionTask]]] | None
-    ) = None
-    methodology_extraction_tasks: list[ExtractionTask] = field(default_factory=list)
-    methodology_extraction_task_execution_fn: (
-        Callable[
-            ...,
-            tuple[MethodologyExtractionExecutionRunResult, MethodologyExtractionExecutionResult],
-        ]
-        | None
-    ) = None
+    methodology_extraction_task_planning_fn: Callable[..., Any] | None = None
+    methodology_extraction_tasks: list[PlannedExtractionTask] = field(default_factory=list)
+    methodology_extraction_task_execution_fn: Callable[..., Any] | None = None
     methodology_extraction_execution_result: MethodologyExtractionExecutionResult | None = None
-    methodology_claim_materialization_fn: (
-        Callable[
-            ...,
-            tuple[
-                MethodologyOutputClaimMaterializationRunResult,
-                list[RunScopedMaterializedClaim],
-            ],
-        ]
-        | None
-    ) = None
-    methodology_materialized_claims: (
-        list[RunScopedMaterializedClaim | RunScopedMaterializedClaimShell] | None
-    ) = None
-    methodology_evidence_item_materialization_fn: (
-        Callable[
-            ...,
-            tuple[
-                MethodologyEvidenceItemMaterializationRunResult,
-                list[RunScopedEvidenceItemRecord],
-            ],
-        ]
-        | None
-    ) = None
-    methodology_evidence_items: (
-        list[RunScopedEvidenceItemRecord | RunScopedEvidenceItemShell] | None
-    ) = None
+    methodology_claim_materialization_fn: Callable[..., Any] | None = None
+    methodology_materialized_claims: list[Any] | None = None
+    methodology_canonical_claim_ids: tuple[str, ...] = ()
+    active_run_step_id: str | None = None
+    methodology_pending_native_output_writes: dict[StepName, tuple[Any, ...]] = field(
+        default_factory=dict
+    )
+    methodology_evidence_item_materialization_fn: Callable[..., Any] | None = None
+    methodology_evidence_items: list[Any] | None = None
     methodology_evidence_source_provenance: list[RunScopedEvidenceProvenanceRef] = field(
         default_factory=list
     )
-    methodology_sanad_creation_linking_grading_fn: (
-        Callable[
-            ...,
-            tuple[
-                MethodologySanadMaterializationRunResult,
-                list[RunScopedSanadRecord],
-                list[RunScopedSanadLinkRecord],
-                list[RunScopedSanadGradeRecord],
-                list[RunScopedSanadDefectRecord],
-            ],
-        ]
-        | None
-    ) = None
+    methodology_sanad_creation_linking_grading_fn: Callable[..., Any] | None = None
     methodology_sanads: list[RunScopedSanadRecord | RunScopedSanadShell] = field(
         default_factory=list
     )
@@ -425,10 +414,24 @@ class RunContext:
     enrich_fn: Callable[..., dict[str, Any]] | None = None
     debate_fn: Callable[..., dict[str, Any]] | None = None
     layer2_ic_challenge_fn: Callable[..., dict[str, Any]] | None = None
+    layer2_ic_challenge_record: Any = None
     analysis_fn: Callable[..., dict[str, Any]] | None = None
     scoring_fn: Callable[..., dict[str, Any]] | None = None
     deliverables_fn: Callable[..., dict[str, Any]] | None = None
     is_cancellation_requested_fn: Callable[[str, str], bool] | None = None
+    strict_resume_validation_required: bool = False
+    fresh_snapshot_initial_execution: bool = False
+    snapshot_output_composition_required: bool = False
+    snapshot_output_composition: SnapshotOutputCompositionPort | None = None
+    completed_step_resume_validator: Callable[[RunContext, RunStep], bool] | None = None
+    lease_owner_id: str | None = None
+    lease_fencing_token: int | None = None
+    step_boundary_uow_fn: Callable[..., None] | None = None
+    after_step_boundary_commit_fn: Callable[..., None] | None = None
+    execute_with_lease_heartbeat_fn: Callable[..., Any] | None = None
+    stage_native_output_writes_fn: Callable[..., tuple[Any, ...]] | None = None
+    provider_output_guard_fn: Callable[..., None] | None = None
+    task7_step_completion_fn: Callable[..., None] | None = None
 
 
 class CancellationRunsRepository(Protocol):
@@ -456,6 +459,7 @@ class RunOrchestrator:
         audit_sink: AuditSink,
         run_steps_repo: RunStepsRepo,
         runs_repo: CancellationRunsRepository | None = None,
+        pipeline_contract_registry: Mapping[str, PipelineContractSpec] = PIPELINE_CONTRACTS,
     ) -> None:
         """Initialize the orchestrator.
 
@@ -466,6 +470,7 @@ class RunOrchestrator:
         self._audit = audit_sink
         self._steps_repo = run_steps_repo
         self._runs_repo = runs_repo
+        self._pipeline_contract_registry = pipeline_contract_registry
         self._origin_actor_id: str | None = None
         self._origin_actor_type: str | None = None
         self._origin_deal_id: str | None = None
@@ -495,7 +500,7 @@ class RunOrchestrator:
         self._origin_actor_type = ctx.created_by_actor_type
         self._origin_deal_id = ctx.deal_id
 
-        step_sequence = FULL_STEPS if ctx.mode == "FULL" else SNAPSHOT_STEPS
+        step_sequence = self._resolve_pipeline_step_sequence(ctx)
         accumulated: dict[str, Any] = {}
 
         for step_name in step_sequence:
@@ -522,9 +527,39 @@ class RunOrchestrator:
 
             existing = self._steps_repo.get_step(ctx.run_id, step_name)
             if existing is not None and existing.status == StepStatus.COMPLETED:
+                if ctx.strict_resume_validation_required:
+                    try:
+                        self._validate_completed_step_for_resume(ctx, existing)
+                    except AuditSinkError:
+                        raise
+                    except Exception as exc:
+                        if self._is_full_strict_v21_context(ctx):
+                            all_steps = self._steps_repo.get_by_run_id(ctx.run_id)
+                            code = getattr(exc, "code", "STEP_REHYDRATION_FAILED")
+                            return OrchestratorResult(
+                                status="FAILED",
+                                steps=all_steps,
+                                block_reason=code,
+                                error_code=code,
+                                error_message="Completed step rehydration failed",
+                            )
+                        self._fail_completed_resume_boundary(ctx, existing, exc)
+                        all_steps = self._steps_repo.get_by_run_id(ctx.run_id)
+                        block_reason = (
+                            existing.error_code if isinstance(exc, RunStepBlockedError) else None
+                        )
+                        return OrchestratorResult(
+                            status="FAILED",
+                            steps=all_steps,
+                            block_reason=block_reason,
+                            error_code=existing.error_code,
+                            error_message=existing.error_message,
+                        )
                 accumulated.update(existing.result_summary)
                 if step_name == StepName.DATA_ROOM_INVENTORY_PACKAGE:
                     self._rehydrate_data_room_inventory_package(ctx, existing.result_summary)
+                if step_name == StepName.DOCUMENT_PREFLIGHT:
+                    self._rehydrate_document_preflight_summary(ctx, existing.result_summary)
                 if step_name == StepName.METHODOLOGY_COVERAGE_INIT:
                     self._rehydrate_methodology_coverage_records(ctx)
                 if step_name == StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING:
@@ -568,16 +603,32 @@ class RunOrchestrator:
                     )
                 continue
 
-            step = self._start_step(ctx, step_name, existing)
+            step = self._start_step_boundary(ctx, step_name, existing)
+            ctx.active_run_step_id = step.step_id
 
             try:
-                result = self._dispatch_step(step_name, ctx, accumulated)
+
+                def operation(
+                    current_step: StepName = step_name,
+                    current_accumulated: dict[str, Any] = accumulated,
+                ) -> dict[str, Any]:
+                    return self._dispatch_guarded_step(current_step, ctx, current_accumulated)
+
+                if ctx.execute_with_lease_heartbeat_fn is not None:
+                    result = ctx.execute_with_lease_heartbeat_fn(
+                        step_name=step_name,
+                        operation=operation,
+                    )
+                else:
+                    result = operation()
             except AuditSinkError:
                 raise
             except Exception as exc:
+                if self._is_lease_control_failure(exc):
+                    raise
                 if self._is_cancellation_requested(ctx):
                     return self._cancelled_result(ctx)
-                self._fail_step(step, exc)
+                self._fail_step_boundary(ctx, step, exc)
                 all_steps = self._steps_repo.get_by_run_id(ctx.run_id)
                 block_reason = step.error_code if isinstance(exc, RunStepBlockedError) else None
                 return OrchestratorResult(
@@ -588,17 +639,161 @@ class RunOrchestrator:
                     error_message=step.error_message,
                 )
 
-            self._complete_step(step, result)
+            # Cancellation clears the active lease.  Recheck after provider work
+            # and before any completion/output write so the in-flight result is
+            # discarded instead of attempting a now-fenced late mutation.
+            if self._is_cancellation_requested(ctx):
+                return self._cancelled_result(ctx)
+            self._complete_step_boundary(ctx, step, result)
+            ctx.active_run_step_id = None
             accumulated.update(result)
             if self._is_cancellation_requested(ctx):
                 return self._cancelled_result(ctx)
 
         all_steps = self._steps_repo.get_by_run_id(ctx.run_id)
-        final_status = self._compute_final_status(all_steps)
+        final_status = self._compute_final_status(
+            all_steps,
+            expected_step_sequence=(
+                step_sequence if self._is_full_strict_v21_context(ctx) else None
+            ),
+        )
         return OrchestratorResult(status=final_status, steps=all_steps)
+
+    @staticmethod
+    def _is_full_strict_v21_context(ctx: RunContext) -> bool:
+        """Return whether this claimed run is bound to the frozen v20 contract."""
+        return ctx.pipeline_contract_version == "full-strict-v21"
+
+    def _resolve_pipeline_step_sequence(self, ctx: RunContext) -> tuple[StepName, ...]:
+        """Resolve a claimed run's immutable contract-local step ordering."""
+        ctx.fresh_snapshot_initial_execution = False
+        if (
+            ctx.pipeline_contract_version is None
+            and ctx.pipeline_contract_hash is None
+            and ctx.pipeline_resume_state is None
+        ):
+            legacy = FULL_STEPS if ctx.mode == "FULL" else SNAPSHOT_STEPS
+            return tuple(legacy)
+        if (
+            ctx.pipeline_contract_version is None
+            or ctx.pipeline_contract_hash is None
+            or ctx.pipeline_resume_state is None
+        ):
+            raise RunStepBlockedError(
+                "PIPELINE_CONTRACT_UNAVAILABLE",
+                "Claimed run has an incomplete pipeline contract identity",
+            )
+        if ctx.pipeline_contract_version in {"snapshot-v1", "full-v1"}:
+            expected = _resolve_run_contract_identity(
+                mode=ctx.mode,
+                pipeline_contract_version=None,
+                pipeline_contract_hash=None,
+                pipeline_resume_state=None,
+                pipeline_resume_error_code=None,
+            )
+            get_run = getattr(self._runs_repo, "get", None)
+            persisted = get_run(ctx.run_id) if callable(get_run) else None
+            if (
+                ctx.mode not in {"SNAPSHOT", "FULL"}
+                or (
+                    ctx.pipeline_contract_version,
+                    ctx.pipeline_contract_hash,
+                    ctx.pipeline_resume_state,
+                )
+                != expected[:3]
+                or ctx.strict_preflight_proof_id is not None
+                or ctx.lease_owner_id is None
+                or ctx.lease_fencing_token != 1
+                or persisted is None
+                or persisted.get("tenant_id") != ctx.tenant_id
+                or persisted.get("deal_id") != ctx.deal_id
+                or persisted.get("mode") != ctx.mode
+                or persisted.get("status") != "RUNNING"
+                or persisted.get("strict_preflight_proof_id") is not None
+                or persisted.get("lease_owner_id") != ctx.lease_owner_id
+                or persisted.get("lease_fencing_token") != ctx.lease_fencing_token
+                or tuple(
+                    persisted.get(field)
+                    for field in (
+                        "pipeline_contract_version",
+                        "pipeline_contract_hash",
+                        "pipeline_resume_state",
+                        "pipeline_resume_error_code",
+                    )
+                )
+                != expected
+                or self._steps_repo.get_by_run_id(ctx.run_id)
+            ):
+                raise RunStepBlockedError(
+                    "STEP_REHYDRATION_FAILED",
+                    "Legacy compatibility permits only fresh exact initial execution",
+                )
+            if ctx.mode == "SNAPSHOT":
+                ctx.fresh_snapshot_initial_execution = True
+                if ctx.snapshot_output_composition_required:
+                    if ctx.snapshot_output_composition is None:
+                        raise RunStepBlockedError(
+                            "PIPELINE_CONTRACT_UNAVAILABLE",
+                            "Claimed worker SNAPSHOT requires its output composition",
+                        )
+                    ctx.snapshot_output_composition.activate(ctx=ctx)
+            return tuple(FULL_STEPS if ctx.mode == "FULL" else SNAPSHOT_STEPS)
+        if ctx.pipeline_resume_state != "RESUMABLE":
+            raise RunStepBlockedError(
+                "STEP_REHYDRATION_FAILED",
+                "Claimed run is not resumable under its pipeline contract",
+            )
+        try:
+            contract = require_pipeline_contract_for_admission(
+                registry=self._pipeline_contract_registry,
+                contract_version=ctx.pipeline_contract_version,
+                proof_contract_hash=ctx.pipeline_contract_hash,
+            )
+            return tuple(StepName(step.step_name) for step in contract.steps)
+        except PipelineContractError as exc:
+            raise RunStepBlockedError(exc.code, str(exc)) from exc
+        except ValueError as exc:
+            raise RunStepBlockedError(
+                "PIPELINE_CONTRACT_HASH_MISMATCH",
+                "Pipeline contract contains an unknown canonical step",
+            ) from exc
+
+    @staticmethod
+    def _validate_completed_step_for_resume(ctx: RunContext, step: RunStep) -> None:
+        """Revalidate a completed strict step before trusting its persisted output.
+
+        Task 7 supplies the contract-aware durable validator.  Until that
+        validator is wired, strict resume fails closed instead of treating a
+        status label or serialized result summary as proof of completion.
+        """
+        validator = ctx.completed_step_resume_validator
+        if validator is None:
+            raise RunStepBlockedError(
+                "PIPELINE_CONTRACT_UNAVAILABLE",
+                "Strict completed-step resume validation is unavailable",
+            )
+
+        try:
+            accepted = validator(ctx, step)
+        except RunStepBlockedError:
+            raise
+        except Exception as exc:
+            raise RunStepBlockedError(
+                "STEP_SEMANTIC_VALIDATION_FAILED",
+                "Strict completed-step resume validation failed",
+            ) from exc
+
+        if accepted is not True:
+            raise RunStepBlockedError(
+                "STEP_SEMANTIC_VALIDATION_FAILED",
+                "Strict completed-step resume validation rejected persisted output",
+            )
 
     def _cancelled_result(self, ctx: RunContext) -> OrchestratorResult:
         """Return a safe cancellation result without overwriting terminal state."""
+        composition = self._snapshot_composition(ctx)
+        if composition is not None:
+            composition.discard_all(ctx=ctx)
         all_steps = self._steps_repo.get_by_run_id(ctx.run_id)
         emit_run_signal(
             self._audit,
@@ -645,6 +840,39 @@ class RunOrchestrator:
         if run_data is None or str(run_data.get("tenant_id")) != ctx.tenant_id:
             return False
         return self._run_signals_cancellation(run_data)
+
+    def _dispatch_guarded_step(
+        self,
+        step_name: StepName,
+        ctx: RunContext,
+        accumulated: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Dispatch only after preflight, then reject any swallowed write attempt."""
+        if ctx.provider_output_guard_fn is not None:
+            ctx.provider_output_guard_fn(step_name=step_name, phase="before")
+        dispatched = self._dispatch_step(step_name, ctx, accumulated)
+        if ctx.provider_output_guard_fn is not None:
+            ctx.provider_output_guard_fn(step_name=step_name, phase="after")
+        composition = self._snapshot_composition(ctx, step_name)
+        if composition is not None:
+            composition.seal_success(ctx=ctx, step_name=step_name, result_summary=dispatched)
+        return dispatched
+
+    @staticmethod
+    def _snapshot_composition(
+        ctx: RunContext,
+        step_name: StepName | None = None,
+    ) -> SnapshotOutputCompositionPort | None:
+        composition = ctx.snapshot_output_composition
+        if (
+            not ctx.fresh_snapshot_initial_execution
+            or composition is None
+            or not composition.active
+            or step_name is not None
+            and step_name not in {StepName.EXTRACT, StepName.GRADE, StepName.CALC}
+        ):
+            return None
+        return composition
 
     def _dispatch_step(
         self,
@@ -824,7 +1052,11 @@ class RunOrchestrator:
                 InMemoryRunDocumentPreflightService,
             )
 
-            preflight_result, eligible_documents = InMemoryRunDocumentPreflightService().run(
+            preflight_result, eligible_documents = InMemoryRunDocumentPreflightService(
+                no_substantive_content_receipt_verifier=(
+                    ctx.no_substantive_content_receipt_verifier
+                ),
+            ).run(
                 tenant_id=ctx.tenant_id,
                 deal_id=ctx.deal_id,
                 run_id=ctx.run_id,
@@ -832,6 +1064,7 @@ class RunOrchestrator:
             )
 
         summary: dict[str, Any] = preflight_result.to_run_step_summary()
+        ctx.document_preflight_summary = dict(summary)
         if not eligible_documents:
             raise RunStepBlockedError(
                 BLOCK_REASON_NO_USABLE_DOCUMENTS,
@@ -841,6 +1074,15 @@ class RunOrchestrator:
         ctx.documents = eligible_documents
         return summary
 
+    @staticmethod
+    def _rehydrate_document_preflight_summary(
+        ctx: RunContext,
+        result_summary: Mapping[str, Any],
+    ) -> None:
+        """Restore the exact preflight envelope instead of the flat accumulator."""
+
+        ctx.document_preflight_summary = dict(result_summary)
+
     def _execute_methodology_coverage_init(self, ctx: RunContext) -> dict[str, Any]:
         """Initialize NOT_STARTED methodology coverage records for this run."""
         if ctx.methodology_coverage_init_fn is not None:
@@ -849,6 +1091,11 @@ class RunOrchestrator:
                 deal_id=ctx.deal_id,
                 run_id=ctx.run_id,
                 registry=ctx.methodology_registry,
+            )
+        elif ctx.strict_resume_validation_required and not ctx.fresh_snapshot_initial_execution:
+            raise RunStepBlockedError(
+                "METHODOLOGY_COVERAGE_INCOMPLETE",
+                "Durable methodology coverage initialization is unavailable",
             )
         else:
             from idis.services.runs.methodology_coverage_init import (
@@ -868,9 +1115,40 @@ class RunOrchestrator:
         return init_result.to_run_step_summary()
 
     def _rehydrate_methodology_coverage_records(self, ctx: RunContext) -> None:
-        """Reattach in-memory coverage records when a completed init step is skipped."""
+        """Reattach durable coverage on strict resume, retaining the legacy local seam."""
         if ctx.methodology_coverage_records:
             return
+
+        if ctx.methodology_coverage_rehydrate_fn is not None:
+            from idis.services.runs.methodology_coverage_init import (
+                MethodologyCoverageInitializationError,
+                validate_durable_methodology_coverage_records,
+            )
+
+            try:
+                records = ctx.methodology_coverage_rehydrate_fn(
+                    tenant_id=ctx.tenant_id,
+                    deal_id=ctx.deal_id,
+                    run_id=ctx.run_id,
+                )
+                ctx.methodology_coverage_records = validate_durable_methodology_coverage_records(
+                    records=records,
+                    tenant_id=ctx.tenant_id,
+                    deal_id=ctx.deal_id,
+                    run_id=ctx.run_id,
+                )
+            except MethodologyCoverageInitializationError as exc:
+                raise RunStepBlockedError(
+                    exc.code,
+                    "Persisted methodology coverage is incomplete",
+                ) from exc
+            return
+
+        if ctx.strict_resume_validation_required:
+            raise RunStepBlockedError(
+                "METHODOLOGY_COVERAGE_INCOMPLETE",
+                "Durable methodology coverage rehydration is unavailable",
+            )
 
         from idis.services.runs.methodology_coverage_init import (
             InMemoryRunMethodologyCoverageInitService,
@@ -892,8 +1170,27 @@ class RunOrchestrator:
         accumulated: dict[str, Any],
     ) -> dict[str, Any]:
         """Plan methodology extraction tasks without executing extraction."""
-        if ctx.methodology_extraction_task_planning_fn is not None:
-            planning_result, tasks = ctx.methodology_extraction_task_planning_fn(
+        planning_callback = ctx.methodology_extraction_task_planning_fn
+        if ctx.strict_resume_validation_required:
+            _require_strict_methodology_callback(planning_callback, external_call=False)
+            assert planning_callback is not None
+            if ctx.document_preflight_summary is None:
+                raise RunStepBlockedError(
+                    "METHODOLOGY_EXTRACTION_TASK_PLANNING_INPUT_INVALID",
+                    "Strict methodology planning requires the exact document preflight envelope",
+                )
+            planning_result, tasks, staged_write = planning_callback(
+                tenant_id=ctx.tenant_id,
+                deal_id=ctx.deal_id,
+                run_id=ctx.run_id,
+                run_step_id=_require_active_run_step_id(ctx),
+                document_preflight_summary=ctx.document_preflight_summary,
+            )
+            ctx.methodology_pending_native_output_writes[
+                StepName.METHODOLOGY_EXTRACTION_TASK_PLANNING
+            ] = (staged_write,)
+        elif planning_callback is not None:
+            planning_result, tasks = planning_callback(
                 tenant_id=ctx.tenant_id,
                 deal_id=ctx.deal_id,
                 run_id=ctx.run_id,
@@ -914,15 +1211,31 @@ class RunOrchestrator:
                 result_summary=planning_result.to_run_step_summary(status="FAILED"),
             )
         ctx.methodology_extraction_tasks = tasks
-        return planning_result.to_run_step_summary()
+        summary = dict(planning_result.to_run_step_summary())
+        if ctx.strict_resume_validation_required:
+            _validate_strict_methodology_summary(summary)
+        return summary
 
     def _rehydrate_methodology_extraction_tasks(
         self,
         ctx: RunContext,
         accumulated: dict[str, Any],
     ) -> None:
-        """Reattach in-memory planned tasks when a completed planning step is skipped."""
+        """Reattach planned tasks from the durable strict loader on resume."""
         if ctx.methodology_extraction_tasks:
+            return
+        if ctx.strict_resume_validation_required:
+            tasks = _run_strict_methodology_rehydrator(
+                ctx,
+                ctx.methodology_extraction_task_planning_fn,
+                external_call=False,
+            )
+            if not isinstance(tasks, list) or not tasks:
+                raise RunStepBlockedError(
+                    "METHODOLOGY_TASK_COVERAGE_INCOMPLETE",
+                    "Durable methodology task rehydration returned no executable tasks",
+                )
+            ctx.methodology_extraction_tasks = tasks
             return
         _planning_result, tasks = self._run_default_methodology_extraction_task_planning(
             ctx,
@@ -934,7 +1247,7 @@ class RunOrchestrator:
         self,
         ctx: RunContext,
         accumulated: dict[str, Any],
-    ) -> tuple[ExtractionTaskPlanningRunResult, list[ExtractionTask]]:
+    ) -> tuple[ExtractionTaskPlanningRunResult, list[PlannedExtractionTask]]:
         from idis.services.runs.methodology_extraction_task_planning import (
             InMemoryRunMethodologyExtractionTaskPlanningService,
         )
@@ -971,14 +1284,33 @@ class RunOrchestrator:
                 "No planned methodology extraction tasks are attached to the run context",
             )
 
-        if ctx.methodology_extraction_task_execution_fn is not None:
-            run_result, execution_result = ctx.methodology_extraction_task_execution_fn(
-                tenant_id=ctx.tenant_id,
-                deal_id=ctx.deal_id,
-                run_id=ctx.run_id,
-                tasks=ctx.methodology_extraction_tasks,
-                documents=ctx.documents,
-            )
+        execution_callback = ctx.methodology_extraction_task_execution_fn
+        if ctx.strict_resume_validation_required:
+            _require_strict_methodology_callback(execution_callback, external_call=True)
+        if execution_callback is not None:
+            execution_kwargs: dict[str, Any] = {
+                "tenant_id": ctx.tenant_id,
+                "deal_id": ctx.deal_id,
+                "run_id": ctx.run_id,
+                "tasks": ctx.methodology_extraction_tasks,
+                "documents": ctx.documents,
+            }
+            if ctx.strict_resume_validation_required:
+                execution_kwargs["run_step_id"] = _require_active_run_step_id(ctx)
+            execution_values = execution_callback(**execution_kwargs)
+            if ctx.strict_resume_validation_required:
+                try:
+                    run_result, execution_result, staged_write = execution_values
+                except (TypeError, ValueError) as exc:
+                    raise RunStepBlockedError(
+                        "METHODOLOGY_TASK_COVERAGE_INCOMPLETE",
+                        "Strict methodology execution did not stage its exact-set proof",
+                    ) from exc
+                ctx.methodology_pending_native_output_writes[
+                    StepName.METHODOLOGY_EXTRACTION_TASK_EXECUTION
+                ] = (staged_write,)
+            else:
+                run_result, execution_result = execution_values
         else:
             from idis.services.runs.methodology_extraction_task_execution import (
                 InMemoryRunMethodologyExtractionTaskExecutionService,
@@ -995,7 +1327,10 @@ class RunOrchestrator:
             )
 
         ctx.methodology_extraction_execution_result = execution_result
-        return run_result.to_run_step_summary()
+        summary = dict(run_result.to_run_step_summary())
+        if ctx.strict_resume_validation_required:
+            _validate_strict_methodology_summary(summary)
+        return summary
 
     def _execute_methodology_claim_materialization(self, ctx: RunContext) -> dict[str, Any]:
         """Materialize accepted neutral execution outputs into in-memory claims."""
@@ -1005,13 +1340,32 @@ class RunOrchestrator:
                 "Methodology claim materialization requires execution results",
             )
 
-        if ctx.methodology_claim_materialization_fn is not None:
-            run_result, materialized_claims = ctx.methodology_claim_materialization_fn(
-                tenant_id=ctx.tenant_id,
-                deal_id=ctx.deal_id,
-                run_id=ctx.run_id,
-                execution_result=ctx.methodology_extraction_execution_result,
-            )
+        materialize_callback = ctx.methodology_claim_materialization_fn
+        if ctx.strict_resume_validation_required:
+            _require_strict_methodology_callback(materialize_callback, external_call=False)
+        if materialize_callback is not None:
+            materialize_kwargs: dict[str, Any] = {
+                "tenant_id": ctx.tenant_id,
+                "deal_id": ctx.deal_id,
+                "run_id": ctx.run_id,
+                "execution_result": ctx.methodology_extraction_execution_result,
+            }
+            if ctx.strict_resume_validation_required:
+                materialize_kwargs["run_step_id"] = _require_active_run_step_id(ctx)
+            materialized_values = materialize_callback(**materialize_kwargs)
+            if ctx.strict_resume_validation_required:
+                try:
+                    run_result, materialized_claims, staged_write = materialized_values
+                except (TypeError, ValueError) as exc:
+                    raise RunStepBlockedError(
+                        "METHODOLOGY_CLAIM_MATERIALIZATION_INCOMPLETE",
+                        "Strict claim materialization did not stage its durable write",
+                    ) from exc
+                ctx.methodology_pending_native_output_writes[
+                    StepName.METHODOLOGY_CLAIM_MATERIALIZATION
+                ] = (staged_write,)
+            else:
+                run_result, materialized_claims = materialized_values
         else:
             from idis.services.runs.methodology_claim_materialization import (
                 InMemoryRunMethodologyClaimMaterializationService,
@@ -1030,7 +1384,19 @@ class RunOrchestrator:
             list(materialized_claims)
         )
         ctx.methodology_materialized_claims = claims_for_context
-        return run_result.to_run_step_summary()
+        ctx.methodology_canonical_claim_ids = tuple(
+            sorted(
+                {
+                    str(claim.claim_id)
+                    for claim in claims_for_context
+                    if getattr(claim, "claim_id", None)
+                }
+            )
+        )
+        summary = dict(run_result.to_run_step_summary())
+        if ctx.strict_resume_validation_required:
+            _validate_strict_methodology_summary(summary)
+        return summary
 
     def _execute_methodology_evidence_item_materialization(self, ctx: RunContext) -> dict[str, Any]:
         """Materialize EvidenceItems from Slice 6 run-scoped claims."""
@@ -1040,13 +1406,32 @@ class RunOrchestrator:
                 "Evidence item materialization requires claim materialization context",
             )
 
-        if ctx.methodology_evidence_item_materialization_fn is not None:
-            run_result, evidence_records = ctx.methodology_evidence_item_materialization_fn(
-                tenant_id=ctx.tenant_id,
-                deal_id=ctx.deal_id,
-                run_id=ctx.run_id,
-                materialized_claims=ctx.methodology_materialized_claims,
-            )
+        materialize_callback = ctx.methodology_evidence_item_materialization_fn
+        if ctx.strict_resume_validation_required:
+            _require_strict_methodology_callback(materialize_callback, external_call=False)
+        if materialize_callback is not None:
+            materialize_kwargs = {
+                "tenant_id": ctx.tenant_id,
+                "deal_id": ctx.deal_id,
+                "run_id": ctx.run_id,
+                "materialized_claims": ctx.methodology_materialized_claims,
+            }
+            if ctx.strict_resume_validation_required:
+                materialize_kwargs["run_step_id"] = _require_active_run_step_id(ctx)
+            materialized_values = materialize_callback(**materialize_kwargs)
+            if ctx.strict_resume_validation_required:
+                try:
+                    run_result, evidence_records, staged_write = materialized_values
+                except (TypeError, ValueError) as exc:
+                    raise RunStepBlockedError(
+                        "METHODOLOGY_EVIDENCE_MATERIALIZATION_INCOMPLETE",
+                        "Strict evidence materialization did not stage its durable write",
+                    ) from exc
+                ctx.methodology_pending_native_output_writes[
+                    StepName.METHODOLOGY_EVIDENCE_ITEM_MATERIALIZATION
+                ] = (staged_write,)
+            else:
+                run_result, evidence_records = materialized_values
         else:
             from idis.services.runs.methodology_evidence_item_materialization import (
                 InMemoryRunMethodologyEvidenceItemMaterializationService,
@@ -1068,7 +1453,10 @@ class RunOrchestrator:
         ctx.methodology_evidence_source_provenance = [
             record.source_ref for record in evidence_records
         ]
-        return run_result.to_run_step_summary()
+        summary = dict(run_result.to_run_step_summary())
+        if ctx.strict_resume_validation_required:
+            _validate_strict_methodology_summary(summary)
+        return summary
 
     def _execute_methodology_sanad_creation_linking_grading(
         self,
@@ -1087,17 +1475,41 @@ class RunOrchestrator:
             )
         evidence_items = ctx.methodology_evidence_items
 
-        if ctx.methodology_sanad_creation_linking_grading_fn is not None:
-            run_result, sanad_records, links, grades, defects = (
-                ctx.methodology_sanad_creation_linking_grading_fn(
-                    tenant_id=ctx.tenant_id,
-                    deal_id=ctx.deal_id,
-                    run_id=ctx.run_id,
-                    materialized_claims=ctx.methodology_materialized_claims,
-                    evidence_items=evidence_items,
-                    source_provenance=ctx.methodology_evidence_source_provenance,
-                )
-            )
+        materialize_callback = ctx.methodology_sanad_creation_linking_grading_fn
+        if ctx.strict_resume_validation_required:
+            _require_strict_methodology_callback(materialize_callback, external_call=False)
+        if materialize_callback is not None:
+            materialize_kwargs = {
+                "tenant_id": ctx.tenant_id,
+                "deal_id": ctx.deal_id,
+                "run_id": ctx.run_id,
+                "materialized_claims": ctx.methodology_materialized_claims,
+                "evidence_items": evidence_items,
+                "source_provenance": ctx.methodology_evidence_source_provenance,
+            }
+            if ctx.strict_resume_validation_required:
+                materialize_kwargs["run_step_id"] = _require_active_run_step_id(ctx)
+            materialized_values = materialize_callback(**materialize_kwargs)
+            if ctx.strict_resume_validation_required:
+                try:
+                    (
+                        run_result,
+                        sanad_records,
+                        links,
+                        grades,
+                        defects,
+                        staged_write,
+                    ) = materialized_values
+                except (TypeError, ValueError) as exc:
+                    raise RunStepBlockedError(
+                        "METHODOLOGY_SANAD_INCOMPLETE",
+                        "Strict Sanad materialization did not stage its durable write",
+                    ) from exc
+                ctx.methodology_pending_native_output_writes[
+                    StepName.METHODOLOGY_SANAD_CREATION_LINKING_GRADING
+                ] = (staged_write,)
+            else:
+                run_result, sanad_records, links, grades, defects = materialized_values
         else:
             from idis.services.runs.methodology_sanad_creation_linking_grading import (
                 InMemoryRunMethodologySanadCreationLinkingGradingService,
@@ -1118,7 +1530,10 @@ class RunOrchestrator:
         ctx.methodology_sanad_links = list(links)
         ctx.methodology_sanad_grades = list(grades)
         ctx.methodology_sanad_defects = list(defects)
-        return run_result.to_run_step_summary()
+        summary = dict(run_result.to_run_step_summary())
+        if ctx.strict_resume_validation_required:
+            _validate_strict_methodology_summary(summary)
+        return summary
 
     def _execute_methodology_deterministic_calculation(self, ctx: RunContext) -> dict[str, Any]:
         """Run deterministic CDD/FDD calculations from Slice 6/8 outputs."""
@@ -1474,9 +1889,20 @@ class RunOrchestrator:
                 "Validated Evidence Package failed closed",
                 result_summary=summary,
             )
-        persistence = self._persist_layer1_vep_row(
-            ctx, record=ctx.methodology_validated_evidence_package
-        )
+        persistence: dict[str, Any] | None
+        if ctx.stage_native_output_writes_fn is not None and isinstance(
+            ctx.methodology_validated_evidence_package,
+            RunScopedValidatedEvidencePackageRecord,
+        ):
+            persistence = {
+                "status": "staged",
+                "package_row_count": 1,
+                "package_ids": [ctx.methodology_validated_evidence_package.package_id],
+            }
+        else:
+            persistence = self._persist_layer1_vep_row(
+                ctx, record=ctx.methodology_validated_evidence_package
+            )
         if persistence is not None:
             summary["layer1_persistence"] = persistence
         return summary
@@ -1647,8 +2073,23 @@ class RunOrchestrator:
         ctx: RunContext,
         result_summary: dict[str, Any],
     ) -> None:
-        """Attach a safe execution result shell when completed execution is skipped."""
+        """Attach durable terminal execution state when completed execution is skipped."""
         if ctx.methodology_extraction_execution_result is not None:
+            return
+        if ctx.strict_resume_validation_required:
+            rehydrated = _run_strict_methodology_rehydrator(
+                ctx,
+                ctx.methodology_extraction_task_execution_fn,
+                external_call=True,
+            )
+            try:
+                _run_result, execution_result = rehydrated
+            except (TypeError, ValueError) as exc:
+                raise RunStepBlockedError(
+                    "METHODOLOGY_TASK_COVERAGE_INCOMPLETE",
+                    "Durable methodology execution rehydration is malformed",
+                ) from exc
+            ctx.methodology_extraction_execution_result = execution_result
             return
         ctx.methodology_extraction_execution_result = _execution_result_shell_from_summary(
             tenant_id=ctx.tenant_id,
@@ -1662,8 +2103,33 @@ class RunOrchestrator:
         ctx: RunContext,
         result_summary: dict[str, Any],
     ) -> None:
-        """Attach safe materialized claim shells when completed materialization is skipped."""
+        """Attach durable canonical claims when completed materialization is skipped."""
         if ctx.methodology_materialized_claims:
+            return
+        if ctx.strict_resume_validation_required:
+            rehydrated = _run_strict_methodology_rehydrator(
+                ctx,
+                ctx.methodology_claim_materialization_fn,
+                external_call=False,
+            )
+            try:
+                _run_result, claims = rehydrated
+                claims_for_context = list(claims)
+            except (TypeError, ValueError) as exc:
+                raise RunStepBlockedError(
+                    "METHODOLOGY_CANONICAL_MATERIALIZATION_INCOMPLETE",
+                    "Durable methodology claim rehydration is malformed",
+                ) from exc
+            ctx.methodology_materialized_claims = claims_for_context
+            ctx.methodology_canonical_claim_ids = tuple(
+                sorted(
+                    {
+                        str(claim.claim_id)
+                        for claim in claims_for_context
+                        if getattr(claim, "claim_id", None)
+                    }
+                )
+            )
             return
         raw_mappings = result_summary.get("output_claim_mappings")
         mappings: list[Any] = raw_mappings if isinstance(raw_mappings, list) else []
@@ -1688,8 +2154,29 @@ class RunOrchestrator:
         ctx: RunContext,
         result_summary: dict[str, Any],
     ) -> None:
-        """Attach safe EvidenceItem shells when completed Slice 7 step is skipped."""
+        """Attach durable EvidenceItems when completed materialization is skipped."""
         if ctx.methodology_evidence_items:
+            return
+        if ctx.strict_resume_validation_required:
+            rehydrated = _run_strict_methodology_rehydrator(
+                ctx,
+                ctx.methodology_evidence_item_materialization_fn,
+                external_call=False,
+            )
+            try:
+                _run_result, evidence_records = rehydrated
+                evidence_for_context = list(evidence_records)
+            except (TypeError, ValueError) as exc:
+                raise RunStepBlockedError(
+                    "METHODOLOGY_CANONICAL_MATERIALIZATION_INCOMPLETE",
+                    "Durable methodology evidence rehydration is malformed",
+                ) from exc
+            ctx.methodology_evidence_items = evidence_for_context
+            ctx.methodology_evidence_source_provenance = [
+                record.source_ref
+                for record in evidence_for_context
+                if getattr(record, "source_ref", None) is not None
+            ]
             return
         raw_mappings = result_summary.get("evidence_item_mappings")
         mappings: list[Any] = raw_mappings if isinstance(raw_mappings, list) else []
@@ -1719,8 +2206,26 @@ class RunOrchestrator:
         ctx: RunContext,
         result_summary: dict[str, Any],
     ) -> None:
-        """Attach safe Sanad shells when completed Slice 8 step is skipped."""
+        """Attach durable canonical Sanad state when completed materialization is skipped."""
         if ctx.methodology_sanads:
+            return
+        if ctx.strict_resume_validation_required:
+            rehydrated = _run_strict_methodology_rehydrator(
+                ctx,
+                ctx.methodology_sanad_creation_linking_grading_fn,
+                external_call=False,
+            )
+            try:
+                _run_result, sanads, links, grades, defects = rehydrated
+                ctx.methodology_sanads = list(sanads)
+                ctx.methodology_sanad_links = list(links)
+                ctx.methodology_sanad_grades = list(grades)
+                ctx.methodology_sanad_defects = list(defects)
+            except (TypeError, ValueError) as exc:
+                raise RunStepBlockedError(
+                    "METHODOLOGY_CANONICAL_MATERIALIZATION_INCOMPLETE",
+                    "Durable methodology Sanad rehydration is malformed",
+                ) from exc
             return
         raw_mappings = result_summary.get("sanad_mappings")
         mappings: list[Any] = raw_mappings if isinstance(raw_mappings, list) else []
@@ -1935,12 +2440,23 @@ class RunOrchestrator:
         Returns:
             Extraction result dict including created_claim_ids.
         """
-        return ctx.extract_fn(
+        result = ctx.extract_fn(
             run_id=ctx.run_id,
             tenant_id=ctx.tenant_id,
             deal_id=ctx.deal_id,
             documents=ctx.documents,
         )
+        from idis.services.extraction.canonical_methodology_materialization import (
+            merge_main_evidence_claim_ids,
+        )
+
+        merged = merge_main_evidence_claim_ids(
+            methodology_claim_ids=ctx.methodology_canonical_claim_ids,
+            generic_new_claim_ids=_str_list(result.get("created_claim_ids")),
+            reused_claim_ids=_str_list(result.get("reused_claim_ids")),
+        )
+        result["created_claim_ids"] = list(merged)
+        return result
 
     def _execute_grade(
         self,
@@ -2141,26 +2657,33 @@ class RunOrchestrator:
         vep_package_ids = (
             layer1_persistence.get("package_ids") if isinstance(layer1_persistence, dict) else None
         )
-        return ctx.layer2_ic_challenge_fn(
-            run_id=ctx.run_id,
-            tenant_id=ctx.tenant_id,
-            deal_id=ctx.deal_id,
-            debate_summary=debate_summary,
-            created_claim_ids=created_claim_ids,
-            calc_ids=calc_ids,
-            vep_package_ids=vep_package_ids if isinstance(vep_package_ids, list) else None,
-            graph_evidence={
+        call_kwargs = {
+            "run_id": ctx.run_id,
+            "tenant_id": ctx.tenant_id,
+            "deal_id": ctx.deal_id,
+            "debate_summary": debate_summary,
+            "created_claim_ids": created_claim_ids,
+            "calc_ids": calc_ids,
+            "vep_package_ids": vep_package_ids if isinstance(vep_package_ids, list) else None,
+            "graph_evidence": {
                 "graph_status": accumulated.get("graph_status"),
                 "graph_projection": accumulated.get("graph_projection"),
                 "graph_retrieval": accumulated.get("graph_retrieval"),
             },
-            rag_evidence={
+            "rag_evidence": {
                 "rag_status": accumulated.get("rag_status"),
                 "rag_indexing": accumulated.get("rag_indexing"),
                 "rag_retrieval": accumulated.get("rag_retrieval"),
             },
-            enrichment_refs=accumulated.get("enrichment_refs", {}),
-        )
+            "enrichment_refs": accumulated.get("enrichment_refs", {}),
+        }
+        if ctx.stage_native_output_writes_fn is not None:
+            call_kwargs["defer_persistence"] = True
+        result = ctx.layer2_ic_challenge_fn(**call_kwargs)
+        record = result.pop("_layer2_ic_challenge_record", None)
+        if record is not None:
+            ctx.layer2_ic_challenge_record = record
+        return result
 
     def _execute_analysis(
         self,
@@ -2303,11 +2826,369 @@ class RunOrchestrator:
             },
         )
 
+    @staticmethod
+    def _is_lease_control_failure(exc: BaseException) -> bool:
+        return getattr(exc, "code", None) in {
+            "WORKER_LEASE_FENCED",
+            "WORKER_LEASE_HEARTBEAT_FAILED",
+            "WORKER_LEASE_BOUNDARY_COMMIT_FAILED",
+        }
+
+    def _start_step_boundary(
+        self,
+        ctx: RunContext,
+        step_name: StepName,
+        existing: RunStep | None,
+    ) -> RunStep:
+        """Commit lease renewal, RUNNING ledger state, and audit atomically."""
+        if ctx.step_boundary_uow_fn is None:
+            return self._start_step(
+                ctx,
+                step_name,
+                existing,
+                lease_owner_id=ctx.lease_owner_id,
+                lease_fencing_token=ctx.lease_fencing_token,
+            )
+        if ctx.lease_owner_id is None or ctx.lease_fencing_token is None:
+            raise RunStepBlockedError(
+                "WORKER_LEASE_FENCED",
+                "Step boundary is missing its complete lease identity",
+            )
+
+        captured: dict[str, RunStep] = {}
+
+        def mutation(
+            *,
+            db_conn: Any = None,
+            lease_owner_id: str | None = ctx.lease_owner_id,
+            lease_fencing_token: int | None = ctx.lease_fencing_token,
+            **_kwargs: Any,
+        ) -> None:
+            captured["step"] = self._start_step(
+                ctx,
+                step_name,
+                existing,
+                db_conn=db_conn,
+                lease_owner_id=lease_owner_id,
+                lease_fencing_token=lease_fencing_token,
+            )
+
+        ctx.step_boundary_uow_fn(
+            run_id=ctx.run_id,
+            tenant_id=ctx.tenant_id,
+            step_name=step_name,
+            boundary="START",
+            lease_owner_id=ctx.lease_owner_id,
+            lease_fencing_token=ctx.lease_fencing_token,
+            mutation=mutation,
+            native_output_writes=(),
+        )
+        if ctx.after_step_boundary_commit_fn is not None:
+            ctx.after_step_boundary_commit_fn(step_name=step_name, boundary="START")
+        return captured["step"]
+
+    def _complete_step_boundary(
+        self,
+        ctx: RunContext,
+        step: RunStep,
+        result: dict[str, Any],
+    ) -> None:
+        """Commit staged native outputs, COMPLETED ledger state, and audit together."""
+        if ctx.step_boundary_uow_fn is None:
+            if ctx.stage_native_output_writes_fn is not None:
+                raise RunStepBlockedError(
+                    "PIPELINE_CONTRACT_UNAVAILABLE",
+                    "Staged output completion requires a boundary unit of work",
+                )
+            self._complete_step(
+                step,
+                result,
+                lease_owner_id=ctx.lease_owner_id,
+                lease_fencing_token=ctx.lease_fencing_token,
+            )
+            return
+        if ctx.lease_owner_id is None or ctx.lease_fencing_token is None:
+            raise RunStepBlockedError(
+                "WORKER_LEASE_FENCED",
+                "Step boundary is missing its complete lease identity",
+            )
+
+        staged = (
+            tuple(
+                ctx.stage_native_output_writes_fn(
+                    ctx=ctx,
+                    step_name=step.step_name,
+                    result_summary=result,
+                )
+            )
+            if ctx.stage_native_output_writes_fn is not None
+            else ()
+        )
+        staged += ctx.methodology_pending_native_output_writes.get(step.step_name, ())
+
+        if self._is_full_strict_v21_context(ctx):
+            if ctx.task7_step_completion_fn is None:
+                raise RunStepBlockedError(
+                    "PIPELINE_CONTRACT_UNAVAILABLE",
+                    "Task 7 strict completion composition is unavailable",
+                )
+            ctx.task7_step_completion_fn(
+                ctx=ctx,
+                step=step,
+                result_summary=result,
+                staged_native_output_writes=staged,
+            )
+            ctx.methodology_pending_native_output_writes.pop(step.step_name, None)
+            if ctx.after_step_boundary_commit_fn is not None:
+                ctx.after_step_boundary_commit_fn(
+                    step_name=step.step_name,
+                    boundary="COMPLETE",
+                )
+            return
+
+        def mutation(
+            *,
+            db_conn: Any = None,
+            lease_owner_id: str | None = ctx.lease_owner_id,
+            lease_fencing_token: int | None = ctx.lease_fencing_token,
+            **_kwargs: Any,
+        ) -> None:
+            composition = self._snapshot_composition(ctx, step.step_name)
+            if composition is not None:
+                composition.before_complete_step(ctx=ctx, step_name=step.step_name)
+            self._complete_step(
+                step,
+                result,
+                db_conn=db_conn,
+                lease_owner_id=lease_owner_id,
+                lease_fencing_token=lease_fencing_token,
+            )
+
+        composition = self._snapshot_composition(ctx, step.step_name)
+        try:
+            ctx.step_boundary_uow_fn(
+                run_id=ctx.run_id,
+                tenant_id=ctx.tenant_id,
+                step_name=step.step_name,
+                boundary="COMPLETE",
+                lease_owner_id=ctx.lease_owner_id,
+                lease_fencing_token=ctx.lease_fencing_token,
+                mutation=mutation,
+                native_output_writes=staged,
+            )
+        except Exception:
+            if composition is not None:
+                composition.boundary_failed(ctx=ctx, step_name=step.step_name)
+            raise
+        if composition is not None:
+            composition.complete_committed(ctx=ctx, step_name=step.step_name)
+        ctx.methodology_pending_native_output_writes.pop(step.step_name, None)
+        if ctx.after_step_boundary_commit_fn is not None:
+            ctx.after_step_boundary_commit_fn(step_name=step.step_name, boundary="COMPLETE")
+
+    def _fail_step_boundary(
+        self,
+        ctx: RunContext,
+        step: RunStep,
+        exc: Exception,
+    ) -> None:
+        """Persist FAILED under the same fenced completion-boundary contract."""
+        if ctx.step_boundary_uow_fn is None:
+            self._fail_step(
+                step,
+                exc,
+                lease_owner_id=ctx.lease_owner_id,
+                lease_fencing_token=ctx.lease_fencing_token,
+            )
+            return
+        if ctx.lease_owner_id is None or ctx.lease_fencing_token is None:
+            raise RunStepBlockedError(
+                "WORKER_LEASE_FENCED",
+                "Step boundary is missing its complete lease identity",
+            )
+        result_summary = getattr(exc, "result_summary", None) or {
+            "error_code": getattr(exc, "code", type(exc).__name__.upper())
+        }
+        composition = self._snapshot_composition(ctx, step.step_name)
+        if composition is not None:
+            ctx.methodology_pending_native_output_writes.pop(step.step_name, None)
+            staged = composition.abort_step_and_stage_failure_audits(
+                ctx=ctx,
+                step_name=step.step_name,
+            )
+        else:
+            staged = (
+                tuple(
+                    ctx.stage_native_output_writes_fn(
+                        ctx=ctx,
+                        step_name=step.step_name,
+                        result_summary=result_summary,
+                    )
+                )
+                if ctx.stage_native_output_writes_fn is not None
+                else ()
+            )
+
+        def mutation(
+            *,
+            db_conn: Any = None,
+            lease_owner_id: str | None = ctx.lease_owner_id,
+            lease_fencing_token: int | None = ctx.lease_fencing_token,
+            **_kwargs: Any,
+        ) -> None:
+            if composition is not None:
+                composition.before_failed_step(ctx=ctx, step_name=step.step_name)
+            self._fail_step(
+                step,
+                exc,
+                db_conn=db_conn,
+                lease_owner_id=lease_owner_id,
+                lease_fencing_token=lease_fencing_token,
+            )
+
+        try:
+            ctx.step_boundary_uow_fn(
+                run_id=ctx.run_id,
+                tenant_id=ctx.tenant_id,
+                step_name=step.step_name,
+                boundary="COMPLETE",
+                lease_owner_id=ctx.lease_owner_id,
+                lease_fencing_token=ctx.lease_fencing_token,
+                mutation=mutation,
+                native_output_writes=staged,
+            )
+        finally:
+            if composition is not None:
+                composition.boundary_failed(ctx=ctx, step_name=step.step_name)
+        if ctx.after_step_boundary_commit_fn is not None:
+            ctx.after_step_boundary_commit_fn(step_name=step.step_name, boundary="COMPLETE")
+
+    def _fail_completed_resume_boundary(
+        self,
+        ctx: RunContext,
+        step: RunStep,
+        exc: Exception,
+    ) -> None:
+        """Fence a completed ledger row whose immutable resume checkpoint is invalid."""
+        if self._is_full_strict_v21_context(ctx):
+            if isinstance(exc, RunStepBlockedError):
+                raise exc
+            raise RunStepBlockedError(
+                "STEP_REHYDRATION_FAILED",
+                "Completed strict step failed immutable rehydration",
+            ) from exc
+        if (
+            ctx.step_boundary_uow_fn is None
+            and ctx.lease_owner_id is None
+            and ctx.lease_fencing_token is None
+        ):
+            # Legacy/non-worker strict validation has no lease to fence.  Preserve
+            # its fail-closed ledger behavior; the production claimed path below
+            # must always use the fenced boundary.
+            self._fail_step(step, exc)
+            return
+        if (
+            ctx.step_boundary_uow_fn is None
+            or ctx.lease_owner_id is None
+            or ctx.lease_fencing_token is None
+        ):
+            raise RunStepBlockedError(
+                "PIPELINE_CONTRACT_UNAVAILABLE",
+                "Fenced completed-step resume failure boundary is unavailable",
+            ) from exc
+
+        def mutation(
+            *,
+            db_conn: Any = None,
+            lease_owner_id: str | None = ctx.lease_owner_id,
+            lease_fencing_token: int | None = ctx.lease_fencing_token,
+            **_kwargs: Any,
+        ) -> None:
+            self._fail_step(
+                step,
+                exc,
+                db_conn=db_conn,
+                lease_owner_id=lease_owner_id,
+                lease_fencing_token=lease_fencing_token,
+            )
+
+        ctx.step_boundary_uow_fn(
+            run_id=ctx.run_id,
+            tenant_id=ctx.tenant_id,
+            step_name=step.step_name,
+            boundary="COMPLETE",
+            lease_owner_id=ctx.lease_owner_id,
+            lease_fencing_token=ctx.lease_fencing_token,
+            mutation=mutation,
+            native_output_writes=(),
+        )
+        if ctx.after_step_boundary_commit_fn is not None:
+            ctx.after_step_boundary_commit_fn(step_name=step.step_name, boundary="COMPLETE")
+
+    def _boundary_steps_repository(self, ctx: RunContext, db_conn: Any) -> RunStepsRepo:
+        if db_conn is None:
+            return self._steps_repo
+        from idis.persistence.repositories.run_steps import get_run_steps_repository
+
+        return get_run_steps_repository(db_conn, ctx.tenant_id)
+
+    def _require_v5_persisted_step(
+        self,
+        ctx: RunContext,
+        step_name: StepName,
+        existing: RunStep | None,
+    ) -> RunStep | None:
+        """Require strict admission's precreated step and exact immutable identity."""
+        if not self._is_full_strict_v21_context(ctx):
+            return existing
+        if existing is None:
+            raise RunStepBlockedError(
+                "STEP_REHYDRATION_FAILED",
+                "Strict admission did not persist the required canonical step",
+            )
+        if ctx.pipeline_contract_hash is None:
+            raise RunStepBlockedError(
+                "PIPELINE_CONTRACT_UNAVAILABLE",
+                "Strict run has no pipeline contract hash",
+            )
+        try:
+            contract = require_pipeline_contract_for_admission(
+                registry=self._pipeline_contract_registry,
+                contract_version="full-strict-v21",
+                proof_contract_hash=ctx.pipeline_contract_hash,
+            )
+        except PipelineContractError as exc:
+            raise RunStepBlockedError(exc.code, str(exc)) from exc
+        spec = next(
+            (candidate for candidate in contract.steps if candidate.step_name == step_name.value),
+            None,
+        )
+        if (
+            spec is None
+            or existing.tenant_id != ctx.tenant_id
+            or existing.run_id != ctx.run_id
+            or existing.step_name is not step_name
+            or existing.step_order != spec.step_order
+            or existing.pipeline_contract_version != contract.contract_version
+            or existing.pipeline_contract_hash != contract.contract_hash
+            or existing.semantic_rule_version != spec.semantic_rule_version
+            or existing.semantic_rule_hash != spec.semantic_rule_hash
+        ):
+            raise RunStepBlockedError(
+                "PIPELINE_CONTRACT_HASH_MISMATCH",
+                "Persisted strict step differs from the reviewed contract",
+            )
+        return existing
+
     def _start_step(
         self,
         ctx: RunContext,
         step_name: StepName,
         existing: RunStep | None,
+        *,
+        db_conn: Any = None,
+        lease_owner_id: str | None = None,
+        lease_fencing_token: int | None = None,
     ) -> RunStep:
         """Create or reuse a RunStep record and mark it RUNNING.
 
@@ -2321,6 +3202,8 @@ class RunOrchestrator:
         """
         now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
+        repository = self._boundary_steps_repository(ctx, db_conn)
+        existing = self._require_v5_persisted_step(ctx, step_name, existing)
         if existing is not None:
             existing.status = StepStatus.RUNNING
             existing.started_at = now
@@ -2328,7 +3211,14 @@ class RunOrchestrator:
             existing.error_code = None
             existing.error_message = None
             existing.retry_count += 1
-            step = self._steps_repo.update(existing)
+            if lease_owner_id is not None and lease_fencing_token is not None:
+                step = repository.update(
+                    existing,
+                    lease_owner_id=lease_owner_id,
+                    lease_fencing_token=lease_fencing_token,
+                )
+            else:
+                step = repository.update(existing)
         else:
             step = RunStep(
                 step_id=str(uuid.uuid4()),
@@ -2339,7 +3229,14 @@ class RunOrchestrator:
                 status=StepStatus.RUNNING,
                 started_at=now,
             )
-            step = self._steps_repo.create(step)
+            if lease_owner_id is not None and lease_fencing_token is not None:
+                step = repository.create(
+                    step,
+                    lease_owner_id=lease_owner_id,
+                    lease_fencing_token=lease_fencing_token,
+                )
+            else:
+                step = repository.create(step)
 
         self._emit_audit_event(
             event_type=f"run.step.{step_name.value.lower()}.started",
@@ -2350,6 +3247,7 @@ class RunOrchestrator:
                 "step_name": step_name.value,
                 "retry_count": step.retry_count,
             },
+            db_conn=db_conn,
         )
         return step
 
@@ -2383,7 +3281,15 @@ class RunOrchestrator:
         except TypeError:
             return str(obj)
 
-    def _complete_step(self, step: RunStep, result: dict[str, Any]) -> None:
+    def _complete_step(
+        self,
+        step: RunStep,
+        result: dict[str, Any],
+        *,
+        db_conn: Any = None,
+        lease_owner_id: str | None = None,
+        lease_fencing_token: int | None = None,
+    ) -> None:
         """Mark a step COMPLETED and persist its result summary.
 
         Args:
@@ -2394,7 +3300,21 @@ class RunOrchestrator:
         step.status = StepStatus.COMPLETED
         step.finished_at = now
         step.result_summary = self._sanitize_for_json(result)
-        self._steps_repo.update(step)
+        result_summary_sha256 = canonical_result_summary_sha256(step.result_summary)
+        if db_conn is None:
+            repository = self._steps_repo
+        else:
+            from idis.persistence.repositories.run_steps import get_run_steps_repository
+
+            repository = get_run_steps_repository(db_conn, step.tenant_id)
+        if lease_owner_id is not None and lease_fencing_token is not None:
+            repository.update(
+                step,
+                lease_owner_id=lease_owner_id,
+                lease_fencing_token=lease_fencing_token,
+            )
+        else:
+            repository.update(step)
 
         self._emit_audit_event(
             event_type=f"run.step.{step.step_name.value.lower()}.completed",
@@ -2404,10 +3324,20 @@ class RunOrchestrator:
                 "step_id": step.step_id,
                 "step_name": step.step_name.value,
                 "result_keys": self._safe_audit_result_keys(result),
+                "result_summary_sha256": result_summary_sha256,
             },
+            db_conn=db_conn,
         )
 
-    def _fail_step(self, step: RunStep, exc: Exception) -> None:
+    def _fail_step(
+        self,
+        step: RunStep,
+        exc: Exception,
+        *,
+        db_conn: Any = None,
+        lease_owner_id: str | None = None,
+        lease_fencing_token: int | None = None,
+    ) -> None:
         """Mark a step FAILED and persist error details.
 
         Args:
@@ -2422,7 +3352,20 @@ class RunOrchestrator:
         result_summary = getattr(exc, "result_summary", None)
         if result_summary is not None:
             step.result_summary = self._sanitize_for_json(result_summary)
-        self._steps_repo.update(step)
+        if db_conn is None:
+            repository = self._steps_repo
+        else:
+            from idis.persistence.repositories.run_steps import get_run_steps_repository
+
+            repository = get_run_steps_repository(db_conn, step.tenant_id)
+        if lease_owner_id is not None and lease_fencing_token is not None:
+            repository.update(
+                step,
+                lease_owner_id=lease_owner_id,
+                lease_fencing_token=lease_fencing_token,
+            )
+        else:
+            repository.update(step)
 
         self._emit_audit_event(
             event_type=f"run.step.{step.step_name.value.lower()}.failed",
@@ -2434,6 +3377,7 @@ class RunOrchestrator:
                 "error_code": step.error_code,
                 "error_message": SAFE_STEP_ERROR_MESSAGE,
             },
+            db_conn=db_conn,
         )
 
     def _create_blocked_step(self, ctx: RunContext, step_name: StepName) -> RunStep:
@@ -2466,6 +3410,8 @@ class RunOrchestrator:
         event_type: str,
         tenant_id: str,
         details: dict[str, Any],
+        *,
+        db_conn: Any = None,
     ) -> None:
         """Emit an audit event, fail-closed on any error.
 
@@ -2488,6 +3434,10 @@ class RunOrchestrator:
         severity = "MEDIUM" if event_type.endswith((".failed", ".blocked")) else "LOW"
         deal_id = self._origin_deal_id
 
+        result_summary_sha256 = details.get("result_summary_sha256")
+        checkpoint_hashes = (
+            [result_summary_sha256] if isinstance(result_summary_sha256, str) else []
+        )
         event: dict[str, Any] = {
             "event_id": str(uuid.uuid4()),
             "occurred_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
@@ -2507,7 +3457,7 @@ class RunOrchestrator:
             "event_type": taxonomy_event_type,
             "severity": severity,
             "summary": f"{taxonomy_event_type} for run {run_id}" if run_id else taxonomy_event_type,
-            "payload": {"safe": details, "hashes": [], "refs": []},
+            "payload": {"safe": details, "hashes": checkpoint_hashes, "refs": []},
         }
 
         validation_result = validate_audit_event(event)
@@ -2517,7 +3467,11 @@ class RunOrchestrator:
                 f"Run-step audit event failed validation, refusing to emit: {error_codes}"
             )
 
-        self._audit.emit(event)
+        emit_in_tx = getattr(self._audit, "emit_in_tx", None)
+        if db_conn is not None and callable(emit_in_tx):
+            emit_in_tx(db_conn, event)
+        else:
+            self._audit.emit(event)
 
     DEFAULT_SERVICE_ACTOR_ID = "idis-worker"
 
@@ -2548,7 +3502,11 @@ class RunOrchestrator:
         return safe_keys
 
     @staticmethod
-    def _compute_final_status(steps: list[RunStep]) -> str:
+    def _compute_final_status(
+        steps: list[RunStep],
+        *,
+        expected_step_sequence: tuple[StepName, ...] | None = None,
+    ) -> str:
         """Derive the final run status from step statuses.
 
         Args:
@@ -2561,9 +3519,19 @@ class RunOrchestrator:
         if not executable_steps:
             return "FAILED"
 
-        has_failed = any(step.status == StepStatus.FAILED for step in executable_steps)
+        if expected_step_sequence is not None:
+            actual_sequence = tuple(step.step_name for step in executable_steps)
+            actual_orders = tuple(step.step_order for step in executable_steps)
+            if (
+                actual_sequence != expected_step_sequence
+                or actual_orders != tuple(range(len(expected_step_sequence)))
+                or len({step.step_id for step in executable_steps}) != len(expected_step_sequence)
+                or any(step.status is not StepStatus.COMPLETED for step in executable_steps)
+            ):
+                return "FAILED"
+            return "SUCCEEDED"
 
-        if has_failed:
+        if any(step.status == StepStatus.FAILED for step in executable_steps):
             return "FAILED"
         return "SUCCEEDED"
 
@@ -3428,5 +4396,127 @@ def _optional_str(value: object) -> str | None:
     return text or None
 
 
-def _tasks_request_calculations(tasks: list[ExtractionTask]) -> bool:
+def _require_strict_methodology_callback(
+    callback: Callable[..., Any] | None,
+    *,
+    external_call: bool,
+) -> None:
+    """Reject every legacy/synthetic methodology seam in strict composition."""
+    if callback is None:
+        raise RunStepBlockedError(
+            "STRICT_METHODOLOGY_COMPOSITION_REQUIRED",
+            "Strict methodology execution requires a durable production callback",
+        )
+    if getattr(callback, "persistence_backend", None) != "postgresql":
+        raise RunStepBlockedError(
+            "STRICT_METHODOLOGY_COMPOSITION_REQUIRED",
+            "Strict methodology execution requires PostgreSQL persistence",
+        )
+    if getattr(callback, "external_calls_enabled", None) is not external_call:
+        requirement = (
+            "requires the production extractor"
+            if external_call
+            else "requires external calls to be disabled"
+        )
+        raise RunStepBlockedError(
+            "STRICT_METHODOLOGY_COMPOSITION_REQUIRED",
+            f"Strict methodology execution {requirement}",
+        )
+
+
+def _require_active_run_step_id(ctx: RunContext) -> str:
+    step_id = str(ctx.active_run_step_id or "").strip()
+    if not step_id:
+        raise RunStepBlockedError(
+            "STRICT_METHODOLOGY_COMPOSITION_REQUIRED",
+            "Strict methodology callback requires the durable RUNNING step identity",
+        )
+    return step_id
+
+
+def _run_strict_methodology_rehydrator(
+    ctx: RunContext,
+    callback: Callable[..., Any] | None,
+    *,
+    external_call: bool,
+) -> Any:
+    """Load Task-6 state from durable rows, never from a result-summary shell."""
+    _require_strict_methodology_callback(callback, external_call=external_call)
+    rehydrate = getattr(callback, "rehydrate", None)
+    if not callable(rehydrate):
+        raise RunStepBlockedError(
+            "STRICT_METHODOLOGY_COMPOSITION_REQUIRED",
+            "Strict methodology callback has no durable restart loader",
+        )
+    try:
+        return rehydrate(
+            tenant_id=ctx.tenant_id,
+            deal_id=ctx.deal_id,
+            run_id=ctx.run_id,
+        )
+    except RunStepBlockedError:
+        raise
+    except Exception as exc:
+        raise RunStepBlockedError(
+            "METHODOLOGY_CANONICAL_MATERIALIZATION_INCOMPLETE",
+            "Strict methodology durable restart loading failed closed",
+        ) from exc
+
+
+_STRICT_METHODOLOGY_FAILURE_STATUSES = frozenset(
+    {"FAILED", "FAILURE", "PARTIAL", "DEFERRED", "BLOCKED", "SKIPPED", "NOT_ATTEMPTED"}
+)
+_STRICT_METHODOLOGY_FAILURE_COUNT_TOKENS = (
+    "failed",
+    "failure",
+    "partial",
+    "deferred",
+    "blocked",
+    "skipped",
+    "rejected",
+)
+
+
+def _validate_strict_methodology_summary(summary: Mapping[str, Any]) -> None:
+    """Reject completed-looking Task-6 summaries containing semantic failures."""
+    if not isinstance(summary, Mapping) or not summary:
+        raise RunStepBlockedError(
+            "METHODOLOGY_TASK_COVERAGE_INCOMPLETE",
+            "Strict methodology step returned no semantic evidence",
+        )
+
+    def visit(value: Any, path: str) -> None:
+        if isinstance(value, Mapping):
+            for raw_key, item in value.items():
+                key = str(raw_key).strip().lower()
+                item_path = f"{path}.{key}" if path else key
+                if (
+                    key.endswith("status")
+                    and isinstance(item, str)
+                    and item.strip().upper() in _STRICT_METHODOLOGY_FAILURE_STATUSES
+                ):
+                    raise RunStepBlockedError(
+                        "METHODOLOGY_TASK_COVERAGE_INCOMPLETE",
+                        "Strict methodology step contains a non-success status",
+                    )
+                if (
+                    key.endswith("count")
+                    and any(token in key for token in _STRICT_METHODOLOGY_FAILURE_COUNT_TOKENS)
+                    and isinstance(item, int)
+                    and not isinstance(item, bool)
+                    and item > 0
+                ):
+                    raise RunStepBlockedError(
+                        "METHODOLOGY_TASK_COVERAGE_INCOMPLETE",
+                        "Strict methodology step contains a nonzero failure count",
+                    )
+                visit(item, item_path)
+        elif isinstance(value, (list, tuple)):
+            for index, item in enumerate(value):
+                visit(item, f"{path}[{index}]")
+
+    visit(summary, "")
+
+
+def _tasks_request_calculations(tasks: list[PlannedExtractionTask]) -> bool:
     return any(task.expected_answer_schema.required_calculations for task in tasks)

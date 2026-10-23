@@ -1,4 +1,9 @@
-"""Deterministic UUIDv5 identities for the reviewed Task 7 contract."""
+"""Deterministic UUIDv5 identities for the reviewed Task 7 contract.
+
+Also exposes the inactive full-strict-v28 candidate registry, derivation, and
+binding validators. The candidate path is dependency-ready foundation only:
+it activates no admission, StageEnvelope, or runtime selection.
+"""
 
 from __future__ import annotations
 
@@ -368,6 +373,42 @@ _NAMESPACE_BY_KIND: Final[Mapping[str, Task7UuidNamespaceSpec]] = MappingProxyTy
     {row.id_kind: row for row in TASK7_UUID_NAMESPACE_REGISTRY}
 )
 
+_FULL_STRICT_V28_VERSION: Final = "full-strict-v28"
+_STAGE_ADMISSION_BINDING_ID_KIND: Final = "stage_admission_binding_id"
+
+_TASK7_V28_CANDIDATE_NAMESPACE_REGISTRY: Final[tuple[Task7UuidNamespaceSpec, ...]] = (
+    *TASK7_UUID_NAMESPACE_REGISTRY,
+    Task7UuidNamespaceSpec(
+        _STAGE_ADMISSION_BINDING_ID_KIND,
+        UUID("591d30bc-4dce-479b-9164-5f4020c311ae"),
+        _NAMESPACE_BY_KIND["binding_id"].name_tuple_schema,
+    ),
+)
+
+_TASK7_V28_NAMESPACE_BY_KIND: Final[Mapping[str, Task7UuidNamespaceSpec]] = MappingProxyType(
+    {row.id_kind: row for row in _TASK7_V28_CANDIDATE_NAMESPACE_REGISTRY}
+)
+
+_V28_STAGE_FIXED_STRINGS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "source_object_kind": "RUN_STAGE_ADMISSION",
+        "source_disposition": "ADMITTED_METADATA",
+        "binding_purpose": "STAGE_ADMISSION",
+        "selected_source_version": "run-stage-admission-v1",
+    }
+)
+
+_V28_STAGE_NONE_FIELDS: Final = (
+    "source_lineage_object_id",
+    "corpus_receipt_id",
+    "corpus_receipt_sha256",
+)
+
+_V28_STAGE_DIGEST_FIELDS: Final = (
+    "selected_identity_sha256",
+    "selected_content_sha256",
+)
+
 
 def _normalize_json_value(value: object) -> object:
     if isinstance(value, str):
@@ -396,6 +437,30 @@ def _canonical_json_bytes(value: object) -> bytes:
     ).encode("utf-8")
 
 
+def _derive_task7_uuid_from_recipe(
+    *,
+    recipe: Task7UuidNamespaceSpec,
+    values: Mapping[str, object],
+) -> Task7DerivedUuid:
+    try:
+        name_tuple = [
+            recipe.name_tuple_schema[0],
+            *(values[field] for field in recipe.name_tuple_schema[1:]),
+        ]
+        name_hash = hashlib.sha256(_canonical_json_bytes(name_tuple)).hexdigest()
+    except (KeyError, TypeError, ValueError) as exc:
+        raise Task7UuidError(
+            TASK7_UUID_NAME_TUPLE_INVALID,
+            f"Task 7 UUID name tuple is invalid: {recipe.id_kind}",
+        ) from exc
+
+    return Task7DerivedUuid(
+        id_kind=recipe.id_kind,
+        name_hash=name_hash,
+        value=uuid5(recipe.namespace_uuid, name_hash),
+    )
+
+
 def derive_task7_uuid(
     *,
     id_kind: str,
@@ -411,23 +476,7 @@ def derive_task7_uuid(
             f"Task 7 UUID recipe is unavailable: {id_kind}",
         ) from exc
 
-    try:
-        name_tuple = [
-            recipe.name_tuple_schema[0],
-            *(values[field] for field in recipe.name_tuple_schema[1:]),
-        ]
-        name_hash = hashlib.sha256(_canonical_json_bytes(name_tuple)).hexdigest()
-    except (KeyError, TypeError, ValueError) as exc:
-        raise Task7UuidError(
-            TASK7_UUID_NAME_TUPLE_INVALID,
-            f"Task 7 UUID name tuple is invalid: {id_kind}",
-        ) from exc
-
-    return Task7DerivedUuid(
-        id_kind=id_kind,
-        name_hash=name_hash,
-        value=uuid5(recipe.namespace_uuid, name_hash),
-    )
+    return _derive_task7_uuid_from_recipe(recipe=recipe, values=values)
 
 
 def derive_step_id_for_admission(
@@ -459,17 +508,119 @@ def preserve_legacy_step_ids(opaque_ids: Sequence[str]) -> tuple[str, ...]:
     return tuple(opaque_ids)
 
 
-def validate_task7_uuid_bindings(
-    bindings: Sequence[Task7UuidBinding],
-) -> tuple[Task7UuidBinding, ...]:
-    """Reject UUID collisions and same-identity retry row drift."""
+def _require_v28_candidate_context(
+    *,
+    candidate_contract_version: str,
+    candidate_contract_hash: str,
+) -> None:
+    if (
+        type(candidate_contract_version) is not str
+        or candidate_contract_version != _FULL_STRICT_V28_VERSION
+    ):
+        raise Task7UuidError(
+            TASK7_UUID_STRICT_ADMISSION_REQUIRED,
+            "Task 7 v28 candidate UUIDs require the full-strict-v28 context",
+        )
+    if (
+        type(candidate_contract_hash) is not str
+        or _SHA256_RE.fullmatch(candidate_contract_hash) is None
+    ):
+        raise Task7UuidError(
+            TASK7_UUID_STRICT_ADMISSION_REQUIRED,
+            "Task 7 v28 candidate contract hash is not a lowercase sha256",
+        )
 
-    rows = tuple(bindings)
+
+def task7_v28_candidate_namespace_registry(
+    *,
+    candidate_contract_version: str,
+) -> tuple[Task7UuidNamespaceSpec, ...]:
+    """Return the inactive full-strict-v28 candidate registry (18 plus stage)."""
+
+    if (
+        type(candidate_contract_version) is not str
+        or candidate_contract_version != _FULL_STRICT_V28_VERSION
+    ):
+        raise Task7UuidError(
+            TASK7_UUID_STRICT_ADMISSION_REQUIRED,
+            "the inactive Task 7 v28 candidate registry requires full-strict-v28",
+        )
+    return _TASK7_V28_CANDIDATE_NAMESPACE_REGISTRY
+
+
+def derive_task7_v28_candidate_uuid(
+    *,
+    candidate_contract_version: str,
+    candidate_contract_hash: str,
+    id_kind: str,
+    values: Mapping[str, object],
+) -> Task7DerivedUuid:
+    """Derive one inactive full-strict-v28 candidate UUID from an exact tuple."""
+
+    _require_v28_candidate_context(
+        candidate_contract_version=candidate_contract_version,
+        candidate_contract_hash=candidate_contract_hash,
+    )
+
+    try:
+        recipe = _TASK7_V28_NAMESPACE_BY_KIND[id_kind]
+    except KeyError as exc:
+        raise Task7UuidError(
+            TASK7_UUID_RECIPE_UNAVAILABLE,
+            f"Task 7 UUID recipe is unavailable: {id_kind}",
+        ) from exc
+
+    expected_fields = frozenset(recipe.name_tuple_schema[1:])
+    if not isinstance(values, Mapping) or frozenset(values) != expected_fields:
+        raise Task7UuidError(
+            TASK7_UUID_NAME_TUPLE_INVALID,
+            f"Task 7 UUID name tuple is invalid: {id_kind}",
+        )
+
+    context_members = {
+        "pipeline_contract_version": candidate_contract_version,
+        "pipeline_contract_hash": candidate_contract_hash,
+    }
+    for field, expected in context_members.items():
+        if field in expected_fields and values[field] != expected:
+            raise Task7UuidError(
+                TASK7_UUID_STRICT_ADMISSION_REQUIRED,
+                "Task 7 v28 candidate values are not bound to the declared full-strict-v28 context",
+            )
+
+    if recipe.id_kind == _STAGE_ADMISSION_BINDING_ID_KIND:
+        for field, fixed in _V28_STAGE_FIXED_STRINGS.items():
+            if type(values[field]) is not str or values[field] != fixed:
+                raise Task7UuidError(
+                    TASK7_UUID_NAME_TUPLE_INVALID,
+                    f"Task 7 v28 stage admission binding member is invalid: {field}",
+                )
+        for field in _V28_STAGE_NONE_FIELDS:
+            if values[field] is not None:
+                raise Task7UuidError(
+                    TASK7_UUID_NAME_TUPLE_INVALID,
+                    f"Task 7 v28 stage admission binding member is invalid: {field}",
+                )
+        for field in _V28_STAGE_DIGEST_FIELDS:
+            digest = values[field]
+            if type(digest) is not str or _SHA256_RE.fullmatch(digest) is None:
+                raise Task7UuidError(
+                    TASK7_UUID_NAME_TUPLE_INVALID,
+                    f"Task 7 v28 stage admission binding digest is invalid: {field}",
+                )
+
+    return _derive_task7_uuid_from_recipe(recipe=recipe, values=values)
+
+
+def _validate_task7_uuid_binding_rows(
+    rows: tuple[Task7UuidBinding, ...],
+    namespace_by_kind: Mapping[str, Task7UuidNamespaceSpec],
+) -> None:
     by_identifier: dict[UUID, Task7UuidBinding] = {}
     by_name: dict[tuple[str, str], UUID] = {}
     for binding in rows:
         if (
-            binding.id_kind not in _NAMESPACE_BY_KIND
+            binding.id_kind not in namespace_by_kind
             or _SHA256_RE.fullmatch(binding.name_hash) is None
             or _SHA256_RE.fullmatch(binding.row_sha256) is None
             or binding.value.version != 5
@@ -501,4 +652,40 @@ def validate_task7_uuid_bindings(
             )
         by_identifier[binding.value] = binding
         by_name[name_key] = binding.value
+
+
+def validate_task7_uuid_bindings(
+    bindings: Sequence[Task7UuidBinding],
+) -> tuple[Task7UuidBinding, ...]:
+    """Reject UUID collisions and same-identity retry row drift."""
+
+    rows = tuple(bindings)
+    _validate_task7_uuid_binding_rows(rows, _NAMESPACE_BY_KIND)
+    return rows
+
+
+def validate_task7_v28_candidate_uuid_bindings(
+    *,
+    candidate_contract_version: str,
+    candidate_contract_hash: str,
+    bindings: Sequence[Task7UuidBinding],
+) -> tuple[Task7UuidBinding, ...]:
+    """Reject colliding or wrong-namespace full-strict-v28 candidate bindings."""
+
+    _require_v28_candidate_context(
+        candidate_contract_version=candidate_contract_version,
+        candidate_contract_hash=candidate_contract_hash,
+    )
+    rows = tuple(bindings)
+    _validate_task7_uuid_binding_rows(rows, _TASK7_V28_NAMESPACE_BY_KIND)
+    for binding in rows:
+        expected_value = uuid5(
+            _TASK7_V28_NAMESPACE_BY_KIND[binding.id_kind].namespace_uuid,
+            binding.name_hash,
+        )
+        if binding.value != expected_value:
+            raise Task7UuidError(
+                TASK7_UUID_BINDING_INVALID,
+                f"Task 7 v28 candidate binding namespace is invalid: {binding.id_kind}",
+            )
     return rows

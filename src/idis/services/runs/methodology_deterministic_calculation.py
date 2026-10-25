@@ -33,9 +33,10 @@ from idis.models.sanad_materialization import (
     RunScopedSanadRecord,
     RunScopedSanadShell,
 )
+from idis.services.calc.runner import _operand_identity_conflicts, _resolve_unique_operand
 from idis.services.runs.methodology_deterministic_calculation_helpers import (
-    claims_by_input_key,
     claims_for_task,
+    claims_grouped_by_input_key,
     decimal_value_from_claim,
     gate_rejection,
     input_key_from_claim,
@@ -127,7 +128,7 @@ class InMemoryRunMethodologyDeterministicCalculationService:
 
         for task, required_calc in requested:
             task_claims = claims_for_task(claims, task)
-            claims_by_input = claims_by_input_key(task_claims)
+            claims_by_input = claims_grouped_by_input_key(task_claims)
             calc_type_text = required_calc.calc_type
             try:
                 calc_type = CalcType(calc_type_text)
@@ -173,7 +174,51 @@ class InMemoryRunMethodologyDeterministicCalculationService:
                 )
                 continue
 
-            input_claims = [claims_by_input[input_key] for input_key in spec.required_inputs]
+            identity_conflicts = _operand_identity_conflicts(claims_by_input, spec.required_inputs)
+            if identity_conflicts:
+                rejections.append(
+                    rejection(
+                        reason=MethodologyCalculationReason.CALCULATION_FAILED,
+                        message=(
+                            "pre-computation operand ambiguity: conflicting record content"
+                            " for a claim identity"
+                        ),
+                        calc_type=calc_type.value,
+                        task=task,
+                        required=required_calc.required,
+                        claim_ids=identity_conflicts,
+                    )
+                )
+                continue
+
+            input_claims: list[RunScopedMaterializedClaim | RunScopedMaterializedClaimShell] = []
+            competing_claim_ids: list[str] = []
+            conflicting_identity = False
+            for input_key in spec.required_inputs:
+                resolution = _resolve_unique_operand(claims_by_input[input_key])
+                if resolution.claim is None:
+                    competing_claim_ids.extend(resolution.competing_claim_ids)
+                    conflicting_identity = conflicting_identity or resolution.conflicting_identity
+                else:
+                    input_claims.append(resolution.claim)
+            if len(input_claims) != len(spec.required_inputs):
+                rejections.append(
+                    rejection(
+                        reason=MethodologyCalculationReason.CALCULATION_FAILED,
+                        message=(
+                            "pre-computation operand ambiguity: conflicting record content"
+                            " for a claim identity"
+                            if conflicting_identity
+                            else "pre-computation operand ambiguity: competing eligible"
+                            " claim identities for a required input"
+                        ),
+                        calc_type=calc_type.value,
+                        task=task,
+                        required=required_calc.required,
+                        claim_ids=sorted(set(competing_claim_ids)),
+                    )
+                )
+                continue
             input_claim_ids = sorted(
                 str(claim.claim_id) for claim in input_claims if claim.claim_id
             )

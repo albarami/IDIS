@@ -92,15 +92,15 @@ def scope_sanads(
     ]
 
 
-def claims_by_input_key(
+def claims_grouped_by_input_key(
     claims: list[RunScopedMaterializedClaim | RunScopedMaterializedClaimShell],
-) -> dict[str, RunScopedMaterializedClaim | RunScopedMaterializedClaimShell]:
-    """Map task-scoped claims to existing CalcRunner input keys."""
-    by_key: dict[str, RunScopedMaterializedClaim | RunScopedMaterializedClaimShell] = {}
+) -> dict[str, list[RunScopedMaterializedClaim | RunScopedMaterializedClaimShell]]:
+    """Group task-scoped claims by existing CalcRunner input key."""
+    by_key: dict[str, list[RunScopedMaterializedClaim | RunScopedMaterializedClaimShell]] = {}
     for claim in claims:
         input_key = _claim_input_key(claim_payload(claim))
         if input_key is not None:
-            by_key[input_key] = claim
+            by_key.setdefault(input_key, []).append(claim)
     return by_key
 
 

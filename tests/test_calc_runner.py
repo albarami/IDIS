@@ -244,3 +244,251 @@ def test_calc_runner_fails_closed_on_persistence_errors() -> None:
             created_claim_ids=list(claims),
             calc_types=[CalcType.GROSS_MARGIN],
         )
+
+
+class SequentialClaimsRepository:
+    """Serves the recorded payload for the Nth successive ``get`` call.
+
+    Narrow double for exercising repeated appearances of one claim id whose
+    record content differs between reads; a plain dict repository cannot
+    express two records under one key.
+    """
+
+    def __init__(self, records: list[dict[str, Any] | None]) -> None:
+        self._records = records
+        self._calls = 0
+
+    def get(self, claim_id: str) -> dict[str, Any] | None:
+        record = self._records[min(self._calls, len(self._records) - 1)]
+        self._calls += 1
+        return record
+
+
+def _three_input_sanads() -> dict[str, dict[str, Any]]:
+    return {
+        "claim-revenue-a": _sanad("claim-revenue-a"),
+        "claim-revenue-b": _sanad("claim-revenue-b"),
+        "claim-cogs": _sanad("claim-cogs"),
+    }
+
+
+def test_calc_runner_refuses_competing_operands_for_required_input() -> None:
+    """Distinct claim identities feeding one required key refuse pre-computation."""
+    claims = {
+        "claim-revenue-a": _money_claim("claim-revenue-a", "revenue", "1000"),
+        "claim-revenue-b": _money_claim("claim-revenue-b", "revenue", "1500"),
+        "claim-cogs": _money_claim("claim-cogs", "cogs", "400"),
+    }
+    sanads = _three_input_sanads()
+
+    for created_claim_ids in (
+        ["claim-revenue-a", "claim-revenue-b", "claim-cogs"],
+        ["claim-revenue-b", "claim-revenue-a", "claim-cogs"],
+    ):
+        calculations_repo = FakeCalculationsRepository()
+        result = _runner(
+            claims=claims,
+            sanads=sanads,
+            calculations_repo=calculations_repo,
+        ).run(
+            created_claim_ids=created_claim_ids,
+            calc_types=[CalcType.GROSS_MARGIN],
+        )
+
+        assert result["persisted_count"] == 0
+        assert result["calc_ids"] == []
+        assert result["reproducibility_hashes"] == []
+        assert calculations_repo.created == []
+        assert result["blocked_candidates"] == [
+            {
+                "calc_type": "GROSS_MARGIN",
+                "reason": "calculation_failed",
+                "claim_ids": ["claim-revenue-a", "claim-revenue-b"],
+            }
+        ]
+
+
+def test_calc_runner_refuses_competing_operands_at_equal_amounts() -> None:
+    """Equal amounts do not collapse two distinct eligible claim identities."""
+    claims = {
+        "claim-revenue-a": _money_claim("claim-revenue-a", "revenue", "1000"),
+        "claim-revenue-b": _money_claim("claim-revenue-b", "revenue", "1000"),
+        "claim-cogs": _money_claim("claim-cogs", "cogs", "400"),
+    }
+
+    calculations_repo = FakeCalculationsRepository()
+    result = _runner(
+        claims=claims,
+        sanads=_three_input_sanads(),
+        calculations_repo=calculations_repo,
+    ).run(
+        created_claim_ids=list(claims),
+        calc_types=[CalcType.GROSS_MARGIN],
+    )
+
+    assert result["persisted_count"] == 0
+    assert calculations_repo.created == []
+    assert result["blocked_candidates"] == [
+        {
+            "calc_type": "GROSS_MARGIN",
+            "reason": "calculation_failed",
+            "claim_ids": ["claim-revenue-a", "claim-revenue-b"],
+        }
+    ]
+
+
+def test_calc_runner_treats_identical_repeated_claim_as_one_observation() -> None:
+    """Re-reading the same immutable claim record is not competition."""
+    calculations_repo = FakeCalculationsRepository()
+    claims = {
+        "claim-revenue": _money_claim("claim-revenue", "revenue", "1000"),
+        "claim-cogs": _money_claim("claim-cogs", "cogs", "400"),
+    }
+    sanads = {
+        "claim-revenue": _sanad("claim-revenue"),
+        "claim-cogs": _sanad("claim-cogs"),
+    }
+
+    result = _runner(
+        claims=claims,
+        sanads=sanads,
+        calculations_repo=calculations_repo,
+    ).run(
+        created_claim_ids=["claim-revenue", "claim-revenue", "claim-cogs"],
+        calc_types=[CalcType.GROSS_MARGIN],
+    )
+
+    assert result["persisted_count"] == 1
+    assert result["blocked_candidates"] == []
+    assert len(result["reproducibility_hashes"]) == 1
+    assert len(calculations_repo.created) == 1
+
+
+def test_calc_runner_refuses_conflicting_content_for_same_claim_id() -> None:
+    """One claim id reappearing with different record content refuses."""
+    claims_repo = SequentialClaimsRepository(
+        [
+            _money_claim("claim-revenue", "revenue", "1000"),
+            _money_claim("claim-revenue", "revenue", "9999"),
+            _money_claim("claim-cogs", "cogs", "400"),
+        ]
+    )
+    calculations_repo = FakeCalculationsRepository()
+
+    result = CalcRunner(
+        tenant_id=TENANT_ID,
+        deal_id=DEAL_ID,
+        claims_repo=claims_repo,
+        sanads_repo=FakeSanadsRepository(
+            {
+                "claim-revenue": _sanad("claim-revenue"),
+                "claim-cogs": _sanad("claim-cogs"),
+            }
+        ),
+        calculations_repo=calculations_repo,
+    ).run(
+        created_claim_ids=["claim-revenue", "claim-revenue", "claim-cogs"],
+        calc_types=[CalcType.GROSS_MARGIN],
+    )
+
+    assert result["persisted_count"] == 0
+    assert result["calc_ids"] == []
+    assert calculations_repo.created == []
+    assert result["blocked_candidates"] == [
+        {
+            "calc_type": "GROSS_MARGIN",
+            "reason": "calculation_failed",
+            "claim_ids": ["claim-revenue"],
+        }
+    ]
+
+    # The same conflicting identity is refused when its snapshots project to
+    # two different required keys — per-key singletons must not escape.
+    cross_key_records: tuple[list[dict[str, Any] | None], ...] = (
+        [
+            _money_claim("claim-shared", "revenue", "1000"),
+            _money_claim("claim-shared", "cogs", "400"),
+        ],
+        [
+            _money_claim("claim-shared", "cogs", "400"),
+            _money_claim("claim-shared", "revenue", "1000"),
+        ],
+    )
+    for records in cross_key_records:
+        calculations_repo = FakeCalculationsRepository()
+        result = CalcRunner(
+            tenant_id=TENANT_ID,
+            deal_id=DEAL_ID,
+            claims_repo=SequentialClaimsRepository(records),
+            sanads_repo=FakeSanadsRepository({"claim-shared": _sanad("claim-shared")}),
+            calculations_repo=calculations_repo,
+        ).run(
+            created_claim_ids=["claim-shared", "claim-shared"],
+            calc_types=[CalcType.GROSS_MARGIN],
+        )
+
+        assert result["persisted_count"] == 0
+        assert result["calc_ids"] == []
+        assert calculations_repo.created == []
+        assert result["blocked_candidates"] == [
+            {
+                "calc_type": "GROSS_MARGIN",
+                "reason": "calculation_failed",
+                "claim_ids": ["claim-shared"],
+            }
+        ]
+
+
+def test_calc_runner_ignores_duplicate_claims_on_unrequested_input_keys() -> None:
+    """Duplicate eligible claims on keys this calculation never requests do not block."""
+    calculations_repo = FakeCalculationsRepository()
+    claims = {
+        "claim-revenue": _money_claim("claim-revenue", "revenue", "1000"),
+        "claim-cogs": _money_claim("claim-cogs", "cogs", "400"),
+        "claim-cash-a": _money_claim("claim-cash-a", "cash_balance", "500"),
+        "claim-cash-b": _money_claim("claim-cash-b", "cash_balance", "700"),
+    }
+    sanads = {claim_id: _sanad(claim_id) for claim_id in claims}
+
+    result = _runner(
+        claims=claims,
+        sanads=sanads,
+        calculations_repo=calculations_repo,
+    ).run(
+        created_claim_ids=list(claims),
+        calc_types=[CalcType.GROSS_MARGIN],
+    )
+
+    assert result["persisted_count"] == 1
+    assert result["blocked_candidates"] == []
+    assert len(result["reproducibility_hashes"]) == 1
+    assert len(calculations_repo.created) == 1
+
+    # Conflicting content under one id that only spans an unrequested key is
+    # equally out of scope for this calculation.
+    calculations_repo = FakeCalculationsRepository()
+    result = CalcRunner(
+        tenant_id=TENANT_ID,
+        deal_id=DEAL_ID,
+        claims_repo=SequentialClaimsRepository(
+            [
+                _money_claim("claim-shared", "revenue", "1000"),
+                _money_claim("claim-shared", "cash_balance", "9999"),
+                _money_claim("claim-cogs", "cogs", "400"),
+            ]
+        ),
+        sanads_repo=FakeSanadsRepository(
+            {
+                "claim-shared": _sanad("claim-shared"),
+                "claim-cogs": _sanad("claim-cogs"),
+            }
+        ),
+        calculations_repo=calculations_repo,
+    ).run(
+        created_claim_ids=["claim-shared", "claim-shared", "claim-cogs"],
+        calc_types=[CalcType.GROSS_MARGIN],
+    )
+
+    assert result["persisted_count"] == 1
+    assert result["blocked_candidates"] == []
+    assert len(calculations_repo.created) == 1

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from typing import Any, Protocol
+from typing import Any, Generic, NamedTuple, Protocol, TypeVar
 
 from idis.calc.engine import CalcEngine, InputGradeInfo
 from idis.calc.formulas.core import register_core_formulas
@@ -19,6 +20,7 @@ BLOCKED_MISSING_SANAD_GRADE = "missing_sanad_grade"
 BLOCKED_MISSING_SOURCE_METADATA = "missing_source_metadata"
 BLOCKED_BELOW_CONFIDENCE = "below_confidence_threshold"
 BLOCKED_BELOW_DHABT = "below_dhabt_threshold"
+BLOCKED_CALCULATION_FAILED = "calculation_failed"
 
 
 @dataclass(frozen=True)
@@ -177,7 +179,7 @@ class CalcRunner:
         claims: list[dict[str, Any]],
     ) -> tuple[CalcCandidate | None, dict[str, Any] | None]:
         spec = self._registry.get_or_raise(calc_type)
-        claims_by_input = _claims_by_input_key(claims)
+        claims_by_input = _claims_grouped_by_input_key(claims)
 
         missing_inputs = [
             input_key for input_key in spec.required_inputs if input_key not in claims_by_input
@@ -189,14 +191,36 @@ class CalcRunner:
                 "missing_inputs": missing_inputs,
             }
 
+        conflicting_ids = _operand_identity_conflicts(claims_by_input, spec.required_inputs)
+        if conflicting_ids:
+            return None, _blocked_candidate(
+                calc_type=calc_type,
+                reason=BLOCKED_CALCULATION_FAILED,
+                claim_ids=conflicting_ids,
+            )
+
+        selected_claims: list[dict[str, Any]] = []
+        competing_claim_ids: list[str] = []
+        operand_blocked = False
+        for input_key in spec.required_inputs:
+            resolution = _resolve_unique_operand(claims_by_input[input_key])
+            if resolution.claim is None:
+                operand_blocked = True
+                competing_claim_ids.extend(resolution.competing_claim_ids)
+            else:
+                selected_claims.append(resolution.claim)
+        if operand_blocked:
+            return None, _blocked_candidate(
+                calc_type=calc_type,
+                reason=BLOCKED_CALCULATION_FAILED,
+                claim_ids=sorted(set(competing_claim_ids)),
+            )
+
         input_values: dict[str, Decimal] = {}
         input_grades: list[InputGradeInfo] = []
-        candidate_claim_ids = sorted(
-            str(claims_by_input[input_key]["claim_id"]) for input_key in spec.required_inputs
-        )
+        candidate_claim_ids = sorted(str(claim["claim_id"]) for claim in selected_claims)
 
-        for input_key in spec.required_inputs:
-            claim = claims_by_input[input_key]
+        for input_key, claim in zip(spec.required_inputs, selected_claims, strict=True):
             value = _extract_decimal_value(claim.get("value"))
             if value is None:
                 return None, _blocked_candidate(
@@ -222,7 +246,7 @@ class CalcRunner:
             metadata_for_calc,
         )
 
-        candidate_claims = [claims_by_input[input_key] for input_key in spec.required_inputs]
+        candidate_claims = selected_claims
         return (
             CalcCandidate(
                 calc_type=calc_type,
@@ -265,13 +289,94 @@ class CalcRunner:
         )
 
 
-def _claims_by_input_key(claims: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    by_key: dict[str, dict[str, Any]] = {}
+def _claims_grouped_by_input_key(claims: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Group claims by their existing input key, keeping every observation."""
+    by_key: dict[str, list[dict[str, Any]]] = {}
     for claim in claims:
         input_key = _claim_input_key(claim)
         if input_key is not None:
-            by_key[input_key] = claim
+            by_key.setdefault(input_key, []).append(claim)
     return by_key
+
+
+_ClaimT = TypeVar("_ClaimT")
+
+
+class _OperandResolution(NamedTuple, Generic[_ClaimT]):
+    """Outcome of resolving one required input key to a single operand."""
+
+    claim: _ClaimT | None
+    competing_claim_ids: list[str]
+    conflicting_identity: bool
+
+
+def _operand_claim_id(claim: object) -> str | None:
+    """Read the existing claim identity from a dict record or claim object."""
+    raw = claim.get("claim_id") if isinstance(claim, dict) else getattr(claim, "claim_id", None)
+    if raw is None:
+        return None
+    text = str(raw)
+    return text or None
+
+
+def _operand_identity_conflicts(
+    grouped: Mapping[str, Sequence[_ClaimT]],
+    required_keys: Iterable[str],
+) -> list[str]:
+    """Conflicting content for one claim identity across the required-key union.
+
+    Only this calculation's already eligible, scope-filtered candidates for the
+    requested keys participate — unrequested keys and out-of-scope claims never
+    reach the check. Identical records under one id remain one observation;
+    distinct ids across different keys do not compete here.
+    """
+    seen: dict[str, _ClaimT] = {}
+    conflicts: set[str] = set()
+    for input_key in required_keys:
+        for claim in grouped.get(input_key, ()):
+            claim_id = _operand_claim_id(claim)
+            if claim_id is None:
+                continue
+            prior = seen.get(claim_id)
+            if prior is None:
+                seen[claim_id] = claim
+            elif prior != claim:
+                conflicts.add(claim_id)
+    return sorted(conflicts)
+
+
+def _resolve_unique_operand(candidates: Sequence[_ClaimT]) -> _OperandResolution[_ClaimT]:
+    """Resolve grouped observations of one required input key to one operand.
+
+    Repeated appearances of the same claim identity with identical record
+    content are a single observation. Distinct claim identities compete and
+    return ``claim=None`` with the sorted competing ids; the same claim id
+    reappearing with conflicting record content is refused identically with
+    ``conflicting_identity=True``. Callers never pick a first/last winner.
+    """
+    distinct: dict[str, _ClaimT] = {}
+    anonymous: list[_ClaimT] = []
+    conflict_ids: set[str] = set()
+    for claim in candidates:
+        claim_id = _operand_claim_id(claim)
+        if claim_id is None:
+            if all(claim != seen for seen in anonymous):
+                anonymous.append(claim)
+            continue
+        prior = distinct.get(claim_id)
+        if prior is None:
+            distinct[claim_id] = claim
+        elif prior != claim:
+            conflict_ids.add(claim_id)
+    if conflict_ids:
+        return _OperandResolution(None, sorted(conflict_ids), True)
+    if len(distinct) + len(anonymous) > 1:
+        return _OperandResolution(None, sorted(distinct), False)
+    if distinct:
+        return _OperandResolution(next(iter(distinct.values())), [], False)
+    if anonymous:
+        return _OperandResolution(anonymous[0], [], False)
+    return _OperandResolution(None, [], False)
 
 
 def _claim_input_key(claim: dict[str, Any]) -> str | None:

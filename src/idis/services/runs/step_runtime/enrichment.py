@@ -46,7 +46,8 @@ def _run_full_enrichment(
     Returns:
         Dict with provider_count, result_count, blocked_count, enrichment_refs.
     """
-    label = str((deal_metadata or {}).get("company_name") or "").strip()
+    raw_label = (deal_metadata or {}).get("company_name")
+    label = raw_label.strip() if isinstance(raw_label, str) else ""
     if not label:
         from idis.services.runs.orchestrator import RunStepBlockedError
 

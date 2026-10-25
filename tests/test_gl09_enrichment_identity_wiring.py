@@ -117,6 +117,39 @@ def test_blank_or_missing_label_fails_closed_before_provider_call(
     assert str(raised.value) == BLANK_MESSAGE
 
 
+@pytest.mark.parametrize(
+    "deal_metadata",
+    [
+        pytest.param({"company_name": True}, id="truthy_bool"),
+        pytest.param({"company_name": 123}, id="truthy_int"),
+        pytest.param({"company_name": ["x"]}, id="nonempty_list"),
+        pytest.param({"company_name": {"k": "v"}}, id="nonempty_dict"),
+        pytest.param({"company_name": b"x"}, id="nonempty_bytes"),
+        pytest.param({"company_name": 0}, id="falsey_int_zero"),
+        pytest.param({"company_name": False}, id="falsey_bool"),
+    ],
+)
+def test_nonstring_label_fails_closed_before_provider_call(
+    monkeypatch: pytest.MonkeyPatch,
+    deal_metadata: dict[str, Any] | None,
+) -> None:
+    """A non-string company label blocks before fetch with the same refusal.
+
+    Truthy wrong types are the boundary defect: the initial extraction must
+    not stringify them into a different provider query.  Falsey 0/False are
+    conservation cases that already refused through the missing/blank path.
+    """
+    connector = _RecordingConnector()
+    _install_connector(monkeypatch, connector)
+
+    with pytest.raises(RunStepBlockedError) as raised:
+        _run(deal_metadata=deal_metadata)
+
+    assert connector.requests == []
+    assert raised.value.code == BLANK_CODE
+    assert str(raised.value) == BLANK_MESSAGE
+
+
 def test_omitted_metadata_fails_closed_before_provider_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

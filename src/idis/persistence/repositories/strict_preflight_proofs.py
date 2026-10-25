@@ -9,17 +9,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import unicodedata
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final, Protocol
 from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
+from idis.analysis.scoring.stage_admission import StageSelectionV1
 from idis.persistence.db import is_postgres_configured, set_tenant_local
 from idis.persistence.repositories.runs import RunAlreadyActiveError
 from idis.persistence.repositories.task7_run_graph import (
@@ -52,6 +54,7 @@ from idis.pipeline.task7_uuid import (
 
 if TYPE_CHECKING:
     from sqlalchemy import Connection
+    from sqlalchemy.sql.base import Executable
 
 
 _ACTIVE_RUN_INDEX = "ux_runs_one_active_per_deal"
@@ -1460,3 +1463,420 @@ def _methodology_hashes(value: Any) -> tuple[str, ...]:
 
 def _optional_string(value: Any) -> str | None:
     return None if value is None else str(value)
+
+
+STRICT_PREFLIGHT_BINDING_SCHEMA_V1: Final = "strict-preflight-binding-v1"
+STRICT_PREFLIGHT_BINDING_SCHEMA_V2: Final = "strict-preflight-binding-v2"
+_DOMAIN_STRICT_PREFLIGHT_BINDING_V2: Final = "idis-strict-preflight-binding-v2"
+_V2_SHA256_RE: Final = re.compile(r"^[0-9a-f]{64}$")
+_MISSING: Final = object()
+
+_V2_BINDING_MEMBER_KEYS: Final = frozenset(
+    {
+        "tenant_id",
+        "deal_id",
+        "corpus_hash",
+        "strict_profile_generation",
+        "strict_profile_hmac",
+        "pipeline_contract_version",
+        "pipeline_contract_hash",
+        "expected_consumer_edge_rule_hash",
+        "static_decision_set_hash",
+        "methodology_version_hashes",
+        "promoted_pointer_hash",
+        "provider_receipt_set_hash",
+        "dependency_receipt_set_hash",
+        "stage_selection_sha256",
+    },
+)
+_V2_ROW_BINDING_KEYS: Final = frozenset(_V2_BINDING_MEMBER_KEYS | {"binding_schema_version"})
+_V2_SHA256_MEMBER_KEYS: Final = frozenset(
+    {
+        "corpus_hash",
+        "strict_profile_hmac",
+        "pipeline_contract_hash",
+        "expected_consumer_edge_rule_hash",
+        "static_decision_set_hash",
+        "promoted_pointer_hash",
+        "provider_receipt_set_hash",
+        "dependency_receipt_set_hash",
+        "stage_selection_sha256",
+    },
+)
+
+
+class ScopedExecuteMappings(Protocol):
+    """Minimal mappings seam shared by scoped proof and stage reads."""
+
+    def all(self) -> Sequence[Mapping[str, object]]:
+        """Return every scoped row as a mapping."""
+        ...
+
+    def one_or_none(self) -> Mapping[str, object] | None:
+        """Return the single scoped row or ``None``."""
+        ...
+
+
+class ScopedExecuteResult(Protocol):
+    """Minimal result seam exposing only the mappings view."""
+
+    def mappings(self) -> ScopedExecuteMappings:
+        """Return the mapping view of this result."""
+        ...
+
+
+class ScopedExecuteConnection(Protocol):
+    """Minimal structural connection seam for scoped execute reads/writes."""
+
+    def execute(
+        self,
+        statement: Executable,
+        parameters: Mapping[str, object] | None = None,
+    ) -> ScopedExecuteResult:
+        """Execute one statement and return its result seam."""
+        ...
+
+
+@dataclass(frozen=True)
+class StrictPreflightBindingV2:
+    """Explicit V2 strict binding: the V1 members plus the stage digest."""
+
+    tenant_id: str
+    deal_id: str
+    corpus_hash: str
+    strict_profile_generation: str
+    strict_profile_hmac: str
+    pipeline_contract_version: str
+    pipeline_contract_hash: str
+    expected_consumer_edge_rule_hash: str
+    static_decision_set_hash: str
+    methodology_version_hashes: tuple[str, ...]
+    promoted_pointer_hash: str
+    provider_receipt_set_hash: str
+    dependency_receipt_set_hash: str
+    stage_selection_sha256: str
+
+    def digest(self) -> str:
+        """Return the V2 domain-tagged canonical SHA-256 digest (closed14)."""
+        payload = {
+            "corpus_hash": self.corpus_hash,
+            "deal_id": self.deal_id,
+            "dependency_receipt_set_hash": self.dependency_receipt_set_hash,
+            "expected_consumer_edge_rule_hash": self.expected_consumer_edge_rule_hash,
+            "methodology_version_hashes": list(self.methodology_version_hashes),
+            "pipeline_contract_hash": self.pipeline_contract_hash,
+            "pipeline_contract_version": self.pipeline_contract_version,
+            "promoted_pointer_hash": self.promoted_pointer_hash,
+            "provider_receipt_set_hash": self.provider_receipt_set_hash,
+            "stage_selection_sha256": self.stage_selection_sha256,
+            "static_decision_set_hash": self.static_decision_set_hash,
+            "strict_profile_generation": self.strict_profile_generation,
+            "strict_profile_hmac": self.strict_profile_hmac,
+            "tenant_id": self.tenant_id,
+        }
+        encoded = json.dumps(
+            [_DOMAIN_STRICT_PREFLIGHT_BINDING_V2, payload],
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+            allow_nan=False,
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+
+@dataclass(frozen=True)
+class StrictPreflightProofRecordV2:
+    """A verified consumed V2 strict proof row and its reciprocal run link."""
+
+    proof_id: str
+    binding: StrictPreflightBindingV2
+    binding_hash: str
+    consumed_at: datetime
+    consumed_by_run_id: str
+
+
+def _require_v2_member_str(value: object) -> str:
+    if type(value) is not str or not value:
+        raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_INVALID")
+    return value
+
+
+def _require_v2_sha256_member(value: object) -> str:
+    member = _require_v2_member_str(value)
+    if _V2_SHA256_RE.fullmatch(member) is None:
+        raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_INVALID")
+    return member
+
+
+def _require_v2_uuid_member(value: object) -> str:
+    member = _require_v2_member_str(value)
+    try:
+        _canonical_uuid_text(member)
+    except (TypeError, ValueError) as exc:
+        raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_INVALID") from exc
+    return member
+
+
+def _strict_v2_methodology_hashes(value: object) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_INVALID")
+    members: list[str] = []
+    for item in value:
+        if type(item) is not str:
+            raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_INVALID")
+        members.append(item)
+    return tuple(members)
+
+
+def build_strict_preflight_binding_v2(
+    *,
+    binding: StrictPreflightBinding,
+    selection: StageSelectionV1,
+) -> StrictPreflightBindingV2:
+    """Bind a genuine stage selection digest to a genuine V1 binding."""
+    if type(binding) is not StrictPreflightBinding or type(selection) is not StageSelectionV1:
+        raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_MISMATCH")
+    if selection.tenant_id != binding.tenant_id or selection.deal_id != binding.deal_id:
+        raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_MISMATCH")
+    return StrictPreflightBindingV2(
+        tenant_id=binding.tenant_id,
+        deal_id=binding.deal_id,
+        corpus_hash=binding.corpus_hash,
+        strict_profile_generation=binding.strict_profile_generation,
+        strict_profile_hmac=binding.strict_profile_hmac,
+        pipeline_contract_version=binding.pipeline_contract_version,
+        pipeline_contract_hash=binding.pipeline_contract_hash,
+        expected_consumer_edge_rule_hash=binding.expected_consumer_edge_rule_hash,
+        static_decision_set_hash=binding.static_decision_set_hash,
+        methodology_version_hashes=tuple(binding.methodology_version_hashes),
+        promoted_pointer_hash=binding.promoted_pointer_hash,
+        provider_receipt_set_hash=binding.provider_receipt_set_hash,
+        dependency_receipt_set_hash=binding.dependency_receipt_set_hash,
+        stage_selection_sha256=selection.canonical_sha256(),
+    )
+
+
+def strict_preflight_binding_v2_from_fields(
+    fields: Mapping[str, object],
+) -> StrictPreflightBindingV2:
+    """Strictly decode one raw V2 binding mapping into the closed 14 members.
+
+    Requires exactly the closed 14 member keys plus the nonnull
+    ``strict-preflight-binding-v2`` discriminator.  Missing, null, unknown or
+    extra keys, non-string scalars and malformed identities refuse; nothing is
+    coerced into validity.
+    """
+    if not isinstance(fields, Mapping) or set(fields) != _V2_ROW_BINDING_KEYS:
+        raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_INVALID")
+    discriminator = fields["binding_schema_version"]
+    if type(discriminator) is not str or discriminator != STRICT_PREFLIGHT_BINDING_SCHEMA_V2:
+        raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_INVALID")
+    methodology_hashes = _strict_v2_methodology_hashes(
+        fields["methodology_version_hashes"],
+    )
+    members: dict[str, object] = {}
+    for key in _V2_BINDING_MEMBER_KEYS - {"methodology_version_hashes"}:
+        value = fields[key]
+        if key in _V2_SHA256_MEMBER_KEYS:
+            members[key] = _require_v2_sha256_member(value)
+        elif key in ("tenant_id", "deal_id"):
+            members[key] = _require_v2_uuid_member(value)
+        else:
+            members[key] = _require_v2_member_str(value)
+    return StrictPreflightBindingV2(
+        tenant_id=_require_v2_uuid_member(members["tenant_id"]),
+        deal_id=_require_v2_uuid_member(members["deal_id"]),
+        corpus_hash=_require_v2_sha256_member(members["corpus_hash"]),
+        strict_profile_generation=_require_v2_member_str(
+            members["strict_profile_generation"],
+        ),
+        strict_profile_hmac=_require_v2_sha256_member(members["strict_profile_hmac"]),
+        pipeline_contract_version=_require_v2_member_str(
+            members["pipeline_contract_version"],
+        ),
+        pipeline_contract_hash=_require_v2_sha256_member(
+            members["pipeline_contract_hash"],
+        ),
+        expected_consumer_edge_rule_hash=_require_v2_sha256_member(
+            members["expected_consumer_edge_rule_hash"],
+        ),
+        static_decision_set_hash=_require_v2_sha256_member(
+            members["static_decision_set_hash"],
+        ),
+        methodology_version_hashes=methodology_hashes,
+        promoted_pointer_hash=_require_v2_sha256_member(members["promoted_pointer_hash"]),
+        provider_receipt_set_hash=_require_v2_sha256_member(
+            members["provider_receipt_set_hash"],
+        ),
+        dependency_receipt_set_hash=_require_v2_sha256_member(
+            members["dependency_receipt_set_hash"],
+        ),
+        stage_selection_sha256=_require_v2_sha256_member(
+            members["stage_selection_sha256"],
+        ),
+    )
+
+
+_V2_PROOF_RUN_SELECT: Final = """
+SELECT p.proof_id::text AS proof_id,
+       p.tenant_id::text AS tenant_id, p.deal_id::text AS deal_id,
+       p.corpus_hash, p.strict_profile_generation, p.strict_profile_hmac,
+       p.pipeline_contract_version, p.pipeline_contract_hash,
+       p.expected_consumer_edge_rule_hash, p.static_decision_set_hash,
+       p.methodology_version_hashes, p.promoted_pointer_hash,
+       p.provider_receipt_set_hash, p.dependency_receipt_set_hash,
+       p.binding_schema_version, p.stage_selection_sha256, p.binding_hash,
+       p.consumed_at, p.consumed_by_run_id::text AS consumed_by_run_id,
+       r.strict_preflight_proof_id::text AS run_strict_preflight_proof_id,
+       r.pipeline_contract_version AS run_pipeline_contract_version,
+       r.pipeline_contract_hash AS run_pipeline_contract_hash,
+       r.status AS run_status, r.mode AS run_mode
+FROM strict_preflight_proofs AS p
+JOIN runs AS r
+  ON r.tenant_id = p.tenant_id
+ AND r.deal_id = p.deal_id
+ AND r.strict_preflight_proof_id = p.proof_id
+ AND r.run_id = CAST(:run_id AS uuid)
+WHERE p.tenant_id = CAST(:tenant_id AS uuid)
+  AND p.deal_id = CAST(:deal_id AS uuid)
+  AND p.proof_id = CAST(:proof_id AS uuid)
+"""
+
+_V2_PROOF_RUN_ADMISSION_SELECT: Final = """
+SELECT p.proof_id::text AS proof_id,
+       p.tenant_id::text AS tenant_id, p.deal_id::text AS deal_id,
+       p.corpus_hash, p.strict_profile_generation, p.strict_profile_hmac,
+       p.pipeline_contract_version, p.pipeline_contract_hash,
+       p.expected_consumer_edge_rule_hash, p.static_decision_set_hash,
+       p.methodology_version_hashes, p.promoted_pointer_hash,
+       p.provider_receipt_set_hash, p.dependency_receipt_set_hash,
+       p.binding_schema_version, p.stage_selection_sha256, p.binding_hash,
+       p.consumed_at, p.consumed_by_run_id::text AS consumed_by_run_id,
+       r.strict_preflight_proof_id::text AS run_strict_preflight_proof_id,
+       r.pipeline_contract_version AS run_pipeline_contract_version,
+       r.pipeline_contract_hash AS run_pipeline_contract_hash,
+       r.status AS run_status, r.mode AS run_mode
+FROM strict_preflight_proofs AS p
+JOIN runs AS r
+  ON r.tenant_id = p.tenant_id
+ AND r.deal_id = p.deal_id
+ AND r.strict_preflight_proof_id = p.proof_id
+ AND r.run_id = CAST(:run_id AS uuid)
+ AND r.status = 'QUEUED'
+ AND r.mode = 'FULL'
+WHERE p.tenant_id = CAST(:tenant_id AS uuid)
+  AND p.deal_id = CAST(:deal_id AS uuid)
+  AND p.proof_id = CAST(:proof_id AS uuid)
+"""
+
+
+def require_consumed_strict_preflight_binding_v2(
+    conn: ScopedExecuteConnection,
+    *,
+    tenant_id: str,
+    deal_id: str,
+    run_id: str,
+    proof_id: str,
+    expected_pipeline_contract_version: str,
+    expected_pipeline_contract_hash: str,
+    expected_stage_selection_sha256: str,
+    expected_binding_hash: str,
+    require_queued_full_admission_state: bool = False,
+    strict_profile_generation: str | None = None,
+    strict_profile_hmac: str | None = None,
+) -> StrictPreflightProofRecordV2:
+    """Verify a consumed V2 proof and its reciprocal run link on one conn.
+
+    The optional queued/full admission-state check is used only by the
+    admission-time writer; the common loader deliberately does not require it.
+    Already-consumed rows stay valid even when the proof has since expired.
+    """
+    if (strict_profile_generation is None) != (strict_profile_hmac is None):
+        raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_MISMATCH")
+    if type(require_queued_full_admission_state) is not bool:
+        raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_INVALID")
+    _require_v2_member_str(expected_pipeline_contract_version)
+    _require_v2_sha256_member(expected_pipeline_contract_hash)
+    _require_v2_sha256_member(expected_stage_selection_sha256)
+    _require_v2_sha256_member(expected_binding_hash)
+    try:
+        checked_tenant = _canonical_uuid_text(tenant_id)
+        checked_deal = _canonical_uuid_text(deal_id)
+        checked_run = _canonical_uuid_text(run_id)
+        checked_proof = _canonical_uuid_text(proof_id)
+    except (TypeError, ValueError) as exc:
+        raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_INVALID") from exc
+
+    rows = (
+        conn.execute(
+            text(
+                _V2_PROOF_RUN_ADMISSION_SELECT
+                if require_queued_full_admission_state
+                else _V2_PROOF_RUN_SELECT,
+            ),
+            {
+                "tenant_id": checked_tenant,
+                "deal_id": checked_deal,
+                "run_id": checked_run,
+                "proof_id": checked_proof,
+            },
+        )
+        .mappings()
+        .all()
+    )
+    if len(rows) != 1:
+        raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_MISMATCH")
+    row = rows[0]
+
+    binding = strict_preflight_binding_v2_from_fields(
+        {key: row.get(key, _MISSING) for key in _V2_ROW_BINDING_KEYS},
+    )
+    if binding.tenant_id != checked_tenant or binding.deal_id != checked_deal:
+        raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_MISMATCH")
+    if (
+        binding.pipeline_contract_version != expected_pipeline_contract_version
+        or binding.pipeline_contract_hash != expected_pipeline_contract_hash
+        or binding.stage_selection_sha256 != expected_stage_selection_sha256
+    ):
+        raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_MISMATCH")
+
+    stored_stage_sha = row.get("stage_selection_sha256", _MISSING)
+    if type(stored_stage_sha) is not str or stored_stage_sha != expected_stage_selection_sha256:
+        raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_MISMATCH")
+    stored_binding_hash = row.get("binding_hash", _MISSING)
+    if type(stored_binding_hash) is not str or stored_binding_hash != binding.digest():
+        raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_INVALID")
+    if stored_binding_hash != expected_binding_hash:
+        raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_MISMATCH")
+
+    stored_proof_id = row.get("proof_id", _MISSING)
+    if stored_proof_id != checked_proof:
+        raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_MISMATCH")
+    consumed_by = row.get("consumed_by_run_id", _MISSING)
+    if type(consumed_by) is not str or consumed_by != checked_run:
+        raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_MISMATCH")
+    consumed_at = row.get("consumed_at", _MISSING)
+    if not isinstance(consumed_at, datetime):
+        raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_MISMATCH")
+    if (
+        row.get("run_strict_preflight_proof_id", _MISSING) != checked_proof
+        or row.get("run_pipeline_contract_version", _MISSING) != expected_pipeline_contract_version
+        or row.get("run_pipeline_contract_hash", _MISSING) != expected_pipeline_contract_hash
+    ):
+        raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_MISMATCH")
+    if require_queued_full_admission_state and (
+        row.get("run_status", _MISSING) != "QUEUED" or row.get("run_mode", _MISSING) != "FULL"
+    ):
+        raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_MISMATCH")
+    if strict_profile_generation is not None and (
+        binding.strict_profile_generation != strict_profile_generation
+        or binding.strict_profile_hmac != strict_profile_hmac
+    ):
+        raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_MISMATCH")
+    return StrictPreflightProofRecordV2(
+        proof_id=checked_proof,
+        binding=binding,
+        binding_hash=stored_binding_hash,
+        consumed_at=consumed_at,
+        consumed_by_run_id=consumed_by,
+    )

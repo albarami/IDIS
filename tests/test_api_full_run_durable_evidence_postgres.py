@@ -81,7 +81,11 @@ def test_selected_full_run_persists_durable_claims_and_evidence_for_uploaded_roo
     deal_response = client.post(
         "/v1/deals",
         headers={"X-IDIS-API-Key": pg_helpers.API_KEY},
-        json={"name": "Slice 26 Durable Evidence Deal", "company_name": "Synthetic Co"},
+        json={
+            "name": "Slice 26 Durable Evidence Deal",
+            "company_name": "Synthetic Co",
+            "stage": "SERIES_A",
+        },
     )
     assert deal_response.status_code == 201
     deal_id = str(deal_response.json()["deal_id"])

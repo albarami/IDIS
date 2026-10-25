@@ -46,6 +46,7 @@ from idis.services.runs.methodology_deterministic_calculation_helpers import (
     scope_claims,
     scope_grades,
     scope_sanads,
+    selected_pair_coordinate_defect,
 )
 from idis.validators.extraction_gate import ExtractionGateBlockedError
 
@@ -244,6 +245,20 @@ class InMemoryRunMethodologyDeterministicCalculationService:
                 rejections.append(candidate)
                 continue
             input_values, input_grades, input_sanad_ids = candidate
+
+            coordinate_defect = selected_pair_coordinate_defect(calc_type, input_claims)
+            if coordinate_defect is not None:
+                rejections.append(
+                    rejection(
+                        reason=MethodologyCalculationReason.CALCULATION_FAILED,
+                        message=coordinate_defect.message,
+                        calc_type=calc_type.value,
+                        task=task,
+                        required=required_calc.required,
+                        claim_ids=coordinate_defect.claim_ids,
+                    )
+                )
+                continue
 
             try:
                 engine_result = self._engine.run(

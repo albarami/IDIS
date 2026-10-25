@@ -244,9 +244,17 @@ class CalcRunner:
         # this module). Shared metadata source so CALC and methodology hashes align (Slice87 G1).
         from idis.services.runs.methodology_deterministic_calculation_helpers import (
             metadata_for_calc,
+            selected_pair_coordinate_defect,
         )
 
         candidate_claims = selected_claims
+        coordinate_defect = selected_pair_coordinate_defect(calc_type, candidate_claims)
+        if coordinate_defect is not None:
+            return None, _blocked_candidate(
+                calc_type=calc_type,
+                reason=BLOCKED_CALCULATION_FAILED,
+                claim_ids=coordinate_defect.claim_ids,
+            )
         return (
             CalcCandidate(
                 calc_type=calc_type,

@@ -1,7 +1,7 @@
 {
   "files": {
     "contracts/full_strict_v21_reviewed_preimage_v1.json": "2eb504ab750e9c3c96a5eeada13b22aad36c8772369c21e65d0e93705ff9cffd",
-    "openapi/IDIS_OpenAPI_v6_3.yaml": "775c91fb08c122b845f58483755d0ce323653bc32c4a44049c42c7c547ef0745",
+    "openapi/IDIS_OpenAPI_v6_3.yaml": "b227dcfe8339133c555677ce04f693c74a6e453f10e3600f9df5006b691e899c",
     "schemas/audit_event.schema.json": "03e44dcece5952081d1a25394c99421e52181ce69ea0067fa529e43ebe241a6f",
     "schemas/calc_sanad.schema.json": "10af14aa1d0329ef9de386adb702e3b55797b73c731150aade441af40297e3a5",
     "schemas/claim.schema.json": "9411359acdaa19d25871a5493325b4f1bfea6407a2c5016b895ba6ac4b849586",

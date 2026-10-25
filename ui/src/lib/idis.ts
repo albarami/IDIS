@@ -5,6 +5,7 @@
  */
 
 import { generateRequestId } from "./requestId";
+import type { components } from "./openapi";
 
 // ============================================================================
 // Error Envelope (per OpenAPI spec)
@@ -240,6 +241,14 @@ export interface RunListItem {
   finished_at?: string | null;
 }
 
+/** Safe tenant methodology-version metadata row (GET /v1/methodology-versions). */
+export type MethodologyVersionSafe =
+  components["schemas"]["MethodologyVersionSafeResponse"];
+/** Methodology family filter for the safe methodology-version listing. */
+export type MethodologyType = components["schemas"]["MethodologyType"];
+/** Genuine generated start-run request (FULL requires methodology_selection). */
+export type StartRunRequest = components["schemas"]["StartRunRequest"];
+
 export interface DebateSession {
   debate_id: string;
   deal_id: string;
@@ -409,11 +418,7 @@ export const idis = {
 
   // Runs
   runs: {
-    start: (
-      dealId: string,
-      data: { mode: "SNAPSHOT" | "FULL"; strict_preflight_proof_id?: string },
-      idempotencyKey?: string
-    ) =>
+    start: (dealId: string, data: StartRunRequest, idempotencyKey?: string) =>
       request<{ run_id: string; status: string }>(`/v1/deals/${dealId}/runs`, {
         method: "POST",
         body: data,
@@ -424,6 +429,12 @@ export const idis = {
 
     list: (dealId: string, params?: { limit?: number; cursor?: string }) =>
       request<PaginatedResponse<RunListItem>>(`/v1/deals/${dealId}/runs`, { params }),
+  },
+
+  // Methodology versions (safe metadata only — no private source/registry bodies)
+  methodology: {
+    list: (params?: { methodology_type?: MethodologyType }) =>
+      request<MethodologyVersionSafe[]>("/v1/methodology-versions", { params }),
   },
 
   // Debate

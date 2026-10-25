@@ -115,6 +115,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/deals/{dealId}/documents/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload and ingest one document
+         * @description Uploads raw bytes for a single supported document and ingests them through the existing compliance-enforced object store and ingestion service. This endpoint does not accept local filesystem paths, folder uploads, raw text, spans, excerpts, or pre-existing object keys.
+         */
+        post: operations["uploadDealDocument"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/deals/{dealId}/documents/{documentId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get durable document summary
+         * @description Retrieves a safe deal-scoped durable document summary. The returned document_id is the value clients pass to RunSource.document_ids. Raw bytes, parsed text, spans, and excerpts are not returned.
+         */
+        get: operations["getDealDocumentSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/documents/{docId}/ingest": {
         parameters: {
             query?: never;
@@ -126,6 +166,90 @@ export interface paths {
         put?: never;
         /** Trigger ingestion for a document */
         post: operations["ingestDocument"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/documents/{docId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a document
+         * @description Retrieve a document by ID. Requires BYOK key active for Class2/3 data.
+         */
+        get: operations["getDocument"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a document
+         * @description Delete a document by ID. Blocked if document is under legal hold.
+         */
+        delete: operations["deleteDocument"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/documents/{docId}/spans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get document spans
+         * @description Retrieve spans for a document after ingestion.
+         */
+        get: operations["getDocumentSpans"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/documents/{docId}/content-integrity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Verify durable document content integrity
+         * @description Re-hashes the authenticated persistent object in bounded chunks and returns only safe hash, size, version, URI-hash, and backend proof. Raw URI/path and object bytes are never returned.
+         */
+        get: operations["getDocumentContentIntegrity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/documents/{docId}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream authenticated durable document content
+         * @description Streams the exact authenticated persistent object in bounded chunks. Safe headers bind the response to its SHA-256, byte size, and immutable object version. Storage URI, object metadata, and private filenames are never emitted.
+         */
+        get: operations["streamDocumentContent"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -349,10 +473,120 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List runs for a deal
+         * @description Returns a deal's runs as safe summaries (ids, status, mode, timestamps), newest first, cursor-paginated. Per-run blocker detail and the step ledger are in GET /v1/runs/{runId}.
+         */
+        get: operations["listDealRuns"];
         put?: never;
         /** Start an IDIS pipeline run (snapshot or full) */
         post: operations["startRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/deals/{dealId}/data-room-packages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List data-room packages for a deal */
+        get: operations["listDataRoomPackages"];
+        put?: never;
+        /** Create a durable data-room package from existing deal documents */
+        post: operations["createDataRoomPackage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/deals/{dealId}/data-room-packages/{packageId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a data-room package with its file ledger */
+        get: operations["getDataRoomPackage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/methodology-versions/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Import the configured server-side CDD or FDD methodology source */
+        post: operations["importMethodologyVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/methodology-versions/{methodology_version_record_id}/freeze": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revalidate and freeze an imported methodology version */
+        post: operations["freezeMethodologyVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/methodology-versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List safe methodology-version metadata for the current tenant */
+        get: operations["listMethodologyVersions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/strict-readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get strict full-live readiness (reviewer-safe)
+         * @description Returns the safe strict full-live readiness review - component modes, blocker counts + blocking component names, and required env-var names / service labels only. Excludes internal evidence, env sources, free-text blocker messages, and provider matrices.
+         */
+        get: operations["getStrictReadiness"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -376,6 +610,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/runs/{runId}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retry a failed run */
+        post: operations["retryRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/runs/{runId}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resume a failed run */
+        post: operations["resumeRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/runs/{runId}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel a queued or running run */
+        post: operations["cancelRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/deals/{dealId}/debate": {
         parameters: {
             query?: never;
@@ -385,7 +670,11 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Start LangGraph debate session (full analysis path) */
+        /**
+         * Start LangGraph debate session (full analysis path)
+         * @description Starts a debate session and returns a RunRef. The returned run_id
+         *     is also the debate_id and should be used when calling GET /v1/debate/{debateId}.
+         */
         post: operations["startDebate"];
         delete?: never;
         options?: never;
@@ -400,7 +689,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get debate session (transcript + decisions) */
+        /**
+         * Get debate session (transcript + decisions)
+         * @description Retrieves a debate session. The debateId is the run_id returned
+         *     from POST /v1/deals/{dealId}/debate.
+         */
         get: operations["getDebate"];
         put?: never;
         post?: never;
@@ -463,6 +756,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/deliverables/{deliverableId}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download one completed deliverable artifact */
+        get: operations["downloadDeliverableContent"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/deals/{dealId}/runs/{runId}/product-bundle/manifest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Review a sanitized product bundle manifest for a run */
+        get: operations["getProductBundleManifest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/audit/events": {
         parameters: {
             query?: never;
@@ -472,6 +799,40 @@ export interface paths {
         };
         /** Query audit events */
         get: operations["listAuditEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/enrichment/fetch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Fetch enrichment data from a registered provider */
+        post: operations["fetchEnrichment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/enrichment/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List registered enrichment providers */
+        get: operations["listEnrichmentProviders"];
         put?: never;
         post?: never;
         delete?: never;
@@ -514,10 +875,293 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/deals/{dealId}/assignments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Assign an actor to a deal (ADMIN only) */
+        post: operations["createDealAssignment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/deals/{dealId}/assignments/{actorId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove a direct deal assignment (ADMIN only) */
+        delete: operations["deleteDealAssignment"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create a group (ADMIN only) */
+        post: operations["createGroup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/groups/{groupId}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add an actor to a group (ADMIN only) */
+        post: operations["addGroupMember"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/groups/{groupId}/members/{actorId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove an actor from a group (ADMIN only) */
+        delete: operations["removeGroupMember"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/deals/{dealId}/group-assignments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Assign a group to a deal (ADMIN only) */
+        post: operations["assignGroupToDeal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/deals/{dealId}/group-assignments/{groupId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Unassign a group from a deal (ADMIN only) */
+        delete: operations["unassignGroupFromDeal"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/break-glass/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Issue a single-use break-glass grant for the requesting admin (ADMIN only) */
+        post: operations["createBreakGlassGrant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/byok/key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Configure the tenant BYOK key policy (ADMIN only; responses carry hash only) */
+        post: operations["configureByokKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/byok/key/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rotate the tenant BYOK key to a new alias (ADMIN only) */
+        post: operations["rotateByokKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/byok/key/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke the tenant BYOK key; Class2/3 access denies until re-keyed (ADMIN only) */
+        post: operations["revokeByokKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/legal-holds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Apply a legal hold; the target cannot be deleted until lifted (ADMIN only) */
+        post: operations["applyLegalHold"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/legal-holds/{holdId}/lift": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Lift a legal hold (ADMIN only; unknown or cross-tenant ids answer 404) */
+        post: operations["liftLegalHold"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/erasure-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create a durable per-deal erasure request (ADMIN only; executed separately) */
+        post: operations["createErasureRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/erasure-requests/{requestId}/execute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Execute a pending erasure request (ADMIN only; hold-aware, full deal removal) */
+        post: operations["executeErasureRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/compliance-exports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Build the tenant's sanitized compliance export bundle (ADMIN only) */
+        post: operations["createComplianceExport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @example {
+         *       "code": "not_found",
+         *       "message": "Deal a1b2c3d4-e5f6-7890-abcd-ef1234567890 not found",
+         *       "details": {
+         *         "resource_type": "deal",
+         *         "resource_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+         *       },
+         *       "request_id": "req_8f3a2b1c-0000-0000-0000-000000000001"
+         *     }
+         */
         Error: {
             /** @example bad_request */
             code: string;
@@ -536,7 +1180,13 @@ export interface components {
             /** @example Asia/Qatar */
             timezone: string;
             /** @example me-south-1 */
-            data_region: string;
+            data_region: string | null;
+        };
+        ByokKeyResponse: {
+            /** @description 16-hex SHA-256 prefix of the key alias; the raw alias is never returned */
+            key_alias_hash: string;
+            /** @enum {string} */
+            key_state: "ACTIVE" | "REVOKED";
         };
         /** @enum {string} */
         DealStatus: "NEW" | "INTAKE" | "SCREENING" | "DEEP_DIVE" | "IC_READY" | "DECLINED" | "ARCHIVED";
@@ -584,6 +1234,11 @@ export interface components {
         DocumentArtifact: {
             /** Format: uuid */
             doc_id: string;
+            /**
+             * Format: uuid
+             * @description Durable parsed document ID accepted by RunSource.document_ids.
+             */
+            document_id?: string | null;
             /** Format: uuid */
             deal_id: string;
             /** @enum {string} */
@@ -593,9 +1248,21 @@ export interface components {
             version_id: string;
             /** Format: date-time */
             ingested_at: string;
+            /** @enum {string|null} */
+            parse_status?: "PARSED" | "FAILED" | null;
+            /** @enum {string|null} */
+            terminal_disposition?: "DOCUMENT_NO_SUBSTANTIVE_CONTENT_CONFIRMED" | null;
+            /**
+             * @description Canonical durable parsed-document type, distinct from artifact classification.
+             * @enum {string|null}
+             */
+            parsed_doc_type?: "PDF" | "PPTX" | "XLSX" | "DOCX" | "AUDIO" | "VIDEO" | "IMAGE" | "HTML" | "TEXT" | null;
             sha256?: string;
             uri?: string;
             metadata?: {
+                [key: string]: unknown;
+            };
+            source_metadata?: {
                 [key: string]: unknown;
             };
         };
@@ -604,7 +1271,7 @@ export interface components {
             title: string;
             /** @example DocSend */
             source_system?: string;
-            /** @description External link or object storage uri */
+            /** @description Existing object storage URI. file:// and local filesystem paths are rejected. */
             uri?: string;
             sha256?: string;
             metadata?: {
@@ -778,27 +1445,219 @@ export interface components {
             items: components["schemas"]["Sanad"][];
             next_cursor?: string | null;
         };
+        StepError: {
+            code: string;
+            message: string;
+        };
+        RunStepResponse: {
+            step_name: string;
+            /** @enum {string} */
+            status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED" | "BLOCKED";
+            /** Format: date-time */
+            started_at?: string | null;
+            /** Format: date-time */
+            finished_at?: string | null;
+            summary?: {
+                [key: string]: unknown;
+            };
+            error?: components["schemas"]["StepError"];
+            /** @default 0 */
+            retry_count: number;
+        };
+        RunRefStepResponse: {
+            step_name: string;
+            /** @enum {string} */
+            status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED" | "BLOCKED";
+            /** Format: date-time */
+            started_at?: string | null;
+            /** Format: date-time */
+            finished_at?: string | null;
+            error?: components["schemas"]["StepError"];
+            /** @default 0 */
+            retry_count: number;
+        };
         RunRef: {
             /** Format: uuid */
             run_id: string;
             /** @enum {string} */
-            status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED";
+            status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
+            /**
+             * Format: uuid
+             * @description Durable parsed document ID produced by document ingestion.
+             */
+            document_id?: string | null;
+            steps?: components["schemas"]["RunRefStepResponse"][];
+            block_reason?: string | null;
         };
         StartRunRequest: {
-            /** @enum {string} */
+            /**
+             * @description FULL requires methodology_selection; SNAPSHOT forbids it.
+             * @enum {string}
+             */
             mode: "SNAPSHOT" | "FULL";
-            /** Fresh one-use proof required when strict full-live FULL admission is enabled. */
+            /**
+             * Format: uuid
+             * @description Fresh one-use proof required when strict full-live FULL admission is enabled.
+             */
             strict_preflight_proof_id?: string;
+            source?: components["schemas"]["RunSource"];
+            /** @description Required for FULL and rejected for SNAPSHOT. */
+            methodology_selection?: components["schemas"]["RunMethodologySelectionRequest"];
+        };
+        RunMethodologySelectionRequest: {
+            /** Format: uuid */
+            commercial_dd_version_record_id: string;
+            /** Format: uuid */
+            financial_dd_version_record_id: string;
+        };
+        /** @enum {string} */
+        MethodologyType: "commercial_dd" | "financial_dd";
+        MethodologyVersionImportRequest: {
+            methodology_type: components["schemas"]["MethodologyType"];
+        };
+        MethodologyVersionSafeResponse: {
+            /** Format: uuid */
+            methodology_version_record_id: string;
+            methodology_version_id: string;
+            methodology_type: components["schemas"]["MethodologyType"];
+            version_label: string;
+            source_sha256: string;
+            source_byte_count: number;
+            source_contract_hash: string;
+            source_trace_digest: string;
+            registry_hash: string;
+            version_hash: string;
+            question_count: number;
+            source_section_count: number;
+            header_row: number | null;
+            /** @enum {string} */
+            status: "IMPORTED" | "FROZEN";
+            /** Format: date-time */
+            imported_at: string;
+            /** Format: date-time */
+            frozen_at: string | null;
+        };
+        RunSource: {
+            /** @enum {string} */
+            type: "deal_documents";
+            document_ids: string[];
+        };
+        SourcePackageManifestFile: {
+            sequence: number;
+            generated_upload_name: string;
+            source_locator_sha256: string;
+            content_sha256: string;
+            size_bytes: number;
+            extension: string;
+            /** Format: uuid */
+            document_id: string;
+            /** Format: uuid */
+            doc_id: string;
+        };
+        SourcePackageManifest: {
+            /** @enum {string} */
+            schema_version: "source-package-manifest-v1";
+            company_alias: string;
+            deal_alias: string;
+            document_set_alias: string;
+            run_alias: string;
+            ledger_alias: string;
+            package_alias: string;
+            source_tree_fingerprint: string;
+            file_count: number;
+            total_bytes: number;
+            files: components["schemas"]["SourcePackageManifestFile"][];
+            manifest_sha256: string;
+        };
+        SourcePackageManifestSummary: {
+            /** @enum {string} */
+            schema_version: "source-package-manifest-v1";
+            company_alias: string;
+            deal_alias: string;
+            document_set_alias: string;
+            run_alias: string;
+            ledger_alias: string;
+            package_alias: string;
+            source_tree_fingerprint: string;
+            file_count: number;
+            total_bytes: number;
+            manifest_sha256: string;
+        };
+        CreateDataRoomPackageRequest: {
+            document_ids: string[];
+            source_manifest?: components["schemas"]["SourcePackageManifest"] | null;
+        };
+        DataRoomPackageRef: {
+            /** Format: uuid */
+            package_id: string;
+            /** Format: uuid */
+            deal_id: string;
+            /** @enum {string} */
+            status: "OPEN" | "SEALED";
+            file_count: number;
+            counts_by_status: {
+                [key: string]: number;
+            };
+            counts_by_reason_code: {
+                [key: string]: number;
+            };
+            created_at: string;
+            source_manifest?: components["schemas"]["SourcePackageManifestSummary"];
+        };
+        DataRoomPackageList: {
+            items: components["schemas"]["DataRoomPackageRef"][];
+        };
+        DataRoomPackageFileEntry: {
+            /** Format: uuid */
+            file_entry_id?: string;
+            sequence?: number;
+            path_hash?: string;
+            extension?: string | null;
+            /** @enum {string} */
+            file_status?: "supported" | "deferred" | "blocked";
+            support_status?: string;
+            triage_status?: string;
+            parse_status?: string;
+            reason_codes?: string[];
+            error_codes?: string[];
+            sha256?: string | null;
+            /** Format: uuid */
+            doc_id?: string | null;
+            /** Format: uuid */
+            document_id?: string | null;
+        };
+        DataRoomPackageRecord: {
+            /** Format: uuid */
+            package_id: string;
+            /** Format: uuid */
+            deal_id: string;
+            /** @enum {string} */
+            status: "OPEN" | "SEALED";
+            file_count: number;
+            counts_by_status: {
+                [key: string]: number;
+            };
+            counts_by_reason_code: {
+                [key: string]: number;
+            };
+            created_at: string;
+            source_manifest?: components["schemas"]["SourcePackageManifestSummary"];
+            files: components["schemas"]["DataRoomPackageFileEntry"][];
         };
         RunStatus: {
             /** Format: uuid */
             run_id: string;
             /** @enum {string} */
-            status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED";
+            status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
+            /** @enum {string} */
+            mode: "SNAPSHOT" | "FULL";
             /** Format: date-time */
             started_at: string;
             /** Format: date-time */
             finished_at?: string | null;
+            source?: components["schemas"]["RunSource"];
+            steps?: components["schemas"]["RunStepResponse"][];
+            block_reason?: string | null;
         };
         RunCalcRequest: {
             calc_name: string;
@@ -808,15 +1667,52 @@ export interface components {
             /** @default 5 */
             max_rounds: number;
         };
+        StrictReadinessComponentReview: {
+            component_name: string;
+            /** @enum {string} */
+            status: "live-wired-and-used" | "code-exists-but-not-wired" | "configured-but-failed-health-check" | "missing-credentials" | "missing-infrastructure" | "not-implemented";
+            may_proceed: boolean;
+            required_env_vars?: string[];
+            required_services?: string[];
+        };
+        StrictReadinessReview: {
+            required: boolean;
+            may_proceed: boolean;
+            blocker_count: number;
+            /** @description One-way identity of the strict server launch profile, null outside strict mode. */
+            profile_hmac_sha256: string | null;
+            blocking_components?: string[];
+            components?: components["schemas"]["StrictReadinessComponentReview"][];
+        };
+        RunListItem: {
+            /** Format: uuid */
+            run_id: string;
+            /** Format: uuid */
+            deal_id: string;
+            status: string;
+            mode: string;
+            /** Format: date-time */
+            started_at: string;
+            /** Format: date-time */
+            finished_at?: string | null;
+        };
+        PaginatedRunList: {
+            items: components["schemas"]["RunListItem"][];
+            next_cursor?: string | null;
+        };
+        DebateRoundSummary: {
+            round_number: number;
+            role: string;
+            claim_refs?: string[];
+            calc_refs?: string[];
+        };
         DebateSession: {
             /** Format: uuid */
             debate_id: string;
             /** Format: uuid */
             deal_id: string;
             protocol_version: string;
-            rounds?: {
-                [key: string]: unknown;
-            }[];
+            rounds: components["schemas"]["DebateRoundSummary"][];
             /** Format: date-time */
             created_at: string;
         };
@@ -879,6 +1775,23 @@ export interface components {
             uri?: string | null;
             /** Format: date-time */
             created_at: string;
+            /** Format: uuid */
+            run_id?: string | null;
+            format?: string | null;
+        };
+        ProductBundleManifestReview: {
+            /** Format: uuid */
+            tenant_id: string;
+            /** Format: uuid */
+            deal_id: string;
+            /** Format: uuid */
+            run_id: string;
+            /** Format: date-time */
+            generated_at?: string | null;
+            artifact_count: number;
+            artifacts: {
+                [key: string]: unknown;
+            }[];
         };
         AuditEvent: {
             /** Format: uuid */
@@ -974,6 +1887,57 @@ export interface components {
             summary: components["schemas"]["TruthDashboardSummary"];
             claims: components["schemas"]["PaginatedClaimList"];
         };
+        EnrichmentQuery: {
+            cik?: string | null;
+            company_name?: string | null;
+            ticker?: string | null;
+            lei?: string | null;
+            jurisdiction?: string | null;
+        };
+        EnrichmentFetchRequest: {
+            provider_id: string;
+            /** @enum {string} */
+            entity_type: "COMPANY" | "PERSON" | "DEAL";
+            query: components["schemas"]["EnrichmentQuery"];
+            requested_fields?: string[] | null;
+            /**
+             * @default DUE_DILIGENCE
+             * @enum {string}
+             */
+            purpose: "SANAD_EVIDENCE" | "KYC" | "DUE_DILIGENCE";
+        };
+        EnrichmentProvenance: {
+            source_id: string;
+            /** Format: date-time */
+            retrieved_at: string;
+            /** @enum {string} */
+            rights_class: "GREEN" | "YELLOW" | "RED";
+            raw_ref_hash: string;
+            identifiers_used?: {
+                [key: string]: string;
+            };
+        };
+        EnrichmentFetchResponse: {
+            /** @enum {string} */
+            status: "HIT" | "MISS" | "ERROR" | "BLOCKED_RIGHTS" | "BLOCKED_MISSING_BYOL";
+            normalized: {
+                [key: string]: unknown;
+            };
+            provenance?: components["schemas"]["EnrichmentProvenance"];
+            /** Format: date-time */
+            expires_at?: string | null;
+        };
+        EnrichmentProviderInfo: {
+            provider_id: string;
+            /** @enum {string} */
+            rights_class: "GREEN" | "YELLOW" | "RED";
+            requires_byol: boolean;
+            cache_ttl_seconds: number;
+            cache_no_store: boolean;
+        };
+        EnrichmentProviderListResponse: {
+            providers: components["schemas"]["EnrichmentProviderInfo"][];
+        };
     };
     responses: {
         /** @description Unauthorized */
@@ -1012,9 +1976,37 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
+        /** @description Forbidden */
+        Forbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Service Unavailable */
+        ServiceUnavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Internal Server Error */
+        InternalError: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
     };
     parameters: {
         DealId: string;
+        DataRoomPackageId: string;
         DocId: string;
         ClaimId: string;
         RunId: string;
@@ -1049,11 +2041,16 @@ export interface operations {
                 content: {
                     "application/json": {
                         /** @example ok */
-                        status?: string;
+                        status: string;
                         /** Format: date-time */
-                        time?: string;
+                        time: string;
                         /** @example 6.3 */
-                        version?: string;
+                        version: string;
+                        /**
+                         * Format: uuid
+                         * @description Opaque per-application boot identity for restart verification.
+                         */
+                        boot_id: string;
                     };
                 };
             };
@@ -1120,6 +2117,21 @@ export interface operations {
         };
         requestBody: {
             content: {
+                /**
+                 * @example {
+                 *       "name": "Series A - Acme Robotics",
+                 *       "company_name": "Acme Robotics Inc.",
+                 *       "stage": "SERIES_A",
+                 *       "tags": [
+                 *         "deep-tech",
+                 *         "robotics",
+                 *         "MENA"
+                 *       ],
+                 *       "external_refs": {
+                 *         "dealcloud_id": "DC-4821"
+                 *       }
+                 *     }
+                 */
                 "application/json": components["schemas"]["CreateDealRequest"];
             };
         };
@@ -1130,6 +2142,22 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
+                    /**
+                     * @example {
+                     *       "deal_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                     *       "name": "Series A - Acme Robotics",
+                     *       "company_name": "Acme Robotics Inc.",
+                     *       "status": "NEW",
+                     *       "stage": "SERIES_A",
+                     *       "tags": [
+                     *         "deep-tech",
+                     *         "robotics",
+                     *         "MENA"
+                     *       ],
+                     *       "created_at": "2026-02-06T08:00:00Z",
+                     *       "updated_at": "2026-02-06T08:00:00Z"
+                     *     }
+                     */
                     "application/json": components["schemas"]["Deal"];
                 };
             };
@@ -1262,11 +2290,76 @@ export interface operations {
         };
         requestBody: {
             content: {
+                /**
+                 * @example {
+                 *       "doc_type": "PITCH_DECK",
+                 *       "title": "Acme Robotics Series A Deck v3",
+                 *       "source_system": "DocSend",
+                 *       "uri": "https://docsend.com/view/abc123",
+                 *       "sha256": "e3b0c44298fc1c149afbf4c8996fb924...",
+                 *       "auto_ingest": true
+                 *     }
+                 */
                 "application/json": components["schemas"]["CreateDocumentRequest"];
             };
         };
         responses: {
             /** @description Document created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "doc_id": "d1e2f3a4-b5c6-7890-abcd-ef1234567890",
+                     *       "deal_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                     *       "doc_type": "PITCH_DECK",
+                     *       "title": "Acme Robotics Series A Deck v3",
+                     *       "source_system": "DocSend",
+                     *       "version_id": "v3",
+                     *       "ingested_at": "2026-02-06T08:05:00Z",
+                     *       "sha256": "e3b0c44298fc1c149afbf4c8996fb924...",
+                     *       "uri": "s3://idis-artifacts/tenant-01/deals/a1b2/docs/d1e2.pdf"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["DocumentArtifact"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    uploadDealDocument: {
+        parameters: {
+            query: {
+                /** @description File name only; path-like values are rejected. */
+                filename: string;
+                doc_type: components["schemas"]["DocumentArtifact"]["doc_type"];
+                /** @description Optional SHA-256 digest to verify the uploaded bytes. */
+                sha256?: string;
+                source_system?: string;
+            };
+            header?: {
+                /** @description Idempotency key for safe retries on POST/PATCH operations. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                /** @description Safe source-contract digest required when a signed no-substantive-content admission may apply. */
+                "X-IDIS-Source-Tree-Fingerprint"?: string;
+            };
+            path: {
+                dealId: components["parameters"]["DealId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description Document uploaded and ingested */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -1279,6 +2372,58 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            /** @description Uploaded document is too large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Unsupported media type */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Document parsing reached a terminal fail-closed disposition */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getDealDocumentSummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dealId: components["parameters"]["DealId"];
+                documentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Document summary */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentArtifact"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
         };
     };
     ingestDocument: {
@@ -1295,6 +2440,11 @@ export interface operations {
         };
         requestBody?: {
             content: {
+                /**
+                 * @example {
+                 *       "priority": "HIGH"
+                 *     }
+                 */
                 "application/json": {
                     /**
                      * @default NORMAL
@@ -1311,11 +2461,217 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
+                    /**
+                     * @example {
+                     *       "run_id": "r1a2b3c4-d5e6-7890-abcd-ef1234567890",
+                     *       "status": "QUEUED",
+                     *       "document_id": "550e8400-e29b-41d4-a716-446655440000"
+                     *     }
+                     */
                     "application/json": components["schemas"]["RunRef"];
                 };
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    getDocument: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                docId: components["parameters"]["DocId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Document retrieved successfully */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        doc_id: string;
+                        tenant_id: string;
+                        /** Format: uuid */
+                        deal_id: string;
+                        doc_type: string;
+                        title: string;
+                        source_system: string;
+                        version_id: string;
+                        /** Format: date-time */
+                        ingested_at: string;
+                        sha256?: string | null;
+                        uri?: string | null;
+                        metadata?: Record<string, never> | null;
+                        /** @description Base64-encoded document content from storage */
+                        content_b64?: string;
+                        /** @description SHA256 hex digest of document content */
+                        content_sha256?: string;
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteDocument: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                docId: components["parameters"]["DocId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Document deleted successfully */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        doc_id: string;
+                        deleted: boolean;
+                        message: string;
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getDocumentSpans: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                docId: components["parameters"]["DocId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Spans retrieved successfully */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: {
+                            /** Format: uuid */
+                            span_id: string;
+                            /** Format: uuid */
+                            document_id: string;
+                            /** @enum {string} */
+                            span_type: "PAGE_TEXT" | "PARAGRAPH" | "CELL" | "TIMECODE";
+                            locator: Record<string, never>;
+                            text_excerpt?: string | null;
+                            content_hash: string | null;
+                        }[];
+                        total: number;
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getDocumentContentIntegrity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                docId: components["parameters"]["DocId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Durable object integrity verified */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        schema_version: "durable-object-integrity-v1";
+                        /** Format: uuid */
+                        doc_id: string;
+                        content_sha256: string;
+                        size_bytes: number;
+                        uri_sha256: string;
+                        /** Format: uuid */
+                        version_id: string;
+                        backend: string;
+                        /** @enum {boolean} */
+                        streaming_verified: true;
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    streamDocumentContent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                docId: components["parameters"]["DocId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Exact durable object stream */
+            200: {
+                headers: {
+                    "Content-Length": number;
+                    "X-IDIS-Content-SHA256": string;
+                    "X-IDIS-Content-Size": number;
+                    "X-IDIS-Object-Version": string;
+                    "X-IDIS-Stream-Contract": "durable-object-stream-v1";
+                    "Cache-Control": "no-store";
+                    "X-Content-Type-Options": "nosniff";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Access denied by compliance policy */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            /** @description Persistent object stream unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     listDealClaims: {
@@ -1362,6 +2718,29 @@ export interface operations {
         };
         requestBody: {
             content: {
+                /**
+                 * @example {
+                 *       "claim_class": "FINANCIAL",
+                 *       "claim_text": "ARR of $4.2M as of Q3 2025",
+                 *       "predicate": "ARR",
+                 *       "value": {
+                 *         "value": 4200000,
+                 *         "unit": "USD",
+                 *         "currency": "USD",
+                 *         "as_of": "2025-09-30",
+                 *         "time_window": {
+                 *           "label": "Q3 2025",
+                 *           "start_date": "2025-07-01",
+                 *           "end_date": "2025-09-30"
+                 *         }
+                 *       },
+                 *       "evidence_ids": [
+                 *         "e1a2b3c4-d5e6-7890-abcd-000000000001"
+                 *       ],
+                 *       "materiality": "HIGH",
+                 *       "ic_bound": true
+                 *     }
+                 */
                 "application/json": components["schemas"]["CreateClaimRequest"];
             };
         };
@@ -1372,6 +2751,33 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
+                    /**
+                     * @example {
+                     *       "claim_id": "c1a2b3c4-d5e6-7890-abcd-ef1234567890",
+                     *       "deal_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                     *       "claim_class": "FINANCIAL",
+                     *       "claim_text": "ARR of $4.2M as of Q3 2025",
+                     *       "predicate": "ARR",
+                     *       "value": {
+                     *         "value": 4200000,
+                     *         "unit": "USD",
+                     *         "currency": "USD",
+                     *         "as_of": "2025-09-30"
+                     *       },
+                     *       "sanad_id": null,
+                     *       "claim_grade": "C",
+                     *       "corroboration": {
+                     *         "level": "AHAD",
+                     *         "independent_chain_count": 1
+                     *       },
+                     *       "claim_verdict": "UNVERIFIED",
+                     *       "claim_action": "NONE",
+                     *       "defect_ids": [],
+                     *       "materiality": "HIGH",
+                     *       "ic_bound": true,
+                     *       "created_at": "2026-02-06T08:10:00Z"
+                     *     }
+                     */
                     "application/json": components["schemas"]["Claim"];
                 };
             };
@@ -1820,6 +3226,32 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
         };
     };
+    listDealRuns: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                dealId: components["parameters"]["DealId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paginated run list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedRunList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
     startRun: {
         parameters: {
             query?: never;
@@ -1834,6 +3266,22 @@ export interface operations {
         };
         requestBody: {
             content: {
+                /**
+                 * @example {
+                 *       "mode": "FULL",
+                 *       "strict_preflight_proof_id": "00000000-0000-4000-8000-000000000001",
+                 *       "source": {
+                 *         "type": "deal_documents",
+                 *         "document_ids": [
+                 *           "550e8400-e29b-41d4-a716-446655440000"
+                 *         ]
+                 *       },
+                 *       "methodology_selection": {
+                 *         "commercial_dd_version_record_id": "9f8e7d6c-5b4a-43c2-9182-736455667788",
+                 *         "financial_dd_version_record_id": "1a2b3c4d-5e6f-47a8-9b0c-1d2e3f4a5b6c"
+                 *       }
+                 *     }
+                 */
                 "application/json": components["schemas"]["StartRunRequest"];
             };
         };
@@ -1844,10 +3292,193 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
+                    /**
+                     * @example {
+                     *       "run_id": "f1a2b3c4-d5e6-7890-abcd-ef1234567890",
+                     *       "status": "QUEUED"
+                     *     }
+                     */
                     "application/json": components["schemas"]["RunRef"];
                 };
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    listDataRoomPackages: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dealId: components["parameters"]["DealId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Data-room packages */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataRoomPackageList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createDataRoomPackage: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Idempotency key for safe retries on POST/PATCH operations. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                dealId: components["parameters"]["DealId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateDataRoomPackageRequest"];
+            };
+        };
+        responses: {
+            /** @description Data-room package created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataRoomPackageRef"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getDataRoomPackage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dealId: components["parameters"]["DealId"];
+                packageId: components["parameters"]["DataRoomPackageId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Data-room package record */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataRoomPackageRecord"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    importMethodologyVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MethodologyVersionImportRequest"];
+            };
+        };
+        responses: {
+            /** @description Imported immutable-source methodology version metadata */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MethodologyVersionSafeResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    freezeMethodologyVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                methodology_version_record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Frozen methodology version metadata */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MethodologyVersionSafeResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    listMethodologyVersions: {
+        parameters: {
+            query?: {
+                methodology_type?: components["schemas"]["MethodologyType"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Tenant-scoped methodology versions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MethodologyVersionSafeResponse"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    getStrictReadiness: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Strict full-live readiness review */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrictReadinessReview"];
+                };
+            };
             401: components["responses"]["Unauthorized"];
         };
     };
@@ -1875,6 +3506,81 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
+    retryRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runId: components["parameters"]["RunId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Run requeued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunRef"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    resumeRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runId: components["parameters"]["RunId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Run requeued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunRef"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    cancelRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runId: components["parameters"]["RunId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Run cancelled */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunRef"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
     startDebate: {
         parameters: {
             query?: never;
@@ -1889,16 +3595,31 @@ export interface operations {
         };
         requestBody: {
             content: {
+                /**
+                 * @example {
+                 *       "protocol_version": "1.0",
+                 *       "max_rounds": 5
+                 *     }
+                 */
                 "application/json": components["schemas"]["StartDebateRequest"];
             };
         };
         responses: {
-            /** @description Debate started */
+            /**
+             * @description Debate started. The run_id in the response is the debate_id
+             *     for subsequent GET /v1/debate/{debateId} calls.
+             */
             202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
+                    /**
+                     * @example {
+                     *       "run_id": "db1a2b3c-d5e6-7890-abcd-ef1234567890",
+                     *       "status": "QUEUED"
+                     *     }
+                     */
                     "application/json": components["schemas"]["RunRef"];
                 };
             };
@@ -2058,6 +3779,12 @@ export interface operations {
         };
         requestBody: {
             content: {
+                /**
+                 * @example {
+                 *       "deliverable_type": "IC_MEMO",
+                 *       "format": "PDF"
+                 *     }
+                 */
                 "application/json": components["schemas"]["GenerateDeliverableRequest"];
             };
         };
@@ -2073,6 +3800,59 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    downloadDeliverableContent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                deliverableId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deliverable artifact bytes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                    "application/pdf": string;
+                    "application/json": string;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    getProductBundleManifest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dealId: components["parameters"]["DealId"];
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sanitized product bundle manifest */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductBundleManifestReview"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     listAuditEvents: {
@@ -2098,6 +3878,53 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PaginatedAuditEventList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    fetchEnrichment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnrichmentFetchRequest"];
+            };
+        };
+        responses: {
+            /** @description Enrichment result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnrichmentFetchResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listEnrichmentProviders: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Provider list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnrichmentProviderListResponse"];
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -2151,6 +3978,619 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    createDealAssignment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    actor_id: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Assignment created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteDealAssignment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Assignment removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Group created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    addGroupMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    actor_id: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Member added */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    removeGroupMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Member removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    assignGroupToDeal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    group_id: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Group assigned */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    unassignGroupFromDeal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Group unassigned */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createBreakGlassGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: uuid */
+                    deal_id: string;
+                    justification: string;
+                    /** @description Requested validity window; the core clamps to [60, 3600] seconds */
+                    duration_seconds?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Grant issued; the token is returned once and never logged or audited raw */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        grant_id: string;
+                        token: string;
+                        /** Format: date-time */
+                        expires_at: string;
+                        /** Format: uuid */
+                        deal_id: string;
+                    };
+                };
+            };
+            /** @description Invalid justification */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    configureByokKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    key_alias: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Key policy configured; the raw alias is never echoed */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ByokKeyResponse"];
+                };
+            };
+            /** @description Invalid key alias */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    rotateByokKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    key_alias: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Key rotated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ByokKeyResponse"];
+                };
+            };
+            /** @description Invalid key alias */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    revokeByokKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Key revoked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ByokKeyResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    applyLegalHold: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    target_type: "DEAL" | "DOCUMENT" | "ARTIFACT";
+                    target_id: string;
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Hold applied; the reason is hashed immediately and never echoed */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        hold_id: string;
+                        /** @enum {string} */
+                        target_type: "DEAL" | "DOCUMENT" | "ARTIFACT";
+                        target_id: string;
+                        /** Format: date-time */
+                        applied_at: string;
+                    };
+                };
+            };
+            /** @description Invalid hold request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    liftLegalHold: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Hold lifted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        hold_id: string;
+                        /** Format: date-time */
+                        lifted_at: string;
+                    };
+                };
+            };
+            /** @description Hold already lifted */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createErasureRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: uuid */
+                    deal_id: string;
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Erasure request created; the reason is hashed and never echoed */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        request_id: string;
+                        /** Format: uuid */
+                        deal_id: string;
+                        /** @enum {string} */
+                        status: "REQUESTED";
+                        /** Format: date-time */
+                        requested_at: string;
+                    };
+                };
+            };
+            /** @description Invalid erasure request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    executeErasureRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Erasure executed; counts are safe-shape totals */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        request_id: string;
+                        /** @enum {string} */
+                        status: "EXECUTED";
+                        /** Format: date-time */
+                        executed_at: string;
+                        counts: {
+                            [key: string]: number;
+                        };
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Forbidden or blocked by legal hold */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+            /** @description Already executed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Execution failed (request marked FAILED */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    createComplianceExport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Export bundle written; manifest carries metadata and hashes only */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        export_id: string;
+                        object_key: string;
+                        manifest_sha256: string;
+                        counts: {
+                            [key: string]: number;
+                        };
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
 }

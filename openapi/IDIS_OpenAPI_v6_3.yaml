@@ -1187,6 +1187,9 @@ paths:
               source:
                 type: "deal_documents"
                 document_ids: ["550e8400-e29b-41d4-a716-446655440000"]
+              methodology_selection:
+                commercial_dd_version_record_id: "9f8e7d6c-5b4a-43c2-9182-736455667788"
+                financial_dd_version_record_id: "1a2b3c4d-5e6f-47a8-9b0c-1d2e3f4a5b6c"
       responses:
         "202":
           description: Run started
@@ -2215,6 +2218,21 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     Conflict:
       description: Conflict / Idempotency collision
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: Forbidden
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ServiceUnavailable:
+      description: Service Unavailable
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    InternalError:
+      description: Internal Server Error
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }

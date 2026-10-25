@@ -21,6 +21,7 @@ from typing import Any, cast
 from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from idis.analysis.scoring import stage_admission
 from idis.api.auth import RequireTenantContext
 from idis.api.errors import IdisHttpError
 from idis.audit.canonical import build_canonical_audit_event
@@ -328,6 +329,57 @@ def _validate_full_methodology_selection(
     return repository
 
 
+def _guard_full_stage_admission(
+    *,
+    request: Request,
+    tenant_id: str,
+    deal_id: str,
+) -> None:
+    """Refuse FULL runs whose deal stage is missing or ineligible.
+
+    Design-02 admission-front guard: detach the scalar ``stage`` value from
+    one tenant-scoped deal metadata read, then capture and validate the
+    transient selection through the installed policy-A codec before any
+    corpus, freeze, proof, run or context work. This validation is not
+    durable stage authority.
+    """
+    deal_record = _load_deal_metadata_for_run(request, tenant_id, deal_id)
+    raw_stage = deal_record.get("stage") if isinstance(deal_record, dict) else None
+    if not isinstance(raw_stage, str):
+        raise IdisHttpError(
+            status_code=400,
+            code="STAGE_UNKNOWN",
+            message="A known deal stage is required to start a FULL run",
+        )
+    try:
+        policy = stage_admission.stage_resolution_policy_a()
+        packs = stage_admission.installed_stage_pack_registry()
+        selection = stage_admission.capture_stage_selection(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            raw_stage=raw_stage,
+            policy=policy,
+            packs=packs,
+        )
+        stage_admission.validate_stage_selection(
+            selection=selection,
+            policy=policy,
+            packs=packs,
+        )
+    except stage_admission.StageAdmissionError as exc:
+        if exc.code == stage_admission.STAGE_UNKNOWN:
+            raise IdisHttpError(
+                status_code=400,
+                code="STAGE_UNKNOWN",
+                message="A known deal stage is required to start a FULL run",
+            ) from exc
+        raise IdisHttpError(
+            status_code=500,
+            code=exc.code,
+            message="Deal stage admission checks could not be completed",
+        ) from exc
+
+
 def resolve_strict_preflight_binding(
     *,
     request: Request,
@@ -607,6 +659,11 @@ async def start_run(
             request=request,
             tenant_id=tenant_ctx.tenant_id,
             selection=cast(RunMethodologySelectionRequest, request_body.methodology_selection),
+        )
+        _guard_full_stage_admission(
+            request=request,
+            tenant_id=tenant_ctx.tenant_id,
+            deal_id=deal_id,
         )
 
     preflight_corpus = _gather_preflight_corpus(request, tenant_ctx.tenant_id, deal_id)

@@ -12,13 +12,17 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
 
+import idis.analysis.scoring.stage_admission as stage_admission_module
 import idis.api.main as api_main
 import idis.api.routes.runs as runs_route
 import idis.pipeline.worker as worker_module
 import idis.services.runs.execution as execution_module
-from idis.api.auth import IDIS_API_KEYS_ENV
+from idis.analysis.scoring.models import Stage
+from idis.api.auth import IDIS_API_KEYS_ENV, TenantContext
+from idis.api.errors import IdisHttpError
 from idis.api.main import create_app
 from idis.api.routes.deals import clear_deals_store
 from idis.api.routes.runs import clear_runs_store
@@ -270,7 +274,7 @@ def _strict_client(
     client = TestClient(app, raise_server_exceptions=False)
     create_response = client.post(
         "/v1/deals",
-        json={"name": "Task1", "company_name": "Task1 Company"},
+        json={"name": "Task1", "company_name": "Task1 Company", "stage": "SEED"},
         headers={"X-IDIS-API-Key": API_KEY},
     )
     assert create_response.status_code == 201
@@ -1052,3 +1056,405 @@ def test_strict_worker_watch_rejects_api_reviewed_profile(
                 ),
             )
         )
+
+
+# ---------------------------------------------------------------------------
+# GL-12 FULL stage-front admission guard controls (approved design02 front slice).
+#
+# These tests pin the transient stage boundary: after FULL methodology
+# validation and before corpus gathering, source freezing, proof consume, run
+# insertion, context or execution-service construction. They call the real
+# start_run through a finite fictional Request and delegate to the real inactive
+# codec; they do not claim durable stage authority, queued/worker persistence or
+# provider admission.
+# ---------------------------------------------------------------------------
+
+_GL12_STAGE_DEAL_ID = "00000000-0000-4000-8000-000000000201"
+_GL12_STAGE_MISSING = object()
+
+
+class _Gl12CorpusSentinel(Exception):
+    """Stops start_run at the first corpus-gather boundary."""
+
+
+class _Gl12StageEffects:
+    """Finite spy state for the FULL stage-guard boundary controls."""
+
+    def __init__(self) -> None:
+        self.events: list[str] = []
+        self.stage_metadata_calls: list[dict[str, Any]] = []
+        self.capture_calls: list[dict[str, Any]] = []
+        self.validate_calls: list[dict[str, Any]] = []
+        self.corpus_calls: list[dict[str, Any]] = []
+        self.freeze_calls: list[dict[str, Any]] = []
+        self.proof_repo_calls: list[dict[str, Any]] = []
+        self.run_create_calls: list[dict[str, Any]] = []
+        self.context_calls: list[dict[str, Any]] = []
+        self.execution_service_calls: list[dict[str, Any]] = []
+
+
+def _gl12_deal_record(stage: object) -> dict[str, Any]:
+    """Build a detached fictional deal record for the stage guard."""
+    record: dict[str, Any] = {
+        "deal_id": _GL12_STAGE_DEAL_ID,
+        "tenant_id": TENANT_ID,
+        "name": "GL12 Stage Deal",
+        "company_name": "GL12 Stage Company",
+        "status": "NEW",
+        "tags": [],
+        "created_at": "2026-07-15T00:00:00Z",
+        "updated_at": None,
+    }
+    if stage is not _GL12_STAGE_MISSING:
+        record["stage"] = stage
+    return record
+
+
+def _gl12_tenant_ctx() -> TenantContext:
+    """Return an already-scoped fictional tenant context for direct route calls."""
+    return TenantContext(
+        tenant_id=TENANT_ID,
+        actor_id="gl12-stage-actor",
+        name="GL12 Stage Boundary",
+        timezone="UTC",
+        data_region="us-east-1",
+        roles=frozenset({"ANALYST"}),
+        actor_type="SERVICE",
+    )
+
+
+def _gl12_start_run_request(body: dict[str, Any]) -> Request:
+    """Build a finite fictional HTTP request carrying the JSON body."""
+    payload = json.dumps(body).encode("utf-8")
+    delivered = False
+
+    async def receive() -> dict[str, Any]:
+        nonlocal delivered
+        if delivered:
+            return {"type": "http.request", "body": b"", "more_body": False}
+        delivered = True
+        return {"type": "http.request", "body": payload, "more_body": False}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": f"/v1/deals/{_GL12_STAGE_DEAL_ID}/runs",
+            "headers": [],
+            "query_string": b"",
+            "state": {},
+            "app": SimpleNamespace(
+                state=SimpleNamespace(
+                    audit_sink=InMemoryAuditSink(),
+                    extractor_configured=True,
+                )
+            ),
+        },
+        receive,
+    )
+    request.state.db_conn = None
+    return request
+
+
+def _gl12_install_stage_spies(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    deal_record: dict[str, Any] | None,
+    deal_exists: bool = True,
+    has_active_run: bool = False,
+    methodology_error: IdisHttpError | None = None,
+) -> _Gl12StageEffects:
+    """Install finite spies around the real route and real codec boundary."""
+    effects = _Gl12StageEffects()
+    monkeypatch.delenv("IDIS_REQUIRE_FULL_LIVE", raising=False)
+    monkeypatch.delenv(runs_route.IDIS_STRICT_DOTENV_PATH_ENV, raising=False)
+
+    # Same bound-coroutine pattern as the hermetic worker fixture: drive the
+    # direct route call without constructing an event loop (Windows socketpair
+    # creation is blocked by the socket guard in this suite).
+    def run_coroutine_sync(coro: Any) -> Any:
+        try:
+            coro.send(None)
+        except StopIteration as stop:
+            return stop.value
+        finally:
+            coro.close()
+        raise RuntimeError("GL12 direct-route coroutine yielded unexpectedly")
+
+    monkeypatch.setattr(asyncio, "run", run_coroutine_sync)
+
+    class RunRepositorySpy:
+        def deal_exists(self, _deal_id: str) -> bool:
+            return deal_exists
+
+        def has_active_run(self, _deal_id: str) -> bool:
+            return has_active_run
+
+        def create(self, **kwargs: Any) -> dict[str, Any]:
+            effects.run_create_calls.append(dict(kwargs))
+            return {"run_id": str(kwargs["run_id"]), "status": "QUEUED"}
+
+        def get(self, run_id: str) -> dict[str, Any]:
+            return {"run_id": str(run_id), "status": "QUEUED"}
+
+    monkeypatch.setattr(
+        runs_route,
+        "get_runs_repository",
+        lambda *_args, **_kwargs: RunRepositorySpy(),
+    )
+
+    if methodology_error is not None:
+
+        def refuse_methodology(**_kwargs: Any) -> Any:
+            raise methodology_error
+
+        monkeypatch.setattr(runs_route, "_validate_full_methodology_selection", refuse_methodology)
+
+    def load_stage_metadata(_request: Any, tenant_id: str, deal_id: str) -> dict[str, Any] | None:
+        effects.stage_metadata_calls.append({"tenant_id": tenant_id, "deal_id": deal_id})
+        effects.events.append("stage_metadata")
+        return None if deal_record is None else dict(deal_record)
+
+    monkeypatch.setattr(runs_route, "_load_deal_metadata_for_run", load_stage_metadata)
+
+    real_capture = stage_admission_module.capture_stage_selection
+
+    def capture_spy(**kwargs: Any) -> Any:
+        result = real_capture(**kwargs)
+        effects.capture_calls.append({"kwargs": dict(kwargs), "result": result})
+        effects.events.append("capture")
+        return result
+
+    real_validate = stage_admission_module.validate_stage_selection
+
+    def validate_spy(**kwargs: Any) -> Any:
+        result = real_validate(**kwargs)
+        effects.validate_calls.append({"kwargs": dict(kwargs), "result": result})
+        effects.events.append("validate")
+        return result
+
+    monkeypatch.setattr(stage_admission_module, "capture_stage_selection", capture_spy)
+    monkeypatch.setattr(stage_admission_module, "validate_stage_selection", validate_spy)
+    monkeypatch.setattr(runs_route, "capture_stage_selection", capture_spy, raising=False)
+    monkeypatch.setattr(runs_route, "validate_stage_selection", validate_spy, raising=False)
+
+    def corpus_spy(_request: Any, tenant_id: str, deal_id: str) -> list[dict[str, Any]]:
+        effects.corpus_calls.append({"tenant_id": tenant_id, "deal_id": deal_id})
+        effects.events.append("corpus")
+        raise _Gl12CorpusSentinel("start_run reached corpus gathering")
+
+    monkeypatch.setattr(runs_route, "_gather_preflight_corpus", corpus_spy)
+
+    def freeze_spy(**kwargs: Any) -> Any:
+        effects.freeze_calls.append(dict(kwargs))
+        raise AssertionError("stage guard must refuse before source freezing")
+
+    monkeypatch.setattr(runs_route, "_freeze_task7_selected_source_packages", freeze_spy)
+
+    class ProofRepositoryBoundary:
+        def consume_and_admit_contract_run(self, **kwargs: Any) -> dict[str, Any]:
+            effects.proof_repo_calls.append(dict(kwargs))
+            raise AssertionError("stage guard must refuse before proof consume")
+
+    monkeypatch.setattr(
+        runs_route,
+        "get_strict_preflight_proofs_repository",
+        lambda *_args: ProofRepositoryBoundary(),
+    )
+
+    class ForbiddenExecutionService:
+        def __init__(self, **kwargs: Any) -> None:
+            effects.execution_service_calls.append(dict(kwargs))
+            raise AssertionError("stage guard must refuse before RunExecutionService")
+
+    monkeypatch.setattr(runs_route, "RunExecutionService", ForbiddenExecutionService)
+
+    def context_spy(**kwargs: Any) -> Any:
+        effects.context_calls.append(dict(kwargs))
+        raise AssertionError("stage guard must refuse before run context")
+
+    monkeypatch.setattr(runs_route, "build_run_context", context_spy)
+    return effects
+
+
+@pytest.mark.parametrize(
+    ("stage", "display"),
+    [
+        pytest.param(_GL12_STAGE_MISSING, None, id="missing"),
+        pytest.param(None, "None", id="none"),
+        pytest.param("", "", id="empty"),
+        pytest.param("OTHER", "OTHER", id="other"),
+        pytest.param("PLATINUM_VINTAGE_UNICORN", "PLATINUM_VINTAGE_UNICORN", id="unknown"),
+        pytest.param(["SEED"], "['SEED']", id="non-string"),
+    ],
+)
+def test_gl12_full_stage_unknown_fails_before_effects(
+    monkeypatch: pytest.MonkeyPatch,
+    _admit_fictional_methodology_selection: _LegacyMethodologySelectionsRepository,
+    stage: object,
+    display: str | None,
+) -> None:
+    effects = _gl12_install_stage_spies(monkeypatch, deal_record=_gl12_deal_record(stage))
+    error: IdisHttpError | None = None
+    try:
+        asyncio.run(
+            runs_route.start_run(
+                deal_id=_GL12_STAGE_DEAL_ID,
+                request=_gl12_start_run_request(_full_run_request()),
+                tenant_ctx=_gl12_tenant_ctx(),
+            )
+        )
+    except IdisHttpError as exc:
+        error = exc
+    except _Gl12CorpusSentinel:
+        pytest.fail("start_run reached corpus gathering without a FULL stage refusal")
+
+    assert error is not None, "start_run returned without a FULL stage refusal"
+    assert error.status_code == 400, (
+        f"expected HTTP400 for ineligible stage, got {error.status_code} ({error.code})"
+    )
+    assert error.code == "STAGE_UNKNOWN", f"expected STAGE_UNKNOWN, got {error.code}"
+    assert error.details is None, "stage refusal must not include raw-stage details"
+    if display:
+        assert display not in str(error.message), "raw stage text must not echo"
+    assert len(effects.stage_metadata_calls) <= 1
+    assert effects.corpus_calls == []
+    assert effects.freeze_calls == []
+    assert effects.proof_repo_calls == []
+    assert effects.run_create_calls == []
+    assert effects.context_calls == []
+    assert effects.execution_service_calls == []
+    assert _admit_fictional_methodology_selection.create_calls == []
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_status", "expected_code"),
+    [
+        pytest.param("missing-deal", 404, "NOT_FOUND", id="missing-deal"),
+        pytest.param("active-run", 409, "RUN_ALREADY_ACTIVE", id="active-run"),
+        pytest.param("methodology", 409, "METHODOLOGY_COVERAGE_INCOMPLETE", id="methodology"),
+    ],
+)
+def test_gl12_stage_guard_keeps_earlier_refusal_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+    _admit_fictional_methodology_selection: _LegacyMethodologySelectionsRepository,
+    case: str,
+    expected_status: int,
+    expected_code: str,
+) -> None:
+    effects = _gl12_install_stage_spies(
+        monkeypatch,
+        deal_record=_gl12_deal_record("PLATINUM_VINTAGE_UNICORN"),
+        deal_exists=case != "missing-deal",
+        has_active_run=case == "active-run",
+        methodology_error=(
+            IdisHttpError(
+                status_code=409,
+                code="METHODOLOGY_COVERAGE_INCOMPLETE",
+                message="Both frozen CDD and FDD methodology versions are required",
+            )
+            if case == "methodology"
+            else None
+        ),
+    )
+
+    with pytest.raises(IdisHttpError) as exc_info:
+        asyncio.run(
+            runs_route.start_run(
+                deal_id=_GL12_STAGE_DEAL_ID,
+                request=_gl12_start_run_request(_full_run_request()),
+                tenant_ctx=_gl12_tenant_ctx(),
+            )
+        )
+
+    assert exc_info.value.status_code == expected_status
+    assert exc_info.value.code == expected_code
+    assert effects.stage_metadata_calls == [], "stage metadata must not load on earlier refusals"
+    assert effects.capture_calls == [] and effects.validate_calls == []
+    assert effects.corpus_calls == []
+    assert effects.freeze_calls == []
+    assert effects.proof_repo_calls == []
+    assert effects.run_create_calls == []
+    assert effects.context_calls == []
+    assert effects.execution_service_calls == []
+    assert _admit_fictional_methodology_selection.create_calls == []
+
+
+def test_gl12_full_later_selection_precedes_corpus_without_persisting_stage(
+    monkeypatch: pytest.MonkeyPatch,
+    _admit_fictional_methodology_selection: _LegacyMethodologySelectionsRepository,
+) -> None:
+    deal_record = _gl12_deal_record("LATER")
+    effects = _gl12_install_stage_spies(monkeypatch, deal_record=deal_record)
+
+    with pytest.raises(_Gl12CorpusSentinel):
+        asyncio.run(
+            runs_route.start_run(
+                deal_id=_GL12_STAGE_DEAL_ID,
+                request=_gl12_start_run_request(_full_run_request()),
+                tenant_ctx=_gl12_tenant_ctx(),
+            )
+        )
+
+    assert len(effects.capture_calls) == 1, (
+        "FULL LATER must delegate to the real stage codec before corpus gathering"
+    )
+    assert len(effects.validate_calls) == 1, (
+        "FULL LATER must validate the captured selection before corpus gathering"
+    )
+    assert effects.events.index("stage_metadata") < effects.events.index("capture")
+    assert effects.events.index("capture") < effects.events.index("corpus")
+    assert effects.events.index("validate") < effects.events.index("corpus")
+    captured = effects.capture_calls[0]["kwargs"]
+    assert captured["tenant_id"] == TENANT_ID
+    assert captured["deal_id"] == _GL12_STAGE_DEAL_ID
+    assert captured["raw_stage"] == "LATER"
+    selection = effects.capture_calls[0]["result"]
+    assert type(selection) is stage_admission_module.StageSelectionV1
+    assert selection.schema_version == "stage-selection-v1"
+    assert selection.tenant_id == TENANT_ID
+    assert selection.deal_id == _GL12_STAGE_DEAL_ID
+    assert selection.raw_stage == "LATER"
+    assert selection.resolved_stage is Stage.GROWTH
+    assert selection.resolution_policy_version == stage_admission_module.POLICY_A_VERSION
+    assert selection.resolution_policy_sha256 == stage_admission_module.POLICY_A_SHA256
+    assert selection.pack_stage is Stage.GROWTH
+    assert selection.pack_sha256 == stage_admission_module.EXPECTED_STAGE_PACK_SHA256[Stage.GROWTH]
+    validated = effects.validate_calls[0]
+    assert validated["kwargs"]["selection"] is selection
+    assert type(validated["result"]) is stage_admission_module.ImmutableStagePack
+    assert validated["result"].pack_sha256 == selection.pack_sha256
+    assert deal_record["stage"] == "LATER"
+    assert effects.freeze_calls == []
+    assert effects.proof_repo_calls == []
+    assert effects.run_create_calls == []
+    assert effects.context_calls == []
+    assert effects.execution_service_calls == []
+    assert _admit_fictional_methodology_selection.create_calls == []
+
+
+def test_gl12_snapshot_does_not_capture_full_stage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    effects = _gl12_install_stage_spies(
+        monkeypatch, deal_record=_gl12_deal_record("PLATINUM_VINTAGE_UNICORN")
+    )
+
+    with pytest.raises(_Gl12CorpusSentinel):
+        asyncio.run(
+            runs_route.start_run(
+                deal_id=_GL12_STAGE_DEAL_ID,
+                request=_gl12_start_run_request({"mode": "SNAPSHOT"}),
+                tenant_ctx=_gl12_tenant_ctx(),
+            )
+        )
+
+    assert len(effects.corpus_calls) == 1, "SNAPSHOT must reach its existing corpus path"
+    assert effects.stage_metadata_calls == []
+    assert effects.capture_calls == []
+    assert effects.validate_calls == []
+    assert effects.freeze_calls == []
+    assert effects.proof_repo_calls == []
+    assert effects.run_create_calls == []
+    assert effects.context_calls == []
+    assert effects.execution_service_calls == []

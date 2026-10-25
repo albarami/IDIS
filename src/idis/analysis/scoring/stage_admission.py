@@ -1,13 +1,17 @@
-"""GL-12 inactive stage identity codec — ``stage-canonical-json-v1``.
+"""GL-12 stage identity codec — ``stage-canonical-json-v1``.
 
 Pure engineering preparation implementing the independently reviewed GL-12
 stage preservation design-02: strict closed typed stage selection, immutable
 full-pack capture and run-stage admission values plus one exact versioned
 canonical byte adapter/digest.
 
-This module is deliberately UNWIRED: no caller, package export, registry,
-config, API enum, migration or runtime path references it. It is not a
-durable admission authority and changes no existing resolver, pack or hash.
+The FULL run admission-front guard in ``api.routes.runs`` reuses
+``stage_resolution_policy_a``, ``installed_stage_pack_registry``,
+``capture_stage_selection`` and ``validate_stage_selection`` for transient
+pre-corpus eligibility validation only. Durable run-stage admission remains
+UNWIRED: no admission row, registry, migration, proof binding, worker or
+runtime path references this module as durable authority, and it changes no
+existing resolver, pack or hash.
 """
 
 from __future__ import annotations

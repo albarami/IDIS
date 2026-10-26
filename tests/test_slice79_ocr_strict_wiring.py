@@ -12,6 +12,9 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+import pytest
+
+from idis.parsers.poppler_runtime import PopplerRuntimeBindingError
 from idis.services.ocr_health import OcrHealthCheck
 from idis.services.runs.strict_full_live import (
     StrictComponentStatus,
@@ -98,9 +101,24 @@ def test_ocr_inventory_reflects_health() -> None:
     assert blocked_inv.health_check_status == "configured_failed"
 
 
-def test_default_ocr_readiness_requires_full_health_not_just_binary() -> None:
+def test_default_ocr_readiness_requires_full_health_not_just_binary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # tesseract present + OCR enabled, but poppler absent: old binary-only logic would pass;
-    # the full health check must fail-close.
+    # the full health check must fail-close. build_strict_full_live_readiness_report does not
+    # thread poppler_runtime_probe (strict_full_live.py:2282), so the seam is supplied at the
+    # imported check_ocr_health.
+    from idis.services.runs import strict_full_live
+
+    def poppler_absent() -> None:
+        raise PopplerRuntimeBindingError("POPPLER_RUNTIME_UNAVAILABLE")
+
+    real_check = strict_full_live.check_ocr_health
+
+    def check_with_absent_poppler(**kwargs: Any) -> OcrHealthCheck:
+        return real_check(**kwargs, poppler_runtime_probe=poppler_absent)
+
+    monkeypatch.setattr(strict_full_live, "check_ocr_health", check_with_absent_poppler)
     report = build_strict_full_live_readiness_report(
         preflight_corpus=_OCR_REQUIRED_CORPUS,
         env={"IDIS_OCR_ENABLED": "1"},

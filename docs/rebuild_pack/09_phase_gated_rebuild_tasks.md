@@ -470,7 +470,7 @@ Phase 2 (Extraction) ──▶ Phase 3 (Sanad) ──▶ Phase 4 (Orchestration)
 make format && make lint && make typecheck && make test && make check
 
 # Gate 3 execution
-python scripts/gates/gate_3_gdbs_f.py --execute
+python scripts/gates/gate_3_gdbs_f.py --execute --deal-stage <DealStage>
 
 # Full check
 make.bat check  # Windows

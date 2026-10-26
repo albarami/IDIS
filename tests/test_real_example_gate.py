@@ -31,7 +31,7 @@ from idis.models.document_classification import (
 
 def test_inventory_only_is_deterministic_and_safe(tmp_path: Path) -> None:
     root = tmp_path / "real_example"
-    confidential_dir = root / "Nexx Confidential Board Pack"
+    confidential_dir = root / "fictional-orion Confidential Board Pack"
     confidential_dir.mkdir(parents=True)
     (confidential_dir / "secret_customer_pipeline.xlsx").write_bytes(b"not a workbook")
     (root / "founder interview.mp4").write_bytes(b"fake video")
@@ -55,7 +55,7 @@ def test_inventory_only_is_deterministic_and_safe(tmp_path: Path) -> None:
     assert first["counts_by_extension"] == {".mp4": 1, ".xlsx": 1}
     assert first["counts_by_status"] == {"inventoried": 2}
     assert first["counts_by_parser_outcome"] == {"not_attempted": 2}
-    _assert_safe_json(first, forbidden=[str(root), "Nexx", "secret_customer", "founder"])
+    _assert_safe_json(first, forbidden=[str(root), "fictional-orion", "secret_customer", "founder"])
     _assert_ledger_is_private(ledger_path)
 
 

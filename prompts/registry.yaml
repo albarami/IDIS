@@ -45,6 +45,34 @@ prompts:
       secondary_model: "gpt-4o-mini"
       safe_fallback: "gpt-3.5-turbo"
 
+  METHODOLOGY_QUESTION_EXTRACTION_V1:
+    id: "METHODOLOGY_QUESTION_EXTRACTION_V1"
+    name: "Task-Aware CDD and FDD Question Extraction"
+    version: "1.0.0"
+    status: DRAFT
+    risk_class: HIGH
+    owner:
+      team: "extraction"
+      person: "TBD"
+    model_requirements:
+      model_class: reasoning
+      min_context_window: 200000
+      json_mode: strict
+      tool_calling: true
+    input_schema: "schemas/extraction/methodology_question_extraction_input.json"
+    output_schema: "schemas/extraction/methodology_question_extraction_output.json"
+    file_path: "prompts/methodology_question_extraction/1.0.0/prompt.md"
+    metadata_path: "prompts/methodology_question_extraction/1.0.0/metadata.json"
+    prompt_content_sha256: "0eab599586b5022ac53766464980119cdd23d9fa23d0117933727c70fecfa9ec"
+    input_schema_sha256: "56da7b7726356335a788ac9bc3cd6eda94ef2438a7521ef3e09464f020a3bb0b"
+    output_schema_sha256: "36e192b8e5e94f515399b7f87b997728c1df0836c590503952a110f3ad3343bf"
+    validation_gates:
+      - GATE_1
+      - GATE_2
+      - GATE_3
+      - GATE_4
+    fallback_policy: {}
+
   CLASSIFY_DOC_V1:
     id: "CLASSIFY_DOC_V1"
     name: "Document Classification"

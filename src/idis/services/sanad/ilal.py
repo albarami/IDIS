@@ -64,6 +64,41 @@ def _get_node_ids(chain: list[dict[str, Any]]) -> set[str]:
     return {str(n.get("node_id")) for n in chain if isinstance(n, dict) and n.get("node_id")}
 
 
+_SUPPORTED_INPUT_REF_KEYS = frozenset({"claim_id", "evidence_id", "source_span_id"})
+
+
+def _typed_input_ref_valid(
+    ref: dict[str, Any],
+    *,
+    evidence_ids: set[str] | None,
+    source_span_ids: set[str] | None,
+    claim_id: str | None,
+) -> bool:
+    """Validate one canonical typed input ref against its own bound domain only.
+
+    A typed ref is a single entity-key object such as
+    ``{"source_span_id": "..."}``. Each supported key resolves ONLY against
+    that domain's bound context: a value valid under another domain still
+    fails here, and a domain whose context was omitted in the bound path
+    never declares its refs valid.
+    """
+    if len(ref) != 1:
+        return False
+    key, value = next(iter(ref.items()))
+    if (
+        not isinstance(key, str)
+        or key not in _SUPPORTED_INPUT_REF_KEYS
+        or not isinstance(value, str)
+        or not value.strip()
+    ):
+        return False
+    if key == "source_span_id":
+        return source_span_ids is not None and value in source_span_ids
+    if key == "evidence_id":
+        return evidence_ids is not None and value in evidence_ids
+    return claim_id is not None and value == claim_id
+
+
 def detect_ilal_version_drift(
     claim: dict[str, Any],
     documents: list[dict[str, Any]],
@@ -178,6 +213,9 @@ def detect_ilal_version_drift(
 def detect_ilal_chain_break(
     sanad: dict[str, Any],
     evidence_ids: set[str] | None = None,
+    *,
+    source_span_ids: set[str] | None = None,
+    claim_id: str | None = None,
 ) -> IlalDefect | None:
     """Detect ILAL_CHAIN_BREAK: broken transmission chain.
 
@@ -189,6 +227,8 @@ def detect_ilal_chain_break(
     Args:
         sanad: Sanad dictionary with transmission_chain
         evidence_ids: Optional set of valid evidence IDs for reference checking
+        source_span_ids: Optional bound set of valid source span IDs
+        claim_id: Optional bound claim ID for typed claim refs
 
     Returns:
         IlalDefect if chain break detected, None otherwise
@@ -244,11 +284,38 @@ def detect_ilal_chain_break(
                 },
             )
 
-        # Check input_refs for broken references (used in GDBS dataset format)
+        # Check input_refs for broken references (used in GDBS dataset format).
+        # Legacy scalar refs keep bare evidence/node membership; canonical
+        # typed refs resolve only inside their own bound domain.
+        bound = evidence_ids is not None or source_span_ids is not None or claim_id is not None
         input_refs = node.get("input_refs", [])
-        if isinstance(input_refs, list) and evidence_ids is not None:
+        if bound:
+            if not isinstance(input_refs, list):
+                return IlalDefect(
+                    code=IlalDefectCode.ILAL_CHAIN_BREAK,
+                    severity="FATAL",
+                    description=f"Node {node_id} has malformed input_refs container",
+                    cure_protocol="RECONSTRUCT_CHAIN",
+                    metadata={
+                        "node_id": node_id,
+                        "malformed_input_refs": input_refs,
+                    },
+                )
             for ref in input_refs:
-                if ref and str(ref) not in evidence_ids and str(ref) not in node_ids:
+                if isinstance(ref, dict):
+                    valid = _typed_input_ref_valid(
+                        ref,
+                        evidence_ids=evidence_ids,
+                        source_span_ids=source_span_ids,
+                        claim_id=claim_id,
+                    )
+                else:
+                    valid = (
+                        isinstance(ref, str)
+                        and bool(ref)
+                        and ((evidence_ids is not None and ref in evidence_ids) or ref in node_ids)
+                    )
+                if not valid:
                     return IlalDefect(
                         code=IlalDefectCode.ILAL_CHAIN_BREAK,
                         severity="FATAL",
@@ -445,6 +512,9 @@ def detect_all_ilal(
     claim: dict[str, Any] | None = None,
     documents: list[dict[str, Any]] | None = None,
     evidence_ids: set[str] | None = None,
+    *,
+    source_span_ids: set[str] | None = None,
+    claim_id: str | None = None,
 ) -> list[IlalDefect]:
     """Run all I'lal detection checks.
 
@@ -453,13 +523,20 @@ def detect_all_ilal(
         claim: Optional claim dictionary for version drift check
         documents: Optional list of documents for version drift check
         evidence_ids: Optional set of valid evidence IDs
+        source_span_ids: Optional bound set of valid source span IDs
+        claim_id: Optional bound claim ID for typed claim refs
 
     Returns:
         List of detected IlalDefect objects
     """
     defects: list[IlalDefect] = []
 
-    chain_break = detect_ilal_chain_break(sanad, evidence_ids)
+    chain_break = detect_ilal_chain_break(
+        sanad,
+        evidence_ids,
+        source_span_ids=source_span_ids,
+        claim_id=claim_id,
+    )
     if chain_break:
         defects.append(chain_break)
 

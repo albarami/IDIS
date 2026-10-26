@@ -467,8 +467,9 @@ class TestDeliverablesGeneratorHappyPath:
                         claim_id=noisy_claim_id,
                         claim_text=(
                             "ONLINE INTERNATIONAL WIRE TRANSFER A/C: FOREIGN CUR BUS ACCT "
-                            "ORG: 00000000933802115 MYNE TECHNOLOGIES INC. BEN:/TR0900134000 "
-                            "BUSINESS EXPENSES/OCMT/EUR1034,00/EXCH/0.8904/TRN: 3519900289RE "
+                            "ORG: 99999999000000001 FICTIONAL PAYEE SYSTEMS INC. "
+                            "BEN:/FX0000000000 BUSINESS EXPENSES/OCMT/EUR4321,00/"
+                            "EXCH/1.2345/TRN: 9999900000ZZ "
                             "with additional remittance boilerplate that should not be exported "
                             "as a long evidence-index snippet."
                         ),
@@ -832,7 +833,7 @@ class TestDeliverablesGeneratorFailClosed:
         assert "deliverable.generation.failed" in event_types
 
         failed = [e for e in sink.events if e["event_type"] == "deliverable.generation.failed"]
-        assert failed[0]["error_type"] == "MISSING_SCORECARD"
+        assert failed[0]["payload"]["safe"]["error_type"] == "MISSING_SCORECARD"
 
     def test_generator_rejects_nff_violation_in_qa_brief(self) -> None:
         """Generator must fail-closed if assembled QA items lack evidence refs."""
@@ -915,7 +916,7 @@ class TestDeliverablesGeneratorFailClosed:
 
         failed = [e for e in sink.events if e["event_type"] == "deliverable.generation.failed"]
         assert len(failed) == 1
-        assert failed[0]["error_type"] == "INTERNAL_ERROR"
+        assert failed[0]["payload"]["safe"]["error_type"] == "INTERNAL_ERROR"
 
 
 class TestDeliverablesGeneratorAudit:
@@ -1000,7 +1001,7 @@ class TestDeliverablesGeneratorAudit:
         )
 
         for event in sink.events:
-            assert event["deal_id"] == "deal-001"
+            assert event["resource"]["deal_id"] == "deal-001"
             assert event["tenant_id"] == "tenant-001"
 
     def test_completed_event_has_deliverable_count(self) -> None:
@@ -1021,8 +1022,8 @@ class TestDeliverablesGeneratorAudit:
             e for e in sink.events if e["event_type"] == "deliverable.generation.completed"
         ]
         assert len(completed) == 1
-        assert completed[0]["deliverable_count"] == 4
-        assert completed[0]["has_decline_letter"] is False
+        assert completed[0]["payload"]["safe"]["deliverable_count"] == 4
+        assert completed[0]["payload"]["safe"]["has_decline_letter"] is False
 
 
 class TestDeliverablesGeneratorStructural:
@@ -1039,3 +1040,102 @@ class TestDeliverablesGeneratorStructural:
             "All deliverable code must live in src/idis/deliverables/ "
             "and src/idis/models/deliverables.py"
         )
+
+
+def _report_with_sections(sections: dict[str, Any]) -> AgentReport:
+    """Report whose supported ids must not be copied onto bare statements."""
+    return _make_report("financial_agent").model_copy(
+        update={
+            "supported_claim_ids": ["claim-report-b", "claim-report-a"],
+            "supported_calc_ids": ["calc-report"],
+            "analysis_sections": sections,
+        }
+    )
+
+
+def _extracted_facts(sections: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract facts from one report without generating a deliverable bundle."""
+    report = _report_with_sections(sections)
+    generator = DeliverablesGenerator(audit_sink=InMemoryAuditSink())
+    return generator._extract_facts_from_report(report)
+
+
+class TestStatementSpecificFactRefs:
+    """A statement carries only the refs written on that statement."""
+
+    def test_string_section_yields_fact_with_empty_refs(self) -> None:
+        """A string section does not inherit the report's supported ids."""
+        facts = _extracted_facts({"summary": "Revenue reached one million."})
+
+        assert facts == [
+            {
+                "text": "Revenue reached one million.",
+                "claim_refs": [],
+                "calc_refs": [],
+            }
+        ]
+
+    def test_string_item_yields_fact_with_empty_refs(self) -> None:
+        """A string item inside a list does not inherit the report's supported ids."""
+        facts = _extracted_facts({"findings": ["Customer count is twelve."]})
+
+        assert facts == [
+            {
+                "text": "Customer count is twelve.",
+                "claim_refs": [],
+                "calc_refs": [],
+            }
+        ]
+
+    def test_dict_item_without_claim_refs_yields_empty_refs(self) -> None:
+        """A dict item that omits ref keys yields empty ref lists."""
+        facts = _extracted_facts({"findings": [{"text": "Burn is one hundred thousand."}]})
+
+        assert len(facts) == 1
+        assert facts[0]["text"] == "Burn is one hundred thousand."
+        assert facts[0]["claim_refs"] == []
+        assert facts[0]["calc_refs"] == []
+
+    def test_dict_section_without_claim_refs_yields_empty_refs(self) -> None:
+        """A dict section that omits ref keys yields empty ref lists."""
+        facts = _extracted_facts({"revenue": {"content": "ARR is one million."}})
+
+        assert len(facts) == 1
+        assert facts[0]["text"] == "ARR is one million."
+        assert facts[0]["claim_refs"] == []
+        assert facts[0]["calc_refs"] == []
+
+    def test_dict_item_keeps_exactly_its_own_claim_refs(self) -> None:
+        """Own claim_refs are kept, and a missing calc_refs key stays empty."""
+        facts = _extracted_facts(
+            {
+                "findings": [
+                    {
+                        "text": "Own statement.",
+                        "claim_refs": ["claim-own"],
+                    }
+                ]
+            }
+        )
+
+        assert len(facts) == 1
+        assert facts[0]["claim_refs"] == ["claim-own"]
+        assert facts[0]["calc_refs"] == []
+
+    def test_dict_item_keeps_exactly_both_own_ref_lists(self) -> None:
+        """A dict item that supplies both ref lists keeps those lists only."""
+        facts = _extracted_facts(
+            {
+                "findings": [
+                    {
+                        "text": "Fully linked statement.",
+                        "claim_refs": ["claim-own-b", "claim-own-a"],
+                        "calc_refs": ["calc-own"],
+                    }
+                ]
+            }
+        )
+
+        assert len(facts) == 1
+        assert facts[0]["claim_refs"] == ["claim-own-b", "claim-own-a"]
+        assert facts[0]["calc_refs"] == ["calc-own"]

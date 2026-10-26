@@ -15,11 +15,6 @@ from typing import Any
 import pytest
 
 from idis.analysis.models import AnalysisContext
-from idis.api.routes.runs import (
-    _build_analysis_calc_registry,
-    _run_full_graph_evidence,
-    _run_full_rag_evidence,
-)
 from idis.audit.sink import InMemoryAuditSink
 from idis.calc.engine import CalcEngine, InputGradeInfo
 from idis.calc.formulas.core import register_core_formulas
@@ -36,6 +31,11 @@ from idis.persistence.repositories.run_steps import InMemoryRunStepsRepository
 from idis.services.calc.runner import CalcRunner
 from idis.services.graph.retrieval import GraphRetrievalService
 from idis.services.runs.orchestrator import RunContext, RunOrchestrator
+from idis.services.runs.step_runtime.analysis import _build_analysis_calc_registry
+from idis.services.runs.step_runtime.evidence import (
+    _run_full_graph_evidence,
+    _run_full_rag_evidence,
+)
 from idis.storage.filesystem_store import FilesystemObjectStore
 from tests.test_calc_runner import (
     FakeClaimsRepository,

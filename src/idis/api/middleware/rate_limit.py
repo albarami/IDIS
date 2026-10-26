@@ -111,7 +111,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if decision.allowed:
             response = await call_next(request)
 
-            response.headers["X-IDIS-RateLimit-Limit"] = str(decision.limit_rpm)
+            # ``remaining_tokens`` is measured against the effective burst-capable
+            # bucket, so the paired limit header must describe that same domain.
+            # Sustained refill remains ``limit_rpm``; this changes only truthful
+            # response provenance, not admission or pacing semantics.
+            effective_capacity = decision.limit_rpm * decision.burst_multiplier
+            response.headers["X-IDIS-RateLimit-Limit"] = str(effective_capacity)
             response.headers["X-IDIS-RateLimit-Remaining"] = str(decision.remaining_tokens)
 
             return response

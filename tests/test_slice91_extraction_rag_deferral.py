@@ -28,7 +28,6 @@ from typing import Any
 import pytest
 
 import idis.services.extraction.extractors.claim_extractor as claim_extractor_mod
-from idis.api.routes.runs import _run_snapshot_extraction
 from idis.audit.sink import InMemoryAuditSink
 from idis.models.run_step import FULL_STEPS, SNAPSHOT_STEPS, STEP_ORDER, StepName
 from idis.persistence.repositories.run_steps import (
@@ -37,6 +36,7 @@ from idis.persistence.repositories.run_steps import (
 )
 from idis.services.extraction.extractors.claim_extractor import LLMClaimExtractor
 from idis.services.runs.orchestrator import RunContext, RunOrchestrator
+from idis.services.runs.step_runtime.snapshot import _run_snapshot_extraction
 from tests.test_slice63_rag_full_wiring import DEAL_ID, RUN_ID, TENANT_ID, _documents
 
 _PLAN_DOC = Path("docs/plans/2026-07-01-slice91-rag-retrieval-full-context.md")

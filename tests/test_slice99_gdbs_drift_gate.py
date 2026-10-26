@@ -48,6 +48,8 @@ def _run_gdbs_s(dataset: Path, baseline: Path, out: Path) -> tuple[int, dict[str
         [
             "test",
             "gdbs-s",
+            "--deal-stage",
+            "SERIES_A",
             "--dataset",
             str(dataset),
             "--baseline",
@@ -62,7 +64,9 @@ def _run_gdbs_s(dataset: Path, baseline: Path, out: Path) -> tuple[int, dict[str
 
 def _fresh_baseline(tmp_path: Path, **overrides: Any) -> Path:
     """Baseline built from the real gdbs_mini dataset, optionally mutated."""
-    document = build_baseline_document(dataset_root=_GDBS_MINI, suite="gdbs-s")
+    document = build_baseline_document(
+        deal_stage="SERIES_A", dataset_root=_GDBS_MINI, suite="gdbs-s"
+    )
     document.update(overrides)
     path = tmp_path / "baseline.json"
     path.write_text(json.dumps(document, indent=2, sort_keys=True), encoding="utf-8")

@@ -78,7 +78,7 @@ class TestRetrieveClaimsForDebate:
 
     def test_claim_text_populated(self) -> None:
         """Claim text from extraction appears in the debate context dict."""
-        from idis.api.routes.runs import _retrieve_claims_for_debate
+        from idis.services.runs.step_runtime.analysis import _retrieve_claims_for_debate
 
         cid = _seed_claim(claim_id=str(uuid.uuid4()), claim_text="ARR is $4.2M")
         result = _retrieve_claims_for_debate(TENANT_ID, [cid])
@@ -88,7 +88,7 @@ class TestRetrieveClaimsForDebate:
 
     def test_claim_class_populated(self) -> None:
         """Claim class from extraction appears in the debate context dict."""
-        from idis.api.routes.runs import _retrieve_claims_for_debate
+        from idis.services.runs.step_runtime.analysis import _retrieve_claims_for_debate
 
         cid = _seed_claim(claim_id=str(uuid.uuid4()), claim_class="TRACTION")
         result = _retrieve_claims_for_debate(TENANT_ID, [cid])
@@ -97,7 +97,7 @@ class TestRetrieveClaimsForDebate:
 
     def test_claim_grade_mapped_to_sanad_grade(self) -> None:
         """Repository claim_grade is mapped to sanad_grade for DebateContext."""
-        from idis.api.routes.runs import _retrieve_claims_for_debate
+        from idis.services.runs.step_runtime.analysis import _retrieve_claims_for_debate
 
         cid = _seed_claim(claim_id=str(uuid.uuid4()), claim_grade="A")
         result = _retrieve_claims_for_debate(TENANT_ID, [cid])
@@ -106,7 +106,7 @@ class TestRetrieveClaimsForDebate:
 
     def test_primary_span_id_mapped_to_source_doc(self) -> None:
         """Repository primary_span_id is mapped to source_doc for DebateContext."""
-        from idis.api.routes.runs import _retrieve_claims_for_debate
+        from idis.services.runs.step_runtime.analysis import _retrieve_claims_for_debate
 
         cid = _seed_claim(claim_id=str(uuid.uuid4()), primary_span_id="span-xyz")
         result = _retrieve_claims_for_debate(TENANT_ID, [cid])
@@ -115,7 +115,7 @@ class TestRetrieveClaimsForDebate:
 
     def test_confidence_from_sanad(self) -> None:
         """Confidence is extracted from the sanad's computed.extraction_confidence."""
-        from idis.api.routes.runs import _retrieve_claims_for_debate
+        from idis.services.runs.step_runtime.analysis import _retrieve_claims_for_debate
 
         cid = _seed_claim(claim_id=str(uuid.uuid4()))
         _seed_sanad(claim_id=cid, extraction_confidence=0.92)
@@ -125,7 +125,7 @@ class TestRetrieveClaimsForDebate:
 
     def test_confidence_defaults_when_no_sanad(self) -> None:
         """Confidence defaults to 0.0 when no sanad exists for the claim."""
-        from idis.api.routes.runs import _retrieve_claims_for_debate
+        from idis.services.runs.step_runtime.analysis import _retrieve_claims_for_debate
 
         cid = _seed_claim(claim_id=str(uuid.uuid4()))
         result = _retrieve_claims_for_debate(TENANT_ID, [cid])
@@ -134,7 +134,7 @@ class TestRetrieveClaimsForDebate:
 
     def test_missing_claim_returns_empty_stub(self) -> None:
         """A claim_id not in the store produces a stub with empty fields."""
-        from idis.api.routes.runs import _retrieve_claims_for_debate
+        from idis.services.runs.step_runtime.analysis import _retrieve_claims_for_debate
 
         missing_id = str(uuid.uuid4())
         result = _retrieve_claims_for_debate(TENANT_ID, [missing_id])
@@ -146,7 +146,7 @@ class TestRetrieveClaimsForDebate:
 
     def test_multiple_claims_all_populated(self) -> None:
         """All claims in a batch are looked up and populated."""
-        from idis.api.routes.runs import _retrieve_claims_for_debate
+        from idis.services.runs.step_runtime.analysis import _retrieve_claims_for_debate
 
         ids = [_seed_claim(claim_id=str(uuid.uuid4()), claim_text=f"Claim {i}") for i in range(5)]
         result = _retrieve_claims_for_debate(TENANT_ID, ids)
@@ -158,7 +158,7 @@ class TestRetrieveClaimsForDebate:
 
     def test_null_primary_span_id_mapped_to_empty_string(self) -> None:
         """A None primary_span_id maps to empty string, not 'None'."""
-        from idis.api.routes.runs import _retrieve_claims_for_debate
+        from idis.services.runs.step_runtime.analysis import _retrieve_claims_for_debate
 
         cid = _seed_claim(claim_id=str(uuid.uuid4()), primary_span_id=None)
         result = _retrieve_claims_for_debate(TENANT_ID, [cid])

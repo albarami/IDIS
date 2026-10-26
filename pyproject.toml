@@ -7,15 +7,16 @@ requires-python = ">=3.11"
 license = { text = "Proprietary" }
 authors = [{ name = "Salim Al-Barami" }]
 dependencies = [
-    "fastapi>=0.109.0",
+    "fastapi>=0.143.3",
     "uvicorn[standard]>=0.27.0",
-    "pydantic>=2.5.0",
+    "pydantic==2.12.5",
     "jsonschema>=4.21.0",
     "pyyaml>=6.0.1",
     "sqlalchemy>=2.0.0",
     "alembic>=1.13.0",
     "psycopg2-binary>=2.9.0",
     "httpx>=0.26.0",
+    "httpx2>=2.13.1",  # current Starlette TestClient response/error family
     "opentelemetry-api>=1.22.0",
     "opentelemetry-sdk>=1.22.0",
     "opentelemetry-exporter-otlp>=1.22.0",
@@ -32,7 +33,7 @@ dependencies = [
     "openpyxl>=3.1.0",
     "python-docx>=1.1.0",
     "python-pptx>=0.6.23",
-    "anthropic>=0.39.0",
+    "anthropic==0.125.0",  # qualified frozen temperature-bearing requests; SDK 1.x rejects them
     "cryptography>=42.0.0,<47",  # AES-256-GCM BYOL credential encryption; also used by auth_sso JWKS verification
     "python-dotenv>=1.0.0",
     "neo4j>=5.14.0",
@@ -43,6 +44,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7.4.0",
+    "pytest-socket>=0.8.1",  # explicit network denial for offline qualification
     "httpx>=0.26.0",
     "ruff>=0.1.14",
     "mypy>=1.8.0",
@@ -57,11 +59,28 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.uv]
+# This lock qualifies Python 3.11 only; --python-version alone is a lower bound.
+environments = ["python_version == '3.11' and (sys_platform == 'win32' or sys_platform == 'linux')"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/idis"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "openapi/IDIS_OpenAPI_v6_3.yaml" = "idis/_openapi/IDIS_OpenAPI_v6_3.yaml"
+"schemas/audit_event.schema.json" = "idis/_schemas/audit_event.schema.json"
+"schemas/calc_sanad.schema.json" = "idis/_schemas/calc_sanad.schema.json"
+"schemas/claim.schema.json" = "idis/_schemas/claim.schema.json"
+"schemas/debate_state.schema.json" = "idis/_schemas/debate_state.schema.json"
+"schemas/defect.schema.json" = "idis/_schemas/defect.schema.json"
+"schemas/evidence_item.schema.json" = "idis/_schemas/evidence_item.schema.json"
+"schemas/muhasabah_record.schema.json" = "idis/_schemas/muhasabah_record.schema.json"
+"schemas/sanad.schema.json" = "idis/_schemas/sanad.schema.json"
+"schemas/transmission_node.schema.json" = "idis/_schemas/transmission_node.schema.json"
+"schemas/value_struct.schema.json" = "idis/_schemas/value_struct.schema.json"
+
+[tool.hatch.build.targets.sdist]
+exclude = ["scripts/dev_only/"]
 
 [tool.ruff]
 line-length = 100
@@ -84,7 +103,29 @@ ignore = [
     "UP038",  # deprecated in ruff >=0.15; isinstance(x, (A, B)) is valid Python
 ]
 
+[tool.ruff.lint.per-file-ignores]
+"scripts/run_task7_v11_current_guard_census.py" = ["B009", "B010", "F401"]
+"scripts/run_task7_v9_current_guard_census.py" = ["I001"]
+"scripts/run_task8_v26_sql_authority_census.py" = ["E501", "I001"]
+"tests/slice100_task8/test_v26_sql_authority_postgres_census_red.py" = ["E501", "F841", "I001", "SIM300"]
+
 [tool.ruff.format]
+exclude = [
+    "scripts/generate_task7_v6_contract_fixture.py",
+    "scripts/generate_task7_v9_contract_fixture.py",
+    "scripts/generate_task7_v21_contract_fixture.py",
+    "scripts/materialize_full_strict_v21_preimage.py",
+    "scripts/run_task7_v11_current_guard_census.py",
+    "scripts/run_task7_v21_current_guard_census.py",
+    "scripts/run_task7_v9_current_guard_census.py",
+    "tests/slice100_task7/test_full_strict_v9_native_schema_red.py",
+    "scripts/materialize_full_strict_v26_preimage.py",
+    "scripts/run_task8_v26_signed_census.py",
+    "scripts/run_task8_v26_sql_authority_census.py",
+    "tests/slice100_task8/test_full_strict_v26_materialization_red.py",
+    "tests/slice100_task8/test_v26_bound_runtime_graph_red.py",
+    "tests/slice100_task8/test_v26_sql_authority_postgres_census_red.py",
+]
 quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false

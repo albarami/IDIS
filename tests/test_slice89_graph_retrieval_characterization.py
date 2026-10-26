@@ -36,12 +36,13 @@ from idis.analysis.agents.llm_specialist_agent import (
 from idis.analysis.scoring.llm_scorecard_runner import (
     _build_context_payload as scoring_build_payload,
 )
-from idis.api.routes.runs import _run_full_debate, _run_full_graph_evidence
 from idis.persistence.graph_repo import GraphRepository
 from idis.persistence.neo4j_driver import Neo4jHealthCheck
 from idis.services.graph.retrieval import GraphRepositoryProtocol, GraphRetrievalService
 from idis.services.runs.layer2_ic_challenge import _graph_ref_ids
 from idis.services.runs.orchestrator import RunStepBlockedError
+from idis.services.runs.step_runtime.analysis import _run_full_debate
+from idis.services.runs.step_runtime.evidence import _run_full_graph_evidence
 from tests.test_slice61_graph_visibility import (
     DEAL_ID,
     RUN_ID,

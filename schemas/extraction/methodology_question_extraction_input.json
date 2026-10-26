@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://idis.local/schemas/extraction/methodology_question_extraction_input.json",
+  "title": "MethodologyQuestionExtractionInput",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "methodology_question_record_id",
+    "methodology_question_id",
+    "source_row_trace",
+    "question_text",
+    "expected_answer_schema",
+    "required_evidence",
+    "candidate_spans",
+    "predicates",
+    "validation_requirements",
+    "required_calculations"
+  ],
+  "properties": {
+    "methodology_question_record_id": {"type": "string", "format": "uuid"},
+    "methodology_question_id": {"type": "string", "minLength": 1},
+    "source_row_trace": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "source_section", "source_sha256"],
+          "properties": {
+            "kind": {"const": "cdd_section"},
+            "source_section": {"type": "string", "minLength": 1},
+            "source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "sheet_name", "row_number", "anchor_cell", "source_sha256"],
+          "properties": {
+            "kind": {"const": "fdd_workbook_row"},
+            "sheet_name": {"type": "string", "minLength": 1},
+            "row_number": {"type": "integer", "minimum": 1},
+            "anchor_cell": {"type": "string", "pattern": "^[A-Z]{1,3}[1-9][0-9]*$"},
+            "source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          }
+        }
+      ]
+    },
+    "question_text": {"type": "string", "minLength": 1},
+    "expected_answer_schema": {"type": "object", "minProperties": 1},
+    "required_evidence": {"type": "array", "minItems": 1, "items": {"type": "object"}},
+    "candidate_spans": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "document_id",
+          "span_id",
+          "ordinal",
+          "content_sha256",
+          "locator_sha256",
+          "text"
+        ],
+        "properties": {
+          "document_id": {"type": "string", "format": "uuid"},
+          "span_id": {"type": "string", "format": "uuid"},
+          "ordinal": {"type": "integer", "minimum": 1},
+          "content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "locator_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "text": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "predicates": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "validation_requirements": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "required_calculations": {"type": "array", "items": {"type": "object"}}
+  }
+}

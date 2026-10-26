@@ -48,8 +48,8 @@ from idis.services.runs.methodology_sanad_creation_helpers import (
 from idis.services.sanad.grader import grade_sanad_v2
 
 
-class InMemoryRunMethodologySanadCreationLinkingGradingService:
-    """Create, link, and grade run-scoped Sanads without durable persistence."""
+class CanonicalRunMethodologySanadCreationLinkingGradingService:
+    """Pure deterministic Sanad producer shared by durable and legacy boundaries."""
 
     def run(
         self,
@@ -336,6 +336,8 @@ class InMemoryRunMethodologySanadCreationLinkingGradingService:
                 sources=sources,
                 claim=claim_for_grader(claim),
                 evidence_ids=set(evidence_ids),
+                source_span_ids=set(source_span_ids),
+                claim_id=claim_id,
             )
         except Exception as exc:  # noqa: BLE001 - fail closed on third-party grader errors.
             raise SanadMaterializationError(
@@ -454,3 +456,9 @@ class InMemoryRunMethodologySanadCreationLinkingGradingService:
             ),
         )
         return run_result, [], [], [], []
+
+
+class InMemoryRunMethodologySanadCreationLinkingGradingService(
+    CanonicalRunMethodologySanadCreationLinkingGradingService
+):
+    """Legacy compatibility name for the pure deterministic producer."""

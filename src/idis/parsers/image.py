@@ -87,7 +87,7 @@ def _parse_image_ocr_pages(pages: list[OcrPageText]) -> ParseResult:
             success=False,
             errors=[
                 ParseError(
-                    code=ParseErrorCode.NO_TEXT_EXTRACTED,
+                    code=ParseErrorCode.OCR_NO_TEXT_EXTRACTED,
                     message="Image OCR completed but no extractable text was found",
                     details={},
                 )

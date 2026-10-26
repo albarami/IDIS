@@ -1375,7 +1375,7 @@ class TestFailClosedIngestion:
         assert len(ingestion_events) >= 1
 
         event = ingestion_events[0]
-        assert "error" in event.get("payload", {})
+        assert event["payload"]["safe"]["failure_code"] == "DOCUMENT_INGESTION_FAILED"
 
     def test_auto_ingest_returns_400_when_service_unavailable(
         self,

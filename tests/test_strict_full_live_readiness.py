@@ -2,28 +2,71 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 import idis.evaluation.real_example_run_harness as harness_module
-from idis.api.auth import IDIS_API_KEYS_ENV
 from idis.api.main import create_app
 from idis.api.routes.deals import clear_deals_store
 from idis.api.routes.runs import clear_runs_store
-from idis.audit.sink import InMemoryAuditSink
 from idis.evaluation.real_example_run_harness import (
     RealExampleFullRunHarnessOptions,
     run_real_example_full_run_harness,
 )
 from idis.persistence.repositories.run_steps import clear_run_steps_store
 from tests.abac_seed import seed_deal_access
+from tests.strict_runtime_test_support import (
+    RecordingPostgresAuditSink,
+    reviewed_strict_api_profile,
+)
 
 TENANT_ID = "11111111-1111-1111-1111-111111111111"
 API_KEY = "slice54-test-key"
+STRICT_API_BASE_URL = "http://127.0.0.1:8000"
+STRICT_PREFLIGHT_PROOF_ID = "00000000-0000-4000-8000-000000000054"
+COMMERCIAL_DD_VERSION_RECORD_ID = "10000000-0000-4000-8000-000000000054"
+FINANCIAL_DD_VERSION_RECORD_ID = "20000000-0000-4000-8000-000000000054"
+
+
+def _full_run_request(**values: Any) -> dict[str, Any]:
+    return {
+        "mode": "FULL",
+        "methodology_selection": {
+            "commercial_dd_version_record_id": COMMERCIAL_DD_VERSION_RECORD_ID,
+            "financial_dd_version_record_id": FINANCIAL_DD_VERSION_RECORD_ID,
+        },
+        **values,
+    }
+
+
+class _LegacyMethodologySelectionsRepository:
+    """Minimal recorder preserving strict-readiness assertions."""
+
+    def __init__(self) -> None:
+        self.create_calls: list[dict[str, Any]] = []
+
+    def create_run_selection(self, **kwargs: Any) -> dict[str, Any]:
+        self.create_calls.append(dict(kwargs))
+        return {"selection_id": "30000000-0000-4000-8000-000000000054"}
+
+
+@pytest.fixture(autouse=True)
+def _admit_fictional_methodology_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> _LegacyMethodologySelectionsRepository:
+    repository = _LegacyMethodologySelectionsRepository()
+    monkeypatch.setattr(
+        "idis.api.routes.runs._validate_full_methodology_selection",
+        lambda **_kwargs: repository,
+    )
+    return repository
 
 
 class _FakeResponse:
@@ -68,6 +111,39 @@ class _FakeApiClient:
             self.run_requests.append(json or {})
             return _FakeResponse(202, {"status": "SUCCEEDED", "steps": []})
         raise AssertionError(f"unexpected URL: {url}")
+
+
+class _FakeExternalApiClient(_FakeApiClient):
+    """Canonical external path: enqueue first, then observe worker completion."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.run_gets: list[str] = []
+        self._run_statuses = iter(("QUEUED", "RUNNING", "SUCCEEDED"))
+
+    def post(self, url: str, **kwargs: Any) -> _FakeResponse:
+        if url == "/v1/deals/deal-private-1/runs":
+            self.run_requests.append(dict(kwargs.get("json") or {}))
+            return _FakeResponse(
+                202,
+                {"run_id": "run-private-1", "status": "QUEUED", "steps": []},
+            )
+        return super().post(url, **kwargs)
+
+    def get(self, url: str, **_kwargs: Any) -> _FakeResponse:
+        if url != "/v1/runs/run-private-1":
+            raise AssertionError(f"unexpected URL: {url}")
+        self.run_gets.append(url)
+        status = next(self._run_statuses)
+        return _FakeResponse(
+            200,
+            {
+                "run_id": "run-private-1",
+                "status": status,
+                "mode": "FULL",
+                "steps": [] if status != "SUCCEEDED" else [{"status": "COMPLETED"}],
+            },
+        )
 
 
 def setup_function() -> None:
@@ -192,23 +268,30 @@ def test_strict_report_lists_ocr_media_rag_graph_and_layer2_blockers() -> None:
 
 def test_strict_api_full_run_fails_before_execution_and_returns_structured_blockers(
     monkeypatch: Any,
+    tmp_path: Path,
 ) -> None:
     """`IDIS_REQUIRE_FULL_LIVE=1` must block before `RunExecutionService.execute`."""
-    monkeypatch.setenv(IDIS_API_KEYS_ENV, json.dumps(_api_keys()))
     monkeypatch.setenv("IDIS_REQUIRE_FULL_LIVE", "1")
 
-    app = create_app(audit_sink=InMemoryAuditSink(), service_region="me-south-1")
+    profile = reviewed_strict_api_profile(tmp_path / "profile")
+    api_key = profile.values["IDIS_REAL_EXAMPLE_API_KEY"]
+    tenant_id = profile.values["IDIS_ACCEPTANCE_TENANT_ID"]
+    app = create_app(
+        audit_sink=RecordingPostgresAuditSink(),
+        ingestion_service=object(),
+        strict_profile=profile,
+    )
     app.state.deal_documents = {}
     client = TestClient(app)
 
     create_resp = client.post(
         "/v1/deals",
         json={"name": "Strict Deal", "company_name": "StrictCo"},
-        headers={"X-IDIS-API-Key": API_KEY},
+        headers={"X-IDIS-API-Key": api_key},
     )
     assert create_resp.status_code == 201
     deal_id = create_resp.json()["deal_id"]
-    seed_deal_access(TENANT_ID, deal_id, "actor-a")
+    seed_deal_access(tenant_id, deal_id, "slice100-acceptance-service")
     app.state.deal_documents[deal_id] = [_preflight_doc(deal_id=deal_id)]
 
     def fail_if_executed(*_args: Any, **_kwargs: Any) -> None:
@@ -217,8 +300,8 @@ def test_strict_api_full_run_fails_before_execution_and_returns_structured_block
     with patch("idis.services.runs.execution.RunExecutionService.execute", fail_if_executed):
         run_resp = client.post(
             f"/v1/deals/{deal_id}/runs",
-            json={"mode": "FULL"},
-            headers={"X-IDIS-API-Key": API_KEY},
+            json=_full_run_request(strict_preflight_proof_id=STRICT_PREFLIGHT_PROOF_ID),
+            headers={"X-IDIS-API-Key": api_key},
         )
 
     assert run_resp.status_code == 409
@@ -242,6 +325,7 @@ def test_strict_api_full_run_fails_before_execution_and_returns_structured_block
 
 def test_private_harness_require_full_live_blocks_before_upload_or_run_without_leaks(
     tmp_path: Path,
+    monkeypatch: Any,
 ) -> None:
     """Private harness strict mode must return safe blockers before upload/run execution."""
     root = tmp_path / "real_example"
@@ -249,13 +333,19 @@ def test_private_harness_require_full_live_blocks_before_upload_or_run_without_l
     secret_dir.mkdir(parents=True)
     (secret_dir / "secret-board-pack.pdf").write_bytes(b"%PDF-1.4\nPRIVATE SECRET\n%%EOF")
     (secret_dir / "secret-founder-demo.mp4").write_bytes(b"PRIVATE MEDIA SECRET")
-    client = _FakeApiClient()
+
+    def fail_if_external_client_is_built(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("strict readiness must block before constructing the HTTP client")
+
+    monkeypatch.setattr(harness_module, "_external_api_client", fail_if_external_client_is_built)
 
     summary = run_real_example_full_run_harness(
         RealExampleFullRunHarnessOptions(
+            deal_stage="SERIES_A",
             root=root,
-            api_client=client,
+            api_base_url=STRICT_API_BASE_URL,
             require_full_live=True,
+            strict_preflight_proof_id=STRICT_PREFLIGHT_PROOF_ID,
         )
     )
 
@@ -266,8 +356,6 @@ def test_private_harness_require_full_live_blocks_before_upload_or_run_without_l
         "http_status": None,
     }
     assert summary["run"]["attempted"] is False
-    assert client.uploads == []
-    assert client.run_requests == []
     assert summary["strict_full_live"]["may_proceed"] is False
     encoded = json.dumps(summary, sort_keys=True)
     assert str(root) not in encoded
@@ -286,7 +374,7 @@ def test_private_harness_require_full_live_proceeds_when_preflight_passes(
     root = tmp_path / "real_example"
     root.mkdir()
     (root / "public-safe.pdf").write_bytes(b"%PDF-1.4\nSAFE\n%%EOF")
-    client = _FakeApiClient()
+    client = _FakeExternalApiClient()
 
     monkeypatch.setattr(
         harness_module,
@@ -294,17 +382,41 @@ def test_private_harness_require_full_live_proceeds_when_preflight_passes(
         lambda **_kwargs: _PassingStrictReport(),
     )
 
+    @contextlib.contextmanager
+    def external_client(
+        base_url: str,
+        _timeout_seconds: float | None = None,
+    ) -> Iterator[_FakeExternalApiClient]:
+        assert base_url == STRICT_API_BASE_URL
+        yield client
+
+    monkeypatch.setattr(harness_module, "_external_api_client", external_client)
+
     summary = run_real_example_full_run_harness(
         RealExampleFullRunHarnessOptions(
+            deal_stage="SERIES_A",
             root=root,
-            api_client=client,
+            api_base_url=STRICT_API_BASE_URL,
             require_full_live=True,
+            strict_preflight_proof_id=STRICT_PREFLIGHT_PROOF_ID,
+            run_poll_interval_seconds=0.001,
         )
     )
 
     assert summary["status"] == "succeeded"
     assert len(client.uploads) == 1
     assert len(client.run_requests) == 1
+    assert client.run_gets == ["/v1/runs/run-private-1"] * 3
+    assert client.run_requests == [
+        {
+            "mode": "FULL",
+            "source": {
+                "type": "deal_documents",
+                "document_ids": ["document-1"],
+            },
+            "strict_preflight_proof_id": STRICT_PREFLIGHT_PROOF_ID,
+        }
+    ]
 
 
 def test_private_harness_non_strict_behavior_still_uploads_and_runs(tmp_path: Path) -> None:
@@ -315,7 +427,7 @@ def test_private_harness_non_strict_behavior_still_uploads_and_runs(tmp_path: Pa
     client = _FakeApiClient()
 
     summary = run_real_example_full_run_harness(
-        RealExampleFullRunHarnessOptions(root=root, api_client=client)
+        RealExampleFullRunHarnessOptions(deal_stage="SERIES_A", root=root, api_client=client)
     )
 
     assert summary["status"] == "succeeded"

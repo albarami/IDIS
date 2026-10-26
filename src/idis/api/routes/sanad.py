@@ -112,7 +112,8 @@ class PaginatedSanadList(BaseModel):
 def _get_sanad_service(request: Request, tenant_id: str) -> SanadService:
     """Get SanadService instance based on DB availability."""
     db_conn = getattr(request.state, "db_conn", None)
-    return SanadService(tenant_id=tenant_id, db_conn=db_conn)
+    audit_sink = getattr(request.app.state, "audit_sink", None)
+    return SanadService(tenant_id=tenant_id, db_conn=db_conn, audit_sink=audit_sink)
 
 
 def _to_sanad_response(sanad_data: dict[str, Any]) -> SanadResponse:

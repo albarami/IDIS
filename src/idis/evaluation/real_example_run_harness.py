@@ -3,19 +3,23 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import logging
 import multiprocessing
 import os
 import tempfile
 import time
+import uuid
 from collections import Counter
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Generic, Protocol, TypeVar
+from typing import Any, Generic, Protocol, TypeVar, cast
+from urllib.parse import urlsplit
 
 from idis.api.auth import IDIS_API_KEYS_ENV
+from idis.evaluation.types import deal_stage_for_request
 from idis.models.document_classification import DocumentSupportStatus, DocumentTriageStatus
 from idis.services.documents.parser_capabilities import capability_for_document
 from idis.services.runs.strict_full_live import (
@@ -33,6 +37,11 @@ RUN_TIMEOUT_REASON = "RUN_TIMEOUT"
 UPLOAD_THROUGHPUT_LIMIT_REASON = "UPLOAD_THROUGHPUT_LIMIT"
 RESUME_UNSUPPORTED_REASON = "RESUME_UNSUPPORTED"
 CONCURRENCY_DISABLED_REASON = "CONCURRENCY_DISABLED_BY_DEFAULT"
+API_ACCEPTANCE_PATH_NONCANONICAL = "API_ACCEPTANCE_PATH_NONCANONICAL"
+STRICT_IDEMPOTENCY_KEY_VERSION = "strict-http-mutation-v1"
+DEFAULT_EXTERNAL_REQUEST_TIMEOUT_SECONDS = 60.0
+STRICT_RUN_PENDING_STATUSES = frozenset({"QUEUED", "RUNNING"})
+STRICT_RUN_TERMINAL_STATUSES = frozenset({"SUCCEEDED", "FAILED", "BLOCKED", "CANCELLED"})
 UPLOAD_TIMING_PHASES = ("read", "upload_api", "run_start")
 INTERNAL_UPLOAD_API_PHASES = frozenset(
     {
@@ -104,16 +113,61 @@ class _ApiClientLike(Protocol):
     ) -> _ResponseLike:
         """Post to a public API route."""
 
+    def get(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> _ResponseLike:
+        """Get a public API route."""
+
+
+class _BoundedExternalApiClient:
+    """Apply one global monotonic deadline to every real HTTP request.
+
+    A finite per-request fallback is retained when the caller intentionally
+    omits a whole-harness deadline, so no socket operation can hang forever.
+    """
+
+    def __init__(self, client: Any, *, timeout_seconds: float | None) -> None:
+        self._client = client
+        self._deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
+
+    def _remaining_timeout(self) -> float:
+        if self._deadline is None:
+            return DEFAULT_EXTERNAL_REQUEST_TIMEOUT_SECONDS
+        remaining = self._deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("external HTTP deadline elapsed")
+        return remaining
+
+    def post(self, url: str, **kwargs: Any) -> _ResponseLike:
+        return self._request("post", url, **kwargs)
+
+    def get(self, url: str, **kwargs: Any) -> _ResponseLike:
+        return self._request("get", url, **kwargs)
+
+    def _request(self, method: str, url: str, **kwargs: Any) -> _ResponseLike:
+        import httpx
+
+        kwargs["timeout"] = self._remaining_timeout()
+        try:
+            return cast(_ResponseLike, getattr(self._client, method)(url, **kwargs))
+        except httpx.TimeoutException as exc:
+            raise TimeoutError("external HTTP deadline elapsed") from exc
+
 
 @dataclass(frozen=True, slots=True)
 class RealExampleFullRunHarnessOptions:
     """Options for the private production-style real_example run harness."""
 
     root: str | Path
+    deal_stage: str | None
     private_run: bool = True
     safe_summary: bool = True
     output_path: str | Path | None = None
     api_client: _ApiClientLike | None = None
+    api_base_url: str | None = None
     api_key: str = DEFAULT_API_KEY
     deal_name: str = "Private real_example controlled run"
     company_name: str = "Private real_example company"
@@ -125,6 +179,7 @@ class RealExampleFullRunHarnessOptions:
     resume_state_output_path: str | Path | None = None
     checkpoint_output_path: str | Path | None = None
     require_full_live: bool = False
+    strict_preflight_proof_id: str | None = None
     dotenv_path: str | Path | None = None
 
 
@@ -149,6 +204,15 @@ class _TimedCallAttempt(Generic[T]):
     result: T | None
     timed_out: bool
     elapsed_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
+class _RunPollAttempt:
+    body: dict[str, Any] | None
+    http_status: int | None
+    timed_out: bool
+    elapsed_seconds: float
+    reason_code: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -302,10 +366,11 @@ def run_real_example_full_run_harness(
                 files=files,
                 strict_full_live_report=strict_full_live_report,
             )
-        elif options.api_client is not None:
-            summary = _run_with_client(options=options, root=root, client=options.api_client)
         else:
-            with _default_api_client(options) as client:
+            with _external_api_client(
+                _strict_api_base_url(options.api_base_url),
+                options.run_timeout_seconds,
+            ) as client:
                 summary = _run_with_client(options=options, root=root, client=client)
         summary["strict_full_live"] = strict_full_live_report
     elif options.api_client is not None:
@@ -382,6 +447,7 @@ def _run_harness_process_child(options: RealExampleFullRunHarnessOptions) -> Non
 
 
 def _validate_options(options: RealExampleFullRunHarnessOptions) -> None:
+    deal_stage_for_request(options.deal_stage)
     if not options.private_run:
         raise ValueError("real_example run harness requires private_run=True")
     if not options.safe_summary:
@@ -396,6 +462,38 @@ def _validate_options(options: RealExampleFullRunHarnessOptions) -> None:
         raise ValueError("run_timeout_seconds must be positive when provided")
     if options.run_poll_interval_seconds <= 0:
         raise ValueError("run_poll_interval_seconds must be positive")
+    if options.require_full_live:
+        if options.api_client is not None:
+            raise ValueError(
+                f"{API_ACCEPTANCE_PATH_NONCANONICAL}: "
+                "strict acceptance cannot use an injected API client"
+            )
+        _strict_api_base_url(options.api_base_url)
+        _canonical_strict_preflight_proof_id(options.strict_preflight_proof_id)
+
+
+def _strict_api_base_url(raw_base_url: str | None) -> str:
+    if not isinstance(raw_base_url, str) or not raw_base_url.strip():
+        raise ValueError(
+            f"{API_ACCEPTANCE_PATH_NONCANONICAL}: "
+            "strict acceptance requires an absolute HTTP API base URL"
+        )
+    base_url = raw_base_url.strip().rstrip("/")
+    parsed = urlsplit(base_url)
+    if (
+        parsed.scheme.lower() not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise ValueError(
+            f"{API_ACCEPTANCE_PATH_NONCANONICAL}: "
+            "strict acceptance requires an absolute HTTP API base URL"
+        )
+    return base_url
 
 
 def _validate_root(root: Path) -> None:
@@ -411,6 +509,7 @@ def _run_with_client(
     root: Path,
     client: _ApiClientLike,
 ) -> dict[str, Any]:
+    resolved_stage = deal_stage_for_request(options.deal_stage)
     harness_started_at = time.monotonic()
     upload_timing = _UploadTimingRecorder(
         max_upload_concurrency=options.max_upload_concurrency,
@@ -450,8 +549,22 @@ def _run_with_client(
         call=lambda: _client_post(
             client,
             "/v1/deals",
-            headers=_headers(options.api_key),
-            json={"name": options.deal_name, "company_name": options.company_name},
+            headers=_headers(
+                options.api_key,
+                idempotency_key=(
+                    _strict_mutation_idempotency_key(
+                        options.strict_preflight_proof_id,
+                        operation="deal-create",
+                    )
+                    if options.require_full_live
+                    else None
+                ),
+            ),
+            json={
+                "name": options.deal_name,
+                "company_name": options.company_name,
+                "stage": resolved_stage,
+            },
         ),
         timeout_seconds=_remaining_timeout_seconds(harness_started_at, options.run_timeout_seconds),
         poll_interval_seconds=options.run_poll_interval_seconds,
@@ -562,6 +675,9 @@ def _run_with_client(
                 api_key=options.api_key,
                 path=path,
                 upload_index=index,
+                strict_preflight_proof_id=(
+                    options.strict_preflight_proof_id if options.require_full_live else None
+                ),
             )
 
         upload_timing.start_attempt()
@@ -778,13 +894,17 @@ def _run_with_client(
             upload_profile=upload_timing.to_summary(),
         )
 
-    run_payload = {
+    run_payload: dict[str, Any] = {
         "mode": "FULL",
         "source": {
             "type": "deal_documents",
             "document_ids": uploaded_document_ids,
         },
     }
+    if options.require_full_live:
+        run_payload["strict_preflight_proof_id"] = _canonical_strict_preflight_proof_id(
+            options.strict_preflight_proof_id
+        )
     remaining_timeout_seconds = _remaining_timeout_seconds(
         harness_started_at,
         options.run_timeout_seconds,
@@ -818,9 +938,18 @@ def _run_with_client(
         client=client,
         url=f"/v1/deals/{deal_id}/runs",
         api_key=options.api_key,
+        idempotency_key=(
+            _strict_mutation_idempotency_key(
+                options.strict_preflight_proof_id,
+                operation="run-enqueue",
+            )
+            if options.require_full_live
+            else None
+        ),
         payload=run_payload,
         timeout_seconds=remaining_timeout_seconds,
         poll_interval_seconds=options.run_poll_interval_seconds,
+        allow_in_process_timeout_snapshot=not options.require_full_live,
     )
     upload_timing.record_phase("run_start", time.monotonic() - run_started_at)
     if run_attempt.timed_out:
@@ -888,6 +1017,108 @@ def _run_with_client(
             upload_profile=upload_timing.to_summary(),
         )
 
+    run_http_status: int | None = run_response.status_code
+    if options.require_full_live:
+        queued_run_id = _canonical_queued_run_id(run_body)
+        if queued_run_id is None:
+            blocker = _blocker(
+                stage="run_start",
+                reason_code=API_ACCEPTANCE_PATH_NONCANONICAL,
+                http_status=run_response.status_code,
+            )
+            _write_checkpoint(
+                options=options,
+                stage="run_start",
+                files=files,
+                decisions=decisions,
+                uploaded_document_ids=uploaded_document_ids,
+                upload_timing=upload_timing,
+                run_body=run_body,
+                run_http_status=run_response.status_code,
+                blocker=blocker,
+            )
+            return _summary(
+                files=files,
+                decisions=decisions,
+                uploaded_document_ids=uploaded_document_ids,
+                status="blocked",
+                run_body=run_body,
+                run_http_status=run_response.status_code,
+                blocker=blocker,
+                upload_profile=upload_timing.to_summary(),
+            )
+
+        poll_attempt = _poll_external_run_to_terminal(
+            client=client,
+            run_id=queued_run_id,
+            api_key=options.api_key,
+            timeout_seconds=_remaining_timeout_seconds(
+                harness_started_at,
+                options.run_timeout_seconds,
+            ),
+            poll_interval_seconds=options.run_poll_interval_seconds,
+        )
+        run_elapsed_seconds = time.monotonic() - run_started_at
+        if poll_attempt.timed_out:
+            _write_checkpoint(
+                options=options,
+                stage="full_run",
+                files=files,
+                decisions=decisions,
+                uploaded_document_ids=uploaded_document_ids,
+                upload_timing=upload_timing,
+                run_timeout_snapshot=poll_attempt.body,
+                run_elapsed_seconds=run_elapsed_seconds,
+                run_attempted_on_timeout=True,
+            )
+            return _summary(
+                files=files,
+                decisions=decisions,
+                uploaded_document_ids=uploaded_document_ids,
+                status="blocked",
+                run_body=None,
+                run_http_status=poll_attempt.http_status,
+                blocker=_blocker(
+                    stage="full_run",
+                    reason_code=RUN_TIMEOUT_REASON,
+                    http_status=poll_attempt.http_status,
+                ),
+                run_timeout_snapshot=poll_attempt.body,
+                run_elapsed_seconds=run_elapsed_seconds,
+                run_attempted_on_timeout=True,
+                upload_profile=upload_timing.to_summary(),
+            )
+        if poll_attempt.reason_code is not None or poll_attempt.body is None:
+            reason_code = poll_attempt.reason_code or API_ACCEPTANCE_PATH_NONCANONICAL
+            blocker = _blocker(
+                stage="full_run",
+                reason_code=reason_code,
+                http_status=poll_attempt.http_status,
+            )
+            _write_checkpoint(
+                options=options,
+                stage="full_run",
+                files=files,
+                decisions=decisions,
+                uploaded_document_ids=uploaded_document_ids,
+                upload_timing=upload_timing,
+                run_body=poll_attempt.body,
+                run_http_status=poll_attempt.http_status,
+                blocker=blocker,
+            )
+            return _summary(
+                files=files,
+                decisions=decisions,
+                uploaded_document_ids=uploaded_document_ids,
+                status="blocked",
+                run_body=poll_attempt.body,
+                run_http_status=poll_attempt.http_status,
+                blocker=blocker,
+                upload_profile=upload_timing.to_summary(),
+            )
+        run_body = poll_attempt.body
+        run_http_status = poll_attempt.http_status
+
     block_reason = _run_block_reason(run_body)
     if block_reason is not None or str(run_body.get("status")) != "SUCCEEDED":
         _write_checkpoint(
@@ -898,11 +1129,11 @@ def _run_with_client(
             uploaded_document_ids=uploaded_document_ids,
             upload_timing=upload_timing,
             run_body=run_body,
-            run_http_status=run_response.status_code,
+            run_http_status=run_http_status,
             blocker=_blocker(
                 stage="full_run",
                 reason_code=block_reason or _safe_status_reason(run_body),
-                http_status=run_response.status_code,
+                http_status=run_http_status,
             ),
         )
         return _summary(
@@ -911,11 +1142,11 @@ def _run_with_client(
             uploaded_document_ids=uploaded_document_ids,
             status="blocked",
             run_body=run_body,
-            run_http_status=run_response.status_code,
+            run_http_status=run_http_status,
             blocker=_blocker(
                 stage="full_run",
                 reason_code=block_reason or _safe_status_reason(run_body),
-                http_status=run_response.status_code,
+                http_status=run_http_status,
             ),
             upload_profile=upload_timing.to_summary(),
         )
@@ -929,7 +1160,7 @@ def _run_with_client(
         upload_timing=upload_timing,
         status="succeeded",
         run_body=run_body,
-        run_http_status=run_response.status_code,
+        run_http_status=run_http_status,
     )
     return _summary(
         files=files,
@@ -937,7 +1168,7 @@ def _run_with_client(
         uploaded_document_ids=uploaded_document_ids,
         status="succeeded",
         run_body=run_body,
-        run_http_status=run_response.status_code,
+        run_http_status=run_http_status,
         blocker=None,
         upload_profile=upload_timing.to_summary(),
     )
@@ -1039,13 +1270,25 @@ def _read_upload_payload(
     api_key: str,
     path: Path,
     upload_index: int,
+    strict_preflight_proof_id: str | None = None,
 ) -> _UploadPayload:
     data = path.read_bytes()
     extension = path.suffix.lower() or ".bin"
     synthetic_filename = f"document-{upload_index:05d}{extension}"
+    idempotency_key = None
+    if strict_preflight_proof_id is not None:
+        content_hash = hashlib.sha256(data).hexdigest()
+        idempotency_key = _strict_mutation_idempotency_key(
+            strict_preflight_proof_id,
+            operation="document-upload",
+            discriminator=f"{upload_index}:{content_hash}",
+        )
     return _UploadPayload(
         extension=extension,
-        headers={**_headers(api_key), "Content-Type": UPLOAD_CONTENT_TYPE},
+        headers={
+            **_headers(api_key, idempotency_key=idempotency_key),
+            "Content-Type": UPLOAD_CONTENT_TYPE,
+        },
         params={
             "filename": synthetic_filename,
             "doc_type": "DATA_ROOM_FILE",
@@ -1073,6 +1316,118 @@ def _post_upload_payload(
 def _client_post(client: _ApiClientLike, url: str, **kwargs: Any) -> _ResponseLike:
     with _suppress_output():
         return client.post(url, **kwargs)
+
+
+def _client_get(client: _ApiClientLike, url: str, **kwargs: Any) -> _ResponseLike:
+    with _suppress_output():
+        return client.get(url, **kwargs)
+
+
+def _canonical_queued_run_id(body: dict[str, Any]) -> str | None:
+    run_id = _optional_string(body.get("run_id"))
+    steps = body.get("steps")
+    if (
+        run_id is None
+        or body.get("status") != "QUEUED"
+        or steps != []
+        or _run_block_reason(body) is not None
+    ):
+        return None
+    return run_id
+
+
+def _poll_external_run_to_terminal(
+    *,
+    client: _ApiClientLike,
+    run_id: str,
+    api_key: str,
+    timeout_seconds: float | None,
+    poll_interval_seconds: float,
+) -> _RunPollAttempt:
+    started_at = time.monotonic()
+    latest_body: dict[str, Any] | None = None
+    latest_http_status: int | None = None
+
+    while True:
+        elapsed_seconds = time.monotonic() - started_at
+        if timeout_seconds is not None and elapsed_seconds >= timeout_seconds:
+            return _RunPollAttempt(
+                body=latest_body,
+                http_status=latest_http_status,
+                timed_out=True,
+                elapsed_seconds=elapsed_seconds,
+            )
+
+        try:
+            response = _client_get(
+                client,
+                f"/v1/runs/{run_id}",
+                headers=_headers(api_key),
+            )
+        except TimeoutError:
+            return _RunPollAttempt(
+                body=latest_body,
+                http_status=latest_http_status,
+                timed_out=True,
+                elapsed_seconds=time.monotonic() - started_at,
+            )
+        latest_http_status = response.status_code
+        if response.status_code != 200:
+            return _RunPollAttempt(
+                body=None,
+                http_status=response.status_code,
+                timed_out=False,
+                elapsed_seconds=time.monotonic() - started_at,
+                reason_code=_response_reason(response),
+            )
+
+        body = response.json()
+        latest_body = body
+        elapsed_seconds = time.monotonic() - started_at
+        if timeout_seconds is not None and elapsed_seconds >= timeout_seconds:
+            return _RunPollAttempt(
+                body=latest_body,
+                http_status=latest_http_status,
+                timed_out=True,
+                elapsed_seconds=elapsed_seconds,
+            )
+
+        status = _optional_string(body.get("status"))
+        if (
+            _optional_string(body.get("run_id")) != run_id
+            or _optional_string(body.get("mode")) != "FULL"
+        ):
+            return _RunPollAttempt(
+                body=body,
+                http_status=response.status_code,
+                timed_out=False,
+                elapsed_seconds=elapsed_seconds,
+                reason_code=API_ACCEPTANCE_PATH_NONCANONICAL,
+            )
+        if status in STRICT_RUN_TERMINAL_STATUSES:
+            return _RunPollAttempt(
+                body=body,
+                http_status=response.status_code,
+                timed_out=False,
+                elapsed_seconds=elapsed_seconds,
+            )
+        if status not in STRICT_RUN_PENDING_STATUSES:
+            return _RunPollAttempt(
+                body=body,
+                http_status=response.status_code,
+                timed_out=False,
+                elapsed_seconds=elapsed_seconds,
+                reason_code=API_ACCEPTANCE_PATH_NONCANONICAL,
+            )
+
+        sleep_seconds = poll_interval_seconds
+        if timeout_seconds is not None:
+            sleep_seconds = min(
+                sleep_seconds,
+                max(0.0, timeout_seconds - elapsed_seconds),
+            )
+        if sleep_seconds > 0:
+            time.sleep(sleep_seconds)
 
 
 def _internal_upload_phase_summary(client: _ApiClientLike) -> dict[str, Any] | None:
@@ -1401,12 +1756,19 @@ def _post_run_with_optional_deadline(
     client: _ApiClientLike,
     url: str,
     api_key: str,
+    idempotency_key: str | None,
     payload: dict[str, Any],
     timeout_seconds: float | None,
     poll_interval_seconds: float,
+    allow_in_process_timeout_snapshot: bool = True,
 ) -> _RunPostAttempt:
     attempt = _call_response_with_optional_deadline(
-        call=lambda: _client_post(client, url, headers=_headers(api_key), json=payload),
+        call=lambda: _client_post(
+            client,
+            url,
+            headers=_headers(api_key, idempotency_key=idempotency_key),
+            json=payload,
+        ),
         timeout_seconds=timeout_seconds,
         poll_interval_seconds=poll_interval_seconds,
     )
@@ -1415,7 +1777,9 @@ def _post_run_with_optional_deadline(
             response=None,
             timed_out=True,
             elapsed_seconds=attempt.elapsed_seconds,
-            timeout_snapshot=_latest_safe_run_snapshot(),
+            timeout_snapshot=(
+                _latest_safe_run_snapshot() if allow_in_process_timeout_snapshot else None
+            ),
         )
     return _RunPostAttempt(
         response=_completed_response_or_raise(attempt),
@@ -1438,7 +1802,14 @@ def _call_response_with_optional_deadline(
             timed_out=True,
             elapsed_seconds=time.monotonic() - started_at,
         )
-    response = call()
+    try:
+        response = call()
+    except TimeoutError:
+        return _RunPostAttempt(
+            response=None,
+            timed_out=True,
+            elapsed_seconds=time.monotonic() - started_at,
+        )
     elapsed_seconds = time.monotonic() - started_at
     return _RunPostAttempt(
         response=response,
@@ -1507,8 +1878,47 @@ def _suppress_output() -> contextlib.AbstractContextManager[None]:
     return suppress()
 
 
-def _headers(api_key: str) -> dict[str, str]:
-    return {"X-IDIS-API-Key": api_key}
+def _headers(api_key: str, *, idempotency_key: str | None = None) -> dict[str, str]:
+    headers = {"X-IDIS-API-Key": api_key}
+    if idempotency_key is not None:
+        headers["Idempotency-Key"] = idempotency_key
+    return headers
+
+
+def _strict_mutation_idempotency_key(
+    proof_id: str | None,
+    *,
+    operation: str,
+    discriminator: str = "",
+) -> str:
+    """Return a stable opaque key for one strict external mutation.
+
+    The proof binds one company/corpus/run attempt.  Hashing it with the
+    versioned operation and a content-derived upload discriminator keeps keys
+    repeatable for safe replay without putting proof IDs or private paths in a
+    request header or ledger.
+    """
+    canonical_proof_id = _canonical_strict_preflight_proof_id(proof_id)
+    material = "\x00".join(
+        (STRICT_IDEMPOTENCY_KEY_VERSION, canonical_proof_id, operation, discriminator)
+    ).encode("utf-8")
+    return f"idis-{hashlib.sha256(material).hexdigest()}"
+
+
+def _canonical_strict_preflight_proof_id(proof_id: str | None) -> str:
+    """Validate and canonicalize a proof UUID before any strict mutation."""
+    if not isinstance(proof_id, str) or not proof_id.strip():
+        raise ValueError(
+            f"{API_ACCEPTANCE_PATH_NONCANONICAL}: "
+            "strict acceptance requires a preflight proof identifier"
+        )
+    try:
+        return str(uuid.UUID(proof_id.strip()))
+    except ValueError as exc:
+        raise ValueError(
+            f"{API_ACCEPTANCE_PATH_NONCANONICAL}: "
+            "strict acceptance requires a valid preflight proof UUID"
+        ) from exc
 
 
 def _write_checkpoint(
@@ -2043,6 +2453,21 @@ def _optional_string(value: Any) -> str | None:
         return None
     text = str(value)
     return text if text else None
+
+
+@contextlib.contextmanager
+def _external_api_client(
+    base_url: str,
+    timeout_seconds: float | None = None,
+) -> Iterator[_ApiClientLike]:
+    import httpx
+
+    with httpx.Client(
+        base_url=base_url,
+        follow_redirects=False,
+        timeout=DEFAULT_EXTERNAL_REQUEST_TIMEOUT_SECONDS,
+    ) as client:
+        yield _BoundedExternalApiClient(client, timeout_seconds=timeout_seconds)
 
 
 @contextlib.contextmanager

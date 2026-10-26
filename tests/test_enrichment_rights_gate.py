@@ -103,7 +103,7 @@ class TestRedProvider:
         )
         assert len(sink.events) == 1
         event = sink.events[0]
-        assert event["event_type"] == "enrichment.rights_denied"
+        assert event["event_type"] == "integration.enrichment.rights_denied"
         assert event["severity"] == "HIGH"
         assert event["tenant_id"] == TENANT_ID
 
@@ -182,4 +182,4 @@ class TestAuditFailureFatal:
                 audit_sink=broken_sink,
                 request_id=REQUEST_ID,
             )
-        assert "audit emission failed" in str(exc_info.value)
+        assert "AUDIT_FAILURE" in str(exc_info.value)

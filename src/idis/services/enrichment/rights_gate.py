@@ -13,7 +13,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
+
+from idis.audit.canonical import build_canonical_audit_event
 
 if TYPE_CHECKING:
     from idis.audit.sink import AuditSink
@@ -165,21 +167,26 @@ def _emit_deny_audit(
     Raises:
         RightsGateError: If audit emission fails.
     """
-    event: dict[str, Any] = {
-        "event_type": "enrichment.rights_denied",
-        "severity": "HIGH",
-        "tenant_id": tenant_id,
-        "payload": {
+    event = build_canonical_audit_event(
+        tenant_id=tenant_id,
+        event_type="integration.enrichment.rights_denied",
+        severity="HIGH",
+        summary="Enrichment provider access denied by rights gate",
+        actor_id="idis-enrichment-rights-gate",
+        request_id=request_id,
+        method="POST",
+        path="/internal/enrichment/rights-check",
+        status_code=403,
+        resource_type="integration",
+        resource_id=provider_id,
+        safe={
             "provider_id": provider_id,
             "rights_class": rights_class.value,
-            "reason": reason,
-            "request_id": request_id,
+            "decision_code": "ENRICHMENT_RIGHTS_DENIED",
         },
-    }
+        refs=[f"provider_id:{provider_id}"],
+    )
     try:
         audit_sink.emit(event)
     except Exception as exc:
-        raise RightsGateError(
-            f"Fatal: audit emission failed during rights denial for "
-            f"provider={provider_id} tenant={tenant_id}: {exc}"
-        ) from exc
+        raise RightsGateError("AUDIT_FAILURE: enrichment rights denial was not recorded") from exc

@@ -15,24 +15,34 @@ import asyncio
 import logging
 import os
 import uuid
-from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any, cast
 
 from fastapi import APIRouter, Query, Request
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from idis.analysis.scoring import stage_admission
 from idis.api.auth import RequireTenantContext
 from idis.api.errors import IdisHttpError
+from idis.audit.canonical import build_canonical_audit_event
+from idis.audit.postgres_sink import PostgresAuditSink
+from idis.audit.request_bound_sink import RequestBoundPostgresAuditSink
 from idis.audit.sink import AuditSink, AuditSinkError
 from idis.models.run_source import RunSource
 from idis.persistence.repositories.run_steps import get_run_steps_repository
-from idis.persistence.repositories.runs import RunAlreadyActiveError, get_runs_repository
+from idis.persistence.repositories.runs import (
+    RunAlreadyActiveError,
+    WorkerLeaseFencedError,
+    get_runs_repository,
+)
+from idis.persistence.repositories.strict_preflight_proofs import (
+    StrictPreflightProofError,
+    get_strict_preflight_proofs_repository,
+)
 from idis.services.runs import strict_full_live as strict_full_live_module
 from idis.services.runs.execution import RunExecutionService
 from idis.services.runs.lifecycle import RunLifecycleService
+from idis.services.runs.step_runtime.common import _resolve_run_audit_sink
 from idis.services.runs.steps import build_run_context
 from idis.services.runs.strict_full_live import (
     IDIS_STRICT_DOTENV_PATH_ENV,
@@ -57,7 +67,23 @@ from idis.services.webhooks.safe_payload import (
 
 logger = logging.getLogger(__name__)
 
+
 router = APIRouter(prefix="/v1", tags=["Runs"])
+
+
+class RunMethodologySelectionRequest(BaseModel):
+    """Explicit immutable methodology-version selection for a FULL run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    commercial_dd_version_record_id: uuid.UUID
+    financial_dd_version_record_id: uuid.UUID
+
+    @model_validator(mode="after")
+    def _version_records_are_distinct(self) -> RunMethodologySelectionRequest:
+        if self.commercial_dd_version_record_id == self.financial_dd_version_record_id:
+            raise ValueError("CDD and FDD methodology version records must be distinct")
+        return self
 
 
 class StartRunRequest(BaseModel):
@@ -67,6 +93,16 @@ class StartRunRequest(BaseModel):
 
     mode: str
     source: RunSource | None = None
+    strict_preflight_proof_id: str | None = None
+    methodology_selection: RunMethodologySelectionRequest | None = None
+
+    @model_validator(mode="after")
+    def _full_run_has_complete_methodology_selection(self) -> StartRunRequest:
+        if self.mode == "FULL" and self.methodology_selection is None:
+            raise ValueError("FULL run requires the frozen CDD and FDD methodology selection")
+        if self.mode == "SNAPSHOT" and self.methodology_selection is not None:
+            raise ValueError("SNAPSHOT run does not accept a methodology selection")
+        return self
 
 
 PATH_LIKE_RUN_FIELDS = frozenset(
@@ -192,7 +228,10 @@ def _validate_start_run_body(body: dict[str, Any] | None) -> StartRunRequest:
             status_code=400,
             code="INVALID_REQUEST",
             message="Invalid run request body",
-            details={"errors": exc.errors()},
+            # Pydantic includes the original ValueError object in ``ctx`` by
+            # default; that object is not JSON serializable and would turn a
+            # safe client error into an internal 500 at the real API boundary.
+            details={"errors": exc.errors(include_context=False)},
         ) from exc
 
 
@@ -205,6 +244,366 @@ def _path_like_fields(body: dict[str, Any]) -> list[str]:
         if isinstance(value, dict):
             rejected.update(field for field in value if field in PATH_LIKE_RUN_FIELDS)
     return sorted(rejected)
+
+
+def _methodology_record_value(record: Any, field: str) -> Any:
+    if isinstance(record, dict):
+        return record[field]
+    return getattr(record, field)
+
+
+def _methodology_configuration(request: Request) -> Any:
+    profile = getattr(request.app.state, "strict_runtime_profile", None)
+    values = getattr(profile, "values", None)
+    return values if values is not None else os.environ
+
+
+def _validate_full_methodology_selection(
+    *,
+    request: Request,
+    tenant_id: str,
+    selection: RunMethodologySelectionRequest,
+) -> Any:
+    """Return the durable repository after exact frozen-source validation."""
+
+    from idis.api.routes.methodology_versions import resolve_server_registry
+    from idis.methodology.models import MethodologyRegistry, MethodologyType
+    from idis.persistence.repositories.methodologies import (
+        MethodologiesRepositoryError,
+        get_methodologies_repository,
+    )
+
+    db_conn = getattr(request.state, "db_conn", None)
+    try:
+        repository = get_methodologies_repository(db_conn, tenant_id)
+        selected = (
+            (
+                MethodologyType.COMMERCIAL_DD,
+                repository.get_frozen_version(
+                    methodology_version_record_id=str(selection.commercial_dd_version_record_id)
+                ),
+            ),
+            (
+                MethodologyType.FINANCIAL_DD,
+                repository.get_frozen_version(
+                    methodology_version_record_id=str(selection.financial_dd_version_record_id)
+                ),
+            ),
+        )
+    except MethodologiesRepositoryError as exc:
+        raise IdisHttpError(
+            status_code=409,
+            code="METHODOLOGY_COVERAGE_INCOMPLETE",
+            message="Both frozen CDD and FDD methodology versions are required",
+        ) from exc
+
+    configuration = _methodology_configuration(request)
+    for expected_type, record in selected:
+        try:
+            actual_type = MethodologyType(_methodology_record_value(record, "methodology_type"))
+            current_registry, _byte_count, _source_type, _source_alias = resolve_server_registry(
+                expected_type, configuration=configuration
+            )
+            persisted_registry = _methodology_record_value(record, "registry")
+            if not isinstance(persisted_registry, MethodologyRegistry):
+                raise ValueError("persisted registry is unavailable")
+            if (
+                actual_type is not expected_type
+                or str(_methodology_record_value(record, "status")) != "FROZEN"
+                or str(_methodology_record_value(record, "source_sha256"))
+                != current_registry.current_version.source_hash
+                or str(_methodology_record_value(record, "registry_hash"))
+                != current_registry.registry_hash
+                or persisted_registry.to_deterministic_json()
+                != current_registry.to_deterministic_json()
+            ):
+                raise ValueError("frozen methodology source binding drifted")
+        except IdisHttpError:
+            raise
+        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            raise IdisHttpError(
+                status_code=409,
+                code="METHODOLOGY_COVERAGE_INCOMPLETE",
+                message="The selected methodology version failed source validation",
+            ) from exc
+    return repository
+
+
+def _guard_full_stage_admission(
+    *,
+    request: Request,
+    tenant_id: str,
+    deal_id: str,
+) -> None:
+    """Refuse FULL runs whose deal stage is missing or ineligible.
+
+    Design-02 admission-front guard: detach the scalar ``stage`` value from
+    one tenant-scoped deal metadata read, then capture and validate the
+    transient selection through the installed policy-A codec before any
+    corpus, freeze, proof, run or context work. This validation is not
+    durable stage authority.
+    """
+    deal_record = _load_deal_metadata_for_run(request, tenant_id, deal_id)
+    raw_stage = deal_record.get("stage") if isinstance(deal_record, dict) else None
+    if not isinstance(raw_stage, str):
+        raise IdisHttpError(
+            status_code=400,
+            code="STAGE_UNKNOWN",
+            message="A known deal stage is required to start a FULL run",
+        )
+    try:
+        policy = stage_admission.stage_resolution_policy_a()
+        packs = stage_admission.installed_stage_pack_registry()
+        selection = stage_admission.capture_stage_selection(
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            raw_stage=raw_stage,
+            policy=policy,
+            packs=packs,
+        )
+        stage_admission.validate_stage_selection(
+            selection=selection,
+            policy=policy,
+            packs=packs,
+        )
+    except stage_admission.StageAdmissionError as exc:
+        if exc.code == stage_admission.STAGE_UNKNOWN:
+            raise IdisHttpError(
+                status_code=400,
+                code="STAGE_UNKNOWN",
+                message="A known deal stage is required to start a FULL run",
+            ) from exc
+        raise IdisHttpError(
+            status_code=500,
+            code=exc.code,
+            message="Deal stage admission checks could not be completed",
+        ) from exc
+
+
+def resolve_strict_preflight_binding(
+    *,
+    request: Request,
+    tenant_id: str,
+    deal_id: str,
+    preflight_corpus: list[dict[str, Any]],
+    strict_report: Any,
+) -> Any:
+    """Resolve the complete server-side binding for a strict proof.
+
+    Slice100's later tasks will install the producer after the governed
+    pipeline, methodology, prompt, provider, and dependency receipts exist.
+    Task 1 deliberately provides no partial/default binding: strict admission
+    stays closed until that complete resolver is wired.
+    """
+    resolver = getattr(request.app.state, "strict_preflight_binding_resolver", None)
+    if not callable(resolver):
+        raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_MISMATCH")
+    binding = resolver(
+        tenant_id=tenant_id,
+        deal_id=deal_id,
+        preflight_corpus=preflight_corpus,
+        strict_report=strict_report,
+    )
+    if binding is None:
+        raise StrictPreflightProofError("STRICT_PREFLIGHT_PROOF_MISMATCH")
+    return binding
+
+
+def _public_source_freeze_code(exc: Exception) -> str | None:
+    """Return the safe 409 code for a freeze failure, or None to propagate it.
+
+    Only prerequisite-class codes map to SOURCE_PREPARATION_PREREQUISITE_UNMET.
+    Fence races map to the retryable SOURCE_FREEZE_CONFLICT code. The internal
+    code is logged server-side and is not placed on the returned public code.
+    Any other freeze code returns None so the caller re-raises it as a 500.
+
+    Args:
+        exc: Failure raised by ``freeze_source_package``.
+
+    Returns:
+        A public 409 code, or None when the failure must not be relabelled.
+    """
+    from idis.persistence.repositories.task7_source_freeze import (
+        TASK7_PARSE_ATTEMPT_LINEAGE_UNRECONSTRUCTIBLE,
+        TASK7_SOURCE_FREEZE_FENCED,
+        TASK7_SOURCE_TERMINAL_STATE_INVALID,
+        Task7SourceFreezeError,
+    )
+
+    if not isinstance(exc, Task7SourceFreezeError):
+        return None
+    logger.error("Task 7 source freeze refused with internal code %s", exc.code)
+    if exc.code in {
+        TASK7_SOURCE_TERMINAL_STATE_INVALID,
+        TASK7_PARSE_ATTEMPT_LINEAGE_UNRECONSTRUCTIBLE,
+    }:
+        return "SOURCE_PREPARATION_PREREQUISITE_UNMET"
+    if exc.code == TASK7_SOURCE_FREEZE_FENCED:
+        return "SOURCE_FREEZE_CONFLICT"
+    return None
+
+
+def _reload_frozen_preflight_corpus(
+    *,
+    db_conn: Any,
+    tenant_id: str,
+    deal_id: str,
+    selected_document_ids: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    """Reload a frozen corpus, mapping only the missing-source refusal.
+
+    ``FROZEN_SOURCE_REQUIRED`` becomes SOURCE_PACKAGE_REQUIRED. Any other
+    ``ValueError`` propagates so a loader bug is a 500, not a package refusal.
+    The internal code is logged server-side only.
+
+    Args:
+        db_conn: Request-scoped database connection.
+        tenant_id: Tenant that owns the deal.
+        deal_id: Deal whose frozen corpus is reloaded.
+        selected_document_ids: Document ids admitted for this run.
+
+    Returns:
+        The frozen preflight corpus.
+
+    Raises:
+        StrictPreflightProofError: When the frozen source is absent.
+        ValueError: When the loader fails for any other reason.
+    """
+    from idis.services.runs.steps import load_document_preflight_corpus_for_deal
+
+    try:
+        return load_document_preflight_corpus_for_deal(
+            db_conn=db_conn,
+            tenant_id=tenant_id,
+            deal_id=deal_id,
+            selected_document_ids=selected_document_ids,
+            require_frozen=True,
+        )
+    except ValueError as exc:
+        if exc.args != ("FROZEN_SOURCE_REQUIRED",):
+            raise
+        logger.error(
+            "Frozen source reload refused with internal code %s",
+            "FROZEN_SOURCE_REQUIRED",
+        )
+        raise StrictPreflightProofError("SOURCE_PACKAGE_REQUIRED") from exc
+
+
+def _freeze_task7_selected_source_packages(
+    *,
+    request: Request,
+    tenant_id: str,
+    deal_id: str,
+    selected_document_ids: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Freeze every complete selected package before any run admission."""
+
+    from sqlalchemy import text
+
+    from idis.models.source_package_manifest import SourcePackageManifest
+    from idis.persistence.db import get_app_engine
+    from idis.persistence.repositories.task7_source_freeze import (
+        Task7SourceFreezeError,
+        freeze_source_package,
+    )
+    from idis.services.ingestion.no_substantive_content_attestation import (
+        VerifiedDocumentNoSubstantiveContentAttestation,
+        VerifiedDocumentNoSubstantiveContentAttestationManifest,
+        load_document_no_substantive_content_attestation,
+    )
+
+    db_conn = getattr(request.state, "db_conn", None)
+    if db_conn is None or not selected_document_ids:
+        raise StrictPreflightProofError("SOURCE_PACKAGE_REQUIRED")
+    try:
+        selected = tuple(sorted(str(uuid.UUID(value)) for value in selected_document_ids))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise StrictPreflightProofError("SOURCE_PACKAGE_REQUIRED") from exc
+    if len(set(selected)) != len(selected):
+        raise StrictPreflightProofError("SOURCE_PACKAGE_REQUIRED")
+
+    package_rows = db_conn.execute(
+        text(
+            """
+            SELECT package_id, metadata -> 'source_manifest' AS source_manifest
+            FROM data_room_packages
+            WHERE tenant_id = CAST(:tenant_id AS uuid)
+              AND deal_id = CAST(:deal_id AS uuid)
+              AND metadata ? 'source_manifest'
+            ORDER BY package_id
+            """
+        ),
+        {"tenant_id": tenant_id, "deal_id": deal_id},
+    ).fetchall()
+    selected_set = set(selected)
+    matched_packages: list[tuple[str, frozenset[str]]] = []
+    document_owner: dict[str, str] = {}
+    try:
+        for row in package_rows:
+            mapping = getattr(row, "_mapping", row)
+            manifest = SourcePackageManifest.model_validate(mapping["source_manifest"])
+            package_id = str(uuid.UUID(str(mapping["package_id"])))
+            members = frozenset(str(member.document_id) for member in manifest.files)
+            overlap = selected_set & members
+            if not overlap:
+                continue
+            for document_id in overlap:
+                if document_id in document_owner:
+                    raise ValueError("selected document belongs to multiple packages")
+                document_owner[document_id] = package_id
+            matched_packages.append((package_id, members))
+    except (KeyError, TypeError, ValueError, ValidationError) as exc:
+        raise StrictPreflightProofError("SOURCE_PACKAGE_REQUIRED") from exc
+
+    if set(document_owner) != selected_set or not matched_packages:
+        raise StrictPreflightProofError("SOURCE_PACKAGE_REQUIRED")
+    selected_package_members = frozenset(
+        document_id for _package_id, members in matched_packages for document_id in members
+    )
+    if selected_package_members != selected_set:
+        # Current-limitation diagnostic for RUN_STATE input-support mapping
+        # item 3. Subset selection of one document from a multi-document
+        # package remains a documented obligation. Until subset binding lands,
+        # this refusal only reports that a partial selection is not yet
+        # admitted. It does not retire that obligation.
+        raise StrictPreflightProofError("PARTIAL_PACKAGE_SELECTION_REFUSED")
+    package_ids = tuple(sorted(package_id for package_id, _members in matched_packages))
+    if len(set(package_ids)) != len(package_ids):
+        raise StrictPreflightProofError("SOURCE_PACKAGE_REQUIRED")
+
+    authority = load_document_no_substantive_content_attestation(
+        env=_methodology_configuration(request)
+    )
+    if authority is not None and not isinstance(
+        authority,
+        (
+            VerifiedDocumentNoSubstantiveContentAttestation,
+            VerifiedDocumentNoSubstantiveContentAttestationManifest,
+        ),
+    ):
+        logger.error("NO_SUBSTANTIVE_CONTENT_ATTESTATION_AUTHORITY_INVALID")
+        raise RuntimeError("NO_SUBSTANTIVE_CONTENT_ATTESTATION_AUTHORITY_INVALID")
+    # CR-C23J-07: freeze_source_package commits on its own get_app_engine()
+    # connection before run admission. Request-scoped db_conn relies on READ
+    # COMMITTED visibility to observe the newly SEALED/BOUND rows below; if a
+    # later 409 (e.g. RUN_ALREADY_ACTIVE) or 500 stops run creation, the
+    # package intentionally remains SEALED/BOUND for idempotent reuse.
+    engine = get_app_engine()
+    try:
+        for package_id in package_ids:
+            freeze_source_package(
+                engine=engine,
+                tenant_id=tenant_id,
+                deal_id=deal_id,
+                package_id=package_id,
+                terminal_exclusion_authority=authority,
+            )
+    except Task7SourceFreezeError as exc:
+        public_code = _public_source_freeze_code(exc)
+        if public_code is None:
+            raise
+        raise StrictPreflightProofError(public_code) from exc
+    return package_ids
 
 
 @router.post("/deals/{deal_id}/runs", response_model=RunRef, status_code=202)
@@ -220,12 +619,12 @@ async def start_run(
         request: FastAPI request for DB connection and body access.
         tenant_ctx: Injected tenant context from auth dependency.
 
-    Returns:
-        RunRef with run_id and initial status.
-
     Raises:
         IdisHttpError: 400 if invalid/missing fields, 404 if deal not found,
             500 if audit emission fails (fail-closed).
+
+    Returns:
+        RunRef with run_id and initial status.
     """
     try:
         body = await request.json()
@@ -250,6 +649,23 @@ async def start_run(
             message="An active run already exists for this deal",
         )
 
+    methodologies_repo: Any | None = None
+    if request_body.mode == "FULL":
+        # Validate both frozen, source-stable methodology families before the
+        # run INSERT.  Versions become immutable once frozen, so the later
+        # selection INSERT can share the request transaction with run creation
+        # without a check-then-mutate race.
+        methodologies_repo = _validate_full_methodology_selection(
+            request=request,
+            tenant_id=tenant_ctx.tenant_id,
+            selection=cast(RunMethodologySelectionRequest, request_body.methodology_selection),
+        )
+        _guard_full_stage_admission(
+            request=request,
+            tenant_id=tenant_ctx.tenant_id,
+            deal_id=deal_id,
+        )
+
     preflight_corpus = _gather_preflight_corpus(request, tenant_ctx.tenant_id, deal_id)
     preflight_corpus = _apply_run_source_to_preflight_corpus(
         preflight_corpus=preflight_corpus,
@@ -269,7 +685,14 @@ async def start_run(
     strict_live_extraction_required = request_body.mode == "FULL" and is_strict_full_live_required(
         dotenv_path=strict_dotenv_path
     )
+    strict_report: Any | None = None
     if strict_live_extraction_required:
+        if request_body.strict_preflight_proof_id is None:
+            raise IdisHttpError(
+                status_code=409,
+                code="STRICT_PREFLIGHT_PROOF_REQUIRED",
+                message="A fresh strict preflight proof is required for this run",
+            )
         strict_report = build_strict_full_live_admission_report(
             db_conn=db_conn,
             tenant_id=tenant_ctx.tenant_id,
@@ -284,28 +707,6 @@ async def start_run(
                 details=build_strict_block_operator_safe_details(strict_report),
             )
 
-    try:
-        run_data = runs_repo.create(
-            run_id=run_id,
-            deal_id=deal_id,
-            mode=request_body.mode,
-            idempotency_key=idempotency_key,
-            source=(
-                request_body.source.to_storage_dict() if request_body.source is not None else None
-            ),
-            created_by_actor_id=tenant_ctx.actor_id,
-            created_by_actor_type=tenant_ctx.actor_type,
-        )
-    except RunAlreadyActiveError as exc:
-        # Loser of a concurrent create race (past the fail-fast check) -> same safe 409.
-        raise IdisHttpError(
-            status_code=409,
-            code="RUN_ALREADY_ACTIVE",
-            message="An active run already exists for this deal",
-        ) from exc
-
-    request.state.audit_resource_id = run_id
-
     extractor_configured = getattr(request.app.state, "extractor_configured", True)
     if not extractor_configured:
         raise IdisHttpError(
@@ -314,12 +715,182 @@ async def start_run(
             message="No claim extractor is configured. Cannot proceed.",
         )
 
+    try:
+        selected_document_ids = tuple(
+            sorted(
+                str(document["document_id"])
+                for document in preflight_corpus
+                if document.get("document_id") is not None
+            )
+        )
+        source = RunSource.model_validate(
+            {"type": "deal_documents", "document_ids": list(selected_document_ids)}
+        ).to_storage_dict()
+        selected_source_package_ids = _freeze_task7_selected_source_packages(
+            request=request,
+            tenant_id=tenant_ctx.tenant_id,
+            deal_id=deal_id,
+            selected_document_ids=selected_document_ids,
+        )
+        preflight_corpus = _reload_frozen_preflight_corpus(
+            db_conn=db_conn,
+            tenant_id=tenant_ctx.tenant_id,
+            deal_id=deal_id,
+            selected_document_ids=selected_document_ids,
+        )
+        documents = _extraction_ready_documents_from_preflight_corpus(preflight_corpus)
+        if strict_live_extraction_required:
+            expected_binding = resolve_strict_preflight_binding(
+                request=request,
+                tenant_id=tenant_ctx.tenant_id,
+                deal_id=deal_id,
+                preflight_corpus=preflight_corpus,
+                strict_report=strict_report,
+            )
+            proof_repo = get_strict_preflight_proofs_repository(db_conn, tenant_ctx.tenant_id)
+            run_data = proof_repo.consume_and_admit_contract_run(
+                proof_id=cast(str, request_body.strict_preflight_proof_id),
+                expected_binding=expected_binding,
+                run_id=run_id,
+                deal_id=deal_id,
+                mode=request_body.mode,
+                idempotency_key=idempotency_key,
+                source=source,
+                created_by_actor_id=tenant_ctx.actor_id,
+                created_by_actor_type=tenant_ctx.actor_type,
+                selected_source_package_ids=selected_source_package_ids,
+            )
+        else:
+            run_data = runs_repo.create(
+                run_id=run_id,
+                deal_id=deal_id,
+                mode=request_body.mode,
+                idempotency_key=idempotency_key,
+                source=source,
+                created_by_actor_id=tenant_ctx.actor_id,
+                created_by_actor_type=tenant_ctx.actor_type,
+            )
+    except StrictPreflightProofError as exc:
+        message = (
+            "Source freeze conflict; retry the request"
+            if exc.code == "SOURCE_FREEZE_CONFLICT"
+            else "Frozen source preparation or strict proof did not authorize this run"
+        )
+        raise IdisHttpError(
+            status_code=409,
+            code=exc.code,
+            message=message,
+        ) from exc
+    except RunAlreadyActiveError as exc:
+        # Loser of a concurrent create race (past the fail-fast check) -> same safe 409.
+        raise IdisHttpError(
+            status_code=409,
+            code="RUN_ALREADY_ACTIVE",
+            message="An active run already exists for this deal",
+        ) from exc
+
+    if methodologies_repo is not None:
+        selection_audit_event_id = str(uuid.uuid4())
+        try:
+            methodologies_repo.create_run_selection(
+                deal_id=deal_id,
+                run_id=run_id,
+                commercial_dd_version_record_id=str(
+                    cast(
+                        RunMethodologySelectionRequest,
+                        request_body.methodology_selection,
+                    ).commercial_dd_version_record_id
+                ),
+                financial_dd_version_record_id=str(
+                    cast(
+                        RunMethodologySelectionRequest,
+                        request_body.methodology_selection,
+                    ).financial_dd_version_record_id
+                ),
+                created_by_actor_id=tenant_ctx.actor_id,
+                selection_audit_event_id=selection_audit_event_id,
+            )
+        except Exception as exc:
+            # A failure after run insertion must be a 5xx so the request-scoped
+            # transaction rolls back the run and selection together.  Returning
+            # a 4xx here would commit an orphan FULL run.
+            logger.error("Durable methodology selection failed for run %s", run_id)
+            raise IdisHttpError(
+                status_code=500,
+                code="METHODOLOGY_COVERAGE_INCOMPLETE",
+                message="Run methodology selection could not be persisted",
+            ) from exc
+        request.state.audit_event_id = selection_audit_event_id
+
+    request.state.audit_resource_id = run_id
+
+    if strict_live_extraction_required:
+        return RunRef(
+            run_id=run_data["run_id"],
+            status=run_data["status"],
+            steps=[],
+            block_reason=None,
+        )
+
     audit_sink = _get_audit_sink(request)
+    if db_conn is not None and isinstance(audit_sink, PostgresAuditSink):
+        audit_sink = RequestBoundPostgresAuditSink(
+            connection=db_conn,
+            delegate=audit_sink,
+            tenant_id=tenant_ctx.tenant_id,
+            actor_id=tenant_ctx.actor_id,
+            actor_type=tenant_ctx.actor_type,
+            actor_roles=tenant_ctx.roles,
+            request_id=request.state.request_id,
+            method=request.method,
+            path=request.url.path,
+            status_code=202,
+        )
+        request.state.run_audit_sink = audit_sink
+
+    def emit_inline_claim(ctx: Any, _identity: dict[str, str]) -> None:
+        claimed = runs_repo.get(ctx.run_id)
+        if (
+            claimed is None
+            or claimed.get("lease_owner_id") != ctx.lease_owner_id
+            or claimed.get("lease_fencing_token") != ctx.lease_fencing_token
+            or claimed.get("lease_expires_at") is None
+        ):
+            raise AuditSinkError("INLINE_CLAIM_AUDIT_IDENTITY_UNAVAILABLE")
+        audit_sink.emit(
+            build_canonical_audit_event(
+                tenant_id=tenant_ctx.tenant_id,
+                event_type="worker.lease.claimed",
+                severity="MEDIUM",
+                summary="API-inline execution lease claimed",
+                actor_id=tenant_ctx.actor_id,
+                actor_type=tenant_ctx.actor_type,
+                actor_roles=tenant_ctx.roles,
+                request_id=request.state.request_id,
+                method=request.method,
+                path=request.url.path,
+                status_code=202,
+                resource_type="deal",
+                resource_id=deal_id,
+                deal_id=deal_id,
+                safe={
+                    "code": "WORKER_LEASE_CLAIMED",
+                    "run_id": ctx.run_id,
+                    "lease_owner_id": ctx.lease_owner_id,
+                    "new_fencing_token": ctx.lease_fencing_token,
+                    "lease_expires_at": str(claimed["lease_expires_at"]),
+                    "execution_origin": "API_INLINE",
+                },
+            )
+        )
+
     run_steps_repo = get_run_steps_repository(db_conn, tenant_ctx.tenant_id)
     execution_service = RunExecutionService(
         audit_sink=audit_sink,
         runs_repo=runs_repo,
         run_steps_repo=run_steps_repo,
+        claim_audit_emitter=emit_inline_claim,
+        webhook_connection=db_conn,
     )
 
     ctx = build_run_context(
@@ -328,16 +899,29 @@ async def start_run(
         tenant_id=tenant_ctx.tenant_id,
         deal_id=deal_id,
         mode=request_body.mode,
+        created_by_actor_id=tenant_ctx.actor_id,
+        created_by_actor_type=tenant_ctx.actor_type,
         documents=documents,
         deal_metadata=_load_deal_metadata_for_run(request, tenant_ctx.tenant_id, deal_id),
         preflight_corpus=preflight_corpus,
         audit_sink=audit_sink,
         strict_live_extraction_required=strict_live_extraction_required,
         strict_live_debate_backend_required=strict_live_extraction_required,
+        pipeline_contract_version=(run_data.get("pipeline_contract_version")),
+        pipeline_contract_hash=(run_data.get("pipeline_contract_hash")),
+        pipeline_resume_state=(run_data.get("pipeline_resume_state")),
     )
 
     try:
         execution_result = await asyncio.to_thread(execution_service.execute, ctx)
+        if isinstance(audit_sink, RequestBoundPostgresAuditSink):
+            audit_sink.raise_if_failed()
+    except WorkerLeaseFencedError as exc:
+        raise IdisHttpError(
+            status_code=503,
+            code="WORKER_LEASE_FENCED",
+            message="Execution lease expired or was fenced; start a fresh frozen-source run",
+        ) from exc
     except AuditSinkError as exc:
         logger.error("Audit failure aborted run %s: %s", run_id, exc)
         raise IdisHttpError(
@@ -525,6 +1109,12 @@ def _retry_or_resume_run(
             status_code=409,
             code="RUN_NOT_RETRYABLE",
             message="Only failed runs can be retried",
+        )
+    if run_data.get("pipeline_resume_state") != "RESUMABLE":
+        raise IdisHttpError(
+            status_code=409,
+            code="LEGACY_RUN_RESUME_UNSAFE",
+            message="This run cannot resume; start a new run after frozen-source admission",
         )
 
     run_source = _run_source_from_storage(run_data.get("source"))
@@ -839,7 +1429,7 @@ def _extraction_ready_documents_from_preflight_corpus(
 
 
 def _get_audit_sink(request: Request) -> AuditSink:
-    """Get the audit sink from app state, falling back to in-memory.
+    """Get the application audit sink under the strict durability contract.
 
     Args:
         request: FastAPI request.
@@ -847,12 +1437,10 @@ def _get_audit_sink(request: Request) -> AuditSink:
     Returns:
         AuditSink instance.
     """
-    from idis.audit.sink import InMemoryAuditSink
-
-    sink: AuditSink | None = getattr(request.app.state, "audit_sink", None)
+    sink: AuditSink | None = getattr(request.state, "run_audit_sink", None)
     if sink is None:
-        return InMemoryAuditSink()
-    return sink
+        sink = getattr(request.app.state, "audit_sink", None)
+    return _resolve_run_audit_sink(sink)
 
 
 def _build_step_responses(steps: list[Any]) -> list[RunStepResponse]:
@@ -957,2948 +1545,27 @@ def _emit_run_completed_audit(
         tenant_id: Tenant UUID.
         status: Final run status.
     """
-    from idis.audit.sink import InMemoryAuditSink
-
-    audit_sink = getattr(request.app.state, "audit_sink", None)
-    if audit_sink is None:
-        audit_sink = InMemoryAuditSink()
-
-    event = {
-        "event_type": "deal.run.completed",
-        "tenant_id": tenant_id,
-        "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-        "details": {
-            "run_id": run_id,
-            "status": status,
-        },
-        "resource": {
-            "resource_type": "deal",
-            "resource_id": run_id,
-        },
-    }
+    audit_sink = _get_audit_sink(request)
+    tenant_ctx = request.state.tenant_context
+    deal_id = str(request.path_params["deal_id"])
+    event = build_canonical_audit_event(
+        tenant_id=tenant_id,
+        event_type="deal.run.completed",
+        severity="LOW",
+        summary="API-inline run execution completed",
+        actor_id=tenant_ctx.actor_id,
+        actor_type=tenant_ctx.actor_type,
+        actor_roles=tenant_ctx.roles,
+        request_id=request.state.request_id,
+        method=request.method,
+        path=request.url.path,
+        status_code=202,
+        resource_type="deal",
+        resource_id=deal_id,
+        deal_id=deal_id,
+        safe={"run_id": run_id, "status": status, "execution_origin": "API_INLINE"},
+    )
     audit_sink.emit(event)
-
-
-def _retrieve_claims_for_debate(
-    tenant_id: str,
-    created_claim_ids: list[str],
-    db_conn: Any = None,
-) -> list[dict[str, Any]]:
-    """Look up full claim data for debate context.
-
-    Uses Postgres repositories when db_conn is available, otherwise
-    falls back to in-memory stores.
-
-    Maps repository field names to DebateContext expected fields:
-      claim_grade → sanad_grade
-      primary_span_id → source_doc
-      extraction_confidence (from sanad) → confidence
-
-    Args:
-        tenant_id: Tenant UUID for scoped lookups.
-        created_claim_ids: Claim IDs produced by extraction/grading.
-        db_conn: SQLAlchemy connection (None for in-memory fallback).
-
-    Returns:
-        List of claim dicts with keys matching DebateContext serialization:
-        claim_id, claim_text, claim_class, sanad_grade, source_doc, confidence.
-    """
-    from idis.persistence.repositories.claims import (
-        ClaimsRepository,
-        InMemoryClaimsRepository,
-        InMemorySanadsRepository,
-        SanadsRepository,
-    )
-
-    if db_conn is not None:
-        claims_repo: ClaimsRepository | InMemoryClaimsRepository = ClaimsRepository(
-            db_conn, tenant_id
-        )
-        sanads_repo: SanadsRepository | InMemorySanadsRepository = SanadsRepository(
-            db_conn, tenant_id
-        )
-    else:
-        claims_repo = InMemoryClaimsRepository(tenant_id)
-        sanads_repo = InMemorySanadsRepository(tenant_id)
-
-    debate_claims: list[dict[str, Any]] = []
-    for cid in created_claim_ids:
-        claim = claims_repo.get(cid)
-        if claim is None:
-            logger.warning("Claim %s not found in store for debate context", cid)
-            debate_claims.append(
-                {
-                    "claim_id": cid,
-                    "claim_text": "",
-                    "claim_class": "",
-                    "sanad_grade": "",
-                    "source_doc": "",
-                    "confidence": 0.0,
-                }
-            )
-            continue
-
-        sanad = sanads_repo.get_by_claim(cid)
-        confidence = 0.0
-        if sanad is not None:
-            computed = sanad.get("computed", {})
-            confidence = computed.get(
-                "extraction_confidence",
-                sanad.get("extraction_confidence", 0.0),
-            )
-
-        debate_claims.append(
-            {
-                "claim_id": cid,
-                "claim_text": claim.get("claim_text", ""),
-                "claim_class": claim.get("claim_class", ""),
-                "sanad_grade": claim.get("claim_grade", ""),
-                "source_doc": claim.get("primary_span_id", "") or "",
-                "confidence": float(confidence),
-            }
-        )
-
-    return debate_claims
-
-
-def _run_full_debate(
-    *,
-    run_id: str,
-    tenant_id: str,
-    deal_id: str,
-    created_claim_ids: list[str],
-    calc_ids: list[str],
-    rag_retrieval: dict[str, Any] | None = None,
-    db_conn: Any = None,
-    debate_role_runners_factory: DebateRoleRunnersFactory | None = None,
-    strict_live_debate_backend_required: bool = False,
-) -> dict[str, Any]:
-    """Run DebateOrchestrator for a FULL pipeline run.
-
-    Constructs a DebateState from pipeline context, executes the debate,
-    and converts the returned DebateState to a dict summary for the step ledger.
-
-    Args:
-        run_id: Pipeline run UUID.
-        tenant_id: Tenant context.
-        deal_id: Deal UUID.
-        created_claim_ids: Claim IDs from extraction/grading.
-        calc_ids: Calc IDs from calculation step.
-        rag_retrieval: Safe probe-retrieval summary from the RAG_EVIDENCE step
-            (Slice91); whitelist-converted to an IDs/scores-only context section.
-        db_conn: SQLAlchemy connection (None for in-memory fallback).
-
-    Returns:
-        Dict with debate_id, stop_reason, round_number, muhasabah_passed,
-        and agent_output_count.
-    """
-    from idis.analysis.models import AnalysisRagEvidence
-    from idis.debate.orchestrator import DebateOrchestrator
-    from idis.debate.roles.llm_role_runner import DebateContext
-    from idis.models.debate import DebateConfig, DebateState
-
-    debate_claims = _retrieve_claims_for_debate(tenant_id, created_claim_ids, db_conn=db_conn)
-
-    context = DebateContext(
-        deal_name=deal_id,
-        deal_sector="Unknown",
-        deal_stage="Unknown",
-        deal_summary="",
-        claims=debate_claims,
-        calc_results=[
-            {
-                "calc_id": cid,
-                "calc_name": "",
-                "result_value": "",
-                "input_claim_ids": [],
-            }
-            for cid in calc_ids
-        ],
-        conflicts=[],
-        rag_evidence=AnalysisRagEvidence.from_retrieval_summary(rag_retrieval).to_payload_section(),
-    )
-
-    state = DebateState(
-        tenant_id=tenant_id,
-        deal_id=deal_id,
-        claim_registry_ref=f"claims://{run_id}",
-        sanad_graph_ref=f"sanad://{run_id}",
-        round_number=1,
-    )
-
-    role_runners = _build_debate_role_runners(
-        context=context,
-        debate_role_runners_factory=debate_role_runners_factory,
-        strict_live_debate_backend_required=strict_live_debate_backend_required,
-        tenant_id=tenant_id,
-    )
-    orchestrator = DebateOrchestrator(config=DebateConfig(), role_runners=role_runners)
-    final_state = orchestrator.run(state)
-
-    gate_failure = orchestrator.get_gate_failure()
-    muhasabah_passed = gate_failure is None
-
-    return {
-        "debate_id": run_id,
-        "stop_reason": (final_state.stop_reason.value if final_state.stop_reason else None),
-        "round_number": final_state.round_number,
-        "muhasabah_passed": muhasabah_passed,
-        "agent_output_count": len(final_state.agent_outputs),
-        "debate_provenance": _build_debate_provenance(
-            selection=_resolve_debate_selection(),
-            strict_live_debate_backend_required=strict_live_debate_backend_required,
-            role_runners=role_runners,
-        ),
-        "debate_observability": _build_debate_observability(final_state),
-    }
-
-
-def _run_full_enrichment(
-    *,
-    run_id: str,
-    tenant_id: str,
-    deal_id: str,
-    created_claim_ids: list[str],
-    calc_ids: list[str],
-    db_conn: Any = None,
-) -> dict[str, Any]:
-    """Run enrichment for all configured providers in a FULL pipeline run.
-
-    Iterates over registered providers, calls EnrichmentService.enrich() for each,
-    and aggregates results. Gracefully handles zero results (step COMPLETED with
-    result_count=0).
-
-    Args:
-        run_id: Pipeline run UUID.
-        tenant_id: Tenant context.
-        deal_id: Deal UUID.
-        created_claim_ids: Claim IDs from extraction/grading.
-        calc_ids: Calc IDs from calculation step.
-        db_conn: Optional database connection for durable BYOL credential repository.
-
-    Returns:
-        Dict with provider_count, result_count, blocked_count, enrichment_refs.
-    """
-    from idis.audit.sink import InMemoryAuditSink
-    from idis.persistence.repositories.enrichment_credentials import (
-        get_enrichment_credentials_repository,
-    )
-    from idis.services.enrichment.models import (
-        EnrichmentPurpose,
-        EnrichmentQuery,
-        EnrichmentRequest,
-        EnrichmentStatus,
-        EntityType,
-    )
-    from idis.services.enrichment.service import create_default_enrichment_service
-
-    audit_sink = InMemoryAuditSink()
-    strict_dotenv_path = os.environ.get(IDIS_STRICT_DOTENV_PATH_ENV)
-    strict_full_live = is_strict_full_live_required(dotenv_path=strict_dotenv_path)
-    service = create_default_enrichment_service(
-        audit_sink=audit_sink,
-        credential_repo=get_enrichment_credentials_repository(db_conn, tenant_id),
-        strict_full_live=strict_full_live,
-        tenant_id=tenant_id,
-        strict_dotenv_path=strict_dotenv_path,
-    )
-    providers = service.list_providers()
-
-    result_count = 0
-    blocked_count = 0
-    enrichment_refs: dict[str, dict[str, str]] = {}
-    # Slice86 ledger: per-provider rows of SAFE values only (ids/enums/bools — never payloads,
-    # credentials, or raw errors) plus aggregate counts, additive in the open result_summary.
-    ledger_rows: list[dict[str, Any]] = []
-    ledger_counts = {
-        "hit": 0,
-        "miss": 0,
-        "error": 0,
-        "blocked_rights": 0,
-        "blocked_missing_byol": 0,
-        "cache_hits": 0,
-    }
-    _LEDGER_COUNT_KEYS = {
-        EnrichmentStatus.HIT: "hit",
-        EnrichmentStatus.MISS: "miss",
-        EnrichmentStatus.ERROR: "error",
-        EnrichmentStatus.BLOCKED_RIGHTS: "blocked_rights",
-        EnrichmentStatus.BLOCKED_MISSING_BYOL: "blocked_missing_byol",
-    }
-
-    request = EnrichmentRequest(
-        tenant_id=tenant_id,
-        entity_type=EntityType.COMPANY,
-        query=EnrichmentQuery(company_name=deal_id),
-        purpose=EnrichmentPurpose.DUE_DILIGENCE,
-    )
-
-    def _record(
-        *,
-        provider_id: str,
-        status: EnrichmentStatus,
-        from_cache: bool,
-        rights_class: str,
-        optional_in_strict: bool,
-        requires_byol: bool,
-        ref_id: str | None,
-        conflicts: list[dict[str, str]] | None = None,
-    ) -> None:
-        from idis.services.enrichment.source_grade import map_rights_to_source_grade
-
-        # Slice86 D-E: grade computed at summary time; BYOL credentials demonstrably backed
-        # the call when a BYOL-requiring provider got past the missing-credential block.
-        has_byol = requires_byol and status != EnrichmentStatus.BLOCKED_MISSING_BYOL
-        source_grade = map_rights_to_source_grade(rights_class, has_byol=has_byol)
-        ledger_rows.append(
-            {
-                "provider_id": provider_id,
-                "status": status.value,
-                "from_cache": from_cache,
-                "rights_class": rights_class,
-                "optional_in_strict": optional_in_strict,
-                "ref_id": ref_id,
-                "source_grade": source_grade.value,
-                "conflicts": conflicts or [],
-            }
-        )
-        ledger_counts[_LEDGER_COUNT_KEYS[status]] += 1
-        if from_cache:
-            ledger_counts["cache_hits"] += 1
-
-    for provider_info in providers:
-        provider_id = provider_info["provider_id"]
-        optional_in_strict = bool(provider_info.get("optional_in_strict", False))
-        rights_class = str(provider_info.get("rights_class", ""))
-        requires_byol = bool(provider_info.get("requires_byol", False))
-        # Slice86 policy: provider errors are fatal in strict mode UNLESS the provider is
-        # registered optional_in_strict — optional failures take the non-strict handling
-        # (recorded and continued) instead of aborting the step.
-        strict_fatal = strict_full_live and not optional_in_strict
-
-        try:
-            result = service.enrich(provider_id=provider_id, request=request)
-        except Exception as exc:
-            if strict_fatal:
-                raise RuntimeError(f"Strict enrichment provider failed: {provider_id}") from exc
-            logger.warning(
-                "Enrichment provider %s failed for deal %s in run %s",
-                provider_id,
-                deal_id,
-                run_id,
-                exc_info=True,
-            )
-            _record(
-                provider_id=provider_id,
-                status=EnrichmentStatus.ERROR,
-                from_cache=False,
-                rights_class=rights_class,
-                optional_in_strict=optional_in_strict,
-                requires_byol=requires_byol,
-                ref_id=None,
-            )
-            continue
-
-        if result.status == EnrichmentStatus.HIT:
-            result_count += 1
-            hit_ref_id: str | None = None
-            hit_conflicts: list[dict[str, str]] = []
-            if result.provenance:
-                hit_ref_id = f"enrich-{provider_id}-{run_id[:8]}"
-                enrichment_refs[hit_ref_id] = {
-                    "ref_id": hit_ref_id,
-                    "provider_id": result.provenance.provider_id,
-                    "source_id": result.provenance.source_id,
-                }
-                # Slice86 D-G: narrow, never-fatal identifier conflict check — flags
-                # carry only a fixed code + field name, never the compared values.
-                from idis.services.enrichment.conflicts import identifier_conflicts
-
-                hit_conflicts = identifier_conflicts(
-                    request.query.model_dump(exclude_none=True),
-                    result.provenance.identifiers_used,
-                )
-            _record(
-                provider_id=provider_id,
-                status=EnrichmentStatus.HIT,
-                from_cache=result.from_cache,
-                rights_class=rights_class,
-                optional_in_strict=optional_in_strict,
-                requires_byol=requires_byol,
-                ref_id=hit_ref_id,
-                conflicts=hit_conflicts,
-            )
-        elif result.status in (
-            EnrichmentStatus.BLOCKED_RIGHTS,
-            EnrichmentStatus.BLOCKED_MISSING_BYOL,
-        ):
-            if strict_fatal:
-                raise RuntimeError(f"Strict enrichment provider blocked: {provider_id}")
-            blocked_count += 1
-            _record(
-                provider_id=provider_id,
-                status=result.status,
-                from_cache=result.from_cache,
-                rights_class=rights_class,
-                optional_in_strict=optional_in_strict,
-                requires_byol=requires_byol,
-                ref_id=None,
-            )
-        elif result.status == EnrichmentStatus.ERROR and strict_fatal:
-            raise RuntimeError(f"Strict enrichment provider failed: {provider_id}")
-        else:
-            _record(
-                provider_id=provider_id,
-                status=result.status,
-                from_cache=result.from_cache,
-                rights_class=rights_class,
-                optional_in_strict=optional_in_strict,
-                requires_byol=requires_byol,
-                ref_id=None,
-            )
-
-    return {
-        "provider_count": len(providers),
-        "result_count": result_count,
-        "blocked_count": blocked_count,
-        "enrichment_refs": enrichment_refs,
-        "enrichment_ledger": {"providers": ledger_rows, "counts": ledger_counts},
-    }
-
-
-def _run_full_layer2_ic_challenge(
-    *,
-    run_id: str,
-    tenant_id: str,
-    deal_id: str,
-    debate_summary: dict[str, Any],
-    created_claim_ids: list[str],
-    calc_ids: list[str],
-    graph_evidence: dict[str, Any] | None = None,
-    rag_evidence: dict[str, Any] | None = None,
-    enrichment_refs: dict[str, Any] | None = None,
-    vep_package_ids: list[str] | None = None,
-    db_conn: Any = None,
-    challenge_repository: Any = None,
-) -> dict[str, Any]:
-    """Run the distinct Layer 2 IC challenge for a FULL pipeline run.
-
-    ``vep_package_ids`` (Slice92) carries the durable Layer-1 VEP candidate ids
-    persisted by the METHODOLOGY_VALIDATED_EVIDENCE_PACKAGE step; they are surfaced
-    as safe sorted ``vep_ref_ids`` in the result so the Layer-2 ledger entry
-    references the durable Layer-1 output.
-
-    After the service returns a completed record, the safe challenge + finding rows
-    are persisted (Slice93) via ``challenge_repository`` when provided, else the
-    Postgres/InMemory twin selector; a write failure fails the step closed with a
-    static ``LAYER2_PERSISTENCE_FAILED`` reason.
-    """
-    from idis.services.runs.layer2_ic_challenge import (
-        Layer2ICChallengeBlockedError,
-        RunLayer2ICChallengeService,
-        build_live_layer2_ic_runners,
-    )
-
-    strict_dotenv_path = os.environ.get(IDIS_STRICT_DOTENV_PATH_ENV)
-    strict_full_live = is_strict_full_live_required(dotenv_path=strict_dotenv_path)
-    backend = str(os.environ.get("IDIS_DEBATE_BACKEND", "")).strip().lower()
-    default_model = os.environ.get(
-        "IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT",
-        "claude-sonnet-4-20250514",
-    )
-    arbiter_model = os.environ.get(
-        "IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER",
-        "claude-opus-4-20250514",
-    )
-    challenger_runner = None
-    arbiter_runner = None
-    if strict_full_live:
-        challenger_runner, arbiter_runner = build_live_layer2_ic_runners(
-            challenger_client=_new_budgeted_llm_client(
-                model=default_model, max_tokens=8192, tenant_id=tenant_id
-            ),
-            arbiter_client=_new_budgeted_llm_client(
-                model=arbiter_model, max_tokens=8192, tenant_id=tenant_id
-            ),
-        )
-    service = RunLayer2ICChallengeService(
-        strict_full_live=strict_full_live,
-        env=os.environ,
-        challenger_runner=challenger_runner,
-        arbiter_runner=arbiter_runner,
-    )
-    result, record = service.run_with_record(
-        tenant_id=tenant_id,
-        deal_id=deal_id,
-        run_id=run_id,
-        debate_summary=debate_summary,
-        created_claim_ids=created_claim_ids,
-        calc_ids=calc_ids,
-        graph_evidence=graph_evidence,
-        rag_evidence=rag_evidence,
-        enrichment_refs=enrichment_refs,
-    )
-
-    # Persist the durable safe rows (Slice93). Deterministic ids -> idempotent upserts;
-    # the InMemory twin keeps non-database runs green. Fail closed with a static,
-    # ledger-safe reason (no raw exception text; cause chained for logs).
-    from idis.models.layer2_durability import Layer2ChallengeRow, Layer2FindingRow
-    from idis.persistence.repositories.layer2_challenge import get_layer2_challenge_repository
-
-    repository = challenge_repository or get_layer2_challenge_repository(db_conn, tenant_id)
-    try:
-        repository.upsert_challenge(Layer2ChallengeRow.from_record(record))
-        for finding in record.findings:
-            repository.upsert_finding(
-                Layer2FindingRow.from_finding(
-                    finding,
-                    tenant_id=record.tenant_id,
-                    deal_id=record.deal_id,
-                    run_id=record.run_id,
-                    challenge_id=record.layer2_challenge_id,
-                )
-            )
-    except Exception as exc:
-        raise Layer2ICChallengeBlockedError("LAYER2_PERSISTENCE_FAILED") from exc
-    result["layer2_persistence"] = {
-        "status": "persisted",
-        "challenge_ids": [record.layer2_challenge_id],
-        "finding_row_count": len(record.findings),
-    }
-
-    # Safe durable Layer-1 reference: sorted, deduped, non-empty strings only.
-    result["vep_ref_ids"] = sorted(
-        {item for item in (vep_package_ids or []) if isinstance(item, str) and item}
-    )
-
-    # Safe live-provider provenance (Slice93 Task 5): model/prompt ids + a runtime-executed
-    # signal proving the challenger + arbiter live calls ran. Non-strict runs report
-    # live_calls_executed=False (no live runners were constructed).
-    result["layer2_provenance"] = _build_layer2_provenance(
-        strict_full_live=strict_full_live,
-        backend=backend,
-        challenger_model=default_model if strict_full_live else None,
-        arbiter_model=arbiter_model if strict_full_live else None,
-        challenger_runner=challenger_runner,
-        arbiter_runner=arbiter_runner,
-    )
-    return result
-
-
-def _run_full_analysis(
-    *,
-    run_id: str,
-    tenant_id: str,
-    deal_id: str,
-    created_claim_ids: list[str],
-    calc_ids: list[str],
-    enrichment_refs: dict[str, Any],
-    rag_retrieval: dict[str, Any] | None = None,
-    deal_metadata: dict[str, Any] | None = None,
-    db_conn: Any = None,
-    analysis_client_factory: AnalysisClientFactory | None = None,
-    strict_live_debate_backend_required: bool = False,
-) -> dict[str, Any]:
-    """Run analysis agents for a FULL pipeline run.
-
-    Builds LLM client (using IDIS_DEBATE_BACKEND), registers all 8 specialist agents,
-    constructs AnalysisContext from pipeline data, and runs AnalysisEngine.
-
-    Args:
-        run_id: Pipeline run UUID.
-        tenant_id: Tenant context.
-        deal_id: Deal UUID.
-        created_claim_ids: Claim IDs from extraction/grading.
-        calc_ids: Calc IDs from calculation step.
-        enrichment_refs: Enrichment references from enrichment step.
-        rag_retrieval: Safe probe-retrieval summary from the RAG_EVIDENCE step
-            (Slice91); IDs/scores only, whitelist-converted onto the context.
-
-    Returns:
-        Dict with agent_count, report_ids, bundle_id, and internal state
-        (_analysis_bundle, _analysis_context) for downstream steps.
-    """
-    from idis.analysis.agents import build_default_specialist_agents
-    from idis.analysis.models import AnalysisContext, AnalysisRagEvidence, EnrichmentRef
-    from idis.analysis.registry import AnalysisAgentRegistry
-    from idis.analysis.runner import AnalysisEngine
-    from idis.audit.sink import InMemoryAuditSink
-
-    llm_client = _build_analysis_llm_client(
-        analysis_client_factory=analysis_client_factory,
-        strict_live_debate_backend_required=strict_live_debate_backend_required,
-        tenant_id=tenant_id,
-    )
-    agents = build_default_specialist_agents(llm_client=llm_client)
-
-    registry = AnalysisAgentRegistry()
-    for agent in agents:
-        registry.register(agent)
-
-    enrichment_ref_models: dict[str, EnrichmentRef] = {}
-    for ref_id, ref_data in enrichment_refs.items():
-        if isinstance(ref_data, dict):
-            enrichment_ref_models[ref_id] = EnrichmentRef(
-                ref_id=ref_data.get("ref_id", ref_id),
-                provider_id=ref_data.get("provider_id", "unknown"),
-                source_id=ref_data.get("source_id", "unknown"),
-            )
-
-    analysis_ctx = AnalysisContext(
-        deal_id=deal_id,
-        tenant_id=tenant_id,
-        run_id=run_id,
-        claim_ids=frozenset(created_claim_ids),
-        calc_ids=frozenset(calc_ids),
-        enrichment_refs=enrichment_ref_models,
-        claim_registry=_build_analysis_claim_registry(
-            tenant_id=tenant_id,
-            deal_id=deal_id,
-            created_claim_ids=created_claim_ids,
-            db_conn=db_conn,
-        ),
-        calc_registry=_build_analysis_calc_registry(
-            tenant_id=tenant_id,
-            deal_id=deal_id,
-            calc_ids=calc_ids,
-            db_conn=db_conn,
-        ),
-        rag_evidence=AnalysisRagEvidence.from_retrieval_summary(rag_retrieval),
-        company_name=str((deal_metadata or {}).get("company_name") or ""),
-        stage=str((deal_metadata or {}).get("stage") or ""),
-        sector=str((deal_metadata or {}).get("sector") or ""),
-    )
-
-    audit_sink = InMemoryAuditSink()
-    engine = AnalysisEngine(registry=registry, audit_sink=audit_sink)
-    agent_ids = [a.agent_id for a in registry.list_agents()]
-    bundle = engine.run(analysis_ctx, agent_ids)
-
-    return {
-        "agent_count": len(bundle.reports),
-        "report_ids": [r.agent_id for r in bundle.reports],
-        "bundle_id": f"bundle-{run_id[:8]}",
-        "analysis_provenance": _build_analysis_provenance(
-            selection=_resolve_analysis_selection(),
-            strict_live_debate_backend_required=strict_live_debate_backend_required,
-            client=llm_client,
-        ),
-        "_analysis_bundle": bundle,
-        "_analysis_context": analysis_ctx,
-    }
-
-
-def _build_analysis_claim_registry(
-    *,
-    tenant_id: str,
-    deal_id: str,
-    created_claim_ids: list[str],
-    db_conn: Any = None,
-) -> dict[str, Any]:
-    """Load readable claim summaries for Layer 2 analysis context."""
-    from idis.analysis.models import AnalysisClaimReference
-    from idis.persistence.repositories.claims import ClaimsRepository, InMemoryClaimsRepository
-
-    claims_repo = (
-        ClaimsRepository(db_conn, tenant_id)
-        if db_conn is not None
-        else InMemoryClaimsRepository(tenant_id)
-    )
-    registry: dict[str, AnalysisClaimReference] = {}
-    for claim_id in sorted(set(created_claim_ids)):
-        claim = claims_repo.get(claim_id)
-        if not claim or str(claim.get("deal_id")) != deal_id:
-            continue
-        source_span_id = claim.get("primary_span_id")
-        claim_class = str(claim.get("claim_class") or "")
-        claim_text = str(claim.get("claim_text") or "")
-        registry[claim_id] = AnalysisClaimReference(
-            claim_id=claim_id,
-            claim_text=claim_text,
-            claim_class=claim_class,
-            source_summary=_claim_source_summary(claim_class, source_span_id),
-            sanad_grade=claim.get("claim_grade"),
-            materiality=claim.get("materiality"),
-            claim_verdict=claim.get("claim_verdict"),
-            source_span_id=str(source_span_id) if source_span_id else None,
-        )
-    return registry
-
-
-def _claim_source_summary(claim_class: str, source_span_id: Any) -> str:
-    """Build a concise claim source summary for evidence appendices."""
-    span_summary = f"span {source_span_id}" if source_span_id else None
-    parts = [part for part in (claim_class, span_summary) if part]
-    return ", ".join(parts) if parts else "Extracted claim"
-
-
-def _build_analysis_calc_registry(
-    *,
-    tenant_id: str,
-    deal_id: str,
-    calc_ids: list[str],
-    db_conn: Any = None,
-) -> dict[str, Any]:
-    """Load readable calculation summaries for Layer 2 analysis context."""
-    from idis.analysis.models import AnalysisCalcReference
-    from idis.calc.formulas.core import resolve_formula_version
-    from idis.persistence.repositories.calculations import get_calculations_repository
-
-    requested_ids = set(calc_ids)
-    if not requested_ids:
-        return {}
-    repo = get_calculations_repository(db_conn, tenant_id)
-    registry: dict[str, AnalysisCalcReference] = {}
-    calc_sanads_by_calc_id = {
-        str(calc_sanad.get("calc_id") or ""): calc_sanad
-        for calc_sanad in repo.list_calc_sanads_by_deal(deal_id)
-    }
-    for calc in repo.list_by_deal(deal_id):
-        calc_id = str(calc.get("calc_id") or "")
-        if calc_id not in requested_ids:
-            continue
-        output = calc.get("output")
-        input_claim_ids = _calc_input_claim_ids(calc.get("inputs"))
-        calc_sanad = calc_sanads_by_calc_id.get(calc_id, {})
-        registry[calc_id] = AnalysisCalcReference(
-            calc_id=calc_id,
-            calc_type=str(calc.get("calc_type") or ""),
-            output_summary=_calc_output_summary(output),
-            input_claim_ids=input_claim_ids,
-            source_summary=(
-                f"{calc.get('calc_type') or 'calculation'} from {len(input_claim_ids)} input claims"
-            ),
-            reproducibility_hash=calc.get("reproducibility_hash"),
-            calc_sanad_id=calc_sanad.get("calc_sanad_id"),
-            formula_hash=calc.get("formula_hash"),
-            code_version=calc.get("code_version"),
-            formula_version=resolve_formula_version(
-                calc.get("calc_type"), calc.get("formula_hash")
-            ),
-            output=_calc_output_payload(output),
-            assumptions=_calc_assumptions(calc.get("inputs")),
-            calc_grade=calc_sanad.get("calc_grade"),
-            input_min_sanad_grade=calc_sanad.get("input_min_sanad_grade"),
-        )
-    return registry
-
-
-def _calc_output_summary(output: Any) -> str:
-    """Render a calculation output to a short deterministic summary."""
-    if isinstance(output, dict):
-        value = output.get("primary_value") or output.get("value") or output.get("amount")
-        unit = output.get("unit")
-        currency = output.get("currency")
-        parts = [str(item) for item in (value, currency, unit) if item not in (None, "")]
-        return " ".join(parts) if parts else str(output)
-    return str(output or "")
-
-
-def _calc_output_payload(output: Any) -> dict[str, Any]:
-    """Return the safe structured output fields used by product exports."""
-    if not isinstance(output, dict):
-        return {}
-    payload: dict[str, Any] = {}
-    for key in ("primary_value", "value", "amount", "unit", "currency"):
-        if key in output:
-            payload[key] = output[key]
-    secondary_values = output.get("secondary_values")
-    if isinstance(secondary_values, dict):
-        payload["secondary_values"] = secondary_values
-    return payload
-
-
-def _calc_assumptions(inputs: Any) -> dict[str, Any]:
-    """Expose calculation inputs/metadata as deterministic assumptions."""
-    if not isinstance(inputs, dict):
-        return {}
-    assumptions: dict[str, Any] = {}
-    values = inputs.get("values")
-    metadata = inputs.get("metadata")
-    if isinstance(values, dict):
-        assumptions["inputs"] = {str(key): value for key, value in sorted(values.items())}
-    if isinstance(metadata, dict) and metadata:
-        assumptions["metadata"] = {
-            str(key): value for key, value in sorted(metadata.items()) if value not in (None, "")
-        }
-    return assumptions
-
-
-def _calc_input_claim_ids(inputs: Any) -> list[str]:
-    """Extract input claim IDs from calculation repository payloads."""
-    if not isinstance(inputs, dict):
-        return []
-    raw_claim_ids = inputs.get("input_claim_ids") or inputs.get("claim_ids") or []
-    if isinstance(raw_claim_ids, list):
-        return sorted(str(item) for item in raw_claim_ids if str(item).strip())
-    return []
-
-
-def _run_full_scoring(
-    *,
-    run_id: str,
-    tenant_id: str,
-    deal_id: str,
-    analysis_bundle: Any,
-    analysis_context: Any,
-    scoring_client_factory: ScoringClientFactory | None = None,
-    strict_live_debate_backend_required: bool = False,
-) -> dict[str, Any]:
-    """Run scoring engine for a FULL pipeline run.
-
-    Builds LLM client (using IDIS_DEBATE_BACKEND), constructs ScoringEngine,
-    and scores the analysis bundle. Defaults to SEED stage.
-
-    Args:
-        run_id: Pipeline run UUID.
-        tenant_id: Tenant context.
-        deal_id: Deal UUID.
-        analysis_bundle: AnalysisBundle from analysis step.
-        analysis_context: AnalysisContext from analysis step.
-
-    Returns:
-        Dict with composite_score, band, routing, and internal state
-        (_scorecard) for downstream steps.
-    """
-    from idis.analysis.scoring.engine import ScoringEngine
-    from idis.analysis.scoring.llm_scorecard_runner import LLMScorecardRunner
-    from idis.analysis.scoring.models import Stage
-    from idis.audit.sink import InMemoryAuditSink
-
-    llm_client = _build_scoring_llm_client(
-        scoring_client_factory=scoring_client_factory,
-        strict_live_debate_backend_required=strict_live_debate_backend_required,
-        tenant_id=tenant_id,
-    )
-    runner = LLMScorecardRunner(llm_client=llm_client)
-    audit_sink = InMemoryAuditSink()
-    engine = ScoringEngine(runner=runner, audit_sink=audit_sink)
-
-    stage = Stage.SEED
-    scorecard = engine.score(analysis_context, analysis_bundle, stage)
-
-    return {
-        "composite_score": scorecard.composite_score,
-        "band": scorecard.score_band.value,
-        "routing": scorecard.routing.value,
-        "scoring_provenance": _build_scoring_provenance(
-            selection=_resolve_scoring_selection(),
-            strict_live_debate_backend_required=strict_live_debate_backend_required,
-            client=llm_client,
-        ),
-        "_scorecard": scorecard,
-    }
-
-
-def _run_full_deliverables(
-    *,
-    run_id: str,
-    tenant_id: str,
-    deal_id: str,
-    analysis_bundle: Any,
-    analysis_context: Any,
-    scorecard: Any,
-    graph_evidence: dict[str, Any] | None = None,
-    rag_evidence: dict[str, Any] | None = None,
-    layer2_evidence: dict[str, Any] | None = None,
-    enrichment_evidence: dict[str, Any] | None = None,
-    vep_evidence: dict[str, Any] | None = None,
-    run_provenance: dict[str, Any] | None = None,
-    db_conn: Any = None,
-    object_store: Any = None,
-) -> dict[str, Any]:
-    """Run deliverables generation for a FULL pipeline run.
-
-    Uses DeliverablesGenerator to produce the full bundle of deliverables
-    from analysis reports and scorecard.
-
-    Args:
-        run_id: Pipeline run UUID.
-        tenant_id: Tenant context.
-        deal_id: Deal UUID.
-        analysis_bundle: AnalysisBundle from analysis step.
-        analysis_context: AnalysisContext from analysis step.
-        scorecard: Scorecard from scoring step.
-
-    Returns:
-        Dict with deliverable_count, types, deliverable_ids.
-    """
-    from idis.audit.sink import InMemoryAuditSink
-    from idis.deliverables.generator import DeliverablesGenerator
-
-    audit_sink = InMemoryAuditSink()
-    generator = DeliverablesGenerator(audit_sink=audit_sink)
-
-    graph_conclusions: dict[str, Any] | None = None
-    if isinstance(graph_evidence, dict):
-        retrieval = graph_evidence.get("graph_retrieval")
-        if isinstance(retrieval, dict):
-            conclusions = retrieval.get("graph_conclusions")
-            if isinstance(conclusions, dict):
-                graph_conclusions = conclusions
-
-    from idis.services.webhooks.lifecycle import (
-        DELIVERABLE_FAILED,
-        DELIVERABLE_PRODUCED,
-        notify_webhook_lifecycle,
-    )
-
-    generated_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-    try:
-        bundle = generator.generate(
-            ctx=analysis_context,
-            bundle=analysis_bundle,
-            scorecard=scorecard,
-            deal_name=deal_id,
-            generated_at=generated_at,
-            deliverable_id_prefix=f"del-{run_id[:8]}",
-            graph_conclusions=graph_conclusions,
-            layer2_evidence=layer2_evidence,
-        )
-    except Exception:
-        # Best-effort webhook (never raises); the generation failure itself still propagates.
-        notify_webhook_lifecycle(
-            tenant_id=tenant_id,
-            event_type=DELIVERABLE_FAILED,
-            resource_type="run",
-            resource_id=run_id,
-            conn=db_conn,
-        )
-        raise
-
-    types: list[str] = [
-        bundle.screening_snapshot.deliverable_type,
-        bundle.ic_memo.deliverable_type,
-        bundle.truth_dashboard.deliverable_type,
-        bundle.qa_brief.deliverable_type,
-    ]
-    deliverable_ids: list[str] = [
-        bundle.screening_snapshot.deliverable_id,
-        bundle.ic_memo.deliverable_id,
-        bundle.truth_dashboard.deliverable_id,
-        bundle.qa_brief.deliverable_id,
-    ]
-
-    if bundle.decline_letter is not None:
-        types.append(bundle.decline_letter.deliverable_type)
-        deliverable_ids.append(bundle.decline_letter.deliverable_id)
-
-    notify_webhook_lifecycle(
-        tenant_id=tenant_id,
-        event_type=DELIVERABLE_PRODUCED,
-        resource_type="run",
-        resource_id=run_id,
-        data={"deliverable_count": len(deliverable_ids)},
-        conn=db_conn,
-    )
-
-    if db_conn is not None and object_store is not None:
-        from idis.deliverables.product_bundle import ProductBundleExporter
-        from idis.persistence.repositories.deliverables import PostgresDeliverablesRepository
-
-        exporter = ProductBundleExporter(
-            deliverables_repo=PostgresDeliverablesRepository(db_conn, tenant_id),
-            object_store=object_store,
-            object_store_backend=object_store.backend_name,
-        )
-        export_summary = exporter.export_bundle(
-            tenant_id=tenant_id,
-            deal_id=deal_id,
-            run_id=run_id,
-            bundle=bundle,
-            analysis_context=analysis_context,
-            scorecard=scorecard,
-            export_timestamp=generated_at,
-            graph_evidence=graph_evidence,
-            rag_evidence=rag_evidence,
-            layer2_evidence=layer2_evidence,
-            enrichment_evidence=enrichment_evidence,
-            vep_evidence=vep_evidence,
-            run_provenance=run_provenance,
-        )
-        export_summary["durable_export"] = True
-        return export_summary
-
-    return {
-        "deliverable_count": len(types),
-        "types": sorted(types),
-        "deliverable_ids": sorted(deliverable_ids),
-        "durable_export": False,
-    }
-
-
-def _calc_evidence_block(calc_ids: list[str] | None) -> dict[str, Any]:
-    """Additive, sanitized reflection of the deterministic calc ids available to a step."""
-    ids = sorted({str(calc_id) for calc_id in (calc_ids or []) if str(calc_id).strip()})
-    return {
-        "status": "calc_evidence_available" if ids else "no_calc_evidence",
-        "calc_count": len(ids),
-        "calc_ids": ids,
-    }
-
-
-def _graph_calculations_by_claim(
-    *,
-    tenant_id: str,
-    deal_id: str,
-    calc_ids: list[str],
-    db_conn: Any,
-) -> dict[str, list[dict[str, Any]]]:
-    """Load PERSISTED deterministic calcs for the given ids, grouped by input claim id.
-
-    Only real persisted calculations are returned (never invented), so the graph projection
-    attaches calc edges only when the persisted calc relationships actually exist.
-    """
-    wanted = {str(calc_id) for calc_id in calc_ids}
-    if not wanted:
-        return {}
-    from idis.persistence.repositories.calculations import get_calculations_repository
-
-    repo = get_calculations_repository(db_conn, tenant_id)
-    by_claim: dict[str, list[dict[str, Any]]] = {}
-    for calc in repo.list_by_deal(deal_id):
-        if str(calc.get("calc_id") or "") not in wanted:
-            continue
-        for claim_id in _calc_input_claim_ids(calc.get("inputs")):
-            by_claim.setdefault(claim_id, []).append(calc)
-    return by_claim
-
-
-# The Sanad service persists transmission-node input_refs ENTITY-KEYED (e.g. {"evidence_id": ...}),
-# while the graph repo routes INPUT edges on ref["type"]. Map each known entity key to its node
-# type so the persisted lineage actually materializes as INPUT edges.
-_INPUT_REF_KEY_TO_TYPE: tuple[tuple[str, str], ...] = (
-    ("span_id", "span"),
-    ("source_span_id", "span"),
-    ("evidence_id", "evidence"),
-    ("claim_id", "claim"),
-    ("calc_id", "calculation"),
-    ("calculation_id", "calculation"),
-)
-
-
-def _normalize_input_ref(ref: dict[str, Any]) -> dict[str, str] | None:
-    """Normalize a persisted Sanad input_ref into the graph-repo ``{type, id}`` shape.
-
-    Maps the entity-keyed refs the Sanad service persists (e.g. ``{"evidence_id": ...}``) to the
-    ``{type, id}`` shape the graph repo routes INPUT edges on, preserves refs already in
-    ``{type, id}`` form, and drops malformed refs (returns ``None``).
-    """
-    for key, ref_type in _INPUT_REF_KEY_TO_TYPE:
-        ref_id = ref.get(key)
-        if ref_id:
-            return {"type": ref_type, "id": str(ref_id)}
-    explicit_type = ref.get("type")
-    explicit_id = ref.get("id")
-    if explicit_type and explicit_id:
-        return {"type": str(explicit_type), "id": str(explicit_id)}
-    return None
-
-
-def _graph_transmission_nodes_by_claim(
-    *,
-    tenant_id: str,
-    created_claim_ids: list[str],
-    db_conn: Any,
-) -> dict[str, list[dict[str, Any]]]:
-    """Load each claim's PERSISTED Sanad transmission chain, shaped for project_claim_sanad.
-
-    The chain is durable on the sanad (`transmission_chain`). Only real persisted transmission
-    nodes are returned (never invented); the projection writes HAS_SANAD_STEP/INPUT/OUTPUT edges
-    only when the persisted chain actually exists. input_refs are normalized from the persisted
-    entity-keyed shape into the graph-repo `{type, id}` shape (see `_normalize_input_ref`). Uses
-    the existing schema — no dedicated Sanad node.
-    """
-    from idis.persistence.repositories.claims import (
-        InMemorySanadsRepository,
-        SanadsRepository,
-    )
-
-    repo: Any = (
-        SanadsRepository(db_conn, tenant_id)
-        if db_conn is not None
-        else InMemorySanadsRepository(tenant_id)
-    )
-    by_claim: dict[str, list[dict[str, Any]]] = {}
-    for claim_id in sorted(set(created_claim_ids)):
-        sanad = repo.get_by_claim(claim_id)
-        chain = (sanad or {}).get("transmission_chain") or []
-        nodes: list[dict[str, Any]] = []
-        for node in chain:
-            if not isinstance(node, dict):
-                continue
-            node_id = str(node.get("node_id") or "")
-            if not node_id:
-                continue
-            input_refs: list[dict[str, str]] = []
-            for ref in node.get("input_refs") or []:
-                if not isinstance(ref, dict):
-                    continue
-                normalized = _normalize_input_ref(ref)
-                if normalized is not None:
-                    input_refs.append(normalized)
-            nodes.append(
-                {
-                    "node_id": node_id,
-                    "timestamp": str(node.get("timestamp") or ""),
-                    "input_refs": input_refs,
-                }
-            )
-        by_claim[claim_id] = nodes
-    return by_claim
-
-
-def _graph_defects_by_claim(
-    *,
-    tenant_id: str,
-    created_claim_ids: list[str],
-    db_conn: Any,
-) -> dict[str, list[dict[str, Any]]]:
-    """Load each claim's PERSISTED defects, shaped for project_claim_sanad.
-
-    Only real persisted defects are returned (never invented); the projection writes Defect /
-    HAS_DEFECT edges only when the persisted defects actually exist. Uses the existing schema
-    (Defect node already exists) — no schema change.
-    """
-    from idis.persistence.repositories.claims import (
-        DefectsRepository,
-        InMemoryDefectsRepository,
-    )
-
-    repo: Any = (
-        DefectsRepository(db_conn, tenant_id)
-        if db_conn is not None
-        else InMemoryDefectsRepository(tenant_id)
-    )
-    by_claim: dict[str, list[dict[str, Any]]] = {}
-    for claim_id in sorted(set(created_claim_ids)):
-        defects, _ = repo.list_by_claim(claim_id, limit=200)
-        items: list[dict[str, Any]] = []
-        for defect in defects:
-            defect_id = str(defect.get("defect_id") or "")
-            if not defect_id:
-                continue
-            items.append(
-                {
-                    "defect_id": defect_id,
-                    "defect_type": str(defect.get("defect_type") or ""),
-                    "severity": str(defect.get("severity") or "MINOR"),
-                }
-            )
-        by_claim[claim_id] = items
-    return by_claim
-
-
-def _run_full_graph_evidence(
-    *,
-    run_id: str,
-    tenant_id: str,
-    deal_id: str,
-    documents: list[dict[str, Any]],
-    created_claim_ids: list[str],
-    calc_ids: list[str],
-    db_conn: Any = None,
-    strict_full_live: bool | None = None,
-    neo4j_health_checker: Any = None,
-    projection_service: Any = None,
-    retrieval_service: Any = None,
-) -> dict[str, Any]:
-    """Project and retrieve Neo4j graph evidence for product visibility."""
-    from idis.persistence.neo4j_driver import Neo4jHealthStatus, check_neo4j_health
-    from idis.services.runs.orchestrator import RunStepBlockedError
-
-    health = (
-        neo4j_health_checker(os.environ)
-        if neo4j_health_checker is not None
-        else check_neo4j_health()
-    )
-    strict = (
-        strict_full_live
-        if strict_full_live is not None
-        else is_strict_full_live_required(
-            dotenv_path=os.environ.get(IDIS_STRICT_DOTENV_PATH_ENV),
-        )
-    )
-    if health.status != Neo4jHealthStatus.HEALTHY:
-        summary = {
-            "graph_status": "skipped",
-            "graph_projection": {"status": "skipped"},
-            "graph_retrieval": {"status": "skipped"},
-            "neo4j_health_status": health.status.value,
-            "missing_env_vars": health.missing_env_vars,
-        }
-        if strict:
-            raise RunStepBlockedError(
-                "GRAPH_HEALTH_BLOCKED",
-                "Neo4j graph evidence is not health-check ready",
-                result_summary=summary,
-            )
-        return summary
-
-    projection_summary = _project_graph_evidence(
-        tenant_id=tenant_id,
-        deal_id=deal_id,
-        documents=documents,
-        created_claim_ids=created_claim_ids,
-        db_conn=db_conn,
-        projection_service=projection_service,
-        calc_ids=calc_ids,
-    )
-    projection_status = projection_summary["status"]
-    if projection_status != "projected":
-        graph_status = "skipped" if projection_status == "skipped" else "blocked"
-        summary = {
-            "graph_status": graph_status,
-            "graph_projection": projection_summary,
-            "graph_retrieval": {"status": "not_attempted"},
-        }
-        if strict:
-            raise RunStepBlockedError(
-                "GRAPH_PROJECTION_BLOCKED",
-                "Neo4j graph projection failed",
-                result_summary=summary,
-            )
-        return summary
-
-    retrieval_summary = _retrieve_graph_evidence(
-        tenant_id=tenant_id,
-        deal_id=deal_id,
-        claim_ids=created_claim_ids,
-        defect_ids=projection_summary.get("projected_defect_ids"),
-        retrieval_service=retrieval_service,
-    )
-    retrieval_status = retrieval_summary["status"]
-    if retrieval_status != "retrieved":
-        graph_status = "skipped" if retrieval_status == "skipped" else "blocked"
-        summary = {
-            "graph_status": graph_status,
-            "graph_projection": projection_summary,
-            "graph_retrieval": retrieval_summary,
-        }
-        if strict:
-            raise RunStepBlockedError(
-                "GRAPH_RETRIEVAL_BLOCKED",
-                "Neo4j graph retrieval failed",
-                result_summary=summary,
-            )
-        return summary
-
-    return {
-        "graph_status": "available",
-        "graph_projection": projection_summary,
-        "graph_retrieval": retrieval_summary,
-    }
-
-
-def _index_full_calc_outputs(
-    *,
-    tenant_id: str,
-    deal_id: str,
-    run_id: str,
-    calc_ids: list[str] | None,
-    repository: Any,
-    env: Any,
-    db_conn: Any,
-    embedding_model: str,
-    embedding_dimensions: int,
-    calc_indexing_service: Any,
-) -> tuple[dict[str, Any], list[list[float]]]:
-    """Index the run's durable calc outputs into pgvector (additive; same provider as spans)."""
-    from idis.services.rag.indexing import create_openai_embed_batch, index_calc_outputs_for_deal
-
-    safe_calc_ids = sorted({str(calc_id) for calc_id in (calc_ids or []) if str(calc_id).strip()})
-    if not safe_calc_ids:
-        return ({"status": "skipped", "indexed_calc_count": 0, "skipped_calc_count": 0}, [])
-    if calc_indexing_service is not None:
-        injected: tuple[dict[str, Any], list[list[float]]] = calc_indexing_service(
-            tenant_id=tenant_id,
-            deal_id=deal_id,
-            run_id=run_id,
-            calc_ids=safe_calc_ids,
-            repository=repository,
-            embedding_model=embedding_model,
-            embedding_dimensions=embedding_dimensions,
-        )
-        return injected
-    from idis.persistence.repositories.calculations import get_calculations_repository
-
-    calc_repo = get_calculations_repository(db_conn, tenant_id)
-    wanted = set(safe_calc_ids)
-    calculations = [
-        calc for calc in calc_repo.list_by_deal(deal_id) if str(calc.get("calc_id")) in wanted
-    ]
-    return index_calc_outputs_for_deal(
-        tenant_id=tenant_id,
-        deal_id=deal_id,
-        run_id=run_id,
-        calculations=calculations,
-        repository=repository,
-        embed_batch=create_openai_embed_batch(env=env),
-        embedding_model=embedding_model,
-        embedding_dimensions=embedding_dimensions,
-    )
-
-
-def _index_full_graph_summaries(
-    *,
-    tenant_id: str,
-    deal_id: str,
-    run_id: str,
-    graph_conclusions: dict[str, Any] | None,
-    repository: Any,
-    env: Any,
-    embedding_model: str,
-    embedding_dimensions: int,
-    graph_indexing_service: Any,
-) -> tuple[dict[str, Any], list[list[float]]]:
-    """Index the run's graph_conclusions into pgvector (additive; same provider/repo as spans)."""
-    from idis.services.rag.indexing import create_openai_embed_batch, index_graph_summaries_for_deal
-
-    conclusions = graph_conclusions if isinstance(graph_conclusions, dict) else None
-    if not conclusions:
-        return (
-            {
-                "status": "skipped",
-                "indexed_graph_summary_count": 0,
-                "skipped_graph_summary_count": 0,
-            },
-            [],
-        )
-    if graph_indexing_service is not None:
-        injected: tuple[dict[str, Any], list[list[float]]] = graph_indexing_service(
-            tenant_id=tenant_id,
-            deal_id=deal_id,
-            run_id=run_id,
-            graph_conclusions=conclusions,
-            repository=repository,
-            embedding_model=embedding_model,
-            embedding_dimensions=embedding_dimensions,
-        )
-        return injected
-    return index_graph_summaries_for_deal(
-        tenant_id=tenant_id,
-        deal_id=deal_id,
-        run_id=run_id,
-        graph_conclusions=conclusions,
-        repository=repository,
-        embed_batch=create_openai_embed_batch(env=env),
-        embedding_model=embedding_model,
-        embedding_dimensions=embedding_dimensions,
-    )
-
-
-def _run_full_rag_evidence(
-    *,
-    calc_ids: list[str] | None = None,
-    **kwargs: Any,
-) -> dict[str, Any]:
-    """RAG FULL-step seam; surfaces calc evidence and indexes durable calc outputs into pgvector.
-
-    Threads accumulated calc ids through the seam: attaches a sanitized rag_calc_evidence block to
-    the step summary (and any blocked summary), and indexes the run's durable calc outputs into
-    pgvector after span indexing (Slice90).
-    """
-    from idis.services.runs.orchestrator import RunStepBlockedError
-
-    calc_evidence = _calc_evidence_block(calc_ids)
-    try:
-        summary = _run_full_rag_evidence_inner(calc_ids=calc_ids, **kwargs)
-    except RunStepBlockedError as exc:
-        result_summary = getattr(exc, "result_summary", None)
-        if isinstance(result_summary, dict):
-            result_summary["rag_calc_evidence"] = calc_evidence
-        raise
-    summary["rag_calc_evidence"] = calc_evidence
-    return summary
-
-
-def _run_full_rag_evidence_inner(
-    *,
-    run_id: str,
-    tenant_id: str,
-    deal_id: str,
-    documents: list[dict[str, Any]],
-    db_conn: Any = None,
-    strict_full_live: bool | None = None,
-    calc_ids: list[str] | None = None,
-    graph_conclusions: dict[str, Any] | None = None,
-    pgvector_health_checker: Any = None,
-    embedding_health_checker: Any = None,
-    indexing_service: Any = None,
-    retrieval_service: Any = None,
-    vector_repository_factory: Any = None,
-    calc_indexing_service: Any = None,
-    graph_indexing_service: Any = None,
-) -> dict[str, Any]:
-    """Index persisted spans, calc outputs, and graph summaries; then run probe retrieval."""
-    from idis.services.rag.embedding_health import (
-        EmbeddingHealthStatus,
-        check_embedding_health,
-        is_vector_search_enabled,
-    )
-    from idis.services.rag.indexing import (
-        VectorEmbeddingsRepository,
-        build_postgres_vector_repository,
-        create_openai_embed_batch,
-        index_document_spans_for_deal,
-    )
-    from idis.services.rag.pgvector_health import PgvectorHealthStatus, check_pgvector_health
-    from idis.services.rag.retrieval import retrieve_rag_probe_evidence
-    from idis.services.runs.orchestrator import RunStepBlockedError
-
-    env = os.environ
-    strict = (
-        strict_full_live
-        if strict_full_live is not None
-        else is_strict_full_live_required(
-            dotenv_path=os.environ.get(IDIS_STRICT_DOTENV_PATH_ENV),
-        )
-    )
-    skipped_summary = {
-        "rag_status": "skipped",
-        "rag_indexing": {"status": "skipped", "indexed_span_count": 0, "skipped_span_count": 0},
-        "rag_retrieval": {
-            "status": "skipped",
-            "retrieval_mode": "probe",
-            "probe_count": 0,
-            "match_count": 0,
-            "matches": [],
-        },
-    }
-
-    if not is_vector_search_enabled(env):
-        if strict:
-            raise RunStepBlockedError(
-                "RAG_CONFIG_BLOCKED",
-                "Vector search is disabled for strict FULL runs",
-                result_summary=skipped_summary,
-            )
-        return skipped_summary
-
-    pgvector_health = (
-        pgvector_health_checker(env)
-        if pgvector_health_checker is not None
-        else check_pgvector_health(env=env)
-    )
-    embedding_health = (
-        embedding_health_checker(env)
-        if embedding_health_checker is not None
-        else check_embedding_health(env=env)
-    )
-
-    if (
-        pgvector_health.status != PgvectorHealthStatus.HEALTHY
-        or embedding_health.status != EmbeddingHealthStatus.HEALTHY
-    ):
-        summary = {
-            **skipped_summary,
-            "pgvector_health_status": pgvector_health.status.value,
-            "embedding_health_status": embedding_health.status.value,
-            "missing_env_vars": sorted(
-                set(pgvector_health.missing_env_vars) | set(embedding_health.missing_env_vars)
-            ),
-        }
-        if strict:
-            raise RunStepBlockedError(
-                "RAG_HEALTH_BLOCKED",
-                "pgvector/RAG evidence is not health-check ready",
-                result_summary=summary,
-            )
-        return summary
-
-    if db_conn is None:
-        if strict:
-            raise RunStepBlockedError(
-                "RAG_DATABASE_BLOCKED",
-                "pgvector indexing requires Postgres run persistence",
-                result_summary=skipped_summary,
-            )
-        return skipped_summary
-
-    repository_factory = vector_repository_factory or build_postgres_vector_repository
-    repository = cast(
-        VectorEmbeddingsRepository,
-        repository_factory(db_conn, tenant_id),
-    )
-    embedding_model = embedding_health.model or "text-embedding-3-small"
-    embedding_dimensions = embedding_health.dimensions or 1536
-
-    if indexing_service is not None:
-        indexing_summary, probe_embeddings = indexing_service(
-            tenant_id=tenant_id,
-            deal_id=deal_id,
-            run_id=run_id,
-            documents=documents,
-            repository=repository,
-            embedding_model=embedding_model,
-            embedding_dimensions=embedding_dimensions,
-        )
-    else:
-        indexing_summary, probe_embeddings = index_document_spans_for_deal(
-            tenant_id=tenant_id,
-            deal_id=deal_id,
-            run_id=run_id,
-            documents=documents,
-            repository=repository,
-            embed_batch=create_openai_embed_batch(env=env),
-            embedding_model=embedding_model,
-            embedding_dimensions=embedding_dimensions,
-        )
-
-    indexing_status = indexing_summary["status"]
-    if indexing_status != "indexed":
-        summary = {
-            "rag_status": "skipped" if indexing_status == "skipped" else "blocked",
-            "rag_indexing": indexing_summary,
-            "rag_retrieval": {
-                "status": "not_attempted",
-                "retrieval_mode": "probe",
-                "probe_count": 0,
-                "match_count": 0,
-                "matches": [],
-            },
-            "pgvector_health_status": pgvector_health.status.value,
-            "embedding_health_status": embedding_health.status.value,
-        }
-        if strict:
-            raise RunStepBlockedError(
-                "RAG_INDEXING_BLOCKED",
-                "pgvector span indexing did not complete",
-                result_summary=summary,
-            )
-        return summary
-
-    # Additive: index the run's durable calc outputs into pgvector after spans (Slice90 Task 4).
-    calc_indexing_summary, calc_probe_embeddings = _index_full_calc_outputs(
-        tenant_id=tenant_id,
-        deal_id=deal_id,
-        run_id=run_id,
-        calc_ids=calc_ids,
-        repository=repository,
-        env=env,
-        db_conn=db_conn,
-        embedding_model=embedding_model,
-        embedding_dimensions=embedding_dimensions,
-        calc_indexing_service=calc_indexing_service,
-    )
-    probe_embeddings = [*probe_embeddings, *calc_probe_embeddings]
-
-    # Additive: index the run's graph_conclusions into pgvector after calc outputs (Slice90 Task 5).
-    graph_indexing_summary, graph_probe_embeddings = _index_full_graph_summaries(
-        tenant_id=tenant_id,
-        deal_id=deal_id,
-        run_id=run_id,
-        graph_conclusions=graph_conclusions,
-        repository=repository,
-        env=env,
-        embedding_model=embedding_model,
-        embedding_dimensions=embedding_dimensions,
-        graph_indexing_service=graph_indexing_service,
-    )
-    probe_embeddings = [*probe_embeddings, *graph_probe_embeddings]
-
-    if retrieval_service is not None:
-        retrieval_summary = retrieval_service(
-            deal_id=deal_id,
-            probe_embeddings=probe_embeddings,
-            repository=repository,
-        )
-    else:
-        retrieval_summary = retrieve_rag_probe_evidence(
-            deal_id=deal_id,
-            probe_embeddings=probe_embeddings,
-            repository=repository,
-        )
-
-    retrieval_status = retrieval_summary["status"]
-    if retrieval_status != "probed":
-        summary = {
-            "rag_status": "blocked",
-            "rag_indexing": indexing_summary,
-            "rag_calc_indexing": calc_indexing_summary,
-            "rag_graph_indexing": graph_indexing_summary,
-            "rag_retrieval": retrieval_summary,
-            "pgvector_health_status": pgvector_health.status.value,
-            "embedding_health_status": embedding_health.status.value,
-        }
-        if strict:
-            raise RunStepBlockedError(
-                "RAG_PROBE_RETRIEVAL_BLOCKED",
-                "pgvector probe retrieval did not complete",
-                result_summary=summary,
-            )
-        return summary
-
-    return {
-        "rag_status": "available",
-        "rag_indexing": indexing_summary,
-        "rag_calc_indexing": calc_indexing_summary,
-        "rag_graph_indexing": graph_indexing_summary,
-        "rag_retrieval": retrieval_summary,
-        "pgvector_health_status": pgvector_health.status.value,
-        "embedding_health_status": embedding_health.status.value,
-    }
-
-
-def _project_graph_evidence(
-    *,
-    tenant_id: str,
-    deal_id: str,
-    documents: list[dict[str, Any]],
-    created_claim_ids: list[str],
-    db_conn: Any,
-    projection_service: Any = None,
-    calc_ids: list[str] | None = None,
-) -> dict[str, Any]:
-    from idis.persistence.graph_consistency import GraphProjectionService, ProjectionStatus
-
-    service = projection_service or GraphProjectionService()
-    calcs_by_claim = _graph_calculations_by_claim(
-        tenant_id=tenant_id,
-        deal_id=deal_id,
-        calc_ids=calc_ids or [],
-        db_conn=db_conn,
-    )
-    transmission_by_claim = _graph_transmission_nodes_by_claim(
-        tenant_id=tenant_id,
-        created_claim_ids=created_claim_ids,
-        db_conn=db_conn,
-    )
-    defects_by_claim = _graph_defects_by_claim(
-        tenant_id=tenant_id,
-        created_claim_ids=created_claim_ids,
-        db_conn=db_conn,
-    )
-    safe_documents = _graph_documents(documents)
-    safe_spans = _graph_spans(documents)
-    try:
-        deal_result = service.project_deal(
-            tenant_id=tenant_id,
-            deal_id=deal_id,
-            documents=safe_documents,
-            spans=safe_spans,
-        )
-    except Exception:
-        return {
-            "status": "failed",
-            "projected_document_count": 0,
-            "projected_span_count": 0,
-            "projected_claim_count": 0,
-            "projected_calculation_count": 0,
-        }
-    if deal_result.status == ProjectionStatus.SKIPPED:
-        return {
-            "status": "skipped",
-            "projected_document_count": 0,
-            "projected_span_count": 0,
-            "projected_claim_count": 0,
-            "projected_calculation_count": 0,
-        }
-    if deal_result.status != ProjectionStatus.SUCCESS:
-        return {"status": "failed", "projected_document_count": 0, "projected_span_count": 0}
-
-    try:
-        claims = _graph_claims(
-            tenant_id=tenant_id,
-            deal_id=deal_id,
-            created_claim_ids=created_claim_ids,
-            db_conn=db_conn,
-        )
-        evidence_by_claim = _graph_evidence_by_claim(
-            tenant_id=tenant_id,
-            created_claim_ids=created_claim_ids,
-            db_conn=db_conn,
-        )
-    except Exception:
-        return {
-            "status": "failed",
-            "projected_document_count": len(safe_documents),
-            "projected_span_count": len(safe_spans),
-            "projected_claim_count": 0,
-            "projected_calculation_count": 0,
-        }
-    projected_claim_count = 0
-    projected_calc_ids: set[str] = set()
-    projected_sanad_step_ids: set[str] = set()
-    projected_defect_ids: set[str] = set()
-    for claim in claims:
-        claim_calculations = calcs_by_claim.get(claim["claim_id"], [])
-        claim_transmission_nodes = transmission_by_claim.get(claim["claim_id"], [])
-        claim_defects = defects_by_claim.get(claim["claim_id"], [])
-        try:
-            result = service.project_claim_sanad(
-                tenant_id=tenant_id,
-                claim=claim,
-                evidence_items=evidence_by_claim.get(claim["claim_id"], []),
-                transmission_nodes=claim_transmission_nodes,
-                defects=claim_defects,
-                calculations=claim_calculations,
-            )
-        except Exception:
-            return {
-                "status": "failed",
-                "projected_document_count": len(safe_documents),
-                "projected_span_count": len(safe_spans),
-                "projected_claim_count": projected_claim_count,
-                "projected_calculation_count": 0,
-            }
-        if result.status != ProjectionStatus.SUCCESS:
-            return {
-                "status": "failed",
-                "projected_document_count": len(safe_documents),
-                "projected_span_count": len(safe_spans),
-                "projected_claim_count": projected_claim_count,
-                "projected_calculation_count": 0,
-            }
-        projected_claim_count += 1
-        projected_calc_ids.update(str(calc.get("calc_id") or "") for calc in claim_calculations)
-        projected_sanad_step_ids.update(
-            str(node.get("node_id") or "") for node in claim_transmission_nodes
-        )
-        projected_defect_ids.update(str(defect.get("defect_id") or "") for defect in claim_defects)
-
-    return {
-        "status": "projected",
-        "projected_document_count": len(safe_documents),
-        "projected_span_count": len(safe_spans),
-        "projected_claim_count": projected_claim_count,
-        "projected_calculation_count": len(projected_calc_ids - {""}),
-        "projected_sanad_step_count": len(projected_sanad_step_ids - {""}),
-        "projected_defect_count": len(projected_defect_ids - {""}),
-        "projected_defect_ids": sorted(projected_defect_ids - {""}),
-    }
-
-
-def _retrieve_graph_evidence(
-    *,
-    tenant_id: str,
-    deal_id: str,
-    claim_ids: list[str],
-    defect_ids: list[str] | None = None,
-    retrieval_service: Any = None,
-) -> dict[str, Any]:
-    from idis.services.graph.retrieval import GraphRetrievalService
-
-    service = retrieval_service or GraphRetrievalService()
-    try:
-        return service.retrieve_deal_graph_summary(
-            tenant_id=tenant_id,
-            deal_id=deal_id,
-            claim_ids=claim_ids,
-            defect_ids=defect_ids,
-        )
-    except Exception:
-        return {"status": "failed", "retrieval_count": 0, "query_summaries": []}
-
-
-def _graph_documents(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        {
-            "document_id": str(document["document_id"]),
-            "doc_type": str(document.get("doc_type") or ""),
-        }
-        for document in documents
-        if document.get("document_id")
-    ]
-
-
-def _graph_spans(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    spans: list[dict[str, Any]] = []
-    for document in documents:
-        document_id = str(document.get("document_id") or "")
-        if not document_id:
-            continue
-        for span in document.get("spans") or []:
-            if not isinstance(span, dict) or not span.get("span_id"):
-                continue
-            spans.append(
-                {
-                    "span_id": str(span["span_id"]),
-                    "document_id": document_id,
-                    "span_type": str(span.get("span_type") or ""),
-                }
-            )
-    return spans
-
-
-def _graph_claims(
-    *,
-    tenant_id: str,
-    deal_id: str,
-    created_claim_ids: list[str],
-    db_conn: Any,
-) -> list[dict[str, Any]]:
-    from idis.persistence.repositories.claims import ClaimsRepository, InMemoryClaimsRepository
-
-    repo = (
-        ClaimsRepository(db_conn, tenant_id)
-        if db_conn is not None
-        else InMemoryClaimsRepository(tenant_id)
-    )
-    claims: list[dict[str, Any]] = []
-    for claim_id in sorted(set(created_claim_ids)):
-        claim = repo.get(claim_id)
-        claims.append(
-            {
-                "claim_id": claim_id,
-                "claim_text": str((claim or {}).get("claim_text") or ""),
-                "claim_grade": str((claim or {}).get("claim_grade") or "D"),
-                "claim_verdict": str((claim or {}).get("claim_verdict") or "UNVERIFIED"),
-                "materiality": str((claim or {}).get("materiality") or "MEDIUM"),
-                "claim_class": str((claim or {}).get("claim_class") or "OTHER"),
-                "deal_id": deal_id,
-            }
-        )
-    return claims
-
-
-def _graph_evidence_by_claim(
-    *,
-    tenant_id: str,
-    created_claim_ids: list[str],
-    db_conn: Any,
-) -> dict[str, list[dict[str, Any]]]:
-    from idis.persistence.repositories.evidence import get_evidence_repository
-
-    repo = get_evidence_repository(db_conn, tenant_id)
-    evidence_by_claim: dict[str, list[dict[str, Any]]] = {}
-    for claim_id in sorted(set(created_claim_ids)):
-        evidence_items = []
-        for item in repo.get_by_claim(claim_id):
-            evidence_items.append(
-                {
-                    "evidence_id": str(item.get("evidence_id") or ""),
-                    "source_grade": str(item.get("source_grade") or "D"),
-                    "source_system": "idis",
-                    "upstream_origin_id": str(item.get("source_span_id") or ""),
-                }
-            )
-        evidence_by_claim[claim_id] = [item for item in evidence_items if item["evidence_id"]]
-    return evidence_by_claim
-
-
-_ANALYSIS_MAX_TOKENS = 8192
-_SCORING_MAX_TOKENS = 16384
-_DEBATE_MAX_TOKENS = 8192
-_DEFAULT_DEBATE_MODEL = "claude-sonnet-4-20250514"
-_DEFAULT_DEBATE_ARBITER_MODEL = "claude-opus-4-20250514"
-
-
-@dataclass(frozen=True)
-class AnalysisClientSelection:
-    """Safe selection context for an injected analysis-client factory (no API key)."""
-
-    backend: str
-    model: str | None
-    max_tokens: int
-
-
-@dataclass(frozen=True)
-class ScoringClientSelection:
-    """Safe selection context for an injected scoring-client factory (no API key)."""
-
-    backend: str
-    model: str | None
-    max_tokens: int
-
-
-@dataclass(frozen=True)
-class DebateRoleRunnerSelection:
-    """Safe selection context for an injected debate role-runners factory (no API key)."""
-
-    backend: str
-    default_model: str | None
-    arbiter_model: str | None
-    max_tokens: int
-
-
-AnalysisClientFactory = Callable[[AnalysisClientSelection], Any]
-ScoringClientFactory = Callable[[ScoringClientSelection], Any]
-DebateRoleRunnersFactory = Callable[[DebateRoleRunnerSelection], Any]
-
-
-def _resolve_analysis_selection() -> AnalysisClientSelection:
-    """Resolve the analysis backend/model selection from env (no client construction)."""
-    backend = os.environ.get("IDIS_DEBATE_BACKEND", "deterministic")
-    model = (
-        os.environ.get("IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT", _DEFAULT_DEBATE_MODEL)
-        if backend == "anthropic"
-        else None
-    )
-    return AnalysisClientSelection(backend=backend, model=model, max_tokens=_ANALYSIS_MAX_TOKENS)
-
-
-def _resolve_scoring_selection() -> ScoringClientSelection:
-    """Resolve the scoring backend/model selection from env (no client construction)."""
-    backend = os.environ.get("IDIS_DEBATE_BACKEND", "deterministic")
-    model = (
-        os.environ.get("IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT", _DEFAULT_DEBATE_MODEL)
-        if backend == "anthropic"
-        else None
-    )
-    return ScoringClientSelection(backend=backend, model=model, max_tokens=_SCORING_MAX_TOKENS)
-
-
-def _resolve_debate_selection() -> DebateRoleRunnerSelection:
-    """Resolve the debate backend/models selection from env (no runner construction)."""
-    backend = os.environ.get("IDIS_DEBATE_BACKEND", "deterministic")
-    if backend == "anthropic":
-        default_model = os.environ.get("IDIS_ANTHROPIC_MODEL_DEBATE_DEFAULT", _DEFAULT_DEBATE_MODEL)
-        arbiter_model = os.environ.get(
-            "IDIS_ANTHROPIC_MODEL_DEBATE_ARBITER", _DEFAULT_DEBATE_ARBITER_MODEL
-        )
-    else:
-        default_model = None
-        arbiter_model = None
-    return DebateRoleRunnerSelection(
-        backend=backend,
-        default_model=default_model,
-        arbiter_model=arbiter_model,
-        max_tokens=_DEBATE_MAX_TOKENS,
-    )
-
-
-# --- Slice84: execution-time strict-live enforcement for analysis / debate L1 / scoring ---
-# A single shared flag ``strict_live_debate_backend_required`` (threaded only from the strict
-# FULL execution path) forbids the deterministic analysis client / debate RoleRunners / scoring
-# client. Surfaced only as fixed, role-specific codes — never with the API key, prompt,
-# response, provider payload, or a raw underlying exception message.
-STRICT_LIVE_ANALYSIS_REQUIRED = "STRICT_LIVE_ANALYSIS_REQUIRED"
-STRICT_LIVE_ANALYSIS_PROVIDER_FAILED = "STRICT_LIVE_ANALYSIS_PROVIDER_FAILED"
-STRICT_LIVE_DEBATE_REQUIRED = "STRICT_LIVE_DEBATE_REQUIRED"
-STRICT_LIVE_DEBATE_PROVIDER_FAILED = "STRICT_LIVE_DEBATE_PROVIDER_FAILED"
-STRICT_LIVE_SCORING_REQUIRED = "STRICT_LIVE_SCORING_REQUIRED"
-STRICT_LIVE_SCORING_PROVIDER_FAILED = "STRICT_LIVE_SCORING_PROVIDER_FAILED"
-
-
-class StrictLiveRoleError(Exception):
-    """A strict FULL analysis/debate/scoring role could not use an approved live backend.
-
-    Carries only a safe, fixed ``code`` + ``message`` — never the API key, prompt, response,
-    provider payload, or a raw underlying exception message. The ``code`` is role-specific (one
-    of the ``STRICT_LIVE_{ANALYSIS,DEBATE,SCORING}_{REQUIRED,PROVIDER_FAILED}`` constants).
-    """
-
-    def __init__(self, *, code: str, message: str) -> None:
-        self.code = code
-        self.message = message
-        super().__init__(message)
-
-
-def _new_budgeted_llm_client(*, model: str | None, max_tokens: int, tenant_id: str | None) -> Any:
-    """Construct the live Anthropic client and wrap it in the per-tenant/provider budget gate.
-
-    Slice96 DEC-C: the single construction point for every live LLM seam, so no live provider call
-    can bypass the hard cap. ``wrap_with_provider_budget`` is a passthrough when no budget is
-    configured (the default), leaving non-strict/dev runs unchanged; when a cap is set the returned
-    client raises the safe provider-budget denial before any provider request once the tenant's
-    budget for the provider is exhausted.
-    """
-    from idis.providers.budget import wrap_with_provider_budget
-    from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
-
-    client = AnthropicLLMClient(model=model, max_tokens=max_tokens)
-    return wrap_with_provider_budget(client, tenant_id=tenant_id or "", provider="anthropic")
-
-
-def _build_strict_anthropic_role_client(
-    selection: Any,
-    factory: Callable[[Any], Any] | None,
-    *,
-    role: str,
-    provider_failed_code: str,
-    tenant_id: str | None = None,
-) -> Any:
-    """Build the live (Anthropic) analysis/scoring client for strict FULL, failing closed safely.
-
-    Any construction/call failure is surfaced as the role's ``..._PROVIDER_FAILED`` code with a
-    fixed message — never the raw exception message, key, prompt, or provider payload.
-    """
-    try:
-        if factory is not None:
-            return factory(selection)
-        return _new_budgeted_llm_client(
-            model=selection.model, max_tokens=selection.max_tokens, tenant_id=tenant_id
-        )
-    except StrictLiveRoleError:
-        raise
-    except Exception as exc:
-        raise StrictLiveRoleError(
-            code=provider_failed_code,
-            message=f"Strict live {role} provider construction or call failed.",
-        ) from exc
-
-
-def _build_scoring_llm_client(
-    *,
-    scoring_client_factory: ScoringClientFactory | None = None,
-    strict_live_debate_backend_required: bool = False,
-    tenant_id: str | None = None,
-) -> Any:
-    """Build the LLM client for scoring based on env configuration.
-
-    Reads IDIS_DEBATE_BACKEND (default: deterministic). When ``scoring_client_factory`` is
-    supplied it is called with the resolved ``ScoringClientSelection`` and its return value is
-    used (injection seam for tests / strict wiring). When ``strict_live_debate_backend_required``
-    is True (threaded only from the strict FULL execution path) a non-anthropic backend fails
-    closed with ``STRICT_LIVE_SCORING_REQUIRED`` (deterministic scoring is forbidden) and an
-    anthropic provider failure surfaces ``STRICT_LIVE_SCORING_PROVIDER_FAILED``. The non-strict
-    default path is unchanged.
-
-    Returns:
-        An LLMClient implementation instance.
-    """
-    selection = _resolve_scoring_selection()
-
-    if selection.backend == "anthropic":
-        if strict_live_debate_backend_required:
-            return _build_strict_anthropic_role_client(
-                selection,
-                scoring_client_factory,
-                role="scoring",
-                provider_failed_code=STRICT_LIVE_SCORING_PROVIDER_FAILED,
-                tenant_id=tenant_id,
-            )
-        if scoring_client_factory is not None:
-            return scoring_client_factory(selection)
-        return _new_budgeted_llm_client(
-            model=selection.model, max_tokens=selection.max_tokens, tenant_id=tenant_id
-        )
-
-    if strict_live_debate_backend_required:
-        raise StrictLiveRoleError(
-            code=STRICT_LIVE_SCORING_REQUIRED,
-            message=(
-                "Strict live scoring requires the anthropic backend; "
-                "deterministic scoring is forbidden."
-            ),
-        )
-    if scoring_client_factory is not None:
-        return scoring_client_factory(selection)
-
-    from idis.services.extraction.extractors.llm_client import DeterministicScoringLLMClient
-
-    return DeterministicScoringLLMClient()
-
-
-def _build_analysis_llm_client(
-    *,
-    analysis_client_factory: AnalysisClientFactory | None = None,
-    strict_live_debate_backend_required: bool = False,
-    tenant_id: str | None = None,
-) -> Any:
-    """Build the LLM client for analysis agents based on env configuration.
-
-    Reads IDIS_DEBATE_BACKEND (default: deterministic). When ``analysis_client_factory`` is
-    supplied it is called with the resolved ``AnalysisClientSelection`` and its return value is
-    used (injection seam for tests / strict wiring). When ``strict_live_debate_backend_required``
-    is True (threaded only from the strict FULL execution path) a non-anthropic backend fails
-    closed with ``STRICT_LIVE_ANALYSIS_REQUIRED`` (deterministic analysis is forbidden) and an
-    anthropic provider failure surfaces ``STRICT_LIVE_ANALYSIS_PROVIDER_FAILED``. The non-strict
-    default path is unchanged.
-
-    Returns:
-        An LLMClient implementation instance.
-    """
-    selection = _resolve_analysis_selection()
-
-    if selection.backend == "anthropic":
-        if strict_live_debate_backend_required:
-            return _build_strict_anthropic_role_client(
-                selection,
-                analysis_client_factory,
-                role="analysis",
-                provider_failed_code=STRICT_LIVE_ANALYSIS_PROVIDER_FAILED,
-                tenant_id=tenant_id,
-            )
-        if analysis_client_factory is not None:
-            return analysis_client_factory(selection)
-        return _new_budgeted_llm_client(
-            model=selection.model, max_tokens=selection.max_tokens, tenant_id=tenant_id
-        )
-
-    if strict_live_debate_backend_required:
-        raise StrictLiveRoleError(
-            code=STRICT_LIVE_ANALYSIS_REQUIRED,
-            message=(
-                "Strict live analysis requires the anthropic backend; "
-                "deterministic analysis is forbidden."
-            ),
-        )
-    if analysis_client_factory is not None:
-        return analysis_client_factory(selection)
-
-    from idis.services.extraction.extractors.llm_client import DeterministicAnalysisLLMClient
-
-    return DeterministicAnalysisLLMClient()
-
-
-def _run_snapshot_calc(
-    *,
-    run_id: str,
-    tenant_id: str,
-    deal_id: str,
-    created_claim_ids: list[str],
-    calc_types: list[Any] | None = None,
-    db_conn: Any = None,
-) -> dict[str, Any]:
-    """Run deterministic calculations for claims produced by extraction.
-
-    Args:
-        run_id: Pipeline run UUID.
-        tenant_id: Tenant context.
-        deal_id: Deal UUID.
-        created_claim_ids: Claim IDs from extraction.
-        calc_types: Optional list of CalcType to run. None means run all.
-        db_conn: SQLAlchemy connection for Postgres persistence.
-
-    Returns:
-        Dict with calc_ids and reproducibility_hashes.
-    """
-    from idis.models.deterministic_calculation import CalcType
-    from idis.persistence.repositories.calculations import get_calculations_repository
-    from idis.persistence.repositories.claims import (
-        ClaimsRepository,
-        InMemoryClaimsRepository,
-        InMemorySanadsRepository,
-        SanadsRepository,
-    )
-    from idis.services.calc.runner import CalcRunner
-
-    typed_calc_types = (
-        [
-            calc_type if isinstance(calc_type, CalcType) else CalcType(str(calc_type))
-            for calc_type in calc_types
-        ]
-        if calc_types
-        else None
-    )
-
-    claims_repo: Any
-    sanads_repo: Any
-    if db_conn is not None:
-        claims_repo = ClaimsRepository(db_conn, tenant_id)
-        sanads_repo = SanadsRepository(db_conn, tenant_id)
-    else:
-        claims_repo = InMemoryClaimsRepository(tenant_id)
-        sanads_repo = InMemorySanadsRepository(tenant_id)
-
-    runner = CalcRunner(
-        tenant_id=tenant_id,
-        deal_id=deal_id,
-        claims_repo=claims_repo,
-        sanads_repo=sanads_repo,
-        calculations_repo=get_calculations_repository(db_conn, tenant_id),
-    )
-    result = runner.run(
-        created_claim_ids=created_claim_ids,
-        calc_types=typed_calc_types,
-    )
-    result["claim_count"] = len(created_claim_ids)
-    return result
-
-
-def _run_full_methodology_deterministic_calculation(
-    *,
-    tenant_id: str,
-    deal_id: str,
-    run_id: str,
-    materialized_claims: list[Any],
-    sanads: list[Any],
-    sanad_grades: list[Any],
-    extraction_tasks: list[Any],
-    db_conn: Any = None,
-) -> tuple[Any, list[Any], list[Any]]:
-    """Run FULL methodology deterministic calculations and persist them durably.
-
-    The methodology service stays pure (it returns run-scoped in-memory records). This wrapper
-    persists each calculation and its CalcSanad through the existing durable persistence path,
-    preserving the deterministic UUID5 methodology calc_ids and skipping any id already stored so
-    resume never double-writes. The returned tuple is unchanged for the orchestrator.
-    """
-    from idis.persistence.repositories.calculations import get_calculations_repository
-    from idis.services.runs.methodology_deterministic_calculation import (
-        InMemoryRunMethodologyDeterministicCalculationService,
-    )
-
-    service = InMemoryRunMethodologyDeterministicCalculationService()
-    run_result, calculations, calc_sanads = service.run(
-        tenant_id=tenant_id,
-        deal_id=deal_id,
-        run_id=run_id,
-        materialized_claims=materialized_claims,
-        sanads=sanads,
-        sanad_grades=sanad_grades,
-        extraction_tasks=extraction_tasks,
-    )
-
-    repo = get_calculations_repository(db_conn, tenant_id)
-    existing_ids = {row["calc_id"] for row in repo.list_by_deal(deal_id)}
-    calc_sanad_by_id = {record.calc_id: record.calc_sanad for record in calc_sanads}
-    for record in calculations:
-        calculation = record.calculation
-        if calculation.calc_id in existing_ids:
-            continue
-        repo.create(
-            calculation=calculation,
-            calc_sanad=calc_sanad_by_id[calculation.calc_id],
-        )
-        existing_ids.add(calculation.calc_id)
-
-    return run_result, calculations, calc_sanads
-
-
-def _run_snapshot_auto_grade(
-    *,
-    run_id: str,
-    tenant_id: str,
-    deal_id: str,
-    created_claim_ids: list[str],
-    audit_sink: AuditSink,
-    db_conn: Any = None,
-) -> dict[str, Any]:
-    """Run Sanad auto-grading for all claims produced by SNAPSHOT extraction.
-
-    Args:
-        run_id: Pipeline run UUID.
-        tenant_id: Tenant context.
-        deal_id: Deal UUID.
-        created_claim_ids: Claim IDs from extraction.
-        audit_sink: App-level audit sink (required).
-        db_conn: SQLAlchemy connection (None for in-memory fallback).
-
-    Returns:
-        Dict with grading summary stats.
-    """
-    from sqlalchemy.exc import SQLAlchemyError
-
-    from idis.services.runs.orchestrator import RunStepBlockedError
-    from idis.services.sanad.auto_grade import auto_grade_claims_for_run
-
-    if not created_claim_ids:
-        return {
-            "graded_count": 0,
-            "failed_count": 0,
-            "total_defects": 0,
-            "all_failed": False,
-        }
-
-    try:
-        if db_conn is not None:
-            with db_conn.begin_nested():
-                grade_result = auto_grade_claims_for_run(
-                    run_id=run_id,
-                    tenant_id=tenant_id,
-                    deal_id=deal_id,
-                    created_claim_ids=created_claim_ids,
-                    audit_sink=audit_sink,
-                    db_conn=db_conn,
-                )
-        else:
-            grade_result = auto_grade_claims_for_run(
-                run_id=run_id,
-                tenant_id=tenant_id,
-                deal_id=deal_id,
-                created_claim_ids=created_claim_ids,
-                audit_sink=audit_sink,
-                db_conn=db_conn,
-            )
-    except SQLAlchemyError as exc:
-        logger.warning("Sanad auto-grade blocked by persistence error", exc_info=True)
-        raise RunStepBlockedError(
-            "SANAD_AUTO_GRADE_PERSISTENCE_BLOCKED",
-            "Sanad auto-grade is blocked by downstream persistence schema",
-            result_summary={
-                "graded_count": 0,
-                "failed_count": len(created_claim_ids),
-                "total_defects": 0,
-                "all_failed": True,
-                "blocker": "defects_schema_query",
-            },
-        ) from exc
-
-    return {
-        "graded_count": grade_result.graded_count,
-        "failed_count": grade_result.failed_count,
-        "total_defects": grade_result.total_defects,
-        "all_failed": grade_result.all_failed,
-    }
-
-
-def _run_snapshot_extraction(
-    *,
-    run_id: str,
-    tenant_id: str,
-    deal_id: str,
-    documents: list[dict[str, Any]],
-    db_conn: Any = None,
-    extractor_client_factory: ExtractorClientFactory | None = None,
-    strict_live_extraction_required: bool = False,
-) -> dict[str, Any]:
-    """Execute SNAPSHOT extraction pipeline synchronously.
-
-    Args:
-        run_id: Pipeline run UUID.
-        tenant_id: Tenant context.
-        deal_id: Deal UUID.
-        documents: List of document dicts with doc_type, document_id, spans.
-        db_conn: SQLAlchemy connection (None for in-memory fallback).
-
-    Returns:
-        Dict with pipeline result status and stats.
-    """
-    from idis.audit.sink import InMemoryAuditSink
-    from idis.persistence.repositories.evidence import get_evidence_repository
-    from idis.services.claims.service import ClaimService
-    from idis.services.extraction.chunking.service import ChunkingService
-    from idis.services.extraction.confidence.scorer import ConfidenceScorer
-    from idis.services.extraction.extractors.claim_extractor import LLMClaimExtractor
-    from idis.services.extraction.pipeline import ExtractionPipeline
-    from idis.services.extraction.resolution.conflict_detector import ConflictDetector
-    from idis.services.extraction.resolution.deduplicator import Deduplicator
-
-    prompt_text = _get_extraction_prompt()
-    output_schema = _get_extraction_output_schema()
-
-    selection = _resolve_extraction_selection()
-    llm_client = _build_extraction_llm_client(
-        extractor_client_factory=extractor_client_factory,
-        strict_live_extraction_required=strict_live_extraction_required,
-        tenant_id=tenant_id,
-    )
-    scorer = ConfidenceScorer()
-    extractor = LLMClaimExtractor(
-        llm_client=llm_client,
-        prompt_text=prompt_text,
-        output_schema=output_schema,
-        confidence_scorer=scorer,
-    )
-
-    audit_sink = InMemoryAuditSink()
-    claim_service = ClaimService(
-        tenant_id=tenant_id,
-        db_conn=db_conn,
-        audit_sink=audit_sink,
-    )
-    evidence_repo = get_evidence_repository(db_conn, tenant_id)
-
-    pipeline = ExtractionPipeline(
-        chunking_service=ChunkingService(),
-        claim_extractor=extractor,
-        deduplicator=Deduplicator(),
-        conflict_detector=ConflictDetector(),
-        claim_service=claim_service,
-        evidence_repo=evidence_repo,
-        audit_sink=audit_sink,
-    )
-
-    result = pipeline.run(
-        run_id=run_id,
-        tenant_id=tenant_id,
-        deal_id=deal_id,
-        documents=documents,
-    )
-
-    return {
-        "status": result.status,
-        "created_claim_ids": result.created_claim_ids,
-        "chunk_count": result.chunk_count,
-        "unique_claim_count": result.unique_claim_count,
-        "conflict_count": result.conflict_count,
-        "extraction_provenance": _build_extraction_provenance(
-            selection=selection,
-            strict_live_extraction_required=strict_live_extraction_required,
-            client=llm_client,
-        ),
-    }
-
-
-def _find_project_root() -> Path:
-    """Walk up from this file to find the directory containing pyproject.toml.
-
-    Returns:
-        Path to the project root.
-
-    Raises:
-        FileNotFoundError: If pyproject.toml cannot be found.
-    """
-    current = Path(__file__).resolve().parent
-    while current != current.parent:
-        if (current / "pyproject.toml").exists():
-            return current
-        current = current.parent
-    msg = "Cannot locate project root (no pyproject.toml found above %s)"
-    raise FileNotFoundError(msg % Path(__file__).resolve())
-
-
-def _get_extraction_prompt() -> str:
-    """Load EXTRACT_CLAIMS_V1 prompt text from disk.
-
-    Fail-closed: raises FileNotFoundError if prompt file is missing.
-
-    Returns:
-        Prompt template string.
-    """
-    root = _find_project_root()
-    prompt_path = root / "prompts" / "extract_claims" / "1.0.0" / "prompt.md"
-    if not prompt_path.exists():
-        raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
-    return prompt_path.read_text(encoding="utf-8")
-
-
-def _get_extraction_output_schema() -> dict[str, Any]:
-    """Load EXTRACT_CLAIMS_V1 output schema from disk.
-
-    Fail-closed: raises FileNotFoundError if schema file is missing.
-
-    Returns:
-        JSON schema dict.
-    """
-    import json
-
-    root = _find_project_root()
-    schema_path = root / "schemas" / "extraction" / "extract_claims_output.json"
-    if not schema_path.exists():
-        raise FileNotFoundError(f"Schema file not found: {schema_path}")
-    with open(schema_path, encoding="utf-8") as f:
-        result: dict[str, Any] = json.load(f)
-        return result
-
-
-_EXTRACTION_MAX_TOKENS = 4096
-
-# Safe, fixed strict-live-extraction outcome codes (value == name, mirroring
-# STRICT_FULL_LIVE_BLOCKED). Surfaced only as codes — never with secrets or raw messages.
-STRICT_LIVE_EXTRACTION_REQUIRED = "STRICT_LIVE_EXTRACTION_REQUIRED"
-STRICT_LIVE_EXTRACTION_PROVIDER_FAILED = "STRICT_LIVE_EXTRACTION_PROVIDER_FAILED"
-
-
-class StrictLiveExtractionError(Exception):
-    """Strict FULL extraction could not use an approved live extractor backend.
-
-    Carries only a safe, fixed ``code`` + ``message`` — never the API key, prompt, response,
-    provider payload, or a raw underlying exception message.
-    """
-
-    def __init__(self, *, code: str, message: str) -> None:
-        self.code = code
-        self.message = message
-        super().__init__(message)
-
-
-@dataclass(frozen=True)
-class ExtractorClientSelection:
-    """Safe selection context handed to an injected extractor-client factory.
-
-    Carries only the resolved backend + model + max_tokens — never the API key or any other
-    secret. The factory (test seam / future strict wiring) returns the extraction client.
-    """
-
-    backend: str
-    model: str | None
-    max_tokens: int
-
-
-ExtractorClientFactory = Callable[[ExtractorClientSelection], Any]
-
-_DEFAULT_ANTHROPIC_EXTRACT_MODEL = "claude-sonnet-4-20250514"
-_EXTRACTION_PROMPT_ID = "EXTRACT_CLAIMS_V1"
-
-
-def _resolve_extraction_selection() -> ExtractorClientSelection:
-    """Resolve the extraction backend/model selection from env (no client construction)."""
-    import os
-
-    backend = os.environ.get("IDIS_EXTRACT_BACKEND", "deterministic")
-    model = (
-        os.environ.get("IDIS_ANTHROPIC_MODEL_EXTRACT", _DEFAULT_ANTHROPIC_EXTRACT_MODEL)
-        if backend == "anthropic"
-        else None
-    )
-    return ExtractorClientSelection(backend=backend, model=model, max_tokens=_EXTRACTION_MAX_TOKENS)
-
-
-def _build_strict_anthropic_extractor(
-    selection: ExtractorClientSelection,
-    extractor_client_factory: ExtractorClientFactory | None,
-    *,
-    tenant_id: str | None = None,
-) -> Any:
-    """Build the live (Anthropic) extractor for strict FULL, failing closed safely.
-
-    Any construction/call failure is surfaced as ``STRICT_LIVE_EXTRACTION_PROVIDER_FAILED``
-    with a fixed message — never the raw exception message, key, prompt, or provider payload.
-    """
-    try:
-        if extractor_client_factory is not None:
-            return extractor_client_factory(selection)
-        return _new_budgeted_llm_client(
-            model=selection.model, max_tokens=selection.max_tokens, tenant_id=tenant_id
-        )
-    except StrictLiveExtractionError:
-        raise
-    except Exception as exc:
-        raise StrictLiveExtractionError(
-            code=STRICT_LIVE_EXTRACTION_PROVIDER_FAILED,
-            message="Strict live extraction provider construction or call failed.",
-        ) from exc
-
-
-def _build_extraction_llm_client(
-    *,
-    extractor_client_factory: ExtractorClientFactory | None = None,
-    strict_live_extraction_required: bool = False,
-    tenant_id: str | None = None,
-) -> Any:
-    """Build the LLM client for extraction based on env configuration.
-
-    Reads IDIS_EXTRACT_BACKEND (default: deterministic).
-    Fail-closed: raises ValueError if anthropic backend selected but key missing.
-
-    When ``extractor_client_factory`` is supplied it is called with the resolved
-    ``ExtractorClientSelection`` and its return value is used as the extraction client
-    (injection seam for tests / strict wiring). When ``strict_live_extraction_required`` is
-    True (threaded only from the strict FULL execution path) a non-anthropic backend fails
-    closed with ``STRICT_LIVE_EXTRACTION_REQUIRED`` (deterministic extraction is forbidden)
-    and an anthropic provider failure surfaces ``STRICT_LIVE_EXTRACTION_PROVIDER_FAILED``.
-    The non-strict default path is unchanged.
-
-    Returns:
-        An LLMClient implementation instance.
-
-    Raises:
-        ValueError: If IDIS_EXTRACT_BACKEND=anthropic but ANTHROPIC_API_KEY is unset
-            (non-strict default path only; an injected factory builds its own client).
-        StrictLiveExtractionError: If strict-live extraction is required but a live approved
-            backend is not available/usable.
-    """
-    selection = _resolve_extraction_selection()
-
-    if selection.backend == "anthropic":
-        if strict_live_extraction_required:
-            return _build_strict_anthropic_extractor(
-                selection, extractor_client_factory, tenant_id=tenant_id
-            )
-        if extractor_client_factory is not None:
-            return extractor_client_factory(selection)
-        return _new_budgeted_llm_client(
-            model=selection.model, max_tokens=selection.max_tokens, tenant_id=tenant_id
-        )
-
-    # Non-anthropic backend (deterministic / unset / other).
-    if strict_live_extraction_required:
-        raise StrictLiveExtractionError(
-            code=STRICT_LIVE_EXTRACTION_REQUIRED,
-            message=(
-                "Strict live extraction requires the anthropic backend; "
-                "deterministic extraction is forbidden."
-            ),
-        )
-    if extractor_client_factory is not None:
-        return extractor_client_factory(selection)
-
-    from idis.services.extraction.extractors.llm_client import DeterministicLLMClient
-
-    return DeterministicLLMClient()
-
-
-def _safe_client_request_id(client: Any) -> str | None:
-    """Return a safe provider request id if the client exposes one, else None."""
-    value = getattr(client, "provider_request_id", None)
-    return value if isinstance(value, str) and value.strip() else None
-
-
-def _extraction_prompt_version() -> str | None:
-    """Return the extraction prompt's registry version from prompts/registry.yaml (safe)."""
-    return _prompt_registry_version(_EXTRACTION_PROMPT_ID)
-
-
-def _build_extraction_provenance(
-    *,
-    selection: ExtractorClientSelection,
-    strict_live_extraction_required: bool,
-    client: Any,
-) -> dict[str, Any]:
-    """Build a safe, additive extraction-provenance block for the step summary.
-
-    Records only provider/backend + safe model name + prompt id/version + the strict flag +
-    a sanitized provider request id (only if the client safely exposes one) — never the API
-    key, prompt body, response text, raw provider payload, exception message, or a path.
-    """
-    from idis.services.llm_model_health import _sanitize_request_id
-
-    provider = "anthropic" if selection.backend == "anthropic" else "deterministic"
-    return {
-        "provider": provider,
-        "backend": selection.backend,
-        "model": selection.model,
-        "prompt_id": _EXTRACTION_PROMPT_ID,
-        "prompt_version": _extraction_prompt_version(),
-        "strict_live_extraction_required": bool(strict_live_extraction_required),
-        "provider_request_id": _sanitize_request_id(_safe_client_request_id(client)),
-    }
-
-
-# --- Slice84 Task 4: safe, additive provenance + debate observability ---
-_SCORING_PROMPT_ID = "scoring_agent"  # on-disk prompt family: prompts/scoring_agent/1.0.0/
-_SCORING_PROMPT_VERSION = "1.0.0"
-_DEBATE_PROMPT_IDS = (
-    "DEBATE_ADVOCATE_V1",
-    "DEBATE_SANAD_BREAKER_V1",
-    "DEBATE_CONTRADICTION_FINDER_V1",
-    "DEBATE_RISK_OFFICER_V1",
-    "DEBATE_ARBITER_V1",
-)
-_DEBATE_PROMPT_VERSION_ID = "DEBATE_ARBITER_V1"
-
-
-def _prompt_registry_version(prompt_id: str) -> str | None:
-    """Return a prompt's registry version from prompts/registry.yaml (safe), else None."""
-    import yaml
-
-    try:
-        registry_path = _find_project_root() / "prompts" / "registry.yaml"
-        data = yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError):
-        return None
-    prompt = (data.get("prompts") or {}).get(prompt_id) or {}
-    version = prompt.get("version")
-    return version.strip() if isinstance(version, str) and version.strip() else None
-
-
-def _provider_label(backend: str) -> str:
-    """Map a resolved backend to a safe provider label."""
-    return "anthropic" if backend == "anthropic" else "deterministic"
-
-
-def _build_role_client_provenance(
-    *,
-    selection: Any,
-    prompt_id: str | None,
-    prompt_version: str | None,
-    strict_live_debate_backend_required: bool,
-    client: Any,
-) -> dict[str, Any]:
-    """Build a safe, additive provenance block for a single-client role (analysis/scoring).
-
-    Records only provider/backend + safe model name + prompt id/version + the strict flag + a
-    sanitized provider request id (only if the client safely exposes one) — never the API key,
-    prompt body, response text, raw provider payload, exception message, or a path.
-    """
-    from idis.services.llm_model_health import _sanitize_request_id
-
-    return {
-        "provider": _provider_label(selection.backend),
-        "backend": selection.backend,
-        "model": selection.model,
-        "prompt_id": prompt_id,
-        "prompt_version": prompt_version,
-        "strict_live_debate_backend_required": bool(strict_live_debate_backend_required),
-        "provider_request_id": _sanitize_request_id(_safe_client_request_id(client)),
-    }
-
-
-def _build_analysis_provenance(
-    *, selection: Any, strict_live_debate_backend_required: bool, client: Any
-) -> dict[str, Any]:
-    """Safe analysis provenance.
-
-    Analysis runs 8 embedded specialist prompts (no single registry prompt id), so
-    ``prompt_id``/``prompt_version`` are null by design; the rest mirrors the shared block.
-    """
-    return _build_role_client_provenance(
-        selection=selection,
-        prompt_id=None,
-        prompt_version=None,
-        strict_live_debate_backend_required=strict_live_debate_backend_required,
-        client=client,
-    )
-
-
-def _build_scoring_provenance(
-    *, selection: Any, strict_live_debate_backend_required: bool, client: Any
-) -> dict[str, Any]:
-    """Safe scoring provenance (on-disk prompt family scoring_agent/1.0.0)."""
-    return _build_role_client_provenance(
-        selection=selection,
-        prompt_id=_SCORING_PROMPT_ID,
-        prompt_version=_SCORING_PROMPT_VERSION,
-        strict_live_debate_backend_required=strict_live_debate_backend_required,
-        client=client,
-    )
-
-
-def _safe_runner_request_id(runner: Any) -> str | None:
-    """Return a safe provider request id from a role runner's client, if any."""
-    client = getattr(runner, "llm_client", None)
-    return _safe_client_request_id(client) if client is not None else None
-
-
-def _build_debate_provenance(
-    *, selection: Any, strict_live_debate_backend_required: bool, role_runners: Any
-) -> dict[str, Any]:
-    """Build safe, additive debate provenance.
-
-    Records default + arbiter model names, the 5 registry debate prompt ids + their version, the
-    strict flag, and sanitized default/arbiter provider request ids (only if safely exposed) —
-    never the API key, prompt body, response, raw payload, exception message, or a path.
-    """
-    from idis.services.llm_model_health import _sanitize_request_id
-
-    return {
-        "provider": _provider_label(selection.backend),
-        "backend": selection.backend,
-        "default_model": selection.default_model,
-        "arbiter_model": selection.arbiter_model,
-        "prompt_ids": list(_DEBATE_PROMPT_IDS),
-        "prompt_version": _prompt_registry_version(_DEBATE_PROMPT_VERSION_ID),
-        "strict_live_debate_backend_required": bool(strict_live_debate_backend_required),
-        "default_provider_request_id": _sanitize_request_id(
-            _safe_runner_request_id(getattr(role_runners, "advocate", None))
-        ),
-        "arbiter_provider_request_id": _sanitize_request_id(
-            _safe_runner_request_id(getattr(role_runners, "arbiter", None))
-        ),
-    }
-
-
-_LAYER2_CHALLENGER_PROMPT_ID = "layer2_ic_challenger"
-_LAYER2_ARBITER_PROMPT_ID = "layer2_ic_arbiter"
-_LAYER2_PROMPT_IDS = (_LAYER2_CHALLENGER_PROMPT_ID, _LAYER2_ARBITER_PROMPT_ID)
-_LAYER2_PROMPT_VERSION = "1.0.0"
-
-
-def _safe_runner_executed(runner: Any) -> bool:
-    """True when a Layer-2 role runner reports a completed live model call."""
-    return bool(getattr(runner, "executed", False))
-
-
-def _build_layer2_provenance(
-    *,
-    strict_full_live: bool,
-    backend: str,
-    challenger_model: str | None,
-    arbiter_model: str | None,
-    challenger_runner: Any,
-    arbiter_runner: Any,
-) -> dict[str, Any]:
-    """Build safe, additive Layer-2 IC challenge provenance (Slice93 Task 5, DEC-F).
-
-    Records provider/backend + challenger/arbiter model names + the two registry prompt ids
-    and version + the strict flag + sanitized challenger/arbiter provider request ids (only if
-    a client safely exposes one) + booleans proving each live runner executed — never the API
-    key, prompt body, model output, raw rationale, or a path. ``live_calls_executed`` is the
-    per-run runtime-execution signal (both challenger and arbiter calls completed).
-    """
-    from idis.services.llm_model_health import _sanitize_request_id
-
-    challenger_executed = _safe_runner_executed(challenger_runner)
-    arbiter_executed = _safe_runner_executed(arbiter_runner)
-    return {
-        "provider": _provider_label(backend),
-        "backend": backend,
-        "challenger_model": challenger_model,
-        "arbiter_model": arbiter_model,
-        "prompt_ids": list(_LAYER2_PROMPT_IDS),
-        "prompt_version": _LAYER2_PROMPT_VERSION,
-        "strict_full_live": bool(strict_full_live),
-        "challenger_provider_request_id": _sanitize_request_id(
-            _safe_runner_request_id(challenger_runner)
-        ),
-        "arbiter_provider_request_id": _sanitize_request_id(
-            _safe_runner_request_id(arbiter_runner)
-        ),
-        "challenger_executed": challenger_executed,
-        "arbiter_executed": arbiter_executed,
-        "live_calls_executed": bool(challenger_executed and arbiter_executed),
-    }
-
-
-def _build_debate_observability(final_state: Any) -> dict[str, Any]:
-    """Build safe, additive debate observability for the step summary.
-
-    Surfaces only bounded counts/booleans + safe source-reference ids + a FIXED arbiter rationale
-    summary — never the raw arbiter rationale (which may contain private model text), agent output
-    content, the API key, response, raw payload, or a path.
-    """
-    decisions = list(getattr(final_state, "arbiter_decisions", []) or [])
-    return {
-        "round_number": final_state.round_number,
-        "stop_reason": (final_state.stop_reason.value if final_state.stop_reason else None),
-        "agent_output_count": len(final_state.agent_outputs),
-        "arbiter_decision_count": len(decisions),
-        "dissent_preserved": any(bool(d.dissent_preserved) for d in decisions),
-        "challenges_validated_count": sum(len(d.challenges_validated) for d in decisions),
-        "arbiter_rationale_summary": (
-            "arbiter_decision_recorded" if decisions else "no_arbiter_decision"
-        ),
-        "source_reference_ids": [
-            final_state.claim_registry_ref,
-            final_state.sanad_graph_ref,
-        ],
-    }
-
-
-def _build_debate_role_runners(
-    context: Any = None,
-    *,
-    debate_role_runners_factory: DebateRoleRunnersFactory | None = None,
-    strict_live_debate_backend_required: bool = False,
-    tenant_id: str | None = None,
-) -> Any:
-    """Build role runners for debate based on env configuration.
-
-    Reads IDIS_DEBATE_BACKEND (default: deterministic).
-    Fail-closed: raises ValueError if anthropic backend selected but key missing.
-
-    When ``debate_role_runners_factory`` is supplied it is called with the resolved
-    ``DebateRoleRunnerSelection`` and its return value (a complete ``RoleRunners``) is used
-    (injection seam for tests / strict wiring). When ``strict_live_debate_backend_required`` is
-    True (threaded only from the strict FULL execution path) a non-anthropic backend fails closed
-    with ``STRICT_LIVE_DEBATE_REQUIRED`` (deterministic debate is forbidden) and an anthropic
-    provider failure surfaces ``STRICT_LIVE_DEBATE_PROVIDER_FAILED``. The non-strict default path
-    is unchanged.
-
-    Args:
-        context: Optional DebateContext with rich pipeline data for LLM agents.
-
-    Returns:
-        RoleRunners instance (deterministic or LLM-backed).
-
-    Raises:
-        ValueError: If IDIS_DEBATE_BACKEND=anthropic but ANTHROPIC_API_KEY is unset
-            (default path only; an injected factory builds its own runners).
-        StrictLiveRoleError: If strict-live debate is required but a live approved backend is
-            not available/usable.
-    """
-    from idis.debate.orchestrator import RoleRunners
-
-    selection = _resolve_debate_selection()
-
-    if selection.backend == "anthropic":
-        if strict_live_debate_backend_required:
-            return _build_strict_debate_role_runners(
-                selection, context, debate_role_runners_factory, tenant_id=tenant_id
-            )
-        if debate_role_runners_factory is not None:
-            return debate_role_runners_factory(selection)
-        return _build_live_debate_role_runners(selection, context, tenant_id=tenant_id)
-
-    if strict_live_debate_backend_required:
-        raise StrictLiveRoleError(
-            code=STRICT_LIVE_DEBATE_REQUIRED,
-            message=(
-                "Strict live debate requires the anthropic backend; "
-                "deterministic debate is forbidden."
-            ),
-        )
-    if debate_role_runners_factory is not None:
-        return debate_role_runners_factory(selection)
-    return RoleRunners()
-
-
-def _build_strict_debate_role_runners(
-    selection: DebateRoleRunnerSelection,
-    context: Any,
-    debate_role_runners_factory: DebateRoleRunnersFactory | None,
-    *,
-    tenant_id: str | None = None,
-) -> Any:
-    """Build the live debate RoleRunners for strict FULL, failing closed safely.
-
-    Any construction/call failure is surfaced as ``STRICT_LIVE_DEBATE_PROVIDER_FAILED`` with a
-    fixed message — never the raw exception message, key, prompt, or provider payload.
-    """
-    try:
-        if debate_role_runners_factory is not None:
-            return debate_role_runners_factory(selection)
-        return _build_live_debate_role_runners(selection, context, tenant_id=tenant_id)
-    except StrictLiveRoleError:
-        raise
-    except Exception as exc:
-        raise StrictLiveRoleError(
-            code=STRICT_LIVE_DEBATE_PROVIDER_FAILED,
-            message="Strict live debate provider construction or call failed.",
-        ) from exc
-
-
-def _build_live_debate_role_runners(
-    selection: DebateRoleRunnerSelection, context: Any, *, tenant_id: str | None = None
-) -> Any:
-    """Construct the live (Anthropic) debate RoleRunners (5 LLM role runners)."""
-    from idis.debate.orchestrator import RoleRunners
-    from idis.debate.roles.llm_role_runner import LLMRoleRunner
-    from idis.models.debate import DebateRole
-
-    prompts = _load_debate_prompts()
-
-    default_client = _new_budgeted_llm_client(
-        model=selection.default_model, max_tokens=selection.max_tokens, tenant_id=tenant_id
-    )
-    arbiter_client = _new_budgeted_llm_client(
-        model=selection.arbiter_model, max_tokens=selection.max_tokens, tenant_id=tenant_id
-    )
-
-    return RoleRunners(
-        advocate=LLMRoleRunner(
-            role=DebateRole.ADVOCATE,
-            llm_client=default_client,
-            system_prompt=prompts["advocate"],
-            context=context,
-        ),
-        sanad_breaker=LLMRoleRunner(
-            role=DebateRole.SANAD_BREAKER,
-            llm_client=default_client,
-            system_prompt=prompts["sanad_breaker"],
-            context=context,
-        ),
-        contradiction_finder=LLMRoleRunner(
-            role=DebateRole.CONTRADICTION_FINDER,
-            llm_client=default_client,
-            system_prompt=prompts["contradiction_finder"],
-            context=context,
-        ),
-        risk_officer=LLMRoleRunner(
-            role=DebateRole.RISK_OFFICER,
-            llm_client=default_client,
-            system_prompt=prompts["risk_officer"],
-            context=context,
-        ),
-        arbiter=LLMRoleRunner(
-            role=DebateRole.ARBITER,
-            llm_client=arbiter_client,
-            system_prompt=prompts["arbiter"],
-            context=context,
-        ),
-    )
-
-
-def _load_debate_prompts() -> dict[str, str]:
-    """Load debate role prompt texts from disk.
-
-    Reads from prompts/<role>/1.0.0/prompt.md for each role.
-    Fail-closed: raises FileNotFoundError if any prompt is missing.
-
-    Returns:
-        Dict mapping role name to prompt text.
-    """
-    root = _find_project_root()
-    role_dirs = {
-        "advocate": "debate_advocate",
-        "sanad_breaker": "debate_sanad_breaker",
-        "contradiction_finder": "debate_contradiction_finder",
-        "risk_officer": "debate_risk_officer",
-        "arbiter": "debate_arbiter",
-    }
-
-    prompts: dict[str, str] = {}
-    for role_key, dir_name in role_dirs.items():
-        prompt_path = root / "prompts" / dir_name / "1.0.0" / "prompt.md"
-        if not prompt_path.exists():
-            raise FileNotFoundError(f"Debate prompt file not found: {prompt_path}")
-        prompts[role_key] = prompt_path.read_text(encoding="utf-8")
-
-    return prompts
 
 
 def clear_runs_store() -> None:

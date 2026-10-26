@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from scripts.audit_full_system_wiring import collect_wiring_inventory
+from scripts.audit_full_system_wiring import _discover_provider_ids, collect_wiring_inventory
+
+from idis.services.enrichment.task9.provider_catalog import PROVIDER_IDS
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -15,11 +17,26 @@ def test_external_connectors_are_inventoried_without_live_provider_calls() -> No
     enrichment = inventory["external_enrichment_connectors"]
 
     assert enrichment.status == "WIRED"
-    assert enrichment.metadata["provider_count"] == 15
-    assert {"sec_edgar", "companies_house", "fmp", "gdelt", "google_news_rss"}.issubset(
-        set(enrichment.metadata["provider_ids"])
-    )
+    assert frozenset(enrichment.metadata["provider_ids"]) == PROVIDER_IDS
+    assert enrichment.metadata["provider_count"] == len(PROVIDER_IDS)
     assert enrichment.metadata["live_calls_performed"] is False
+
+
+def test_provider_inventory_is_parsed_from_catalog_not_connector_constants(
+    tmp_path: Path,
+) -> None:
+    """Static discovery must use the catalog authority without importing providers."""
+    catalog = tmp_path / "src/idis/services/enrichment/task9/provider_catalog.py"
+    catalog.parent.mkdir(parents=True)
+    catalog.write_text(
+        '_PROVIDER_SPECS = (_spec("alpha"), _spec("beta"))\n',
+        encoding="utf-8",
+    )
+    connector = tmp_path / "src/idis/services/enrichment/connectors/decoy.py"
+    connector.parent.mkdir(parents=True)
+    connector.write_text('PROVIDER_ID = "stale-connector-only"\n', encoding="utf-8")
+
+    assert _discover_provider_ids(tmp_path) == ["alpha", "beta"]
 
 
 def test_anthropic_is_config_validated_only_and_openai_is_placeholder() -> None:

@@ -3,8 +3,11 @@
 Provides production-grade tracing baseline per v6.3 Tech Stack requirements:
 - OpenTelemetry (MUST) per docs/07_IDIS_Tech_Stack_v6_3.md §1.5
 - Correlation with request_id, tenant_id, actor_id, roles, operation_id
-- DB and webhook outbound instrumentation
-- Fail-closed when IDIS_REQUIRE_OTEL=1 and init fails
+- Database spans are IDIS-owned SQLAlchemy engine events. The pinned
+  SQLAlchemy release is outside the vendor instrumentor's supported range,
+  so this module does not import opentelemetry.instrumentation.sqlalchemy.
+- Webhook outbound instrumentation
+- Fail-closed when IDIS_REQUIRE_OTEL=1 and init or DB-span registration fails
 
 Environment Variables:
     IDIS_OTEL_ENABLED: Set to "1" to enable tracing (default: disabled)
@@ -19,13 +22,18 @@ Environment Variables:
 Security (per docs/IDIS_Security_Threat_Model_v6_3.md):
     - Never export API keys, Authorization headers, request bodies, or secrets
     - No full SQL with bound parameters in span attributes
+    - Database spans record only db.system and db.operation. No statement
+      text, parameters, table names, connection URL, credentials, or
+      exception messages in attributes, events, or status descriptions.
     - Tenant/actor IDs allowed as internal attributes (not propagated outbound)
 """
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import os
+import weakref
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -223,22 +231,182 @@ def instrument_fastapi(app: Any) -> None:
         logger.warning("Failed to instrument FastAPI: %s", e)
 
 
-def instrument_sqlalchemy(engine: Any) -> None:
-    """Instrument SQLAlchemy engine with OpenTelemetry.
+_DB_TRACER_NAME = "idis.db"
+_DB_SPAN_STACK: contextvars.ContextVar[tuple[tuple[Any, Any], ...]] = contextvars.ContextVar(
+    "idis_db_span_stack"
+)
+_INSTRUMENTED_ENGINES: weakref.WeakSet[Any] = weakref.WeakSet()
+# fmt: off
+_DB_OPERATIONS = frozenset({
+    "ALTER", "BEGIN", "CALL", "COMMIT", "COPY", "CREATE", "DELETE", "DROP",
+    "EXECUTE", "EXPLAIN", "INSERT", "RELEASE", "ROLLBACK", "SAVEPOINT",
+    "SELECT", "SET", "SHOW", "TRUNCATE", "UPDATE", "WITH",
+})
+# fmt: on
+_LISTENER_FAILURE = "Database span listener failed: %s"
+
+
+def _sql_operation(statement: str) -> str:
+    remaining = statement.lstrip()
+    while remaining.startswith("/*"):
+        end = remaining.find("*/")
+        if end < 0:
+            return "OTHER"
+        remaining = remaining[end + 2 :].lstrip()
+    length = 0
+    while length < len(remaining) and remaining[length].isalpha():
+        length += 1
+    keyword = remaining[:length].upper()
+    if keyword in _DB_OPERATIONS:
+        return keyword
+    return "OTHER"
+
+
+def _statement_key(context: Any, cursor: Any) -> Any:
+    if context is not None:
+        return context
+    return cursor
+
+
+def _push_db_entry(key: Any, span: Any) -> None:
+    _DB_SPAN_STACK.set((*_DB_SPAN_STACK.get(()), (key, span)))
+
+
+def _close_db_entry(key: Any, error_name: str | None) -> None:
+    current = _DB_SPAN_STACK.get(())
+    match_index = -1
+    for index in range(len(current) - 1, -1, -1):
+        if current[index][0] is key:
+            match_index = index
+            break
+    if match_index < 0:
+        return
+    span = current[match_index][1]
+    _DB_SPAN_STACK.set(current[:match_index] + current[match_index + 1 :])
+    if span is None:
+        return
+    try:
+        if error_name is not None:
+            from opentelemetry.trace import Status, StatusCode
+
+            span.set_status(Status(StatusCode.ERROR, description=error_name))
+    finally:
+        span.end()
+
+
+def _run_listener(callback: Any, /, *args: Any) -> None:
+    try:
+        callback(*args)
+    except Exception as exc:
+        logger.debug(_LISTENER_FAILURE, type(exc).__name__)
+
+
+def _start_db_span(conn: Any, statement: str) -> Any:
+    from opentelemetry import trace
+
+    operation = _sql_operation(statement)
+    system = str(conn.engine.dialect.name).lower()
+    return trace.get_tracer(_DB_TRACER_NAME).start_span(
+        operation,
+        kind=trace.SpanKind.CLIENT,
+        attributes={"db.system": system, "db.operation": operation},
+    )
+
+
+def _before_cursor_execute(
+    conn: Any, cursor: Any, statement: str, parameters: Any, context: Any, executemany: bool
+) -> None:
+    def open_statement() -> None:
+        key = _statement_key(context, cursor)
+        span: Any = None
+        try:
+            span = _start_db_span(conn, statement if isinstance(statement, str) else "")
+        finally:
+            _push_db_entry(key, span)
+
+    _run_listener(open_statement)
+
+
+def _after_cursor_execute(
+    conn: Any, cursor: Any, statement: str, parameters: Any, context: Any, executemany: bool
+) -> None:
+    _run_listener(_close_db_entry, _statement_key(context, cursor), None)
+
+
+def _handle_db_error(exception_context: Any) -> None:
+    def close_failed_statement() -> None:
+        if exception_context.connection is None:
+            return
+        execution_context = exception_context.execution_context
+        if execution_context is not None:
+            key = execution_context
+        else:
+            # SQLAlchemy 2.1.4 accepts a cursor argument but does not assign the slot.
+            key = getattr(exception_context, "cursor", None)
+            if key is None:
+                return
+        caught = exception_context.sqlalchemy_exception or exception_context.original_exception
+        _close_db_entry(key, type(caught).__name__)
+
+    _run_listener(close_failed_statement)
+
+
+def instrument_sqlalchemy(engine: Any) -> bool:
+    """Register IDIS-owned synchronous SQLAlchemy engine-event spans.
+
+    The pinned SQLAlchemy release is outside the vendor instrumentor's
+    range, so this does not import opentelemetry.instrumentation.sqlalchemy.
+    Async engines are out of scope. Listeners are before_cursor_execute,
+    after_cursor_execute, and handle_error. Spans come from tracer idis.db,
+    use CLIENT kind, and are children of the active span. The span name is
+    the SQL operation keyword only.
+
+    Attributes are only db.system (dialect name lower-cased; sqlite and
+    postgresql stay themselves) and db.operation (first keyword, upper-cased,
+    closed set, otherwise OTHER). Leading whitespace and /* */ comments are
+    skipped. No statement text, parameters, table names, connection URL,
+    credentials, or exception message is recorded in any attribute, event,
+    or status description. On error the status is ERROR and the description
+    is only the exception class name.
+
+    Registration is idempotent per engine. A listener failure logs one debug
+    line and is not raised. Registration failure logs a warning and returns
+    False, or raises TracingConfigError when IDIS_REQUIRE_OTEL=1.
 
     Args:
-        engine: SQLAlchemy Engine instance.
+        engine: Synchronous SQLAlchemy Engine.
+
+    Returns:
+        True when listeners are registered, otherwise False.
+
+    Raises:
+        TracingConfigError: Registration failed and IDIS_REQUIRE_OTEL=1.
     """
     if not _get_env_bool("IDIS_OTEL_ENABLED", False):
-        return
+        return False
 
     try:
-        from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+        from sqlalchemy import event as sa_event
 
-        SQLAlchemyInstrumentor().instrument(engine=engine, enable_commenter=False)
-        logger.debug("SQLAlchemy engine instrumented with OpenTelemetry")
-    except Exception as e:
-        logger.warning("Failed to instrument SQLAlchemy: %s", e)
+        if engine in _INSTRUMENTED_ENGINES:
+            return True
+        listeners = (
+            ("before_cursor_execute", _before_cursor_execute),
+            ("after_cursor_execute", _after_cursor_execute),
+            ("handle_error", _handle_db_error),
+        )
+        for event_name, listener in listeners:
+            if not sa_event.contains(engine, event_name, listener):
+                sa_event.listen(engine, event_name, listener)
+        _INSTRUMENTED_ENGINES.add(engine)
+        return True
+    except Exception as exc:
+        logger.warning("Failed to instrument SQLAlchemy: %s", type(exc).__name__)
+        if _get_env_bool("IDIS_REQUIRE_OTEL", False):
+            raise TracingConfigError(
+                "OpenTelemetry SQLAlchemy instrumentation required but registration failed"
+            ) from exc
+        return False
 
 
 def instrument_httpx() -> None:

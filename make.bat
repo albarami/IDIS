@@ -114,7 +114,7 @@ echo === All checks passed ===
 goto end
 
 :format_internal
-"%PYTHON_BIN%" -m ruff format .
+"%PYTHON_BIN%" -m ruff format --check .
 exit /b %errorlevel%
 
 :lint_internal

@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -31,7 +32,7 @@ from idis.storage.models import StoredObject, StoredObjectMetadata
 
 if TYPE_CHECKING:
     from idis.api.auth import TenantContext
-    from idis.storage.object_store import ObjectStore
+    from idis.storage.object_store import ObjectStore, StreamSource
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +166,46 @@ class ComplianceEnforcedStore:
 
         return metadata
 
+    def put_stream(
+        self,
+        tenant_ctx: TenantContext,
+        key: str,
+        source: StreamSource,
+        *,
+        content_type: str | None = None,
+        data_class: DataClass = DataClass.CLASS_2,
+        expected_sha256: str | None = None,
+        expected_size_bytes: int | None = None,
+    ) -> StoredObjectMetadata:
+        """Store a bounded stream with the same non-bypassable BYOK checks."""
+        self._enforce_byok_for_class(tenant_ctx, data_class, "put_stream")
+
+        metadata = self._inner.put_stream(
+            tenant_id=tenant_ctx.tenant_id,
+            key=key,
+            source=source,
+            content_type=content_type,
+            expected_sha256=expected_sha256,
+            expected_size_bytes=expected_size_bytes,
+        )
+
+        byok_metadata = get_key_metadata(tenant_ctx, self._byok_registry)
+        if byok_metadata and data_class in (DataClass.CLASS_2, DataClass.CLASS_3):
+            self._persist_byok_evidence(
+                tenant_ctx=tenant_ctx,
+                key=key,
+                byok_metadata=byok_metadata,
+                data_class=data_class,
+            )
+            logger.info(
+                "Streamed object stored with BYOK evidence: tenant=%s, key=%s, kms_key_hash=%s",
+                tenant_ctx.tenant_id,
+                key,
+                byok_metadata.get("kms_key_alias_hash"),
+            )
+
+        return metadata
+
     def _persist_byok_evidence(
         self,
         tenant_ctx: TenantContext,
@@ -280,6 +321,38 @@ class ComplianceEnforcedStore:
         self._enforce_byok_for_class(tenant_ctx, data_class, "head")
 
         return self._inner.head(
+            tenant_id=tenant_ctx.tenant_id,
+            key=key,
+            version_id=version_id,
+        )
+
+    def verify_integrity(
+        self,
+        tenant_ctx: TenantContext,
+        key: str,
+        *,
+        version_id: str | None = None,
+        data_class: DataClass = DataClass.CLASS_2,
+    ) -> StoredObjectMetadata:
+        """Enforce BYOK, then stream-verify durable bytes without returning them."""
+        self._enforce_byok_for_class(tenant_ctx, data_class, "verify_integrity")
+        return self._inner.verify_integrity(
+            tenant_id=tenant_ctx.tenant_id,
+            key=key,
+            version_id=version_id,
+        )
+
+    def open_verified_stream(
+        self,
+        tenant_ctx: TenantContext,
+        key: str,
+        *,
+        version_id: str | None = None,
+        data_class: DataClass = DataClass.CLASS_2,
+    ) -> tuple[StoredObjectMetadata, Iterator[bytes]]:
+        """Enforce BYOK, then open a bounded integrity-checking read stream."""
+        self._enforce_byok_for_class(tenant_ctx, data_class, "open_verified_stream")
+        return self._inner.open_verified_stream(
             tenant_id=tenant_ctx.tenant_id,
             key=key,
             version_id=version_id,

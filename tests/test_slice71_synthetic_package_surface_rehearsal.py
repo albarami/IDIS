@@ -22,6 +22,7 @@ def test_synthetic_package_surface_rehearsal_requires_explicit_package_opt_in() 
 
     try:
         rehearsal.build_bounded_synthetic_package_surface_rehearsal(
+            deal_stage="GROWTH",
             dataset_root=Path("datasets/gdbs_full"),
             env={},
             max_cases=1,
@@ -47,6 +48,7 @@ def test_synthetic_package_surface_rehearsal_fails_closed_without_postgres(
 
     try:
         rehearsal.build_bounded_synthetic_package_surface_rehearsal(
+            deal_stage="GROWTH",
             dataset_root=Path("datasets/gdbs_full"),
             env={},
             max_cases=1,
@@ -74,6 +76,7 @@ def test_synthetic_package_surface_rehearsal_fails_closed_when_postgres_unreacha
 
     try:
         rehearsal.build_bounded_synthetic_package_surface_rehearsal(
+            deal_stage="GROWTH",
             dataset_root=Path("datasets/gdbs_full"),
             env={},
             max_cases=1,
@@ -94,7 +97,7 @@ def test_run_full_deliverables_marks_durable_export_when_db_and_object_store(
     monkeypatch: Any,
 ) -> None:
     """DELIVERABLES summary must honestly signal same-run durable package export."""
-    from idis.api.routes import runs as runs_route
+    from idis.services.runs.step_runtime import deliverables as deliverables_module
 
     class FakeObjectStore:
         backend_name = "filesystem"
@@ -133,7 +136,7 @@ def test_run_full_deliverables_marks_durable_export_when_db_and_object_store(
         FakeRepository,
     )
 
-    summary = runs_route._run_full_deliverables(
+    summary = deliverables_module._run_full_deliverables(
         run_id="22222222-2222-4222-8222-222222222222",
         tenant_id=str(pg_helpers.TENANT_ID),
         deal_id=str(pg_helpers.DEAL_ID),
@@ -234,6 +237,7 @@ def test_synthetic_package_surface_rehearsal_proves_same_run_package_surfaces(
     monkeypatch.setenv("IDIS_ENABLE_VECTOR_SEARCH", "1")
 
     report = build_bounded_synthetic_package_surface_rehearsal(
+        deal_stage="GROWTH",
         dataset_root=Path("datasets/gdbs_full"),
         env={},
         max_cases=1,

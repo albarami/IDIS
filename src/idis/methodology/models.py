@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+from collections.abc import Mapping
 from enum import StrEnum
 from typing import Any
 
@@ -17,10 +19,50 @@ class MethodologyType(StrEnum):
     COMMERCIAL_DD = "commercial_dd"
 
 
+class FddFormulaType(StrEnum):
+    """The complete formula-type set frozen by FDD policy v2."""
+
+    GROSS_MARGIN = "GROSS_MARGIN"
+    FDD_EBITDA_BRIDGE = "FDD_EBITDA_BRIDGE"
+    FDD_EBIT_BRIDGE = "FDD_EBIT_BRIDGE"
+    FDD_TAX_RECONCILIATION = "FDD_TAX_RECONCILIATION"
+    FDD_NET_INCOME_BRIDGE = "FDD_NET_INCOME_BRIDGE"
+    FDD_WORKING_CAPITAL_MOVEMENT = "FDD_WORKING_CAPITAL_MOVEMENT"
+    FDD_FREE_CASH_FLOW_CASH_BRIDGE = "FDD_FREE_CASH_FLOW_CASH_BRIDGE"
+    FDD_DEBT_ROLL_FORWARD = "FDD_DEBT_ROLL_FORWARD"
+    FDD_ASSET_TIE_OUT = "FDD_ASSET_TIE_OUT"
+    FDD_LIABILITY_TIE_OUT = "FDD_LIABILITY_TIE_OUT"
+
+
+class FddFormulaScope(StrEnum):
+    """The complete requirement-scope set frozen by FDD policy v2."""
+
+    LINE_ITEM = "line_item"
+    P_AND_L_CONTROL = "p_and_l_control"
+    CASH_FLOW_CONTROL = "cash_flow_control"
+    DEBT_CONTROL = "debt_control"
+    SHEET_CONTROL = "sheet_control"
+
+
+FDD_FORMULA_POLICY_V2_WORKBOOK_SHA256 = (
+    "a3b83addfff02815c9fd44c4a3dcb7f56ce39410fe182faff12acfb845bd4352"
+)
+FDD_FORMULA_POLICY_V2_POLICY_SHA256 = (
+    "2b9f141a54628dbc8528813cc2f58cdaa2fe3eb09925a74f881f56baac7076e9"
+)
+FDD_FORMULA_POLICY_V2_METHODOLOGY_VERSION_ID = (
+    f"financial_dd:{FDD_FORMULA_POLICY_V2_WORKBOOK_SHA256}:"
+    f"fdd-formula-policy-v2:{FDD_FORMULA_POLICY_V2_POLICY_SHA256}"
+)
+
+
 class MethodologyBaseModel(BaseModel):
     """Base model with deterministic serialization settings."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+
+_LOWERCASE_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 class RequiredEvidence(MethodologyBaseModel):
@@ -41,8 +83,10 @@ class RequiredEvidence(MethodologyBaseModel):
 class RequiredCalculation(MethodologyBaseModel):
     """Calculation requirement for a methodology question."""
 
-    calc_type: str
-    required: bool = True
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    calc_type: str = Field(strict=True)
+    required: bool = Field(default=True, strict=True)
 
     @field_validator("calc_type")
     @classmethod
@@ -50,6 +94,31 @@ class RequiredCalculation(MethodologyBaseModel):
         if not value.strip():
             raise ValueError("calc_type must not be blank")
         return value.strip()
+
+
+class FddFormulaRequirement(MethodologyBaseModel):
+    """Closed, policy-v2-only FDD formula requirement."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    formula_ordinal: int = Field(ge=1, le=10, strict=True)
+    formula_type: FddFormulaType
+    required: bool = Field(strict=True)
+    scope: FddFormulaScope
+
+    @field_validator("formula_type", mode="before")
+    @classmethod
+    def _formula_type_is_an_exact_string_or_enum(cls, value: Any) -> Any:
+        if type(value) not in {str, FddFormulaType}:
+            raise ValueError("formula_type must not be coerced")
+        return value
+
+    @field_validator("scope", mode="before")
+    @classmethod
+    def _scope_is_an_exact_string_or_enum(cls, value: Any) -> Any:
+        if type(value) not in {str, FddFormulaScope}:
+            raise ValueError("scope must not be coerced")
+        return value
 
 
 class AssignedAgent(MethodologyBaseModel):
@@ -103,6 +172,12 @@ class MethodologySourceTrace(MethodologyBaseModel):
     source_hash: str
     sheet_or_section: str
     row_number: int | None = None
+    source_anchor_cell: str | None = None
+
+    @property
+    def anchor_cell(self) -> str | None:
+        """Return the legacy-safe name for the persisted source anchor cell."""
+        return self.source_anchor_cell
 
     @field_validator("source_type", "source_name", "source_hash", "sheet_or_section")
     @classmethod
@@ -110,6 +185,30 @@ class MethodologySourceTrace(MethodologyBaseModel):
         if not value.strip():
             raise ValueError("field must not be blank")
         return value.strip()
+
+    @field_validator("source_hash")
+    @classmethod
+    def _source_hash_is_lowercase_sha256(cls, value: str) -> str:
+        if _LOWERCASE_SHA256.fullmatch(value) is None:
+            raise ValueError("source_hash must be a lowercase SHA-256")
+        return value
+
+    @field_validator("row_number")
+    @classmethod
+    def _row_number_is_physical_excel_row(cls, value: int | None) -> int | None:
+        if value is not None and value < 1:
+            raise ValueError("row_number must be a positive physical row")
+        return value
+
+    @field_validator("source_anchor_cell")
+    @classmethod
+    def _source_anchor_cell_is_a1_coordinate(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if re.fullmatch(r"[A-Z]{1,3}[1-9][0-9]*", cleaned) is None:
+            raise ValueError("source_anchor_cell must be an uppercase A1 cell coordinate")
+        return cleaned
 
 
 class MethodologyQuestion(MethodologyBaseModel):
@@ -126,13 +225,13 @@ class MethodologyQuestion(MethodologyBaseModel):
     nature: str | None = None
     line_item: str | None = None
     question_text: str
-    required_evidence: list[RequiredEvidence]
-    target_document_categories: list[str]
-    required_calculations: list[RequiredCalculation] = Field(default_factory=list)
-    assigned_agents: list[AssignedAgent]
-    red_flag_rules: list[RedFlagRule] = Field(default_factory=list)
+    required_evidence: tuple[RequiredEvidence, ...]
+    target_document_categories: tuple[str, ...]
+    required_calculations: tuple[RequiredCalculation | FddFormulaRequirement, ...] = ()
+    assigned_agents: tuple[AssignedAgent, ...]
+    red_flag_rules: tuple[RedFlagRule, ...] = ()
     report_mapping: ReportMapping
-    validation_requirements: list[str]
+    validation_requirements: tuple[str, ...]
     source_trace: MethodologySourceTrace
 
     @field_validator(
@@ -140,13 +239,19 @@ class MethodologyQuestion(MethodologyBaseModel):
         "methodology_version_id",
         "methodology_question_id",
         "section",
-        "question_text",
     )
     @classmethod
     def _not_blank(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("field must not be blank")
         return value.strip()
+
+    @field_validator("question_text")
+    @classmethod
+    def _question_text_not_blank_and_exact(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("question_text must not be blank")
+        return value
 
     @field_validator("methodology_question_id")
     @classmethod
@@ -162,18 +267,79 @@ class MethodologyQuestion(MethodologyBaseModel):
         "validation_requirements",
     )
     @classmethod
-    def _non_empty_list(cls, value: list[Any]) -> list[Any]:
+    def _non_empty_list(cls, value: tuple[Any, ...]) -> tuple[Any, ...]:
         if not value:
             raise ValueError("list must not be empty")
         return value
 
     @field_validator("target_document_categories", "validation_requirements")
     @classmethod
-    def _list_items_not_blank(cls, value: list[str]) -> list[str]:
-        cleaned = [item.strip() for item in value]
+    def _list_items_not_blank(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        cleaned = tuple(item.strip() for item in value)
         if any(not item for item in cleaned):
             raise ValueError("list items must not be blank")
         return cleaned
+
+    @model_validator(mode="before")
+    @classmethod
+    def _calculation_requirement_shape_is_version_bound(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        if "required_calculations" not in value:
+            return value
+        raw_requirements = value["required_calculations"]
+        if not isinstance(raw_requirements, (list, tuple)):
+            raise ValueError("calculation requirement container must be a list or tuple")
+        is_policy_v2 = (
+            value.get("methodology_version_id") == FDD_FORMULA_POLICY_V2_METHODOLOGY_VERSION_ID
+        )
+        expected_keys = (
+            {"formula_ordinal", "formula_type", "required", "scope"}
+            if is_policy_v2
+            else {"calc_type", "required"}
+        )
+        expected_model = FddFormulaRequirement if is_policy_v2 else RequiredCalculation
+        rejected_model = RequiredCalculation if is_policy_v2 else FddFormulaRequirement
+        for requirement in raw_requirements:
+            if type(requirement) is rejected_model:
+                raise ValueError("calculation requirement shape does not match version")
+            if type(requirement) is expected_model:
+                continue
+            if not isinstance(requirement, Mapping) or set(requirement) != expected_keys:
+                raise ValueError("calculation requirement shape does not match version")
+        return value
+
+    @model_validator(mode="after")
+    def _calculation_requirement_runtime_type_is_exact(self) -> MethodologyQuestion:
+        expected_model = (
+            FddFormulaRequirement
+            if self.methodology_version_id == FDD_FORMULA_POLICY_V2_METHODOLOGY_VERSION_ID
+            else RequiredCalculation
+        )
+        if any(
+            type(requirement) is not expected_model for requirement in self.required_calculations
+        ):
+            raise ValueError("calculation requirement runtime type does not match version")
+        return self
+
+    @model_validator(mode="after")
+    def _source_trace_is_complete_and_consistent(self) -> MethodologyQuestion:
+        if (
+            self.methodology_type == MethodologyType.FINANCIAL_DD
+            and self.source_trace.source_type == "operator_workbook"
+        ):
+            if self.source_row_number is None or self.source_trace.row_number is None:
+                raise ValueError("financial_dd question requires Excel row trace")
+            if not self.sheet_or_source_section:
+                raise ValueError("financial_dd question requires sheet row trace")
+        if self.source_row_number != self.source_trace.row_number:
+            raise ValueError("source row trace must match question row")
+        if (
+            self.sheet_or_source_section is not None
+            and self.sheet_or_source_section != self.source_trace.sheet_or_section
+        ):
+            raise ValueError("source sheet trace must match question sheet")
+        return self
 
 
 class MethodologyVersion(MethodologyBaseModel):
@@ -185,7 +351,7 @@ class MethodologyVersion(MethodologyBaseModel):
     version_label: str
     source_hash: str
     source_name: str | None = None
-    questions: list[MethodologyQuestion]
+    questions: tuple[MethodologyQuestion, ...]
 
     @field_validator(
         "methodology_id",
@@ -198,6 +364,13 @@ class MethodologyVersion(MethodologyBaseModel):
         if not value.strip():
             raise ValueError("field must not be blank")
         return value.strip()
+
+    @field_validator("source_hash")
+    @classmethod
+    def _source_hash_is_lowercase_sha256(cls, value: str) -> str:
+        if _LOWERCASE_SHA256.fullmatch(value) is None:
+            raise ValueError("source_hash must be a lowercase SHA-256")
+        return value
 
     @model_validator(mode="after")
     def _question_ids_are_unique(self) -> MethodologyVersion:
@@ -213,6 +386,11 @@ class MethodologyVersion(MethodologyBaseModel):
                 raise ValueError("question methodology_version_id must match version")
             if question.methodology_type != self.methodology_type:
                 raise ValueError("question methodology_type must match version")
+            if (
+                question.source_trace.source_type in {"operator_workbook", "checked_in_template"}
+                and question.source_trace.source_hash != self.source_hash
+            ):
+                raise ValueError("question source_hash must match version source_hash")
         return self
 
 
@@ -221,7 +399,7 @@ class MethodologyRegistry(MethodologyBaseModel):
 
     methodology_id: str
     methodology_type: MethodologyType
-    versions: list[MethodologyVersion]
+    versions: tuple[MethodologyVersion, ...]
 
     @property
     def current_version(self) -> MethodologyVersion:
@@ -252,7 +430,9 @@ class MethodologyRegistry(MethodologyBaseModel):
 
     @field_validator("versions")
     @classmethod
-    def _versions_not_empty(cls, value: list[MethodologyVersion]) -> list[MethodologyVersion]:
+    def _versions_not_empty(
+        cls, value: tuple[MethodologyVersion, ...]
+    ) -> tuple[MethodologyVersion, ...]:
         if not value:
             raise ValueError("versions must not be empty")
         return value

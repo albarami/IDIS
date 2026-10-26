@@ -2,6 +2,7 @@
 
 A committed lock (``contracts/contract_lock.json``) pins:
 - the sha256 of ``openapi/IDIS_OpenAPI_v6_3.yaml`` and EVERY ``schemas/**/*.json``; and
+- the governed Commercial-DD question-category mapping artifact; and
 - a snapshot of the OpenAPI contract surface (paths -> methods -> operation id, response
   codes, top-level required request fields).
 
@@ -29,6 +30,15 @@ CONTRACT_LOCK_RELATIVE_PATH = Path("contracts") / "contract_lock.json"
 OPENAPI_RELATIVE_PATH = Path("openapi") / "IDIS_OpenAPI_v6_3.yaml"
 SCHEMAS_RELATIVE_DIR = Path("schemas")
 UI_CLIENT_RELATIVE_PATH = Path("ui") / "src" / "lib" / "openapi.ts"
+GOVERNED_CONTRACT_RELATIVE_PATHS = (
+    Path("contracts") / "full_strict_v21_reviewed_preimage_v1.json",
+    Path("src") / "idis" / "methodology" / "mappings" / "commercial_dd_v1_question_categories.json",
+    Path("src")
+    / "idis"
+    / "methodology"
+    / "mappings"
+    / "commercial_dd_v1_question_categories.schema.json",
+)
 
 LOCK_VERSION = 1
 
@@ -61,6 +71,11 @@ def _lockable_files(repo_root: Path) -> list[str]:
     schemas_dir = repo_root / SCHEMAS_RELATIVE_DIR
     if schemas_dir.is_dir():
         files.extend(path.relative_to(repo_root).as_posix() for path in schemas_dir.rglob("*.json"))
+    files.extend(
+        relative.as_posix()
+        for relative in GOVERNED_CONTRACT_RELATIVE_PATHS
+        if (repo_root / relative).is_file()
+    )
     return sorted(set(files))
 
 

@@ -14,6 +14,35 @@ from typing import Any
 import jsonschema
 from jsonschema import Draft202012Validator, RefResolver
 
+# schema_validator.py is idis/validators/schema_validator.py.
+# parents[1] is the installed idis package. parents[3] is the checkout root
+# in a source tree and python3.11 in the image's site-packages layout.
+_PACKAGED_SCHEMA_PARENT = 1
+_CHECKOUT_SCHEMA_PARENT = 3
+_AUDIT_SCHEMA_FILENAME = "audit_event.schema.json"
+
+
+def _resolve_default_schema_dir() -> Path:
+    """Resolve the default schema directory.
+
+    An explicit ``schema_dir`` does not call this function. There is no
+    environment variable and no working-directory lookup.
+
+    Order:
+    1. Packaged ``idis/_schemas`` when it holds ``audit_event.schema.json``.
+    2. The project ``schemas/`` directory.
+
+    When neither location holds the audit schema, the project path is returned
+    so schema load fails closed.
+    """
+    packaged = Path(__file__).resolve().parents[_PACKAGED_SCHEMA_PARENT] / "_schemas"
+    if (packaged / _AUDIT_SCHEMA_FILENAME).is_file():
+        return packaged
+    checkout = Path(__file__).resolve().parents[_CHECKOUT_SCHEMA_PARENT] / "schemas"
+    if (checkout / _AUDIT_SCHEMA_FILENAME).is_file():
+        return checkout
+    return checkout
+
 
 @dataclass(frozen=True)
 class ValidationError:
@@ -68,10 +97,11 @@ class SchemaValidator:
         Args:
             schema_dir: Directory containing JSON schema files.
                         Defaults to project schemas/ directory.
+                        Packaged idis/_schemas is used first when it holds
+                        audit_event.schema.json. An explicit path is authoritative.
         """
         if schema_dir is None:
-            # Default to project root schemas/
-            self._schema_dir = Path(__file__).parent.parent.parent.parent / "schemas"
+            self._schema_dir = _resolve_default_schema_dir()
         else:
             self._schema_dir = Path(schema_dir)
 

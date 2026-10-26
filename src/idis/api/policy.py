@@ -148,6 +148,12 @@ POLICY_RULES: dict[str, PolicyRule] = {
     "getDocumentSpans": PolicyRule(
         allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=False
     ),
+    "getDocumentContentIntegrity": PolicyRule(
+        allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=False
+    ),
+    "streamDocumentContent": PolicyRule(
+        allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=False
+    ),
     "deleteDocument": PolicyRule(
         allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=False
     ),
@@ -178,6 +184,15 @@ POLICY_RULES: dict[str, PolicyRule] = {
     "listDealCalcs": PolicyRule(allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=True),
     "runCalc": PolicyRule(allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=True),
     "startRun": PolicyRule(allowed_roles=MUTATOR_ROLES, is_mutation=True, is_deal_scoped=True),
+    "importMethodologyVersion": PolicyRule(
+        allowed_roles=ADMIN_ONLY, is_mutation=True, is_deal_scoped=False
+    ),
+    "freezeMethodologyVersion": PolicyRule(
+        allowed_roles=ADMIN_ONLY, is_mutation=True, is_deal_scoped=False
+    ),
+    "listMethodologyVersions": PolicyRule(
+        allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=False
+    ),
     "getRun": PolicyRule(allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=False),
     "getStrictReadiness": PolicyRule(
         allowed_roles=ALL_ROLES, is_mutation=False, is_deal_scoped=False

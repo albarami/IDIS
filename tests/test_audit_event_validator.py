@@ -196,6 +196,15 @@ class TestAuditEventNegative:
         assert not result.passed
         assert any(e.code == "AUDIT_INVALID_TIMESTAMP" for e in result.errors)
 
+    def test_occurred_at_without_timezone_fails(self) -> None:
+        """A timezone-naive timestamp cannot become ambiguous durable audit evidence."""
+        event = build_valid_audit_event(occurred_at="2026-01-06T12:00:00")
+
+        result = validate_audit_event(event)
+
+        assert not result.passed
+        assert any(e.code == "AUDIT_INVALID_TIMESTAMP" for e in result.errors)
+
     def test_actor_is_not_dict_fails_without_exception(self) -> None:
         """actor as string (not dict) fails with AUDIT_INVALID_ACTOR without exception."""
         validator = AuditEventValidator()

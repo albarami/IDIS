@@ -179,24 +179,20 @@ def test_transcript_text_only_in_span_text_excerpt(tmp_path: Path) -> None:
     assert marker not in json.dumps(audit.events, default=str)
 
 
-# --- 5. spans persist even though NARROW triage is non-eligible (documented, unchanged) ---
+# --- 5. legacy STT-only spans persist but cannot clear dual-track readiness ---
 
 
-def test_media_spans_persist_but_triage_is_non_eligible_narrow(tmp_path: Path) -> None:
-    # NARROW asymmetry: media TIMECODE spans persist durably, but the document triages as
-    # UNKNOWN/unknown_format -> it is NOT extraction/claims-eligible. Task 4 confirms this
-    # reality; it does NOT change triage/extraction behavior.
+def test_legacy_stt_only_spans_persist_but_do_not_clear_readiness(tmp_path: Path) -> None:
+    # Task 4 controlled drift: both completed receipts are now required for readiness.
     service, _audit, _result = _ingest_media(tmp_path, [MediaSegmentText(1000, 2500, "data")])
 
     spans = service.recording_repo.spans
     assert spans and all(row["span_type"] == "TIMECODE" for row in spans)
 
     metadata = service.recording_repo.documents[0]["metadata"]
-    assert metadata["parser_triage_status"] == DocumentTriageStatus.UNKNOWN.value
-    assert metadata["parser_support_status"] == DocumentSupportStatus.UNKNOWN.value
-    assert metadata["parser_reason_codes"] == ["unknown_format"]
-    assert metadata["parser_requires_ocr"] is False
-    assert metadata["parser_requires_conversion"] is False
+    assert metadata["parser_triage_status"] != DocumentTriageStatus.READY.value
+    assert metadata["parser_support_status"] != DocumentSupportStatus.SUPPORTED.value
+    assert not any(code.endswith("_completed") for code in metadata["parser_reason_codes"])
 
 
 # --- 6. multi-segment: locators survive + deterministic ordering/provenance ---

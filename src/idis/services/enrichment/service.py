@@ -20,9 +20,9 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import UTC, datetime
 from typing import Any
 
+from idis.audit.canonical import build_canonical_audit_event
 from idis.audit.sink import AuditSink, AuditSinkError
 from idis.persistence.repositories.enrichment_credentials import (
     CredentialNotFoundError,
@@ -302,28 +302,41 @@ class EnrichmentService:
         Raises:
             EnrichmentServiceError: If audit emission fails.
         """
-        event: dict[str, Any] = {
-            "event_id": str(uuid.uuid4()),
-            "event_type": event_type,
-            "occurred_at": datetime.now(UTC).isoformat(),
-            "tenant_id": tenant_id,
-            "severity": severity,
-            "resource": {
-                "resource_type": "enrichment",
-                "provider_id": provider_id,
-            },
-            "request": {
-                "request_id": request_id,
-            },
-            "payload": details,
+        canonical_type = (
+            event_type if event_type.startswith("integration.") else f"integration.{event_type}"
+        )
+        safe: dict[str, object] = {
+            key: details[key]
+            for key in ("status", "entity_type", "purpose", "has_provenance")
+            if key in details
         }
+        if canonical_type.endswith(".blocked"):
+            safe["decision_code"] = "ENRICHMENT_CREDENTIALS_UNAVAILABLE"
+        if canonical_type.endswith(".failed"):
+            safe["failure_code"] = "ENRICHMENT_PROVIDER_FAILED"
+        failed = canonical_type.endswith(".failed")
+        blocked = canonical_type.endswith(".blocked")
+        event = build_canonical_audit_event(
+            tenant_id=tenant_id,
+            event_type=canonical_type,
+            severity=severity,
+            summary=f"Enrichment operation recorded: {canonical_type}",
+            actor_id="idis-enrichment-service",
+            request_id=request_id,
+            method="POST",
+            path=f"/internal/enrichment/providers/{provider_id}",
+            status_code=502 if failed else (403 if blocked else 200),
+            resource_type="integration",
+            resource_id=provider_id,
+            safe={"provider_id": provider_id, **safe},
+            refs=[f"provider_id:{provider_id}"],
+        )
 
         try:
             self._audit_sink.emit(event)
         except (AuditSinkError, Exception) as exc:
             raise EnrichmentServiceError(
-                f"Fatal: audit emission failed for {event_type} "
-                f"provider={provider_id} tenant={tenant_id}: {exc}"
+                "AUDIT_FAILURE: enrichment operation was not recorded"
             ) from exc
 
 

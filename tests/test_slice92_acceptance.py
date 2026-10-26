@@ -24,10 +24,10 @@ from __future__ import annotations
 
 import json
 import uuid as uuid_mod
+from functools import partial
 from pathlib import Path
 from typing import Any
 
-from idis.api.routes.runs import _run_full_layer2_ic_challenge
 from idis.audit.sink import InMemoryAuditSink
 from idis.deliverables.generator import DeliverablesGenerator
 from idis.deliverables.product_bundle import ProductBundleExporter
@@ -41,6 +41,7 @@ from idis.persistence.repositories.run_steps import (
     clear_run_steps_store,
 )
 from idis.services.runs.orchestrator import RunOrchestrator
+from idis.services.runs.step_runtime.layer2 import _run_full_layer2_ic_challenge
 from idis.storage.filesystem_store import FilesystemObjectStore
 from tests.test_deliverables_generator import (
     _TIMESTAMP,
@@ -54,6 +55,8 @@ from tests.test_run_orchestrator_methodology_claim_materialization import (
     _ctx,
 )
 from tests.test_slice59_product_export_bundle import RecordingDeliverablesRepository
+
+_DEAL_STAGE = "pre-seed"
 
 
 def setup_function() -> None:
@@ -70,6 +73,9 @@ def test_full_run_produces_durable_vep_referenced_by_layer2(tmp_path: Path) -> N
         return {"deliverable_count": 1}
 
     ctx = _ctx(run_id)
+    deal_metadata = dict(ctx.deal_metadata or {})
+    deal_metadata["stage"] = _DEAL_STAGE
+    ctx.deal_metadata = deal_metadata
     # The harness's operational stubs return empty refs; the real Layer-2 service
     # fails closed without claim/calc references, so supply production-shaped ones.
     ctx.extract_fn = lambda **_kwargs: {
@@ -84,7 +90,11 @@ def test_full_run_produces_durable_vep_referenced_by_layer2(tmp_path: Path) -> N
         "muhasabah_passed": True,
         "agent_output_count": 2,
     }
-    ctx.layer2_ic_challenge_fn = _run_full_layer2_ic_challenge  # the REAL Layer 2 fn
+    ctx.layer2_ic_challenge_fn = partial(
+        _run_full_layer2_ic_challenge,
+        db_conn=None,
+        deal_metadata=deal_metadata,
+    )
     ctx.deliverables_fn = capturing_deliverables
 
     repo = InMemoryRunStepsRepository(TENANT_ID)

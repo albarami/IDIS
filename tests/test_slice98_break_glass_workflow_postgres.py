@@ -40,6 +40,8 @@ _TENANT_A = "11111111-1111-1111-1111-111111111111"
 _TENANT_B = "22222222-2222-2222-2222-222222222222"
 _ADMIN_KEY = "bg-pg-admin-key"
 _ADMIN_ACTOR = "bg-pg-admin"
+_CREATOR_KEY = "bg-pg-creator-key"
+_CREATOR_ACTOR = "bg-pg-creator"
 _JUSTIFICATION = "Regulator deadline today; need immediate deal access."
 
 
@@ -230,6 +232,8 @@ def test_wire_and_prove_issue_use_reuse_denied_across_app_instances(
     from idis.api.abac import reset_deal_assignment_store
     from idis.api.routes.deals import clear_deals_store
 
+    # This is the focused durable break-glass twin, not a strict full-live process.
+    monkeypatch.setenv("IDIS_REQUIRE_FULL_LIVE", "0")
     monkeypatch.setenv(
         IDIS_API_KEYS_ENV,
         json.dumps(
@@ -241,7 +245,15 @@ def test_wire_and_prove_issue_use_reuse_denied_across_app_instances(
                     "timezone": "UTC",
                     "data_region": "us-east-1",
                     "roles": ["ADMIN"],
-                }
+                },
+                _CREATOR_KEY: {
+                    "tenant_id": _TENANT_A,
+                    "actor_id": _CREATOR_ACTOR,
+                    "name": "BG PG Creator",
+                    "timezone": "UTC",
+                    "data_region": "us-east-1",
+                    "roles": ["PARTNER"],
+                },
             }
         ),
     )
@@ -251,9 +263,12 @@ def test_wire_and_prove_issue_use_reuse_denied_across_app_instances(
     reset_deal_assignment_store()
     try:
         headers = {"X-IDIS-API-Key": _ADMIN_KEY, "Content-Type": "application/json"}
+        creator_headers = {"X-IDIS-API-Key": _CREATOR_KEY, "Content-Type": "application/json"}
         client1 = TestClient(create_app(service_region="us-east-1"))
         deal = client1.post(
-            "/v1/deals", json={"name": "BG", "company_name": "Acme"}, headers=headers
+            "/v1/deals",
+            json={"name": "BG", "company_name": "Acme"},
+            headers=creator_headers,
         )
         assert deal.status_code == 201, deal.text
         deal_id = deal.json()["deal_id"]

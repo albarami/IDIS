@@ -12,13 +12,13 @@ from typing import Any
 
 import pytest
 
-from idis.api.routes.runs import _run_full_graph_evidence
 from idis.persistence.neo4j_driver import Neo4jHealthCheck
 from idis.persistence.repositories.claims import (
     InMemoryDefectsRepository,
     clear_defects_in_memory_store,
 )
 from idis.services.graph.retrieval import GraphRetrievalService
+from idis.services.runs.step_runtime.evidence import _run_full_graph_evidence
 from tests.test_slice61_graph_visibility import (
     DEAL_ID,
     RUN_ID,

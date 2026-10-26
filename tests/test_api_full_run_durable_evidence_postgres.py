@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
@@ -19,6 +20,12 @@ from idis.models.run_step import StepName, StepStatus
 from tests import test_ingestion_persists_documents_postgres as pg_helpers
 from tests.abac_seed import seed_deal_access
 from tests.test_api_default_upload_ingestion_postgres import _configure_api_key
+from tests.test_api_selected_multidocument_full_acceptance_postgres import (
+    clear_frozen_methodology_rows,
+    frozen_full_methodology_selection,
+    public_fdd_fixture,
+    upload_and_bind_preview_members,
+)
 from tests.test_docx_parser import create_test_docx
 from tests.test_pptx_parser import create_test_pptx
 from tests.test_xlsx_parser import create_test_xlsx
@@ -41,9 +48,17 @@ FORBIDDEN_PUBLIC_TOKENS = (
 )
 
 
+@pytest.fixture
+def methodology_cleanup(admin_engine: Any, clean_tables: None) -> Any:
+    yield
+    clear_frozen_methodology_rows(admin_engine)
+
+
 def test_selected_full_run_persists_durable_claims_and_evidence_for_uploaded_room(
     app_engine: Any,
+    admin_engine: Any,
     clean_tables: None,
+    methodology_cleanup: None,
     monkeypatch: Any,
     tmp_path: Path,
 ) -> None:
@@ -53,6 +68,8 @@ def test_selected_full_run_persists_durable_claims_and_evidence_for_uploaded_roo
     _configure_api_key(monkeypatch)
     storage_base_dir = str(tmp_path / "objects")
     monkeypatch.setenv("IDIS_OBJECT_STORE_BASE_DIR", storage_base_dir)
+    fdd_fixture = public_fdd_fixture(tmp_path)
+    monkeypatch.setenv("IDIS_FDD_METHODOLOGY_PATH", str(fdd_fixture))
     audit_sink = InMemoryAuditSink()
 
     app = create_app(
@@ -64,7 +81,11 @@ def test_selected_full_run_persists_durable_claims_and_evidence_for_uploaded_roo
     deal_response = client.post(
         "/v1/deals",
         headers={"X-IDIS-API-Key": pg_helpers.API_KEY},
-        json={"name": "Slice 26 Durable Evidence Deal", "company_name": "Synthetic Co"},
+        json={
+            "name": "Slice 26 Durable Evidence Deal",
+            "company_name": "Synthetic Co",
+            "stage": "SERIES_A",
+        },
     )
     assert deal_response.status_code == 201
     deal_id = str(deal_response.json()["deal_id"])
@@ -72,11 +93,21 @@ def test_selected_full_run_persists_durable_claims_and_evidence_for_uploaded_roo
     seed_deal_access(str(pg_helpers.TENANT_ID), deal_id, pg_helpers.ACTOR_ID)
 
     fixture_files = _write_supported_fixture_tree(tmp_path / "room")
-    document_ids: list[str] = []
-    for path in fixture_files:
-        upload_body = _upload_supported_file(client, deal_id=deal_id, path=path)
-        document_ids.append(str(upload_body["document_id"]))
+    upload_bodies = upload_and_bind_preview_members(
+        client,
+        app_engine,
+        deal_id=deal_id,
+        members=[(path.suffix.lstrip("."), path.read_bytes()) for path in fixture_files],
+    )
+    document_ids = [str(body["document_id"]) for body in upload_bodies]
+    for upload_body in upload_bodies:
         _assert_safe_payload(upload_body, storage_base_dir=storage_base_dir)
+    methodology_selection = frozen_full_methodology_selection(
+        app_engine,
+        admin_engine,
+        str(pg_helpers.TENANT_ID),
+        fdd_fixture,
+    )
 
     assert len(document_ids) == len(fixture_files)
 
@@ -108,6 +139,7 @@ def test_selected_full_run_persists_durable_claims_and_evidence_for_uploaded_roo
                 "type": "deal_documents",
                 "document_ids": document_ids,
             },
+            "methodology_selection": methodology_selection,
         },
     )
     assert run_response.status_code == 202
@@ -228,26 +260,6 @@ def _pdf_bytes() -> bytes:
     from tests.test_pdf_parser import create_test_pdf
 
     return create_test_pdf(["slice26_nested_pdf_claim shows revenue."])
-
-
-def _upload_supported_file(client: TestClient, *, deal_id: str, path: Path) -> dict[str, Any]:
-    data = path.read_bytes()
-    response = client.post(
-        f"/v1/deals/{deal_id}/documents/upload",
-        headers={
-            "X-IDIS-API-Key": pg_helpers.API_KEY,
-            "Content-Type": "application/octet-stream",
-        },
-        params={
-            "filename": path.name,
-            "doc_type": "DATA_ROOM_FILE",
-            "sha256": hashlib.sha256(data).hexdigest(),
-            "source_system": "slice26-durable-evidence",
-        },
-        content=data,
-    )
-    assert response.status_code == 201
-    return response.json()
 
 
 def _unsupported_upload_examples() -> list[dict[str, Any]]:

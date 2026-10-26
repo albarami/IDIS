@@ -13,9 +13,9 @@ changes (the route fn shapes the result). Injected fakes only — no real LLM, n
 from __future__ import annotations
 
 import uuid as uuid_mod
+from functools import partial
 from typing import Any
 
-from idis.api.routes.runs import _run_full_layer2_ic_challenge
 from idis.audit.sink import InMemoryAuditSink
 from idis.models.run_step import StepName, StepStatus
 from idis.persistence.repositories.layer1_evidence import (
@@ -27,12 +27,14 @@ from idis.persistence.repositories.run_steps import (
     clear_run_steps_store,
 )
 from idis.services.runs.orchestrator import RunContext, RunOrchestrator
+from idis.services.runs.step_runtime.layer2 import _run_full_layer2_ic_challenge
 from tests.test_run_methodology_claim_materialization_service import TENANT_ID
 from tests.test_slice63_rag_full_wiring import _documents
 from tests.test_slice92_layer1_persistence_wiring import _ctx_with_finding_inputs
 
 DEAL_ID = "33333333-3333-3333-3333-333333333333"
 RUN_ID = "22222222-2222-2222-2222-222222222222"
+_DEAL_STAGE = "Series B"
 VEP_ID_A = "55555555-5555-5555-5555-555555555555"
 VEP_ID_B = "99999999-5555-5555-5555-555555555555"
 
@@ -120,6 +122,7 @@ def test_layer2_result_surfaces_safe_sorted_vep_ref_ids() -> None:
         debate_summary=dict(_DEBATE_SUMMARY),
         created_claim_ids=["claim_mth_0123456789abcdef01234567"],
         calc_ids=["calc-1"],
+        deal_metadata={"stage": _DEAL_STAGE},
         vep_package_ids=[VEP_ID_B, VEP_ID_A, VEP_ID_A, "", 7],  # type: ignore[list-item]
     )
     # Sorted, deduped, strings only — junk entries are dropped, never coerced.
@@ -135,6 +138,7 @@ def test_layer2_result_vep_ref_ids_empty_when_absent() -> None:
         debate_summary=dict(_DEBATE_SUMMARY),
         created_claim_ids=["claim_mth_0123456789abcdef01234567"],
         calc_ids=["calc-1"],
+        deal_metadata={"stage": _DEAL_STAGE},
     )
     assert result["vep_ref_ids"] == []
 
@@ -258,7 +262,16 @@ def test_resume_layer2_ledger_row_emits_vep_ref_ids_via_real_fn() -> None:
     # Resume with the REAL Layer-2 route fn: its result (with vep_ref_ids) is what
     # _complete_step persists into the LAYER2 ledger row.
     orchestrator = RunOrchestrator(audit_sink=InMemoryAuditSink(), run_steps_repo=repo)
-    result = orchestrator.execute(_full_run_ctx(run_id, layer2_fn=_run_full_layer2_ic_challenge))
+    ctx = _full_run_ctx(run_id, layer2_fn=_run_full_layer2_ic_challenge)
+    deal_metadata = dict(ctx.deal_metadata or {})
+    deal_metadata["stage"] = _DEAL_STAGE
+    ctx.deal_metadata = deal_metadata
+    ctx.layer2_ic_challenge_fn = partial(
+        _run_full_layer2_ic_challenge,
+        db_conn=None,
+        deal_metadata=deal_metadata,
+    )
+    result = orchestrator.execute(ctx)
 
     assert result.status == "SUCCEEDED"
     layer2_step = repo.get_step(run_id, StepName.LAYER2_IC_CHALLENGE)

@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import secrets
+import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -65,6 +66,7 @@ class CredentialRecord(BaseModel):
 
     tenant_id: str
     connector_id: str
+    credential_version_id: str
     created_at: datetime
     rotated_at: datetime | None = None
     revoked_at: datetime | None = None
@@ -109,6 +111,7 @@ class InMemoryCredentialRepository:
             record = CredentialRecord(
                 tenant_id=tenant_id,
                 connector_id=connector_id,
+                credential_version_id=str(uuid.uuid4()),
                 created_at=existing.created_at,
                 rotated_at=now,
                 revoked_at=None,
@@ -117,6 +120,7 @@ class InMemoryCredentialRepository:
             record = CredentialRecord(
                 tenant_id=tenant_id,
                 connector_id=connector_id,
+                credential_version_id=str(uuid.uuid4()),
                 created_at=now,
             )
 
@@ -180,6 +184,7 @@ class InMemoryCredentialRepository:
         updated = CredentialRecord(
             tenant_id=tenant_id,
             connector_id=connector_id,
+            credential_version_id=meta.credential_version_id,
             created_at=meta.created_at,
             rotated_at=meta.rotated_at,
             revoked_at=now,
@@ -238,36 +243,62 @@ class PostgresCredentialRepository:
     ) -> CredentialRecord:
         """Encrypt and store credentials for a tenant/provider pair."""
         self._ensure_tenant(tenant_id)
+        self._lock_connector(tenant_id=tenant_id, connector_id=connector_id)
         now = datetime.now(UTC)
-        existing = self._metadata(tenant_id=tenant_id, connector_id=connector_id)
+        existing = self.active_metadata(
+            tenant_id=tenant_id,
+            connector_id=connector_id,
+            _for_update=True,
+        )
         ciphertext = encrypt_credentials(credentials)
+        credential_version_id = str(uuid.uuid4())
+        if existing is not None:
+            rotated = self._conn.execute(
+                text(
+                    """
+                    UPDATE enrichment_credentials
+                    SET rotated_at = :rotated_at
+                    WHERE tenant_id = :tenant_id
+                      AND connector_id = :connector_id
+                      AND credential_version_id = CAST(:prior_credential_version_id AS UUID)
+                      AND rotated_at IS NULL
+                      AND revoked_at IS NULL
+                    """
+                ),
+                {
+                    "tenant_id": tenant_id,
+                    "connector_id": connector_id,
+                    "prior_credential_version_id": existing.credential_version_id,
+                    "rotated_at": now,
+                },
+            )
+            if int(getattr(rotated, "rowcount", 1)) != 1:
+                raise CredentialNotFoundError(tenant_id, connector_id)
         self._conn.execute(
             text(
                 """
                 INSERT INTO enrichment_credentials
-                    (tenant_id, connector_id, ciphertext, created_at, rotated_at, revoked_at)
+                    (tenant_id, connector_id, credential_version_id, ciphertext,
+                     created_at, rotated_at, revoked_at)
                 VALUES
-                    (:tenant_id, :connector_id, :ciphertext, :created_at, NULL, NULL)
-                ON CONFLICT (tenant_id, connector_id)
-                DO UPDATE SET
-                    ciphertext = :ciphertext,
-                    rotated_at = :rotated_at,
-                    revoked_at = NULL
+                    (:tenant_id, :connector_id, CAST(:credential_version_id AS UUID),
+                     :ciphertext, :created_at, NULL, NULL)
                 """
             ),
             {
                 "tenant_id": tenant_id,
                 "connector_id": connector_id,
+                "credential_version_id": credential_version_id,
                 "ciphertext": ciphertext,
                 "created_at": now,
-                "rotated_at": now,
             },
         )
         return CredentialRecord(
             tenant_id=tenant_id,
             connector_id=connector_id,
-            created_at=existing.created_at if existing is not None else now,
-            rotated_at=now if existing is not None else None,
+            credential_version_id=credential_version_id,
+            created_at=now,
+            rotated_at=None,
             revoked_at=None,
         )
 
@@ -281,6 +312,7 @@ class PostgresCredentialRepository:
                 FROM enrichment_credentials
                 WHERE tenant_id = :tenant_id
                   AND connector_id = :connector_id
+                  AND rotated_at IS NULL
                   AND revoked_at IS NULL
                 """
             ),
@@ -294,25 +326,36 @@ class PostgresCredentialRepository:
     def revoke(self, *, tenant_id: str, connector_id: str) -> CredentialRecord:
         """Revoke active credentials for a tenant/provider pair."""
         self._ensure_tenant(tenant_id)
-        existing = self._metadata(tenant_id=tenant_id, connector_id=connector_id)
+        self._lock_connector(tenant_id=tenant_id, connector_id=connector_id)
+        existing = self.active_metadata(
+            tenant_id=tenant_id,
+            connector_id=connector_id,
+            _for_update=True,
+        )
         if existing is None:
             raise CredentialNotFoundError(tenant_id, connector_id)
         now = datetime.now(UTC)
-        self._conn.execute(
+        revoked = self._conn.execute(
             text(
                 """
                 UPDATE enrichment_credentials
                 SET revoked_at = :revoked_at
                 WHERE tenant_id = :tenant_id
                   AND connector_id = :connector_id
+                  AND credential_version_id = CAST(:credential_version_id AS UUID)
+                  AND rotated_at IS NULL
+                  AND revoked_at IS NULL
                 """
             ),
             {
                 "tenant_id": tenant_id,
                 "connector_id": connector_id,
+                "credential_version_id": existing.credential_version_id,
                 "revoked_at": now,
             },
         )
+        if int(getattr(revoked, "rowcount", 1)) != 1:
+            raise CredentialNotFoundError(tenant_id, connector_id)
         return existing.model_copy(update={"revoked_at": now})
 
     def exists(self, *, tenant_id: str, connector_id: str) -> bool:
@@ -325,6 +368,7 @@ class PostgresCredentialRepository:
                 FROM enrichment_credentials
                 WHERE tenant_id = :tenant_id
                   AND connector_id = :connector_id
+                  AND rotated_at IS NULL
                   AND revoked_at IS NULL
                 """
             ),
@@ -332,15 +376,28 @@ class PostgresCredentialRepository:
         )
         return result.fetchone() is not None
 
-    def _metadata(self, *, tenant_id: str, connector_id: str) -> CredentialRecord | None:
+    def active_metadata(
+        self,
+        *,
+        tenant_id: str,
+        connector_id: str,
+        _for_update: bool = False,
+    ) -> CredentialRecord | None:
+        """Return the active credential version metadata without decrypting its secret."""
+        self._ensure_tenant(tenant_id)
+        lock_clause = " FOR UPDATE" if _for_update else ""
         result = self._conn.execute(
             text(
                 """
-                SELECT tenant_id, connector_id, created_at, rotated_at, revoked_at
+                SELECT tenant_id, connector_id, credential_version_id,
+                       created_at, rotated_at, revoked_at
                 FROM enrichment_credentials
                 WHERE tenant_id = :tenant_id
                   AND connector_id = :connector_id
+                  AND rotated_at IS NULL
+                  AND revoked_at IS NULL
                 """
+                + lock_clause
             ),
             {"tenant_id": tenant_id, "connector_id": connector_id},
         )
@@ -350,9 +407,16 @@ class PostgresCredentialRepository:
         return CredentialRecord(
             tenant_id=str(row.tenant_id),
             connector_id=str(row.connector_id),
+            credential_version_id=str(row.credential_version_id),
             created_at=row.created_at,
             rotated_at=row.rotated_at,
             revoked_at=row.revoked_at,
+        )
+
+    def _lock_connector(self, *, tenant_id: str, connector_id: str) -> None:
+        self._conn.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+            {"lock_key": f"idis:enrichment-credential:{tenant_id}:{connector_id}"},
         )
 
     def _ensure_tenant(self, tenant_id: str) -> None:

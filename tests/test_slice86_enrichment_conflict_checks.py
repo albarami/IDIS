@@ -25,6 +25,7 @@ from idis.services.enrichment.models import (
     RightsClass,
 )
 from idis.services.enrichment.registry import EnrichmentProviderRegistry
+from tests.strict_runtime_test_support import RecordingPostgresAuditSink
 from tests.test_slice86_enrichment_execution_provenance_characterization import (
     TENANT_ID,
     _env_without,
@@ -38,6 +39,7 @@ from tests.test_slice86_source_grade_vc_visibility import (
 )
 
 _LEAK_MARKERS = ("sk-s86-conf-LEAK-1", "/var/secret/s86-conf", "Other Corp Confidential Ltd")
+_DEAL_COMPANY_LABEL = "Acme Robotics Ltd"
 
 
 class _IdentityConnector(_StatusConnector):
@@ -63,25 +65,36 @@ class _IdentityConnector(_StatusConnector):
 
 
 def _run_step(registry_factory: Any, *, strict: bool = False) -> dict[str, Any]:
-    from idis.api.routes.runs import _run_full_enrichment
+    from idis.services.runs.step_runtime.enrichment import _run_full_enrichment
 
     env = _env_without("IDIS_REQUIRE_FULL_LIVE", "IDIS_STRICT_DOTENV_PATH")
     with (
         patch.dict(os.environ, env, clear=True),
         patch("idis.services.enrichment.service._build_default_registry", registry_factory),
         patch(
-            "idis.api.routes.runs.is_strict_full_live_required",
+            "idis.services.runs.step_runtime.enrichment.is_strict_full_live_required",
             return_value=strict,
-        ),
+        ) as enrichment_strict,
+        patch(
+            "idis.services.runs.step_runtime.common.is_strict_full_live_required",
+            return_value=strict,
+        ) as common_strict,
     ):
-        return _run_full_enrichment(
-            run_id="run-1",
-            tenant_id=TENANT_ID,
-            deal_id="deal-1",
-            created_claim_ids=[],
-            calc_ids=[],
-            db_conn=None,
-        )
+        try:
+            summary = _run_full_enrichment(
+                run_id="run-1",
+                tenant_id=TENANT_ID,
+                deal_id="deal-1",
+                created_claim_ids=[],
+                calc_ids=[],
+                db_conn=None,
+                audit_sink=RecordingPostgresAuditSink(),
+                deal_metadata={"company_name": _DEAL_COMPANY_LABEL},
+            )
+        finally:
+            assert enrichment_strict.called
+            assert common_strict.called
+        return summary
 
 
 # --- the pure comparator ---
@@ -114,7 +127,7 @@ def test_identifier_conflicts_comparator() -> None:
 def test_ledger_rows_record_identifier_mismatch_per_hit() -> None:
     def registry() -> EnrichmentProviderRegistry:
         reg = EnrichmentProviderRegistry()
-        reg.register(_IdentityConnector("matching_hit", "deal-1"))  # step queries deal_id
+        reg.register(_IdentityConnector("matching_hit", _DEAL_COMPANY_LABEL))
         reg.register(_IdentityConnector("mismatched_hit", _LEAK_MARKERS[2]))
         reg.register(_StatusConnector("plain_miss", EnrichmentStatus.MISS))
         return reg

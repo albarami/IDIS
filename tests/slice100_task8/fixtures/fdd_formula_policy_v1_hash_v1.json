@@ -1,0 +1,33 @@
+{
+  "artifact_schema": "fdd-formula-policy-v1-hash-fixture-v1",
+  "policy_id": "fdd-formula-policy-v1",
+  "artifact_sha256": "750f4375bd68f79fa64ee596189a09a1a9354f2aabfa710893f6d31c85090ee4",
+  "fdd_formula_policy_v1_sha256": "537949a3327152241dedbb3871f4e098ab080e18370d0cfce331ad574efda9d2",
+  "component_hashes": {
+    "metadata": "afb43c345482fcd49005dd5ef4b693028f8d04c23cf0c9031e12bd09618ebc3f",
+    "canonicalization_contract": "5559e4bb0f630815198c7ec001a9ec5708cd70802270c18e51ee24cb3c5f4bf2",
+    "workbook_authority": "4c34f8c85f0ad990d0af88f5b8d9f3dec2c8c3bb26266ae001a1b3e49e596b99",
+    "workbook_row_registry": "4fb9b6cfa86a2908f73debbd9023ba6bb276fb339317b750bf6f0f639903a899",
+    "methodology_transition": "1d761884c865eb9557b114a7499be181a96387e85f8e767e1093811625016fef",
+    "formula_registry": "bfe17e16282954ddb2fb246132aee24df3f81c2cfcae15bfcb4c4ab5c3b544bc",
+    "debt_scope_exclusions": "4c178b1caf906b183de98634da35edf08fe3de71282ae5bd58bc8ec9d47b465d",
+    "completeness_request_registry": "d57d4b63e82d85c89c3b620a1131878d82d12471d68f1074eb22ce4d0c922ec9",
+    "direct_signed_convention_registry": "1a605150f0a73cecc7b9884d50217a1c39d4b46b6dc625af81451700b42d92ea",
+    "incomplete_binding_failure_schema": "7baedeab6c520f7baca97fdfe10ffda9a9da4a99f0f935b41216db8887b4557e",
+    "financial_output_schema": "45fc319b155c1ed050c68e5ae790fa1b076a7d3e4020fa93b09932eedfb9cb4a",
+    "activation_assertions": "761ba13cc11675356eca5867d40e19b177f81e7fac9f26f800e01c2be1e96e60"
+  },
+  "review_map_sha256": "653065eebb9c84193fe9aecb7c76304529391ee0095bd766d8e751c651d168fb",
+  "counts": {
+    "question_count": 79,
+    "required_question_count": 10,
+    "empty_requirement_count": 69,
+    "formula_count": 10,
+    "expanded_source_binding_count": 107,
+    "distinct_source_mapping_count": 101,
+    "parent_binding_count": 9,
+    "direct_signed_binding_count": 19,
+    "completeness_binding_count": 2
+  },
+  "activation_status": "INACTIVE"
+}

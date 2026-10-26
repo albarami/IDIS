@@ -40,39 +40,59 @@ class _FakeResult:
 class _FakePostgresConnection:
     def __init__(self) -> None:
         self.statements: list[tuple[str, dict[str, object]]] = []
-        self.rows: dict[tuple[str, str], dict[str, object]] = {}
+        # Task 2 rotation preserves every encrypted version instead of overwriting one pair row.
+        self.rows: dict[tuple[str, str, str], dict[str, object]] = {}
+
+    def _active(self, tenant_id: str, connector_id: str) -> dict[str, object] | None:
+        return next(
+            (
+                row
+                for (tenant, connector, _version), row in reversed(self.rows.items())
+                if tenant == tenant_id
+                and connector == connector_id
+                and row.get("rotated_at") is None
+                and row.get("revoked_at") is None
+            ),
+            None,
+        )
 
     def execute(self, statement: object, params: dict[str, object] | None = None) -> _FakeResult:
         sql = str(statement)
         bound = params or {}
         self.statements.append((sql, bound))
         if "INSERT INTO enrichment_credentials" in sql:
-            key = (str(bound["tenant_id"]), str(bound["connector_id"]))
-            existing = self.rows.get(key)
+            key = (
+                str(bound["tenant_id"]),
+                str(bound["connector_id"]),
+                str(bound["credential_version_id"]),
+            )
             self.rows[key] = {
                 "tenant_id": bound["tenant_id"],
                 "connector_id": bound["connector_id"],
+                "credential_version_id": bound["credential_version_id"],
                 "ciphertext": bound["ciphertext"],
-                "created_at": existing["created_at"] if existing else bound["created_at"],
-                "rotated_at": bound["rotated_at"] if existing else None,
+                "created_at": bound["created_at"],
+                "rotated_at": None,
                 "revoked_at": None,
             }
             return _FakeResult(None)
         if "UPDATE enrichment_credentials" in sql:
-            key = (str(bound["tenant_id"]), str(bound["connector_id"]))
-            if key in self.rows:
-                self.rows[key]["revoked_at"] = bound["revoked_at"]
+            row = self._active(str(bound["tenant_id"]), str(bound["connector_id"]))
+            if row is not None and "SET rotated_at" in sql:
+                row["rotated_at"] = bound["rotated_at"]
+            elif row is not None and "SET revoked_at" in sql:
+                row["revoked_at"] = bound["revoked_at"]
             return _FakeResult(None)
         if "SELECT ciphertext" in sql:
-            row = self.rows.get((str(bound["tenant_id"]), str(bound["connector_id"])))
-            if row is None or row.get("revoked_at") is not None:
+            row = self._active(str(bound["tenant_id"]), str(bound["connector_id"]))
+            if row is None:
                 return _FakeResult(None)
             return _FakeResult(type("Row", (), row)())
         if "SELECT 1" in sql:
-            row = self.rows.get((str(bound["tenant_id"]), str(bound["connector_id"])))
-            return _FakeResult(None if row is None or row.get("revoked_at") is not None else (1,))
+            row = self._active(str(bound["tenant_id"]), str(bound["connector_id"]))
+            return _FakeResult(None if row is None else (1,))
         if "SELECT tenant_id" in sql:
-            row = self.rows.get((str(bound["tenant_id"]), str(bound["connector_id"])))
+            row = self._active(str(bound["tenant_id"]), str(bound["connector_id"]))
             return _FakeResult(None if row is None else type("Row", (), row)())
         return _FakeResult(None)
 
@@ -201,8 +221,10 @@ class TestPostgresCredentialRepository:
             connector_id=CONNECTOR_ID,
             credentials={"api_key": "v2"},
         )
-        assert second.created_at == first.created_at
-        assert second.rotated_at is not None
+        # A rotation returns metadata for the newly inserted active row, not its retired parent.
+        assert second.created_at >= first.created_at
+        assert second.credential_version_id != first.credential_version_id
+        assert second.rotated_at is None
         assert repo.load(tenant_id=TENANT_ID, connector_id=CONNECTOR_ID) == {"api_key": "v2"}
 
         revoked = repo.revoke(tenant_id=TENANT_ID, connector_id=CONNECTOR_ID)
@@ -214,7 +236,9 @@ class TestPostgresCredentialRepository:
         joined_sql = "\n".join(sql for sql, _params in conn.statements)
         assert "SET LOCAL idis.tenant_id" in joined_sql
         assert "INSERT INTO enrichment_credentials" in joined_sql
-        assert "ON CONFLICT" in joined_sql
+        assert "credential_version_id" in joined_sql
+        assert "SET rotated_at" in joined_sql
+        assert "ON CONFLICT" not in joined_sql
 
     def test_postgres_repo_requires_encryption_key(
         self,

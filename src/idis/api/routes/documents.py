@@ -18,27 +18,39 @@ import time
 import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
+from pathlib import Path
 from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Header, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from idis.api.auth import RequireTenantContext
-from idis.api.errors import IdisHttpError
+from idis.api.errors import ErrorResponse, IdisHttpError
+from idis.audit.canonical import build_canonical_audit_event
 from idis.audit.sink import AuditSinkError
 from idis.parsers.registry import (
     detect_format,
+    detect_format_file,
     is_image_source,
     is_media_source,
     is_text_source,
 )
 from idis.services.ingestion import IngestionContext
+from idis.services.ingestion.image_only_page import (
+    project_safe_image_only_page_metadata,
+)
+from idis.services.ingestion.no_substantive_content_attestation import (
+    NO_SUBSTANTIVE_CONTENT_RECEIPT_V2_SCHEMA_VERSION,
+    project_safe_document_no_substantive_content_receipt,
+)
 from idis.services.ingestion.service import (
     DEFAULT_MAX_BYTES,
     RouteValidatedSha256,
     UploadIngestionPhase,
 )
+from idis.services.ingestion.upload_staging import StagedUpload
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +58,8 @@ router = APIRouter(tags=["Documents"])
 
 ALLOWED_URI_SCHEMES = frozenset({"idis://", "s3://"})
 UPLOAD_CONTENT_TYPE = "application/octet-stream"
+DURABLE_OBJECT_INTEGRITY_SCHEMA_VERSION = "durable-object-integrity-v1"
+DURABLE_OBJECT_STREAM_CONTRACT_VERSION = "durable-object-stream-v1"
 MAX_LIMIT = 200
 DEFAULT_LIMIT = 50
 FORBIDDEN_SUMMARY_METADATA_KEYS = frozenset(
@@ -66,6 +80,35 @@ FORBIDDEN_SUMMARY_METADATA_KEYS = frozenset(
         "text_excerpt",
     }
 )
+FORBIDDEN_ATTESTATION_METADATA_PREFIXES = (
+    "document_illegibility",
+    "document_no_substantive_content_attestation",
+)
+ATTESTATION_UPLOAD_ERROR_CODES = frozenset(
+    {
+        "DOCUMENT_NO_SUBSTANTIVE_CONTENT_ATTESTATION_MANIFEST_INVALID",
+        "DOCUMENT_NO_SUBSTANTIVE_CONTENT_ATTESTATION_MISMATCH",
+        "DOCUMENT_NO_SUBSTANTIVE_CONTENT_ATTESTATION_NOT_ACTIVE",
+        "DOCUMENT_NO_SUBSTANTIVE_CONTENT_ATTESTATION_REQUIRED",
+        "DOCUMENT_NO_SUBSTANTIVE_CONTENT_PROOF_CONTRADICTED",
+        "DOCUMENT_NO_SUBSTANTIVE_CONTENT_PROOF_INCOMPLETE",
+        "GOVERNANCE_SIGNATURE_INVALID",
+        "GOVERNANCE_SIGNER_UNTRUSTED",
+    }
+)
+
+
+def _require_staged_upload_cleanup(staged_upload: StagedUpload) -> None:
+    """Prove private-spool removal before a successful response reaches idempotency."""
+    try:
+        staged_upload.cleanup()
+    except Exception as error:
+        logger.error("Upload staging cleanup failed in route: %s", type(error).__name__)
+        raise IdisHttpError(
+            status_code=500,
+            code="INGEST_STAGING_CLEANUP_FAILED",
+            message="Document upload cleanup failed",
+        ) from None
 
 
 class DocType(StrEnum):
@@ -114,6 +157,8 @@ class DocumentArtifactResponse(BaseModel):
     ingested_at: str
     document_id: str | None = None
     parse_status: str | None = None
+    terminal_disposition: str | None = None
+    parsed_doc_type: str | None = None
     sha256: str | None = None
     uri: str | None = None
     metadata: dict[str, Any] | None = None
@@ -537,14 +582,79 @@ def _reject_unsupported_upload_format(data: bytes, filename: str) -> None:
     )
 
 
+def _reject_unsupported_staged_upload(source_path: Path, filename: str) -> None:
+    """Reject unsupported staged files without rematerializing their bodies."""
+    detected_format = detect_format_file(source_path)
+    if detected_format is not None:
+        return
+    if (
+        is_image_source(filename=filename, mime_type=None)
+        or is_media_source(filename=filename, mime_type=None)
+        or is_text_source(filename=filename, mime_type=None)
+    ):
+        return
+    raise IdisHttpError(
+        status_code=400,
+        code="UNSUPPORTED_FORMAT",
+        message="Uploaded document format is not supported",
+        details={"filename": filename},
+    )
+
+
 def _safe_ingestion_error_details(errors: list[Any]) -> list[dict[str, str]]:
     """Return ingestion error details without parser internals or byte-derived fields."""
     safe_errors: list[dict[str, str]] = []
     for error in errors:
-        code = getattr(getattr(error, "code", None), "value", str(getattr(error, "code", "")))
-        message = str(getattr(error, "message", "Ingestion failed"))
-        safe_errors.append({"code": code, "message": message})
+        error_code = getattr(
+            getattr(error, "code", None),
+            "value",
+            str(getattr(error, "code", "")),
+        )
+        details = getattr(error, "details", None)
+        parse_code = details.get("parse_error_code") if isinstance(details, dict) else None
+        public_code = str(parse_code or error_code or "ingestion_failed")
+        safe_errors.append({"code": public_code, "message": "Document ingestion failed"})
     return safe_errors
+
+
+def _terminal_upload_error_code(errors: list[Any]) -> str:
+    """Map a persisted parser failure to one stable, admission-safe code."""
+    attestation_code = _attestation_upload_error_code(errors)
+    if attestation_code is not None:
+        return attestation_code
+    parse_codes = {
+        str(details.get("parse_error_code"))
+        for error in errors
+        if isinstance((details := getattr(error, "details", None)), dict)
+        and details.get("parse_error_code")
+    }
+    if "max_size_exceeded" in parse_codes:
+        return "INGEST_ADMISSION_MAX_SIZE_EXCEEDED"
+    if "ocr_image_too_large" in parse_codes:
+        return "ocr_image_too_large"
+    if "encrypted_pdf" in parse_codes:
+        dispositions = {
+            str(details.get("password_disposition"))
+            for error in errors
+            if isinstance((details := getattr(error, "details", None)), dict)
+            and details.get("parse_error_code") == "encrypted_pdf"
+        }
+        if "invalid" in dispositions:
+            return "DOCUMENT_PASSWORD_INVALID"
+        return "DOCUMENT_PASSWORD_REQUIRED"
+    return "DOCUMENT_UNREADABLE"
+
+
+def _attestation_upload_error_code(errors: list[Any]) -> str | None:
+    """Return only a namespaced signed-admission code from internal details."""
+    for error in errors:
+        details = getattr(error, "details", None)
+        if not isinstance(details, dict):
+            continue
+        code = details.get("attestation_error_code")
+        if isinstance(code, str) and code in ATTESTATION_UPLOAD_ERROR_CODES:
+            return code
+    return None
 
 
 def _validate_durable_deal_scope(request: Request, tenant_id: str, deal_id: str) -> None:
@@ -598,36 +708,30 @@ def _emit_document_created_audit(
     """Emit document.created audit event."""
     from idis.audit.sink import get_audit_sink
 
-    request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
-    actor_id = getattr(request.state, "tenant_context", None)
-    actor_id_str = actor_id.actor_id if actor_id else "unknown"
-
-    event = {
-        "event_id": str(uuid.uuid4()),
-        "event_type": "document.created",
-        "occurred_at": datetime.now(UTC).isoformat(),
-        "tenant_id": tenant_id,
-        "severity": "MEDIUM",
-        "actor": {
-            "actor_type": "HUMAN",
-            "actor_id": actor_id_str,
-        },
-        "request": _audit_request_metadata(
-            request_id=request_id,
-            idempotency_key=idempotency_key,
+    tenant_context = request.state.tenant_context
+    sha256 = artifact.get("sha256")
+    event = build_canonical_audit_event(
+        tenant_id=tenant_id,
+        event_type="document.created",
+        severity="MEDIUM",
+        summary="Document artifact created",
+        actor_id=tenant_context.actor_id,
+        actor_type=tenant_context.actor_type,
+        actor_roles=tenant_context.roles,
+        request_id=request.state.request_id,
+        method="POST",
+        path=request.url.path,
+        status_code=201,
+        resource_type="document",
+        resource_id=artifact["doc_id"],
+        deal_id=artifact["deal_id"],
+        idempotency_key_sha256=(
+            hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest() if idempotency_key else None
         ),
-        "resource": {
-            "resource_type": "document",
-            "resource_id": artifact["doc_id"],
-            "deal_id": artifact["deal_id"],
-        },
-        "summary": f"Document artifact created: {artifact['title']}",
-        "payload": {
-            "sha256": artifact.get("sha256"),
-            "title": artifact["title"],
-            "doc_type": artifact["doc_type"],
-        },
-    }
+        safe={"doc_type": artifact["doc_type"]},
+        hashes=[sha256] if sha256 else [],
+        refs=[f"deal_id:{artifact['deal_id']}"],
+    )
 
     audit_sink = getattr(request.app.state, "audit_sink", None)
     if audit_sink is None:
@@ -648,51 +752,79 @@ def _emit_ingestion_audit(
     """Emit ingestion audit event (completed or failed)."""
     from idis.audit.sink import get_audit_sink
 
-    request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
-    actor_id = getattr(request.state, "tenant_context", None)
-    actor_id_str = actor_id.actor_id if actor_id else "unknown"
-
     event_type = (
         "document.ingestion.completed"
         if status == RunStatus.SUCCEEDED.value
         else "document.ingestion.failed"
     )
-    summary = (
-        f"Document ingestion {status.lower()}"
-        if not error_message
-        else f"Document ingestion failed: {error_message}"
-    )
-
-    event = {
-        "event_id": str(uuid.uuid4()),
-        "event_type": event_type,
-        "occurred_at": datetime.now(UTC).isoformat(),
-        "tenant_id": tenant_id,
-        "severity": "MEDIUM" if status == RunStatus.FAILED.value else "LOW",
-        "actor": {
-            "actor_type": "HUMAN",
-            "actor_id": actor_id_str,
-        },
-        "request": _audit_request_metadata(
-            request_id=request_id,
-            idempotency_key=idempotency_key,
+    tenant_context = request.state.tenant_context
+    safe: dict[str, Any] = {"run_id": run_id, "status": status}
+    if error_message is not None:
+        # Raw exception and parser text is never audit-safe.  The route currently
+        # exposes only a generic failure category, so record that honest category.
+        safe["failure_code"] = "DOCUMENT_INGESTION_FAILED"
+    event = build_canonical_audit_event(
+        tenant_id=tenant_id,
+        event_type=event_type,
+        severity="MEDIUM" if status == RunStatus.FAILED.value else "LOW",
+        summary=(
+            "Document ingestion failed"
+            if status == RunStatus.FAILED.value
+            else "Document ingestion completed"
         ),
-        "resource": {
-            "resource_type": "document",
-            "resource_id": doc_id,
-            "deal_id": deal_id,
-        },
-        "summary": summary,
-        "payload": {
-            "run_id": run_id,
-            "status": status,
-            "error": error_message,
-        },
-    }
+        actor_id=tenant_context.actor_id,
+        actor_type=tenant_context.actor_type,
+        actor_roles=tenant_context.roles,
+        request_id=request.state.request_id,
+        method="POST",
+        path=request.url.path,
+        status_code=202,
+        resource_type="document",
+        resource_id=doc_id,
+        deal_id=deal_id,
+        idempotency_key_sha256=(
+            hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest() if idempotency_key else None
+        ),
+        safe=safe,
+        refs=[f"run_id:{run_id}", f"deal_id:{deal_id}"],
+    )
 
     audit_sink = getattr(request.app.state, "audit_sink", None)
     if audit_sink is None:
         audit_sink = get_audit_sink()
+    audit_sink.emit(event)
+
+
+def _emit_document_deleted_audit(
+    *,
+    request: Request,
+    tenant_ctx: RequireTenantContext,
+    doc_id: str,
+    deal_id: str,
+    deleted: bool,
+) -> None:
+    """Emit the mutation-critical document deletion event, fail closed."""
+    from idis.audit.sink import get_audit_sink
+
+    event = build_canonical_audit_event(
+        tenant_id=tenant_ctx.tenant_id,
+        event_type="document.deleted",
+        severity="HIGH",
+        summary="Document deletion completed",
+        actor_id=tenant_ctx.actor_id,
+        actor_type=tenant_ctx.actor_type,
+        actor_roles=tenant_ctx.roles,
+        request_id=request.state.request_id,
+        method="DELETE",
+        path=request.url.path,
+        status_code=200,
+        resource_type="document",
+        resource_id=doc_id,
+        deal_id=deal_id,
+        safe={"deleted": deleted},
+        refs=[f"deal_id:{deal_id}"],
+    )
+    audit_sink = getattr(request.app.state, "audit_sink", None) or get_audit_sink()
     audit_sink.emit(event)
 
 
@@ -702,7 +834,21 @@ def _safe_summary_metadata(value: Any) -> Any:
         safe: dict[str, Any] = {}
         for key, nested_value in value.items():
             normalized_key = str(key).lower()
-            if normalized_key in FORBIDDEN_SUMMARY_METADATA_KEYS:
+            if normalized_key == "document_no_substantive_content_receipt":
+                receipt = project_safe_document_no_substantive_content_receipt(nested_value)
+                if receipt is not None:
+                    safe[str(key)] = receipt
+                continue
+            if normalized_key in {
+                "image_only_page_receipts",
+                "image_only_page_evaluation",
+            }:
+                # These sibling values are projected only as one cross-bound pair
+                # in ``_document_summary_from_durable_row`` below.
+                continue
+            if normalized_key in FORBIDDEN_SUMMARY_METADATA_KEYS or normalized_key.startswith(
+                FORBIDDEN_ATTESTATION_METADATA_PREFIXES
+            ):
                 continue
             safe_value = _safe_summary_metadata(nested_value)
             if safe_value is not None:
@@ -719,6 +865,30 @@ def _safe_summary_metadata(value: Any) -> Any:
 def _document_summary_from_durable_row(document: dict[str, Any]) -> DocumentArtifactResponse:
     """Convert a durable document row to a safe public summary."""
     source_metadata = document.get("source_metadata") or {}
+    metadata = document.get("metadata") or {}
+    safe_metadata_value = _safe_summary_metadata(metadata)
+    safe_metadata = safe_metadata_value if isinstance(safe_metadata_value, dict) else {}
+    receipt = safe_metadata.get("document_no_substantive_content_receipt")
+    terminal_disposition = receipt.get("disposition") if isinstance(receipt, dict) else None
+    if (
+        isinstance(receipt, dict)
+        and receipt.get("schema_version") == NO_SUBSTANTIVE_CONTENT_RECEIPT_V2_SCHEMA_VERSION
+        and receipt.get("whole_document_terminal") is not True
+    ):
+        terminal_disposition = None
+    parse_status = str(document.get("parse_status") or "")
+    if terminal_disposition is None and isinstance(metadata, dict):
+        image_only_metadata = project_safe_image_only_page_metadata(
+            receipts=metadata.get("image_only_page_receipts"),
+            evaluation=metadata.get("image_only_page_evaluation"),
+            parse_status=parse_status,
+        )
+        if image_only_metadata is not None:
+            safe_metadata.update(image_only_metadata)
+            image_only_evaluation = image_only_metadata["image_only_page_evaluation"]
+            if isinstance(image_only_evaluation, dict):
+                terminal_code = image_only_evaluation.get("terminal_code")
+                terminal_disposition = terminal_code if isinstance(terminal_code, str) else None
     return DocumentArtifactResponse(
         doc_id=str(document["doc_id"]),
         document_id=str(document["document_id"]),
@@ -728,10 +898,12 @@ def _document_summary_from_durable_row(document: dict[str, Any]) -> DocumentArti
         source_system=str(source_metadata.get("source_system") or "ingestion"),
         version_id=str(document.get("sha256") or document["doc_id"])[:12],
         ingested_at=str(document.get("created_at") or document.get("updated_at") or ""),
-        parse_status=str(document.get("parse_status") or ""),
+        parse_status=parse_status,
+        terminal_disposition=terminal_disposition,
+        parsed_doc_type=str(document["doc_type"]),
         sha256=document.get("sha256"),
         uri=document.get("uri"),
-        metadata=_safe_summary_metadata(document.get("metadata") or {}),
+        metadata=safe_metadata,
         source_metadata=_safe_summary_metadata(source_metadata),
     )
 
@@ -748,6 +920,8 @@ def _document_summary_from_memory_artifact(artifact: dict[str, Any]) -> Document
         version_id=artifact["version_id"],
         ingested_at=artifact["ingested_at"],
         parse_status=artifact.get("parse_status"),
+        terminal_disposition=artifact.get("terminal_disposition"),
+        parsed_doc_type=artifact.get("parsed_doc_type"),
         sha256=artifact.get("sha256"),
         uri=artifact.get("uri"),
         metadata=artifact.get("metadata"),
@@ -808,6 +982,8 @@ def _trigger_auto_ingest(
             actor_id=tenant_ctx.actor_id,
             request_id=getattr(request.state, "request_id", str(uuid.uuid4())),
             idempotency_key=idempotency_key,
+            actor_type=tenant_ctx.actor_type,
+            actor_roles=tuple(sorted(tenant_ctx.roles)),
         )
 
         result = ingestion_service.ingest_bytes(
@@ -955,6 +1131,12 @@ def get_deal_document_summary(
         "Upload raw bytes for a single supported document and ingest them through the "
         "compliance-enforced storage and ingestion pipeline."
     ),
+    responses={
+        422: {
+            "model": ErrorResponse,
+            "description": "Document parsing reached a terminal fail-closed disposition",
+        }
+    },
 )
 async def upload_deal_document(
     deal_id: str,
@@ -965,6 +1147,10 @@ async def upload_deal_document(
     sha256: Annotated[str | None, Query(min_length=64, max_length=64)] = None,
     source_system: Annotated[str, Query(min_length=1, max_length=64)] = "api-upload",
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    source_tree_fingerprint: Annotated[
+        str | None,
+        Header(alias="X-IDIS-Source-Tree-Fingerprint", min_length=64, max_length=64),
+    ] = None,
 ) -> DocumentArtifactResponse:
     """Upload raw bytes for one deal document and return a safe durable summary."""
     ingestion_service = getattr(request.app.state, "ingestion_service", None)
@@ -984,10 +1170,20 @@ async def upload_deal_document(
     phase_recorder = _upload_phase_recorder(request)
     phase_started_at = time.monotonic()
     try:
-        data = await request.body()
-        _reject_invalid_upload_body(data, max_bytes)
-        actual_sha256 = _reject_sha256_mismatch(data, sha256)
-        _reject_unsupported_upload_format(data, filename)
+        staged_upload = getattr(request.state, "staged_upload", None)
+        if staged_upload is None:
+            raise IdisHttpError(
+                status_code=500,
+                code="INGEST_STREAMING_STAGE_MISSING",
+                message="Document upload streaming stage is unavailable",
+            )
+        source_path = staged_upload.verified_path()
+        staged_upload.verify_integrity()
+        actual_sha256 = RouteValidatedSha256.from_digest(
+            actual_sha256=staged_upload.sha256,
+            expected_sha256=sha256,
+        )
+        _reject_unsupported_staged_upload(source_path, filename)
     finally:
         _record_upload_phase(
             phase_recorder,
@@ -999,25 +1195,47 @@ async def upload_deal_document(
         "doc_type": doc_type.value,
         "source_system": source_system,
         "upload_filename": filename,
+        "size_bytes": staged_upload.size_bytes,
         "upload_intake": "single_document_upload",
     }
+    if source_tree_fingerprint is not None:
+        normalized_tree_fingerprint = source_tree_fingerprint.strip().lower()
+        if len(normalized_tree_fingerprint) != 64 or any(
+            character not in "0123456789abcdef" for character in normalized_tree_fingerprint
+        ):
+            raise IdisHttpError(
+                status_code=422,
+                code="DOCUMENT_NO_SUBSTANTIVE_CONTENT_ATTESTATION_MISMATCH",
+                message="Source contract fingerprint is invalid",
+            )
+        metadata["source_tree_fingerprint"] = normalized_tree_fingerprint
     ctx = IngestionContext(
         tenant_id=UUID(tenant_ctx.tenant_id),
         actor_id=tenant_ctx.actor_id,
         request_id=getattr(request.state, "request_id", str(uuid.uuid4())),
         idempotency_key=idempotency_key,
+        actor_type=tenant_ctx.actor_type,
+        actor_roles=tuple(sorted(tenant_ctx.roles)),
     )
-    result = ingestion_service.ingest_bytes(
+    result = ingestion_service.ingest_file(
         ctx=ctx,
         deal_id=UUID(deal_id),
         filename=filename,
         media_type=UPLOAD_CONTENT_TYPE,
-        data=data,
+        source_path=source_path,
+        size_bytes=staged_upload.size_bytes,
         metadata=metadata,
         validated_sha256=actual_sha256,
         phase_recorder=phase_recorder,
         db_conn=getattr(request.state, "db_conn", None),
     )
+    attestation_error_code = _attestation_upload_error_code(result.errors)
+    if attestation_error_code is not None:
+        raise IdisHttpError(
+            status_code=422,
+            code=attestation_error_code,
+            message="Document no-substantive-content attestation was not admitted",
+        )
     if result.artifact_id is None or result.document_id is None:
         raise IdisHttpError(
             status_code=400,
@@ -1025,8 +1243,31 @@ async def upload_deal_document(
             message="Document upload ingestion failed",
             details={"errors": _safe_ingestion_error_details(result.errors)},
         )
+    is_confirmed_no_substantive_content = (
+        result.terminal_disposition == "DOCUMENT_NO_SUBSTANTIVE_CONTENT_CONFIRMED"
+        and result.parse_status is not None
+        and result.parse_status.value == "FAILED"
+        and result.span_count == 0
+    )
+    if not result.success and not is_confirmed_no_substantive_content:
+        raise IdisHttpError(
+            status_code=422,
+            code=_terminal_upload_error_code(result.errors),
+            message="Document upload parsing failed",
+            details={"errors": _safe_ingestion_error_details(result.errors)},
+        )
+    if result.success and result.terminal_disposition is not None:
+        raise IdisHttpError(
+            status_code=500,
+            code="DOCUMENT_NO_SUBSTANTIVE_CONTENT_PROOF_CONTRADICTED",
+            message="Document terminal disposition is contradictory",
+        )
 
     request.state.audit_resource_id = str(result.artifact_id)
+    # Idempotency is downstream of the staging middleware so it can consume the
+    # streaming digest. Clean here, before it can snapshot a 201; the middleware
+    # remains the safety net for errors and idempotency replays that bypass the route.
+    _require_staged_upload_cleanup(staged_upload)
     db_conn = getattr(request.state, "db_conn", None)
     if db_conn is not None:
         from idis.persistence.repositories.documents import PostgresDocumentsRepository
@@ -1052,6 +1293,7 @@ async def upload_deal_document(
         metadata=metadata,
     )
     artifact["parse_status"] = result.parse_status.value if result.parse_status else None
+    artifact["terminal_disposition"] = result.terminal_disposition
     artifact["document_id"] = str(result.document_id)
     return _document_summary_from_memory_artifact(artifact)
 
@@ -1297,6 +1539,8 @@ def ingest_document(
                     actor_id=tenant_ctx.actor_id,
                     request_id=getattr(request.state, "request_id", str(uuid.uuid4())),
                     idempotency_key=idempotency_key,
+                    actor_type=tenant_ctx.actor_type,
+                    actor_roles=tuple(sorted(tenant_ctx.roles)),
                 )
 
                 result = ingestion_service.ingest_bytes(
@@ -1424,6 +1668,7 @@ class SpanResponse(BaseModel):
     span_type: str
     locator: dict[str, Any]
     text_excerpt: str | None = None
+    content_hash: str | None = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class PaginatedSpanList(BaseModel):
@@ -1431,6 +1676,150 @@ class PaginatedSpanList(BaseModel):
 
     items: list[SpanResponse]
     total: int
+
+
+class DurableObjectIntegrityResponse(BaseModel):
+    """Safe proof that authenticated persistent bytes match their durable row."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str
+    doc_id: str
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size_bytes: int = Field(ge=0)
+    uri_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    version_id: str = Field(
+        pattern=(
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+            r"[0-9a-f]{4}-[0-9a-f]{12}$"
+        )
+    )
+    backend: str = Field(pattern=r"^[a-z0-9][a-z0-9._:+\-]{0,127}$")
+    streaming_verified: bool
+
+
+@router.get(
+    "/v1/documents/{doc_id}/content-integrity",
+    response_model=DurableObjectIntegrityResponse,
+    summary="Verify durable document content integrity",
+    description=(
+        "Re-hash authenticated persistent object bytes in bounded chunks and return only "
+        "safe hash, size, version, URI-hash, and backend proof."
+    ),
+    responses={
+        200: {"description": "Durable object integrity verified"},
+        404: {"description": "Document or content not found"},
+        409: {"description": "Durable object integrity verification failed"},
+    },
+)
+def get_document_content_integrity(
+    doc_id: str,
+    tenant_ctx: RequireTenantContext,
+    request: Request,
+) -> DurableObjectIntegrityResponse:
+    """Verify persistent bytes without returning or materializing their body."""
+    from idis.api.auth import TenantContext as TenantCtx
+    from idis.compliance.byok import DataClass
+    from idis.storage.errors import (
+        ObjectIntegrityError,
+        ObjectNotFoundError,
+        StorageBackendError,
+    )
+
+    db_conn = getattr(request.state, "db_conn", None)
+    if db_conn is not None:
+        from idis.persistence.repositories.documents import PostgresDocumentsRepository
+
+        artifact = PostgresDocumentsRepository(
+            db_conn,
+            tenant_ctx.tenant_id,
+        ).get_document_by_artifact_id(doc_id)
+    else:
+        artifact = _document_store.get_artifact(tenant_ctx.tenant_id, doc_id)
+    if artifact is None:
+        raise IdisHttpError(
+            status_code=404,
+            code="DOCUMENT_NOT_FOUND",
+            message="Document not found",
+        )
+
+    raw_uri = artifact.get("uri")
+    expected_sha256 = artifact.get("sha256")
+    source_metadata = artifact.get("source_metadata") or artifact.get("metadata")
+    expected_size = source_metadata.get("size_bytes") if isinstance(source_metadata, dict) else None
+    if (
+        not isinstance(raw_uri, str)
+        or not raw_uri
+        or not isinstance(expected_sha256, str)
+        or len(expected_sha256) != 64
+        or isinstance(expected_size, bool)
+        or not isinstance(expected_size, int)
+        or expected_size < 0
+    ):
+        raise IdisHttpError(
+            status_code=409,
+            code="DOCUMENT_CONTENT_INTEGRITY_FAILED",
+            message="Document content integrity verification failed",
+        )
+
+    ingestion_service = getattr(request.app.state, "ingestion_service", None)
+    compliant_store = getattr(ingestion_service, "_compliant_store", None)
+    if compliant_store is None:
+        raise IdisHttpError(
+            status_code=503,
+            code="SERVICE_UNAVAILABLE",
+            message="Persistent object integrity service unavailable",
+        )
+    storage_key = _strip_uri_scheme(raw_uri)
+    ctx_for_store = TenantCtx(
+        tenant_id=tenant_ctx.tenant_id,
+        actor_id=tenant_ctx.actor_id,
+        name=getattr(tenant_ctx, "name", "api"),
+        timezone=getattr(tenant_ctx, "timezone", "UTC"),
+        data_region=getattr(tenant_ctx, "data_region", "me-south-1"),
+    )
+    try:
+        verified = compliant_store.verify_integrity(
+            tenant_ctx=ctx_for_store,
+            key=storage_key,
+            data_class=DataClass.CLASS_2,
+        )
+    except ObjectNotFoundError as exc:
+        raise IdisHttpError(
+            status_code=404,
+            code="DOCUMENT_CONTENT_NOT_FOUND",
+            message="Document content not found",
+        ) from exc
+    except (ObjectIntegrityError, StorageBackendError) as exc:
+        raise IdisHttpError(
+            status_code=409,
+            code="DOCUMENT_CONTENT_INTEGRITY_FAILED",
+            message="Document content integrity verification failed",
+        ) from exc
+
+    backend = compliant_store.backend_name
+    if (
+        verified.tenant_id != tenant_ctx.tenant_id
+        or verified.key != storage_key
+        or verified.sha256 != expected_sha256.lower()
+        or verified.size_bytes != expected_size
+        or not isinstance(backend, str)
+    ):
+        raise IdisHttpError(
+            status_code=409,
+            code="DOCUMENT_CONTENT_INTEGRITY_FAILED",
+            message="Document content integrity verification failed",
+        )
+    return DurableObjectIntegrityResponse(
+        schema_version=DURABLE_OBJECT_INTEGRITY_SCHEMA_VERSION,
+        doc_id=doc_id,
+        content_sha256=verified.sha256,
+        size_bytes=verified.size_bytes,
+        uri_sha256=hashlib.sha256(raw_uri.encode("utf-8")).hexdigest(),
+        version_id=verified.version_id,
+        backend=backend,
+        streaming_verified=True,
+    )
 
 
 @router.get(
@@ -1465,6 +1854,36 @@ def get_document_spans(
     Raises:
         IdisHttpError: 404 if document not found in tenant scope.
     """
+    db_conn = getattr(request.state, "db_conn", None)
+    if db_conn is not None:
+        from idis.persistence.repositories.documents import PostgresDocumentsRepository
+
+        repository = PostgresDocumentsRepository(db_conn, tenant_ctx.tenant_id)
+        document = repository.get_document_by_artifact_id(doc_id)
+        if document is None:
+            raise IdisHttpError(
+                status_code=404,
+                code="NOT_FOUND",
+                message="Document not found",
+                details={"doc_id": doc_id},
+            )
+        durable_spans = repository.list_spans_by_document(
+            deal_id=str(document["deal_id"]),
+            document_id=str(document["document_id"]),
+        )
+        durable_items = [
+            SpanResponse(
+                span_id=str(span["span_id"]),
+                document_id=str(span["document_id"]),
+                span_type=str(span["span_type"]),
+                locator=dict(span["locator"]),
+                text_excerpt=span.get("text_excerpt"),
+                content_hash=span.get("content_hash"),
+            )
+            for span in durable_spans
+        ]
+        return PaginatedSpanList(items=durable_items, total=len(durable_items))
+
     artifact = _document_store.get_artifact(tenant_ctx.tenant_id, doc_id)
     if artifact is None:
         raise IdisHttpError(
@@ -1491,6 +1910,7 @@ def get_document_spans(
             span_type=span.span_type.value,
             locator=span.locator,
             text_excerpt=span.text_excerpt,
+            content_hash=span.content_hash,
         )
         for span in spans
     ]
@@ -1516,6 +1936,251 @@ class GetDocumentResponse(BaseModel):
     metadata: dict[str, Any] | None = None
     content_b64: str
     content_sha256: str
+
+
+def _load_download_artifact(
+    request: Request,
+    *,
+    tenant_id: str,
+    doc_id: str,
+) -> tuple[dict[str, Any] | None, bool]:
+    """Load exact artifact metadata from the durable RLS scope when available."""
+    db_conn = getattr(request.state, "db_conn", None)
+    if db_conn is None:
+        return _document_store.get_artifact(tenant_id, doc_id), False
+
+    from sqlalchemy import text
+
+    from idis.persistence.db import set_tenant_local
+
+    set_tenant_local(db_conn, tenant_id)
+    row = db_conn.execute(
+        text(
+            """
+            SELECT doc_id, tenant_id, deal_id, doc_type, title, source_system,
+                   version_id, ingested_at, sha256, uri, metadata
+            FROM document_artifacts
+            WHERE doc_id = CAST(:doc_id AS uuid)
+              AND tenant_id = CAST(:tenant_id AS uuid)
+            """
+        ),
+        {"doc_id": doc_id, "tenant_id": tenant_id},
+    ).fetchone()
+    if row is None:
+        return None, True
+
+    artifact = dict(row._mapping)
+    metadata = artifact.get("metadata")
+    if isinstance(metadata, str):
+        try:
+            loaded_metadata = json.loads(metadata)
+        except json.JSONDecodeError:
+            loaded_metadata = None
+        artifact["metadata"] = loaded_metadata if isinstance(loaded_metadata, dict) else None
+    ingested_at = artifact.get("ingested_at")
+    if isinstance(ingested_at, datetime):
+        artifact["ingested_at"] = ingested_at.isoformat().replace("+00:00", "Z")
+    else:
+        artifact["ingested_at"] = str(ingested_at)
+    for identifier in ("doc_id", "tenant_id", "deal_id"):
+        artifact[identifier] = str(artifact[identifier])
+    return artifact, True
+
+
+def _validate_durable_download_integrity(
+    *,
+    artifact: dict[str, Any],
+    tenant_id: str,
+    storage_key: str,
+    content_bytes: bytes,
+    stored_object: Any,
+) -> str:
+    """Bind durable row hash/size to the authenticated persistent object."""
+    expected_sha256 = artifact.get("sha256")
+    metadata = artifact.get("metadata")
+    expected_size = metadata.get("size_bytes") if isinstance(metadata, dict) else None
+    content_sha256 = hashlib.sha256(content_bytes).hexdigest()
+    stored_metadata = stored_object.metadata
+    if (
+        not isinstance(expected_sha256, str)
+        or len(expected_sha256) != 64
+        or expected_sha256.lower() != expected_sha256
+        or isinstance(expected_size, bool)
+        or not isinstance(expected_size, int)
+        or expected_size < 0
+        or stored_metadata.tenant_id != tenant_id
+        or stored_metadata.key != storage_key
+        or stored_metadata.sha256 != expected_sha256
+        or stored_metadata.size_bytes != expected_size
+        or len(content_bytes) != expected_size
+        or content_sha256 != expected_sha256
+    ):
+        raise IdisHttpError(
+            status_code=409,
+            code="DOCUMENT_CONTENT_INTEGRITY_FAILED",
+            message="Document content integrity verification failed",
+        )
+    return content_sha256
+
+
+def _validate_durable_stream_metadata(
+    *,
+    artifact: dict[str, Any],
+    tenant_id: str,
+    storage_key: str,
+    stored_metadata: Any,
+) -> None:
+    """Bind safe stream headers to the durable row and exact stored version."""
+    expected_sha256 = artifact.get("sha256")
+    source_metadata = artifact.get("source_metadata") or artifact.get("metadata")
+    expected_size = source_metadata.get("size_bytes") if isinstance(source_metadata, dict) else None
+    if (
+        not isinstance(expected_sha256, str)
+        or len(expected_sha256) != 64
+        or expected_sha256.lower() != expected_sha256
+        or isinstance(expected_size, bool)
+        or not isinstance(expected_size, int)
+        or expected_size < 0
+        or stored_metadata.tenant_id != tenant_id
+        or stored_metadata.key != storage_key
+        or stored_metadata.sha256 != expected_sha256
+        or stored_metadata.size_bytes != expected_size
+    ):
+        raise IdisHttpError(
+            status_code=409,
+            code="DOCUMENT_CONTENT_INTEGRITY_FAILED",
+            message="Document content integrity verification failed",
+        )
+
+
+@router.get(
+    "/v1/documents/{doc_id}/content",
+    operation_id="streamDocumentContent",
+    response_class=StreamingResponse,
+    summary="Stream authenticated document content",
+    description=(
+        "Stream the exact durable object in bounded chunks with safe integrity and version "
+        "headers. Storage URI, metadata, and private filenames are never emitted."
+    ),
+    responses={
+        200: {
+            "description": "Exact durable object stream",
+            "content": {
+                "application/octet-stream": {"schema": {"type": "string", "format": "binary"}}
+            },
+        },
+        404: {"description": "Document or content not found"},
+        409: {"description": "Durable object integrity verification failed"},
+        503: {"description": "Persistent object service unavailable"},
+    },
+)
+def stream_document_content(
+    request: Request,
+    doc_id: str,
+    tenant_ctx: RequireTenantContext,
+) -> StreamingResponse:
+    """Return a non-materializing, compliance-bound stream for one artifact."""
+    from idis.api.auth import TenantContext as TenantCtx
+    from idis.compliance.byok import DataClass
+    from idis.storage.errors import (
+        ObjectIntegrityError,
+        ObjectNotFoundError,
+        StorageBackendError,
+    )
+
+    request.state.audit_resource_id = doc_id
+    artifact, _is_durable = _load_download_artifact(
+        request,
+        tenant_id=tenant_ctx.tenant_id,
+        doc_id=doc_id,
+    )
+    if artifact is None:
+        raise IdisHttpError(
+            status_code=404,
+            code="DOCUMENT_NOT_FOUND",
+            message="Document not found",
+        )
+
+    raw_uri = artifact.get("uri")
+    if not isinstance(raw_uri, str) or not raw_uri:
+        raise IdisHttpError(
+            status_code=404,
+            code="DOCUMENT_CONTENT_NOT_FOUND",
+            message="Document content not found",
+        )
+    storage_key = _strip_uri_scheme(raw_uri)
+    ingestion_service = getattr(request.app.state, "ingestion_service", None)
+    compliant_store = getattr(ingestion_service, "_compliant_store", None)
+    if compliant_store is None:
+        raise IdisHttpError(
+            status_code=503,
+            code="SERVICE_UNAVAILABLE",
+            message="Persistent object stream service unavailable",
+        )
+
+    ctx_for_store = TenantCtx(
+        tenant_id=tenant_ctx.tenant_id,
+        actor_id=tenant_ctx.actor_id,
+        name=getattr(tenant_ctx, "name", "api"),
+        timezone=getattr(tenant_ctx, "timezone", "UTC"),
+        data_region=getattr(tenant_ctx, "data_region", "me-south-1"),
+    )
+    try:
+        verified = compliant_store.verify_integrity(
+            tenant_ctx=ctx_for_store,
+            key=storage_key,
+            data_class=DataClass.CLASS_2,
+        )
+        _validate_durable_stream_metadata(
+            artifact=artifact,
+            tenant_id=tenant_ctx.tenant_id,
+            storage_key=storage_key,
+            stored_metadata=verified,
+        )
+        stream_metadata, chunks = compliant_store.open_verified_stream(
+            tenant_ctx=ctx_for_store,
+            key=storage_key,
+            version_id=verified.version_id,
+            data_class=DataClass.CLASS_2,
+        )
+        _validate_durable_stream_metadata(
+            artifact=artifact,
+            tenant_id=tenant_ctx.tenant_id,
+            storage_key=storage_key,
+            stored_metadata=stream_metadata,
+        )
+        if stream_metadata != verified:
+            raise IdisHttpError(
+                status_code=409,
+                code="DOCUMENT_CONTENT_INTEGRITY_FAILED",
+                message="Document content integrity verification failed",
+            )
+    except ObjectNotFoundError as exc:
+        raise IdisHttpError(
+            status_code=404,
+            code="DOCUMENT_CONTENT_NOT_FOUND",
+            message="Document content not found",
+        ) from exc
+    except (ObjectIntegrityError, StorageBackendError) as exc:
+        raise IdisHttpError(
+            status_code=409,
+            code="DOCUMENT_CONTENT_INTEGRITY_FAILED",
+            message="Document content integrity verification failed",
+        ) from exc
+
+    return StreamingResponse(
+        chunks,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Length": str(stream_metadata.size_bytes),
+            "X-IDIS-Content-SHA256": stream_metadata.sha256,
+            "X-IDIS-Content-Size": str(stream_metadata.size_bytes),
+            "X-IDIS-Object-Version": stream_metadata.version_id,
+            "X-IDIS-Stream-Contract": DURABLE_OBJECT_STREAM_CONTRACT_VERSION,
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.get(
@@ -1555,11 +2220,15 @@ async def get_document(
 
     from idis.api.auth import TenantContext as TenantCtx
     from idis.compliance.byok import DataClass
-    from idis.storage.errors import ObjectNotFoundError
+    from idis.storage.errors import ObjectIntegrityError, ObjectNotFoundError, StorageBackendError
 
     request.state.audit_resource_id = doc_id
 
-    artifact = _document_store.get_artifact(tenant_ctx.tenant_id, doc_id)
+    artifact, is_durable = _load_download_artifact(
+        request,
+        tenant_id=tenant_ctx.tenant_id,
+        doc_id=doc_id,
+    )
     if artifact is None:
         raise IdisHttpError(
             status_code=404,
@@ -1612,10 +2281,26 @@ async def get_document(
             code="DOCUMENT_CONTENT_NOT_FOUND",
             message="Document content not found",
         ) from err
+    except (ObjectIntegrityError, StorageBackendError) as err:
+        if not is_durable:
+            raise
+        raise IdisHttpError(
+            status_code=409,
+            code="DOCUMENT_CONTENT_INTEGRITY_FAILED",
+            message="Document content integrity verification failed",
+        ) from err
 
     content_bytes = stored_object.body
     content_b64 = base64.b64encode(content_bytes).decode("ascii")
     content_sha256 = hashlib.sha256(content_bytes).hexdigest()
+    if is_durable:
+        content_sha256 = _validate_durable_download_integrity(
+            artifact=artifact,
+            tenant_id=tenant_ctx.tenant_id,
+            storage_key=storage_key,
+            content_bytes=content_bytes,
+            stored_object=stored_object,
+        )
 
     return GetDocumentResponse(
         doc_id=artifact["doc_id"],
@@ -1681,7 +2366,22 @@ async def delete_document(
 
     request.state.audit_resource_id = doc_id
 
-    artifact = _document_store.get_artifact(tenant_ctx.tenant_id, doc_id)
+    db_conn = getattr(request.state, "db_conn", None)
+    if db_conn is None:
+        artifact = _document_store.get_artifact(tenant_ctx.tenant_id, doc_id)
+    else:
+        durable_artifact, _ = _load_download_artifact(
+            request,
+            tenant_id=tenant_ctx.tenant_id,
+            doc_id=doc_id,
+        )
+        if durable_artifact is None:
+            artifact = None
+        else:
+            # Task 4 uses this durable lookup only to make the isolation-canary 404
+            # RLS-authoritative. Keep legacy memory authorization before mutation so
+            # this checkpoint cannot introduce partial durable object/row deletion.
+            artifact = _document_store.get_artifact(tenant_ctx.tenant_id, doc_id)
     if artifact is None:
         raise IdisHttpError(
             status_code=404,
@@ -1723,21 +2423,13 @@ async def delete_document(
 
     deleted = _document_store.delete_artifact(tenant_ctx.tenant_id, doc_id)
 
-    audit_sink = getattr(request.app.state, "audit_sink", None)
-    if audit_sink is not None:
-        event = {
-            "event_type": "document.deleted",
-            "tenant_id": tenant_ctx.tenant_id,
-            "actor_id": tenant_ctx.actor_id,
-            "resource_type": "document",
-            "resource_id": doc_id,
-            "details": {"deleted": deleted},
-            "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-        }
-        try:
-            audit_sink.emit(event)
-        except Exception as e:
-            logger.warning("Audit emission failed for document.deleted: %s", e)
+    _emit_document_deleted_audit(
+        request=request,
+        tenant_ctx=tenant_ctx,
+        doc_id=doc_id,
+        deal_id=artifact["deal_id"],
+        deleted=deleted,
+    )
 
     return DeleteDocumentResponse(
         doc_id=doc_id,

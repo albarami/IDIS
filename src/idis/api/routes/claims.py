@@ -578,7 +578,8 @@ def _get_claim_service(
     from idis.services.claims.service import ClaimService
 
     db_conn = getattr(request.state, "db_conn", None)
-    return ClaimService(tenant_id=tenant_id, db_conn=db_conn)
+    audit_sink = getattr(request.app.state, "audit_sink", None)
+    return ClaimService(tenant_id=tenant_id, db_conn=db_conn, audit_sink=audit_sink)
 
 
 @router.patch(

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Any
+from typing import Any, NamedTuple
 
 from idis.methodology.models import RequiredCalculation
 from idis.models.calc_materialization import (
@@ -15,24 +15,39 @@ from idis.models.claim_materialization import (
     RunScopedMaterializedClaimShell,
 )
 from idis.models.deterministic_calculation import CalcType
-from idis.models.extraction_task import ExtractionTask
+from idis.models.extraction_task import (
+    ExtractionTask,
+    FddPolicyV2ExtractionTask,
+    PlannedExtractionTask,
+    decode_extraction_task,
+)
 from idis.models.sanad_materialization import (
     RunScopedSanadGradeRecord,
     RunScopedSanadRecord,
     RunScopedSanadShell,
 )
-from idis.services.calc.runner import _claim_input_key, _extract_decimal_value
+from idis.services.calc.runner import (
+    _claim_input_key,
+    _extract_decimal_value,
+    _operand_claim_id,
+)
 from idis.validators.extraction_gate import ExtractionGateBlockedError
 
 
 def requested_calculations(
-    extraction_tasks: list[ExtractionTask],
+    extraction_tasks: list[PlannedExtractionTask],
 ) -> list[tuple[ExtractionTask, RequiredCalculation]]:
     """Return calculation requirements from each task's expected answer schema."""
+    admitted: list[ExtractionTask] = []
+    for value in extraction_tasks:
+        task = decode_extraction_task(value)
+        if isinstance(task, FddPolicyV2ExtractionTask):
+            raise ValueError("METHODOLOGY_FDD_POLICY_V2_CALCULATION_UNSUPPORTED")
+        admitted.append(task)
     return [
-        (task, required_calc)
-        for task in extraction_tasks
-        for required_calc in task.expected_answer_schema.required_calculations
+        (task, calc)
+        for task in admitted
+        for calc in task.expected_answer_schema.required_calculations
     ]
 
 
@@ -81,21 +96,21 @@ def scope_sanads(
     ]
 
 
-def claims_by_input_key(
+def claims_grouped_by_input_key(
     claims: list[RunScopedMaterializedClaim | RunScopedMaterializedClaimShell],
-) -> dict[str, RunScopedMaterializedClaim | RunScopedMaterializedClaimShell]:
-    """Map task-scoped claims to existing CalcRunner input keys."""
-    by_key: dict[str, RunScopedMaterializedClaim | RunScopedMaterializedClaimShell] = {}
+) -> dict[str, list[RunScopedMaterializedClaim | RunScopedMaterializedClaimShell]]:
+    """Group task-scoped claims by existing CalcRunner input key."""
+    by_key: dict[str, list[RunScopedMaterializedClaim | RunScopedMaterializedClaimShell]] = {}
     for claim in claims:
         input_key = _claim_input_key(claim_payload(claim))
         if input_key is not None:
-            by_key[input_key] = claim
+            by_key.setdefault(input_key, []).append(claim)
     return by_key
 
 
 def claims_for_task(
     claims: list[RunScopedMaterializedClaim | RunScopedMaterializedClaimShell],
-    task: ExtractionTask,
+    task: PlannedExtractionTask,
 ) -> list[RunScopedMaterializedClaim | RunScopedMaterializedClaimShell]:
     """Return only claims produced for the same task/question/coverage tuple."""
     return [
@@ -170,6 +185,17 @@ def metadata_for_calc(
     return metadata
 
 
+def _claim_value_attr(claim: Any, attr: str) -> Any:
+    """Read a value-struct attribute from a claim object or repository dict."""
+    value_struct = getattr(claim, "value_struct", None)
+    if value_struct is not None:
+        return getattr(value_struct, attr, None)
+    if isinstance(claim, dict):
+        value = claim.get("value")
+        return value.get(attr) if isinstance(value, dict) else None
+    return None
+
+
 def common_attr(
     claims: list[Any],
     attr: str,
@@ -181,14 +207,7 @@ def common_attr(
     """
     values: set[str] = set()
     for claim in claims:
-        value_struct = getattr(claim, "value_struct", None)
-        if value_struct is not None:
-            raw = getattr(value_struct, attr, None)
-        elif isinstance(claim, dict):
-            value = claim.get("value")
-            raw = value.get(attr) if isinstance(value, dict) else None
-        else:
-            raw = None
+        raw = _claim_value_attr(claim, attr)
         if raw is not None:
             values.add(str(raw))
     if len(values) == 1:
@@ -196,10 +215,56 @@ def common_attr(
     return None
 
 
+class PairCoordinateDefect(NamedTuple):
+    """Deliberate pre-computation refusal detail for a selected operand pair."""
+
+    coordinate: str
+    claim_ids: list[str]
+    message: str
+
+
+def selected_pair_coordinate_defect(
+    calc_type: CalcType,
+    claims: list[Any],
+) -> PairCoordinateDefect | None:
+    """Refuse incoherent currency/time_window on the selected GROSS_MARGIN pair.
+
+    Shared by the methodology service and CalcRunner at the existing metadata
+    seam, over the already-selected required operands only. For each coordinate
+    independently: equal present values are coherent, distinct present values
+    refuse, exactly one absent refuses (a present value must not be borrowed
+    for the whole result), and both absent preserve the existing optional
+    repository-dict behavior. Absence is never reported as disagreement.
+    """
+    if calc_type != CalcType.GROSS_MARGIN:
+        return None
+    for coordinate in ("currency", "time_window"):
+        raws = [_claim_value_attr(claim, coordinate) for claim in claims]
+        present = [raw for raw in raws if raw is not None]
+        if not present:
+            continue
+        if len(present) == len(raws) and len({str(raw) for raw in present}) == 1:
+            continue
+        detail = (
+            f"selected operands disagree on {coordinate}"
+            if len(present) == len(raws)
+            else f"selected operands have incomplete {coordinate} metadata"
+        )
+        claim_ids = sorted(
+            claim_id for claim in claims if (claim_id := _operand_claim_id(claim)) is not None
+        )
+        return PairCoordinateDefect(
+            coordinate=coordinate,
+            claim_ids=claim_ids,
+            message=f"pre-computation operand coordinate refusal: {detail}",
+        )
+    return None
+
+
 def gate_rejection(
     calc_type: CalcType,
     exc: ExtractionGateBlockedError,
-    task: ExtractionTask,
+    task: PlannedExtractionTask,
     required: bool,
 ) -> MethodologyCalculationRejection:
     """Convert extraction gate failures into stable Slice 9 reason codes."""
@@ -228,7 +293,7 @@ def rejection(
     reason: MethodologyCalculationReason,
     message: str,
     calc_type: str,
-    task: ExtractionTask,
+    task: PlannedExtractionTask,
     required: bool,
     reason_codes: list[str] | None = None,
     claim_ids: list[str] | None = None,

@@ -338,3 +338,70 @@ class TestTdd102Completeness:
         kwargs.pop(field)
         with pytest.raises((TypeError, ValueError)):
             AgentReport(**kwargs)  # type: ignore[arg-type]
+
+
+_SECTION_UNKNOWN_CLAIM = "00000000-0000-0000-0000-999999999999"
+
+
+class TestAnalysisSectionReferenceMembershipIntegration:
+    """Engine must refuse a report whose sole defect is a bad section ref.
+
+    The deterministic _ExampleAgent returns a fully valid report/global/
+    risk/Muhasabah envelope; only the structured section's claim_refs or
+    calc_refs carries an ungrounded ID.  The existing No-Free-Facts gate
+    inside AnalysisEngine._validate_report must reject before a bundle is
+    returned — the exact existing AnalysisEngineError text is asserted so a
+    refusal cannot be an incidental import or setup failure.
+    """
+
+    def test_engine_rejects_unknown_section_claim(self) -> None:
+        bad_report = _make_valid_report().model_copy(
+            update={
+                "analysis_sections": {
+                    "summary": "Test analysis",
+                    "financial": {
+                        "content": "ARR grew to $1.2M in FY2025.",
+                        "claim_refs": [_SECTION_UNKNOWN_CLAIM],
+                        "calc_refs": [CALC_1],
+                        "sanad_grade": "A",
+                        "confidence": 0.8,
+                    },
+                }
+            }
+        )
+        registry = AnalysisAgentRegistry()
+        registry.register(_ExampleAgent(report=bad_report))
+        engine = AnalysisEngine(registry=registry, audit_sink=InMemoryAuditSink())
+
+        with pytest.raises(AnalysisEngineError) as excinfo:
+            engine.run(_make_context(), ["agent-1"])
+        message = str(excinfo.value)
+        assert "No-Free-Facts validation failed" in message
+        assert "NFF_UNKNOWN_CLAIM_ID" in message
+        assert _SECTION_UNKNOWN_CLAIM in message
+
+    def test_engine_accepts_valid_structured_section(self) -> None:
+        """Companion: a fully grounded structured section reaches the bundle."""
+        valid_report = _make_valid_report().model_copy(
+            update={
+                "analysis_sections": {
+                    "summary": "Test analysis",
+                    "financial": {
+                        "content": "ARR grew to $1.2M in FY2025.",
+                        "claim_refs": [CLAIM_1],
+                        "calc_refs": [CALC_1],
+                        "sanad_grade": "A",
+                        "confidence": 0.8,
+                    },
+                }
+            }
+        )
+        registry = AnalysisAgentRegistry()
+        registry.register(_ExampleAgent(report=valid_report))
+        engine = AnalysisEngine(registry=registry, audit_sink=InMemoryAuditSink())
+
+        bundle = engine.run(_make_context(), ["agent-1"])
+        assert len(bundle.reports) == 1
+        section = bundle.reports[0].analysis_sections["financial"]
+        assert section["claim_refs"] == [CLAIM_1]
+        assert section["calc_refs"] == [CALC_1]

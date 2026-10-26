@@ -1,0 +1,17 @@
+{
+  "schema_version": "frame-ocr-health-fixture-manifest-v1",
+  "fixture_id": "frame-ocr-health-v1",
+  "file_name": "frame-ocr-health-v1.mp4",
+  "file_sha256": "581a4dc749d576662859019d2006c354b03094733e1156fcf91a96f90df6643c",
+  "duration_ms": 3000,
+  "width": 1280,
+  "height": 720,
+  "frame_rate": "5/1",
+  "expected_normalized_phrase": "media frame ocr health one two three",
+  "normalization": "lowercase, strip punctuation, collapse whitespace, and map digit tokens 1 2 3 to one two three",
+  "sampling_policy": "periodic-plus-scenes-v1",
+  "generation_recipe": "ffmpeg lavfi white 1280x720 5fps 3s canvas; centered black project-authored phrase rendered with a local system bold font; H.264 CRF 0, yuv420p, one encoding thread, metadata removed",
+  "provenance_note": "Generated locally for IDIS on 2026-07-16. The text and composition are project-authored; the local font and ffmpeg toolchain are generation tools and are not distributed as source assets.",
+  "license_evidence": "Project-owned locally generated visual health-check content. No third-party recording, media, company data, or data-room source material is included.",
+  "license_evidence_sha256": "998c66f026f466989e7ad9cdfd225e90fdcb6ef57684936bc85947f37dd0d709"
+}

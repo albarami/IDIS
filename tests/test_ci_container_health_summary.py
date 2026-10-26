@@ -1,0 +1,2276 @@
+"""Execute the container CI summary and preserve its required health gate."""
+
+from __future__ import annotations
+
+import ast
+import functools
+import hashlib
+import importlib.util
+import inspect
+import json
+import os
+import platform
+import shutil
+import subprocess
+import sys
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+import pytest
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+HEALTH_STEP_NAME = "Test container health check"
+SUMMARY_STEP_NAME = "Write container build summary"
+HEALTH_RUN_SHA256 = "69742b272e4e396925e69edf09db6dd435705fb99a1dda10b829ddf3fd1651d9"
+CONTAINER_STEP_NAMES = (
+    "Checkout code",
+    "Set up Docker Buildx",
+    "Build Docker image",
+    "Set up Python 3.11 for composition",
+    "Install composition interpreter",
+    "Reject image env names outside the reviewed allowlist",
+    "Reject gate Task4 and unsigned envelopes before any container start",
+    "Restore pinned tiny.en model cache",
+    "Fetch pinned tiny.en model on cache miss",
+    "Verify pinned tiny.en hashes and install the model tree",
+    "Save pinned tiny.en model cache",
+    "Prepare synthetic profile as root for uid 1000",
+    "Mask maintenance secrets and separate that directory",
+    "Create the network-none namespace and disposable datastores",
+    "Census loopback-only topology before the API start",
+    "Enforce authorized migration ceiling before bootstrap",
+    "Create migration 0038 erasure roles on the postgres database",
+    "Bootstrap the sealed database to the packaged Alembic head",
+    "Qualify startup env and start the API",
+    HEALTH_STEP_NAME,
+    "Run the loader negative in the step-21 image",
+    "Record launch audit, topology, and maintenance absence",
+    "Record admission codes when the API is blocked",
+    "Cleanup",
+    "Set up Python 3.11 for release manifest",
+    "Generate release manifest",
+    "Upload release manifest artifact",
+    SUMMARY_STEP_NAME,
+)
+_PRESERVED_STEP_NAMES = (
+    "Checkout code",
+    "Set up Docker Buildx",
+    "Build Docker image",
+    "Set up Python 3.11 for release manifest",
+    "Generate release manifest",
+    "Upload release manifest artifact",
+    SUMMARY_STEP_NAME,
+)
+# Job digests from _canonical_digest (sort_keys JSON).
+# check: reviewed checkpoint 16 (4563316f); unchanged at checkpoint 17.
+# postgres-integration: H3-4c host-uid drop, receipt labels, read-only mounts, no Poppler on PATH.
+# H3-4d: the c3 dropped script runs the dependency verifier after pip check.
+# Every other job in this table: reviewed checkpoint 07
+# (f99595ef053883807f58b703252de25a24e91edb).
+# postgres-integration was recomputed after the R5-04 pg-tests edit (R5-04b).
+_F99595EF_JOB_DIGESTS = {
+    "backup-restore-drill": "152593732bb006b84ac1c26fe3a178d27f5d200ca69a2a2c7c48f720d87d70d3",
+    "check": "6dc86cde933106f39b7eda71332029a7ca4bc94c08fec9a0f65e57cecc0e20f1",
+    # GL-12 slice 2, 2026-10-19: --deal-stage SEED on the gdbs-s command. Previous digest:
+    # ea835316a4d6d092d26f4739f66c75f852f396003cf8ce59f8ddb02d0a54eb35
+    "evaluation-harness": "96ba60654e4ad689f78756ddbcc7fff7c496e5d8c733f3cb7167118403eed65b",
+    "k8s-validate": "5054b069fee639461e357604d3ff5f7003386045b23703dccbaff80f8485ca19",
+    # CIR-04 checkpoint 23 assembly re-pin: the H3 set and R5-04/R5-04b on the combined job.
+    # Previous digests: 16c82ea3c93ff8df074a669f6e643ae2808099d22b05a4588683376f34ee0e7e (H3-6g)
+    # and 305efd64e5ee57bce2ce6f406137d427db2062047fe5e068eebbc75affc23346 (R5-04b).
+    # CIR-04H3-6g re-pin. Previous digest:
+    # fa0de3934ff268fc561c2d1e316b6fc3b782f1f4920d8a02eeed7f9748a4cc54
+    # CIR-04H3-6b re-pin. Previous digest:
+    # b37e61ca1faba82cbeebd9f096010433e6c63f164c8df0c7ed471e990b02b986
+    # CIR-04H3-6 re-pin. Previous digest:
+    # 3d98ec97b87694ad67c9c7a4f593d464122b1747b48309819842c5b386ce0fa3
+    # CIR-04H3-8 re-pin: the admit script installs into its own venv before idis.
+    # Previous digest:
+    # 63b724e74963fa54db7452c1e8567a965a248fb5b6e945009834a5b635890c60
+    "postgres-integration": "18c818cfbeb1479f854760eb3b5766a2c59205ddd74cd2323e4032cbbf5085f6",
+    "release-gate": "95f9816c495581f5b642ec6932d84ba16d75704d5ca1435f77b4406e87f6c8ab",
+    "terraform-validate": "1938b5718ff7e1eff243b5a982c453a7745372ebd4145d55d639dd0af74d47a4",
+    "ui-check": "cc279df20f4a53d6426db11701765cb386b2d1e36aae57dcbb23829df89ea03b",
+}
+_F99595EF_PRESERVED_STEP_DIGESTS = {
+    "Build Docker image": "93fcabd76b8615c01409ebe68f4f2cc4cc03d4f3c51063ab87e126b8ee5fb364",
+    "Checkout code": "1294060e86df1629fd5c6d3c4b93d960f3138c679239be34edb791ac5ceeba9f",
+    "Generate release manifest": "d0193f33f03cc03c87230c70bfb6e993caa0e53880c59c4b93a4cef2c6eebf5d",
+    "Set up Docker Buildx": "08108c9e973cb74f5a5287655f02f0209b111793f0666486d48f8eda290d0a80",
+    "Set up Python 3.11 for release manifest": (
+        "f9cb0af25f26bdc4fff106fce03ecfee67b5d2aabb91ce32668d8ec43dd90ab6"
+    ),
+    "Upload release manifest artifact": (
+        "68d45adde72fa195c9e48debd486577e4a562977e42e26d493b42dbffccb03f6"
+    ),
+    "Write container build summary": (
+        "92f570fef7de253b90221c8d276c094b3a17d7e6b11c653ac7c2c93a3a73c625"
+    ),
+}
+_MODEL_REVISION = "0d3d19a32d3338f10357c0889762bd8d64bbdeba"
+_MODEL_MANIFEST_SHA256 = "8a9f6ac2c61d339ea4f5a27d00934ea5fe83bcb0d25b67a01cd3b47b9e1adf34"
+_MODEL_FINGERPRINT_LINUX = "4b1662df734cdf3854f6a3de0a9fd9c3fdaadfa644d6c7471f5c63c9cb62f6e5"
+_MODEL_FINGERPRINT_WINDOWS = "47e043de5fce0c94a30e264cb503f65ccb69cf03b6db296fa14e937a0ab81aea"
+_MODEL_FILES = (
+    ("README.md", 1323, "1b7816626bf0548e4b71a467f4112b4592924bc818e3117f19aefcc50ce4b6aa"),
+    ("config.json", 2317, "14b1b421a90349bc551b881461426b561a874049cb9e4c4864f2ca384f6a7cc5"),
+    ("model.bin", 75537502, "1a5afae06a4db91c975c9a9d78be5cc110ee4ea022ad57d55492e4550e936b2a"),
+    ("tokenizer.json", 2128466, "929c5252409436dce1b38a75d1abbcb5e132d170d8e324e4e04ed915fa2d22df"),
+    ("vocabulary.txt", 422309, "ff77588746d3a2595d32ab5b69ffd7b95ce2441ac57533cb66fc3eb575a115cf"),
+)
+_STEP_IF = {
+    "setup-composition": "success()",
+    "install-composition": "success()",
+    "inspect-image-env": "success()",
+    "signature-and-gate-negatives": "success()",
+    "model-cache": "success()",
+    "model-fetch": "success() && steps.model-cache.outputs.cache-hit != 'true'",
+    "model-verify": "success()",
+    "model-cache-save": "success() && steps.model-cache.outputs.cache-hit != 'true'",
+    "prepare-inputs": "success()",
+    "mask-maintenance": "success()",
+    "disposable-datastores": "success()",
+    "topology-before": "success()",
+    "migration-ceiling": "success()",
+    "erasure-roles": "success()",
+    "pg-bootstrap": "success()",
+    "start-api": "success()",
+    "container_health": "success()",
+    "loader-negative": "always() && steps.container_health.outcome != 'skipped'",
+    "launch-proof": "always() && steps.start-api.outcome != 'skipped'",
+    "admission-codes": "always() && steps.start-api.outcome != 'skipped'",
+    "cleanup": "always()",
+}
+_REDIS_START_LITERAL = (
+    "sh -c 'printf \"bind 127.0.0.1\\nprotected-mode yes\\n"
+    'requirepass %s\\n" "$REDIS_PASSWORD" | exec redis-server -\''
+)
+
+
+def _workflow() -> dict[str, Any]:
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    assert isinstance(workflow, dict)
+    return workflow
+
+
+def _step(name: str) -> dict[str, Any]:
+    return next(
+        step for step in _workflow()["jobs"]["container-build"]["steps"] if step["name"] == name
+    )
+
+
+def _required_bash() -> str:
+    if os.name == "nt":
+        candidate = Path(os.environ.get("PROGRAMFILES", "C:/Program Files")) / "Git/bin/bash.exe"
+        if candidate.is_file():
+            return str(candidate)
+        pytest.fail("Required Git Bash is missing; container summary execution must not skip")
+    executable = shutil.which("bash")
+    if executable is None:
+        pytest.fail("Required Bash is missing; container summary execution must not skip")
+    return executable
+
+
+def _write_step_script(directory: Path, name: str, script: str) -> Path:
+    """Write the executed step text as LF UTF-8 bytes in the case tmp directory."""
+    payload = script.encode("utf-8")
+    if b"\r" in payload:
+        raise AssertionError("step script contains CR")
+    path = directory / name
+    path.write_bytes(payload)
+    if path.read_bytes() != payload:
+        raise AssertionError("step script bytes changed on write")
+    return path
+
+
+def _bash_file_args(bash: str, script_path: Path) -> list[str]:
+    return [bash, "--noprofile", "--norc", "-euo", "pipefail", script_path.as_posix()]
+
+
+def _render_summary(tmp_path: Path, outcome: str | None, *, manifest: bool = False) -> str:
+    bash = _required_bash()
+    summary_path = tmp_path / "summary.md"
+    script = _step(SUMMARY_STEP_NAME)["run"].replace("${{ github.sha }}", "a" * 40)
+    assert "${{" not in script, "Only the fixed image identity may be rendered into shell code"
+    script_path = _write_step_script(tmp_path, "h1b-summary-step.sh", script)
+    bash_path = Path(bash)
+    search_path = [str(bash_path.parent), str(bash_path.parent.parent / "usr/bin"), os.defpath]
+    env = {"PATH": os.pathsep.join(search_path), "GITHUB_STEP_SUMMARY": summary_path.as_posix()}
+    if os.name == "nt":
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+    if outcome is not None:
+        env["CONTAINER_HEALTH_OUTCOME"] = outcome
+    if manifest:
+        (tmp_path / "release_manifest.json").write_text(
+            '{"version":"ci-fixture"}\n', encoding="utf-8"
+        )
+    completed = subprocess.run(  # noqa: S603 - fixed local Bash and checked-in workflow script
+        _bash_file_args(bash, script_path),
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return summary_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [
+        ("success", "[OK] Passed"),
+        ("failure", "[FAIL] Failed"),
+        ("cancelled", "[NOT PASSED] Cancelled"),
+        ("skipped", "[NOT PASSED] Skipped"),
+        ("", "[NOT PASSED] Not run"),
+        (None, "[NOT PASSED] Not run"),
+        ("unexpected", "[NOT PASSED] Unknown outcome"),
+    ],
+    ids=("success", "failure", "cancelled", "skipped", "empty", "missing", "unknown"),
+)
+def test_rendered_health_summary_matches_actual_outcome(
+    tmp_path: Path,
+    outcome: str | None,
+    expected: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded: list[list[str]] = []
+    real_run = subprocess.run
+
+    def spy(args, *positional, **kwargs):
+        recorded.append([os.fspath(item) for item in args])
+        return real_run(args, *positional, **kwargs)
+
+    if outcome == "success":
+        monkeypatch.setattr(subprocess, "run", spy)
+    summary = _render_summary(tmp_path, outcome)
+    if outcome == "success":
+        rendered = _step(SUMMARY_STEP_NAME)["run"].replace("${{ github.sha }}", "a" * 40)
+        script_path = _assert_script_file_argv(recorded[0], rendered)
+        assert script_path.parent == tmp_path
+
+    health_lines = [line for line in summary.splitlines() if line.startswith("- **Health Check:**")]
+    assert health_lines == [f"- **Health Check:** {expected}"]
+    assert "## Container Build Results" in summary
+    assert f"- **Image:** idis:ci-{'a' * 40}" in summary
+
+
+def test_unknown_outcome_is_not_echoed_or_executed_as_shell_code(tmp_path: Path) -> None:
+    untrusted = "$(printf injected > summary-injection-marker)"
+
+    summary = _render_summary(tmp_path, untrusted)
+
+    assert "- **Health Check:** [NOT PASSED] Unknown outcome" in summary
+    assert untrusted not in summary
+    assert not (tmp_path / "summary-injection-marker").exists()
+
+
+def test_summary_keeps_existing_release_manifest_section(tmp_path: Path) -> None:
+    summary = _render_summary(tmp_path, "failure", manifest=True)
+
+    assert "- **Health Check:** [FAIL] Failed" in summary
+    assert '### Release Manifest\n```json\n{"version":"ci-fixture"}\n```' in summary
+
+
+def test_summary_binds_actual_step_outcome_as_environment_data() -> None:
+    health = _step(HEALTH_STEP_NAME)
+    summary = _step(SUMMARY_STEP_NAME)
+
+    assert health.get("id") == "container_health"
+    assert summary["if"] == "always()"
+    assert summary.get("env") == {
+        "CONTAINER_HEALTH_OUTCOME": "${{ steps.container_health.outcome }}"
+    }
+    assert "${{ steps." not in summary["run"]
+
+
+def _pinned_release_gate() -> tuple[str, str]:
+    """Reuse the J-03 release-gate literals so this pin cannot drift from them."""
+    path = ROOT / "tests" / "test_pg_bootstrap_ci_required_preview.py"
+    spec = importlib.util.spec_from_file_location("cir04j_release_gate_pins", path)
+    if spec is None or spec.loader is None:
+        raise AssertionError("release-gate pin module is missing")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module._RELEASE_GATE_IF, module._required_job_gate_run()
+
+
+def test_required_health_invocation_and_release_dependencies_are_unchanged() -> None:
+    workflow = _workflow()
+    jobs = workflow["jobs"]
+    container = jobs["container-build"]
+    health = _step(HEALTH_STEP_NAME)
+
+    assert tuple(step["name"] for step in container["steps"]) == CONTAINER_STEP_NAMES
+    assert set(health) == {"name", "id", "if", "run"}
+    assert health["if"] == "success()"
+    assert hashlib.sha256(health["run"].encode("utf-8")).hexdigest() == HEALTH_RUN_SHA256
+    assert "continue-on-error" not in container
+    assert "if" not in container
+    assert set(jobs["release-gate"]["needs"]) == set(jobs) - {"release-gate"}
+    expression, guard_run = _pinned_release_gate()
+    gate = jobs["release-gate"]
+    assert gate.get("if") == expression
+    guard = gate["steps"][0]
+    assert guard["name"] == "Fail unless every required job succeeded"
+    assert guard["run"] == guard_run
+    assert (
+        'CMD ["python", "-m", "idis.runtime.strict_launcher", "api", '
+        '"--host", "0.0.0.0", "--port", "8000", "--pid-file", "/tmp/idis-api.pid"]'
+        in (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    )
+
+
+def _string_keys(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _string_keys(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_string_keys(item) for item in value]
+    return value
+
+
+def _canonical_digest(value: Any) -> str:
+    encoded = json.dumps(
+        _string_keys(value),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _container_steps() -> list[dict[str, Any]]:
+    steps = _workflow()["jobs"]["container-build"]["steps"]
+    assert isinstance(steps, list)
+    return steps
+
+
+def _by_id(step_id: str) -> dict[str, Any]:
+    return next(step for step in _container_steps() if step.get("id") == step_id)
+
+
+def test_jobs_other_than_container_build_match_f99595ef() -> None:
+    jobs = _workflow()["jobs"]
+    assert set(jobs) == set(_F99595EF_JOB_DIGESTS) | {"container-build"}
+    for name, expected in _F99595EF_JOB_DIGESTS.items():
+        assert _canonical_digest(jobs[name]) == expected
+
+
+def test_preserved_container_steps_match_f99595ef() -> None:
+    assert set(_F99595EF_PRESERVED_STEP_DIGESTS) == set(_PRESERVED_STEP_NAMES)
+    for name, expected in _F99595EF_PRESERVED_STEP_DIGESTS.items():
+        assert _canonical_digest(_step(name)) == expected
+
+
+def test_container_build_uses_gain_only_the_model_cache() -> None:
+    uses = [step["uses"] for step in _container_steps() if "uses" in step]
+    assert uses == [
+        "actions/checkout@v4",
+        "docker/setup-buildx-action@v3",
+        "docker/build-push-action@v5",
+        "actions/setup-python@v5",
+        "actions/cache/restore@v4",
+        "actions/cache/save@v4",
+        "actions/setup-python@v5",
+        "actions/upload-artifact@v4",
+    ]
+
+
+def test_new_steps_pin_fail_closed_if_and_have_no_continue_on_error() -> None:
+    steps = _container_steps()
+    assert "continue-on-error" not in _workflow()["jobs"]["container-build"]
+    for step in steps:
+        assert "continue-on-error" not in step
+        run = step.get("run") or ""
+        assert "|| true" not in run
+        if "|" in run:
+            assert "PIPESTATUS" in run
+    for step_id, expected_if in _STEP_IF.items():
+        step = _by_id(step_id)
+        assert step["if"] == expected_if
+        assert "id" in step
+    restore = _by_id("model-cache")
+    assert restore["uses"] == "actions/cache/restore@v4"
+    assert set(restore) == {"name", "id", "if", "uses", "with"}
+    save = _by_id("model-cache-save")
+    assert save["uses"] == "actions/cache/save@v4"
+    assert save["with"] == restore["with"]
+    assert set(save) == {"name", "id", "if", "uses", "with"}
+    assert set(_by_id("setup-composition")) == {"name", "id", "if", "uses", "with"}
+    assert set(_by_id("cleanup")) == {"name", "id", "if", "run"}
+    assert set(_by_id("pg-bootstrap")) == {"name", "id", "if", "env", "run"}
+    assert set(_by_id("launch-proof")) == {"name", "id", "if", "env", "run"}
+
+
+def test_loader_negative_follows_the_step_21_health_probe() -> None:
+    """One disposable pytest of the loader negative in the image step 21 probes."""
+
+    steps = _container_steps()
+    names = [step["name"] for step in steps]
+    health_at = names.index(HEALTH_STEP_NAME)
+    assert names[health_at + 1] == "Run the loader negative in the step-21 image"
+    step = steps[health_at + 1]
+    assert step["id"] == "loader-negative"
+    assert step["if"] == _STEP_IF["loader-negative"]
+    assert "continue-on-error" not in step
+    run = str(step["run"])
+    assert "|| true" not in run
+    assert "docker commit" not in run
+    assert "docker build" not in run
+    assert "docker run --rm" in run
+    assert "idis:ci-${GITHUB_SHA}" in run
+    assert "${GITHUB_WORKSPACE}/tests:${GITHUB_WORKSPACE}/tests:ro" in run
+    assert "--target" in run
+    assert "requirements/constraints-py311.txt" in run
+    assert "IDIS_REQUIRE_LOADER_NEGATIVE=1" in run
+    assert "-p no:cacheprovider" in run
+    assert "--junitxml=" in run
+    assert "loader_negative_pytest.xml" in run
+    assert "tests/slice100_task4/test_linux_poppler_loader_negative.py" in run
+    assert "tests != 1" in run
+    assert "failures != 0" in run
+    assert "errors != 0" in run
+    assert "skipped != 0" in run
+    assert "poppler-utils" not in run
+
+
+def test_composition_literals_keep_secrets_off_the_command_line() -> None:
+    runs = "\n".join(step.get("run") or "" for step in _container_steps())
+    assert "IDIS_SERVICE_REGION" not in runs
+    assert "--env-file" not in runs
+    assert "docker network create" not in runs
+    assert "build-arg" not in runs
+    prepare = _by_id("prepare-inputs")["run"]
+    assert "install -d -m 0700 -o 1000 -g 1000" in prepare
+    assert "--owner-uid" in prepare and "1000" in prepare
+    datastores = _by_id("disposable-datastores")["run"]
+    assert "--network none" in datastores or '"--network", "none"' in datastores
+    assert '"-e", "POSTGRES_PASSWORD"' in datastores
+    assert '"-e", "REDIS_PASSWORD"' in datastores
+    assert "POSTGRES_PASSWORD=" not in datastores
+    assert "REDIS_PASSWORD=" not in datastores
+    pg_image = (
+        "pgvector/pgvector:pg16@sha256:"
+        "a97d77306ff47cc1d8add4d000cec2207da2e110746318df3137ce53c337ca30"
+    )
+    redis_image = (
+        "redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499"
+    )
+    assert pg_image in datastores
+    assert redis_image in datastores
+    mask = _by_id("mask-maintenance")["run"]
+    assert "unquote" in mask
+    assert "::add-mask::" in mask
+    assert ":/src:ro" in _by_id("erasure-roles")["run"]
+    assert ":/src:ro" in _by_id("pg-bootstrap")["run"]
+    assert "127.0.0.1:5432/postgres" in _by_id("erasure-roles")["run"]
+    assert "scripts/check_migration_ceiling.py" in _by_id("migration-ceiling")["run"]
+    assert "prepare_ci_erasure_roles.py" in _by_id("erasure-roles")["run"]
+    assert "--disposable-ci" in _by_id("erasure-roles")["run"]
+    assert "pg_bootstrap_ci.py" in _by_id("pg-bootstrap")["run"]
+    assert set(_by_id("pg-bootstrap")["env"]) == {
+        "IDIS_PG_HOST",
+        "IDIS_PG_PORT",
+        "IDIS_PG_DB_NAME",
+        "PG_ADMIN_USER",
+        "IDIS_PG_APP_USER",
+    }
+    start = _by_id("start-api")["run"]
+    assert "IDIS_STRICT_DOTENV_PATH" in start
+    assert "/proc/1/cmdline" not in start
+    assert 'entry.get("Path")' in start
+    assert 'entry.get("Args")' in start
+    assert '--requirepass "$' not in runs
+    assert '-a "$' not in runs
+    assert _REDIS_START_LITERAL in datastores
+    assert "stdin=handle" not in datastores
+    assert '"redis-server", "-"' not in datastores
+    assert '"-d", "-i"' not in datastores
+    assert "REDISCLI_AUTH" in start
+    assert "redis-server" in _by_id("disposable-datastores")["run"]
+    assert "redis.conf" in _by_id("cleanup")["run"]
+    assert "--tmpfs" in start or "tmpfs" in start
+    assert "IDIS_OBJECT_STORE_BASE_DIR" in start or "IDIS_OBJECT_STORE_BASE_DIR" in datastores
+    for step_id in ("topology-before", "launch-proof"):
+        census = _by_id(step_id)["run"]
+        assert "/sys/class/net" in census
+        assert "/proc/net/route" in census
+        assert "/proc/net/ipv6_route" in census
+    proof = _by_id("launch-proof")["run"]
+    assert "integration.strict_launch.admitted" in proof
+    assert "api_launch_rows" in proof
+    assert "gate_launch_rows" in proof
+    assert "provider_invocation_attempts" in proof
+    assert "NOT_EXECUTED" in proof
+    assert "container health with synthetic fixtures" in proof
+    assert "AUTH-CI-HEALTH-20261017" in proof
+    assert '"cmdline_exact": True' not in proof
+    assert "api_created" in proof
+    assert 'os.environ["IMAGE_ENV_OUTCOME"]' in proof
+    assert 'os.environ["API_START_OUTCOME"]' in proof
+    assert 'os.environ["CONTAINER_HEALTH_OUTCOME"]' in proof
+    health = _by_id("container_health")["run"]
+    assert "sleep 10" in health
+    assert "prefixes = " not in health
+    assert "POPPLER_RUNTIME_UNAVAILABLE" in health
+    assert "STRICT_FULL_LIVE_BLOCKED" in health
+    assert "[OK] Health check passed" in health
+    assert "[FAIL] Health check failed" in health
+    assert "api-container.log" in health
+    assert "docker logs idis-test" not in health
+    ok_at = health.index("[OK] Health check passed")
+    fail_at = health.index("[FAIL] Health check failed")
+    assert ok_at < fail_at
+    assert "exit 0" in health[:fail_at]
+    assert "exit 1" in health[fail_at:]
+    cleanup = _by_id("cleanup")["run"]
+    assert "/opt/idis-ci-health/" in cleanup
+    assert "/var/lib/idis-ci-health/" in cleanup
+    assert "datastore.env" in cleanup
+    verify = _by_id("model-verify")["run"]
+    cache = _by_id("model-cache")["with"]
+    assert _MODEL_REVISION in cache["key"]
+    assert _MODEL_MANIFEST_SHA256 in cache["key"]
+    assert _MODEL_REVISION in verify
+    assert _MODEL_FINGERPRINT_LINUX in verify
+    assert _MODEL_FINGERPRINT_WINDOWS in verify
+    for name, size, digest in _MODEL_FILES:
+        assert name in verify
+        assert str(size) in verify
+        assert digest in verify
+    proof_and_verify = proof + "\n" + verify
+    assert _MODEL_FINGERPRINT_LINUX in proof_and_verify
+    for _name, _size, digest in _MODEL_FILES:
+        assert digest in proof
+
+
+_FAKE_DOCKER = r"""
+import os
+import sys
+from pathlib import Path
+
+state = Path(os.environ["DOCKER_FAKE_STATE"])
+args = sys.argv[1:]
+with (state / "actions.log").open("a", encoding="utf-8") as handle:
+    handle.write(" ".join(args) + "\n")
+
+
+def _exists(kind: str, name: str) -> bool:
+    return (state / kind / name).is_file()
+
+
+if args[:1] == ["exec"]:
+    raise SystemExit(1)
+if args[:2] == ["container", "inspect"]:
+    raise SystemExit(0 if _exists("containers", args[2]) else 1)
+if args[:2] == ["network", "inspect"]:
+    raise SystemExit(0 if _exists("networks", args[2]) else 1)
+if args[:1] == ["logs"]:
+    sys.stdout.write((state / "logs" / args[1]).read_text(encoding="utf-8"))
+    raise SystemExit(0)
+if args[:2] == ["inspect", "--format"] and "ExitCode" in args[2]:
+    sys.stdout.write((state / "exit-codes" / args[3]).read_text(encoding="utf-8"))
+    raise SystemExit(0)
+if args[:2] == ["rm", "-f"]:
+    name = args[2]
+    code_path = state / "rm-codes" / name
+    code = int(code_path.read_text(encoding="utf-8")) if code_path.is_file() else 0
+    stuck = (state / "stuck" / name).is_file()
+    if code == 0 and not stuck:
+        target = state / "containers" / name
+        if target.exists():
+            target.unlink()
+    raise SystemExit(code)
+sys.stderr.write("unexpected docker args\n")
+raise SystemExit(97)
+"""
+_FAKE_SUDO = r"""
+#!/usr/bin/env bash
+set -euo pipefail
+cmd=()
+for arg in "$@"; do
+  if [ "$arg" = "-n" ] || [ "$arg" = "-E" ]; then
+    continue
+  fi
+  if [ "${#cmd[@]}" -eq 0 ] && [[ "$arg" == *=* ]]; then
+    export "$arg"
+    continue
+  fi
+  cmd+=("$arg")
+done
+exec "${cmd[@]}"
+"""
+_FAKE_PY = r"""
+#!/usr/bin/env bash
+if [ -n "${H1B_SHIM:-}" ]; then
+  export PYTHONPATH="$H1B_SHIM"
+fi
+exec "$H1B_PY" "$@"
+"""
+_WINDOWS_DOCKER_SHIM = r"""
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+_Popen = subprocess.Popen
+
+
+class _DockerPopen(_Popen):
+    def __init__(self, args, *pos, **kwargs):
+        if isinstance(args, (list, tuple)) and args:
+            command = Path(str(args[0])).name.lower()
+            if command in {"docker", "docker.exe"}:
+                args = [sys.executable, os.environ["H1B_DOCKER_PY"], *list(args)[1:]]
+        super().__init__(args, *pos, **kwargs)
+
+
+subprocess.Popen = _DockerPopen
+"""
+_LINUX_DOCKER_BYTES = b'#!/bin/sh\nexec "$H1B_PY" "$H1B_DOCKER_PY" "$@"\n'
+_HEALTH_LOG = (
+    "token_urlsafe_Ab9SECRET\n"
+    "STRICT_SECRETTOKEN\n"
+    "POPPLER_RUNTIME_UNAVAILABLE\n"
+    "POPPLER_RUNTIME_UNAVAILABLE_EXTRA\n"
+)
+_SECRET_MARKERS = (
+    "STRICT_SECRETTOKEN",
+    "POPPLER_RUNTIME_UNAVAILABLE_EXTRA",
+    "token_urlsafe_Ab9SECRET",
+)
+_ADMISSION_STEP_NAME = "Record admission codes when the API is blocked"
+_ADMISSION_DSN = "postgresql://idis_app:s3cret-token@127.0.0.1:5432/idis_ci_health"
+_ADMISSION_DOCKER = r"""
+import json
+import os
+import sys
+from pathlib import Path
+
+state = Path(os.environ["DOCKER_FAKE_STATE"])
+args = sys.argv[1:]
+(state / "argv.json").write_text(json.dumps(args), encoding="utf-8")
+stdout = (state / "stdout.txt").read_text(encoding="utf-8")
+stderr = (state / "stderr.txt").read_text(encoding="utf-8")
+code = int((state / "code.txt").read_text(encoding="utf-8"))
+sys.stdout.write(stdout)
+sys.stderr.write(stderr)
+raise SystemExit(code)
+"""
+
+
+_OPT_LITERAL = "/opt/idis-ci-health"
+_VAR_LITERAL = "/var/lib/idis-ci-health"
+_PARSED_ROOT_REPLACEMENTS = {
+    "container_health": {_OPT_LITERAL: 3, _VAR_LITERAL: 0},
+    "admission-codes": {_OPT_LITERAL: 1, _VAR_LITERAL: 0},
+    "cleanup": {_OPT_LITERAL: 1, _VAR_LITERAL: 2},
+}
+_EXECUTABLE_MODE = 0o755
+
+
+def _write_executable(path: Path, text: str) -> None:
+    path.write_text(text, encoding="utf-8", newline="\n")
+    os.chmod(path, _EXECUTABLE_MODE)
+
+
+def _install_fake_toolchain(tmp_path: Path) -> None:
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    _write_executable(tmp_path / "docker_fake.py", _FAKE_DOCKER)
+    docker = bindir / "docker"
+    docker.write_bytes(_LINUX_DOCKER_BYTES)
+    os.chmod(docker, _EXECUTABLE_MODE)
+    _write_executable(bindir / "sudo", _FAKE_SUDO)
+    venv_bin = tmp_path / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    _write_executable(venv_bin / "python", _FAKE_PY)
+    if sys.platform == "win32":
+        shim = tmp_path / "shim"
+        shim.mkdir()
+        (shim / "sitecustomize.py").write_text(_WINDOWS_DOCKER_SHIM, encoding="utf-8", newline="\n")
+    if sys.platform != "win32":
+        for path in (bindir / "docker", bindir / "sudo", venv_bin / "python"):
+            assert os.stat(path).st_mode & 0o111
+
+
+def test_linux_docker_script_bytes_are_posix_lf(tmp_path: Path) -> None:
+    _install_fake_toolchain(tmp_path)
+    payload = (tmp_path / "bin" / "docker").read_bytes()
+    assert payload.startswith(b"#!/bin/sh\n")
+    assert b"\r" not in payload
+    assert b"H1B_SHIM" not in payload
+    if sys.platform != "win32":
+        assert not (tmp_path / "shim").exists()
+
+
+def _sandbox_roots(tmp_path: Path) -> dict[str, Path]:
+    return {
+        _OPT_LITERAL: tmp_path / "opt-idis-ci-health",
+        _VAR_LITERAL: tmp_path / "var-lib-idis-ci-health",
+    }
+
+
+def _rewrite_parsed_roots(script: str, step_id: str, tmp_path: Path) -> str:
+    expected = _PARSED_ROOT_REPLACEMENTS[step_id]
+    roots = _sandbox_roots(tmp_path)
+    rewritten = script
+    for literal, count in expected.items():
+        found = rewritten.count(literal)
+        assert found == count, (step_id, literal, found, count)
+        if count == 0:
+            assert literal not in rewritten
+            continue
+        destination = roots[literal].as_posix()
+        assert literal not in destination
+        rewritten = rewritten.replace(literal, destination, count)
+        assert rewritten.count(destination) == count
+        assert literal not in rewritten
+    return rewritten
+
+
+def _docker_state(tmp_path: Path) -> Path:
+    state = tmp_path / "docker-state"
+    for name in ("containers", "logs", "exit-codes", "stuck", "rm-codes", "networks"):
+        (state / name).mkdir(parents=True)
+    (state / "actions.log").write_text("", encoding="utf-8")
+    return state
+
+
+def _run_parsed_step(
+    tmp_path: Path, step_id: str, env: dict[str, str]
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    script = _rewrite_parsed_roots(_by_id(step_id)["run"], step_id, tmp_path)
+    assert "${{" not in script
+    script_path = _write_step_script(tmp_path, f"h1b-{step_id}.sh", script)
+    bash = Path(_required_bash())
+    path = os.pathsep.join(
+        [str(tmp_path / "bin"), str(bash.parent), str(bash.parent.parent / "usr" / "bin")]
+    )
+    full_env = {
+        "PATH": path,
+        "HOME": str(tmp_path),
+        "TMP": str(tmp_path),
+        "TEMP": str(tmp_path),
+        "H1B_PY": Path(sys.executable).as_posix(),
+        "H1B_DOCKER_PY": (tmp_path / "docker_fake.py").as_posix(),
+    }
+    if sys.platform == "win32":
+        full_env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+        full_env["WINDIR"] = os.environ.get("WINDIR", os.environ["SYSTEMROOT"])
+        full_env["PATHEXT"] = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+        full_env["H1B_SHIM"] = (tmp_path / "shim").as_posix()
+    full_env.update(env)
+    completed = subprocess.run(
+        _bash_file_args(str(bash), script_path),
+        cwd=tmp_path,
+        env=full_env,
+        capture_output=True,
+        text=True,
+        timeout=150,
+        check=False,
+    )
+    return completed, script_path
+
+
+def _owned_run(root: Path, run_id: str) -> Path:
+    if not run_id.isalnum() or len(run_id) < 8:
+        raise AssertionError("run id must stay inside the owned health root")
+    path = root / run_id
+    if path.parent != root:
+        raise AssertionError("run path escaped the owned health root")
+    return path
+
+
+def test_health_step_fails_closed_and_extracts_only_allowlisted_codes(tmp_path: Path) -> None:
+    run_id = f"h1b1ehealth{os.getpid()}"
+    run_root = _owned_run(_sandbox_roots(tmp_path)[_OPT_LITERAL], run_id)
+    state = _docker_state(tmp_path)
+    api = f"idis-h1b-api-{run_id}"
+    (state / "containers" / api).write_text("present", encoding="utf-8")
+    (state / "logs" / api).write_text(_HEALTH_LOG, encoding="utf-8")
+    (state / "exit-codes" / api).write_text("7\n", encoding="utf-8")
+    _install_fake_toolchain(tmp_path)
+    run_root.mkdir(parents=True)
+    (run_root / "maintenance").mkdir()
+    (run_root / "maintenance" / "api-container.log").write_text(
+        _HEALTH_LOG, encoding="utf-8", newline="\n"
+    )
+    try:
+        completed, _script_path = _run_parsed_step(
+            tmp_path,
+            "container_health",
+            {
+                "GITHUB_RUN_ID": run_id,
+                "GITHUB_SHA": "a" * 40,
+                "GITHUB_WORKSPACE": str(tmp_path),
+                "DOCKER_FAKE_STATE": str(state),
+            },
+        )
+        receipt = json.loads((run_root / "api-exit.json").read_text(encoding="utf-8"))
+    finally:
+        if run_root.exists():
+            shutil.rmtree(run_root)
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 1
+    assert "[FAIL] Health check failed" in completed.stdout
+    assert "[OK]" not in output
+    assert receipt["code"] == "POPPLER_RUNTIME_UNAVAILABLE"
+    assert receipt["exit"] == 7
+    assert all(marker not in json.dumps(receipt) for marker in _SECRET_MARKERS)
+
+
+def _admission_public_line() -> str:
+    return json.dumps(
+        {
+            "checks": [
+                ["postgres", "DATABASE_UNAVAILABLE"],
+                ["audit", "UNLISTED"],
+                ["idempotency", "UNLISTED"],
+            ],
+            "phase": "admission",
+        },
+        sort_keys=True,
+    )
+
+
+def _prepare_admission_case(
+    tmp_path: Path,
+    *,
+    stdout: str,
+    stderr: str,
+    code: int,
+    exit_code: str,
+) -> tuple[Path, Path]:
+    run_id = f"h1bladm{os.getpid()}"
+    run_root = _owned_run(_sandbox_roots(tmp_path)[_OPT_LITERAL], run_id)
+    state = _docker_state(tmp_path)
+    _install_fake_toolchain(tmp_path)
+    _write_executable(tmp_path / "docker_fake.py", _ADMISSION_DOCKER)
+    (state / "stdout.txt").write_text(stdout, encoding="utf-8", newline="\n")
+    (state / "stderr.txt").write_text(stderr, encoding="utf-8", newline="\n")
+    (state / "code.txt").write_text(f"{code}\n", encoding="utf-8", newline="\n")
+    run_root.mkdir(parents=True)
+    (run_root / "maintenance").mkdir()
+    (run_root / "api-exit.json").write_text(
+        json.dumps({"code": exit_code, "exit": 1}, sort_keys=True),
+        encoding="utf-8",
+        newline="\n",
+    )
+    (run_root / "object-path").write_text(
+        f"/var/lib/idis-ci-health/{run_id}/objects\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    return run_root, state
+
+
+def _run_admission_case(
+    tmp_path: Path,
+    run_root: Path,
+    state: Path,
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    return _run_parsed_step(
+        tmp_path,
+        "admission-codes",
+        {
+            "GITHUB_RUN_ID": run_root.name,
+            "GITHUB_SHA": "d" * 40,
+            "GITHUB_WORKSPACE": str(tmp_path),
+            "DOCKER_FAKE_STATE": str(state),
+        },
+    )
+
+
+def _assert_script_file_argv(args: list[str], script: str) -> Path:
+    """The executed step text is a tmp file, never a bash -c argument."""
+    payload = script.encode("utf-8")
+    lengths = ",".join(str(len(arg)) for arg in args)
+    if b"\r" in payload or "-c" in args or any(script in arg for arg in args):
+        raise AssertionError(f"step script traveled in argv; arg lengths {lengths}")
+    matches = [
+        Path(arg) for arg in args if Path(arg).is_file() and Path(arg).read_bytes() == payload
+    ]
+    if len(matches) != 1:
+        raise AssertionError(f"expected one script file in argv, found {len(matches)}; {lengths}")
+    return matches[0]
+
+
+def test_admission_codes_snippet_filters_unlisted_codes_and_hides_dsn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    steps = _container_steps()
+    assert len(steps) == len(CONTAINER_STEP_NAMES) == 28
+    assert tuple(step["name"] for step in steps) == CONTAINER_STEP_NAMES
+    step = _by_id("admission-codes")
+    assert step["name"] == _ADMISSION_STEP_NAME
+    assert step["if"] == _STEP_IF["admission-codes"]
+    assert "continue-on-error" not in step
+    run = step["run"]
+    assert "STRICT_FULL_LIVE_BLOCKED" in run
+    assert 'load_profile_then_import_runtime(command="api")' in run
+    assert "_default_admission_runner(" in run
+    assert "task4_ingestion_scope=True" in run
+    assert '"--rm"' in run
+    assert '"--user", "1000"' in run
+    assert '"--read-only"' in run
+    assert '"--tmpfs", "/tmp:rw,nosuid,size=2147483648"' in run
+    assert '"-e", "IDIS_STRICT_DOTENV_PATH"' in run
+    assert "container:" in run
+    assert "DIAGNOSTIC_UNAVAILABLE" in run
+    assert "admission-diagnostic.log" in run
+    assert "UNLISTED" in run
+    assert "alembic_version" in run
+    assert "rolsuper" in run
+    assert "rolbypassrls" in run
+    assert "relforcerowsecurity" in run
+    jobs = _workflow()["jobs"]
+    assert _canonical_digest(jobs["check"]) == _F99595EF_JOB_DIGESTS["check"]
+
+    raw = json.dumps(
+        {
+            "phase": "admission",
+            "checks": [
+                ["postgres", "DATABASE_UNAVAILABLE"],
+                ["audit", _ADMISSION_DSN],
+                ["idempotency", "NOT_A_REAL_CODE"],
+            ],
+        }
+    )
+    run_root, state = _prepare_admission_case(
+        tmp_path,
+        stdout=raw + "\n",
+        stderr=_ADMISSION_DSN + "\n",
+        code=0,
+        exit_code="STRICT_FULL_LIVE_BLOCKED",
+    )
+    recorded: list[list[str]] = []
+    real_run = subprocess.run
+
+    def spy(args, *positional, **kwargs):
+        recorded.append([os.fspath(item) for item in args])
+        return real_run(args, *positional, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", spy)
+    completed, returned_path = _run_admission_case(tmp_path, run_root, state)
+    executed = _rewrite_parsed_roots(_by_id("admission-codes")["run"], "admission-codes", tmp_path)
+    assert returned_path.parent == tmp_path
+    assert returned_path.read_bytes() == executed.encode("utf-8")
+    script_path = _assert_script_file_argv(recorded[0], executed)
+    assert script_path == returned_path
+    script = returned_path.read_text(encoding="utf-8")
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, output
+    assert completed.stdout.strip() == _admission_public_line()
+    assert completed.stdout.strip().count("\n") == 0
+    assert _ADMISSION_DSN not in output
+    assert "NOT_A_REAL_CODE" not in output
+    assert "UNLISTED" in completed.stdout
+    private_log = run_root / "maintenance" / "admission-diagnostic.log"
+    assert _ADMISSION_DSN in private_log.read_text(encoding="utf-8")
+    args = json.loads((state / "argv.json").read_text(encoding="utf-8"))
+    assert args[0] == "run"
+    assert "--rm" in args
+    assert args[args.index("--user") + 1] == "1000"
+    assert args[args.index("--network") + 1] == f"container:idis-h1b-netns-{run_root.name}"
+    assert "--read-only" in args
+    assert args[args.index("--tmpfs") + 1] == "/tmp:rw,nosuid,size=2147483648"
+    assert args[args.index("-e") + 1] == "IDIS_STRICT_DOTENV_PATH"
+    assert "-d" not in args
+    assert args[args.index("--name") + 1] == f"idis-ci-admission-codes-{run_root.name}"
+    assert 'load_profile_then_import_runtime(command="api")' in script
+    assert "task4_ingestion_scope=True" in script
+    image = "idis:ci-" + ("d" * 40)
+    assert image in args
+    inputs = (run_root / "inputs").as_posix()
+    model = "/opt/idis-models/0d3d19a32d3338f10357c0889762bd8d64bbdeba"
+    objects = f"/var/lib/idis-ci-health/{run_root.name}/objects"
+    volumes = [args[index + 1] for index, token in enumerate(args) if token == "-v"]
+    assert volumes == [
+        f"{inputs}:{inputs}:ro",
+        f"{model}:{model}:ro",
+        f"{objects}:{objects}",
+    ]
+
+
+def test_admission_codes_docker_failure_stays_closed(tmp_path: Path) -> None:
+    run_root, state = _prepare_admission_case(
+        tmp_path,
+        stdout=_ADMISSION_DSN + "\n",
+        stderr=_ADMISSION_DSN + "\n",
+        code=1,
+        exit_code="STRICT_FULL_LIVE_BLOCKED",
+    )
+    completed, _script_path = _run_admission_case(tmp_path, run_root, state)
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, output
+    assert completed.stdout.strip() == json.dumps(
+        {"code": "DIAGNOSTIC_UNAVAILABLE", "phase": "admission"},
+        sort_keys=True,
+    )
+    assert _ADMISSION_DSN not in output
+    private_log = run_root / "maintenance" / "admission-diagnostic.log"
+    assert _ADMISSION_DSN in private_log.read_text(encoding="utf-8")
+
+
+def test_cleanup_checks_existence_and_fails_when_a_resource_remains(tmp_path: Path) -> None:
+    run_id = f"h1b1eclean{os.getpid()}"
+    roots = _sandbox_roots(tmp_path)
+    secret_root = _owned_run(roots[_OPT_LITERAL], run_id)
+    object_root = roots[_VAR_LITERAL]
+    object_name = f"h1bobj{os.getpid()}"
+    object_parent = _owned_run(object_root, object_name)
+    var_run = _owned_run(object_root, run_id)
+    state = _docker_state(tmp_path)
+    _install_fake_toolchain(tmp_path)
+    secret_root.mkdir(parents=True)
+    (secret_root / "datastore.env").write_text("REDIS_PASSWORD=secretvalue\n", encoding="utf-8")
+    (secret_root / "redis.conf").write_text("requirepass secretvalue\n", encoding="utf-8")
+    (secret_root / "object-store-parent").write_text(
+        object_parent.as_posix() + "\n",
+        encoding="utf-8",
+    )
+    object_parent.mkdir(parents=True)
+    (object_parent / "marker").write_text("object", encoding="utf-8")
+    var_run.mkdir(parents=True)
+    api = f"idis-h1b-api-{run_id}"
+    redis = f"idis-h1b-redis-{run_id}"
+    netns = f"idis-h1b-netns-{run_id}"
+    for name in (api, redis, netns):
+        (state / "containers" / name).write_text("present", encoding="utf-8")
+    (state / "stuck" / api).write_text("stuck", encoding="utf-8")
+    (state / "rm-codes" / api).write_text("1", encoding="utf-8")
+    try:
+        completed, _script_path = _run_parsed_step(
+            tmp_path,
+            "cleanup",
+            {
+                "GITHUB_RUN_ID": run_id,
+                "GITHUB_SHA": "b" * 40,
+                "GITHUB_WORKSPACE": str(tmp_path),
+                "DOCKER_FAKE_STATE": str(state),
+            },
+        )
+        actions = (state / "actions.log").read_text(encoding="utf-8")
+        output = completed.stdout + completed.stderr
+        assert completed.returncode == 1, output
+        assert "container remains" in output, output + "\n" + actions
+        redis_inspect = actions.index(f"container inspect {redis}")
+        redis_rm = actions.index(f"rm -f {redis}")
+        assert redis_inspect < redis_rm
+        assert f"container inspect idis-h1b-pg-{run_id}" in actions
+        assert f"rm -f idis-h1b-pg-{run_id}" not in actions
+        assert completed.returncode == 1
+        assert "container remains" in output
+        assert not secret_root.exists()
+        assert not object_parent.exists()
+        assert not var_run.exists()
+    finally:
+        for path in (secret_root, object_parent, var_run):
+            if path.exists() and not path.is_symlink():
+                shutil.rmtree(path)
+
+
+_IMAGE_ENV_FORMAT = "{{range .Config.Env}}{{println .}}{{end}}"
+_EXTRA_IMAGE_ENV_NAME = "H1B_UNREVIEWED_IMAGE_ENV"
+_LOADER_TIMEOUT_SECONDS = 120
+_REVIEWED_SHA = "c" * 40
+_IMAGE_ENV_DOCKER = r"""
+import os
+import sys
+from pathlib import Path
+
+state = Path(os.environ["DOCKER_FAKE_STATE"])
+args = sys.argv[1:]
+with (state / "actions.log").open("a", encoding="utf-8") as handle:
+    handle.write(" ".join(args) + "\n")
+format_arg = "{{range .Config.Env}}{{println .}}{{end}}"
+if args[:4] != ["image", "inspect", "--format", format_arg] or len(args) != 5:
+    sys.stderr.write("unexpected docker args\n")
+    raise SystemExit(97)
+if args[4] != "idis:ci-" + os.environ["GITHUB_SHA"]:
+    sys.stderr.write("unexpected image\n")
+    raise SystemExit(97)
+sys.stdout.write((state / "image-env.txt").read_text(encoding="utf-8"))
+raise SystemExit(0)
+"""
+
+
+def _h1b_py_bodies(run: str) -> list[str]:
+    lines = run.splitlines()
+    bodies: list[str] = []
+    index = 0
+    while index < len(lines):
+        if "<<'H1B_PY'" not in lines[index]:
+            index += 1
+            continue
+        index += 1
+        body: list[str] = []
+        while index < len(lines) and lines[index] != "H1B_PY":
+            body.append(lines[index])
+            index += 1
+        if index >= len(lines):
+            raise AssertionError("H1B_PY heredoc is unterminated")
+        bodies.append("\n".join(body) + "\n")
+        index += 1
+    return bodies
+
+
+def _qualify_snippet(outer: str) -> str:
+    marker = "qualify = r" + ('"' * 3) + "\n"
+    start = outer.find(marker)
+    if start < 0:
+        raise AssertionError("start-api heredoc has no qualify script")
+    start += len(marker)
+    end = outer.find("\n" + ('"' * 3), start)
+    if end < 0:
+        raise AssertionError("qualify script is unterminated")
+    return outer[start:end] + "\n"
+
+
+def _three_loader_snippets() -> tuple[str, str, str]:
+    allow_bodies = _h1b_py_bodies(_by_id("inspect-image-env")["run"])
+    start_bodies = _h1b_py_bodies(_by_id("start-api")["run"])
+    if len(allow_bodies) != 1 or len(start_bodies) != 1:
+        raise AssertionError((len(allow_bodies), len(start_bodies)))
+    allow, outer = allow_bodies[0], start_bodies[0]
+    qualify = _qualify_snippet(outer)
+    if allow.count("spec.loader.exec_module") != 1:
+        raise AssertionError("allowlist snippet lost its helper loader")
+    if outer.count("spec.loader.exec_module") != 2:
+        raise AssertionError("start-api snippet lost a helper loader")
+    if qualify.count("spec.loader.exec_module") != 1:
+        raise AssertionError("qualify snippet lost its helper loader")
+    if qualify not in outer:
+        raise AssertionError("qualify snippet is not taken from the start-api heredoc")
+    return allow, outer, qualify
+
+
+@functools.lru_cache(maxsize=1)
+def _image_control_names() -> frozenset[str]:
+    spec = importlib.util.spec_from_file_location(
+        "h1b_image_control_names",
+        ROOT / ".github" / "scripts" / "prepare_bootstrap_health.py",
+    )
+    if spec is None or spec.loader is None:
+        raise AssertionError("prepare_bootstrap_health.py is missing")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    names = module._IMAGE_CONTROL_NAMES
+    if not isinstance(names, frozenset):
+        raise AssertionError("image control names are not a frozenset")
+    if any(not isinstance(name, str) for name in names):
+        raise AssertionError("image control names are not strings")
+    return names
+
+
+def _image_env_text(*, extra: str | None = None) -> str:
+    names = set(_image_control_names())
+    if extra is not None:
+        if extra in names:
+            raise AssertionError("extra image env name collides with the allowlist")
+        names.add(extra)
+    return "".join(f"{name}=reviewed\n" for name in sorted(names))
+
+
+def _snippet_env(tmp_path: Path, state: Path, github: dict[str, str]) -> dict[str, str]:
+    pythonpath = [str(ROOT / "src"), str(ROOT)]
+    env: dict[str, str] = {
+        "PATH": str(tmp_path / "bin"),
+        "HOME": str(tmp_path),
+        "TMP": str(tmp_path),
+        "TEMP": str(tmp_path),
+        "H1B_PY": Path(sys.executable).as_posix(),
+        "H1B_DOCKER_PY": (tmp_path / "docker_fake.py").as_posix(),
+        "DOCKER_FAKE_STATE": str(state),
+        "PYTHONPATH": os.pathsep.join(pythonpath),
+    }
+    if sys.platform == "win32":
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+        env["WINDIR"] = os.environ.get("WINDIR", os.environ["SYSTEMROOT"])
+        env["PATHEXT"] = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+        shim = tmp_path / "shim"
+        env["H1B_SHIM"] = shim.as_posix()
+        env["PYTHONPATH"] = os.pathsep.join([str(shim), *pythonpath])
+    env.update(github)
+    return env
+
+
+def _run_loader_snippet(
+    tmp_path: Path,
+    body: str,
+    *,
+    image_env: str,
+    github: dict[str, str],
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    _install_fake_toolchain(tmp_path)
+    _write_executable(tmp_path / "docker_fake.py", _IMAGE_ENV_DOCKER)
+    state = _docker_state(tmp_path)
+    (state / "image-env.txt").write_text(image_env, encoding="utf-8", newline="\n")
+    workspace = tmp_path / "workspace"
+    helper_dir = workspace / ".github" / "scripts"
+    helper_dir.mkdir(parents=True)
+    shutil.copy2(
+        ROOT / ".github" / "scripts" / "prepare_bootstrap_health.py",
+        helper_dir / "prepare_bootstrap_health.py",
+    )
+    snippet_path = workspace / "h1b_snippet.py"
+    snippet_path.write_text(body, encoding="utf-8", newline="\n")
+    completed = subprocess.run(
+        [sys.executable, os.fspath(snippet_path)],
+        cwd=workspace,
+        env=_snippet_env(tmp_path, state, github),
+        capture_output=True,
+        text=True,
+        timeout=_LOADER_TIMEOUT_SECONDS,
+        check=False,
+    )
+    actions = (state / "actions.log").read_text(encoding="utf-8")
+    return completed, actions
+
+
+def _assert_no_unregistered_dataclass_failure(output: str) -> None:
+    assert "AttributeError" not in output, output
+    assert "'NoneType' object has no attribute '__dict__'" not in output, output
+
+
+def test_allowlist_h1b_py_accepts_reviewed_image_env_names(tmp_path: Path) -> None:
+    allow, _outer, _qualify = _three_loader_snippets()
+    assert _IMAGE_ENV_FORMAT in allow
+    assert _IMAGE_ENV_FORMAT in _IMAGE_ENV_DOCKER
+    completed, actions = _run_loader_snippet(
+        tmp_path,
+        allow,
+        image_env=_image_env_text(),
+        github={"GITHUB_SHA": _REVIEWED_SHA},
+    )
+    output = completed.stdout + completed.stderr
+    _assert_no_unregistered_dataclass_failure(output)
+    assert completed.returncode == 0, output
+    payload = json.loads(completed.stdout)
+    assert payload["extra_names"] == [], payload
+    assert f"idis:ci-{_REVIEWED_SHA}" in actions
+
+
+def test_allowlist_h1b_py_rejects_one_extra_image_env_name(tmp_path: Path) -> None:
+    allow, _outer, _qualify = _three_loader_snippets()
+    assert _EXTRA_IMAGE_ENV_NAME not in _image_control_names()
+    completed, _actions = _run_loader_snippet(
+        tmp_path,
+        allow,
+        image_env=_image_env_text(extra=_EXTRA_IMAGE_ENV_NAME),
+        github={"GITHUB_SHA": _REVIEWED_SHA},
+    )
+    output = completed.stdout + completed.stderr
+    _assert_no_unregistered_dataclass_failure(output)
+    assert completed.returncode == 1, output
+    payload = json.loads(completed.stdout)
+    assert payload["extra_names"] == [_EXTRA_IMAGE_ENV_NAME], payload
+
+
+def test_start_api_outer_h1b_py_imports_helper_then_stops_before_containers(
+    tmp_path: Path,
+) -> None:
+    # Seam: fake image inspect includes H1B_UNREVIEWED_IMAGE_ENV. The outer
+    # snippet raises SystemExit(1) at `if name not in helper._IMAGE_CONTROL_NAMES`
+    # immediately after that inspect, before image-defaults.json, os.chown, the
+    # nested qualify script, redis, and `docker run`.
+    _allow, outer, _qualify = _three_loader_snippets()
+    run_id = f"h1b1gapi{os.getpid()}"
+    completed, actions = _run_loader_snippet(
+        tmp_path,
+        outer,
+        image_env=_image_env_text(extra=_EXTRA_IMAGE_ENV_NAME),
+        github={"GITHUB_SHA": _REVIEWED_SHA, "GITHUB_RUN_ID": run_id},
+    )
+    output = completed.stdout + completed.stderr
+    _assert_no_unregistered_dataclass_failure(output)
+    assert "Traceback" not in output, output
+    assert completed.returncode == 1, output
+    expected = f"image inspect --format {_IMAGE_ENV_FORMAT} idis:ci-{_REVIEWED_SHA}"
+    assert actions.splitlines() == [expected], output + "\n" + actions
+    assert not Path(f"/opt/idis-ci-health/{run_id}/image-defaults.json").exists()
+
+
+def test_start_api_qualify_h1b_py_imports_helper_then_stops_at_defaults_file(
+    tmp_path: Path,
+) -> None:
+    # Seam: this snippet does not call docker. It loads the helper, then reads
+    # image-defaults.json, which this test does not create. FileNotFoundError
+    # is the stop. No container is started. The run-root helper copy is the
+    # file the uid-1000 script loads; the workspace copy remains for the
+    # outer loader.
+    _allow, _outer, qualify = _three_loader_snippets()
+    run_id = f"h1b1gqual{os.getpid()}"
+    mapped = tmp_path / "opt-health"
+    run_root = mapped / run_id
+    run_root.mkdir(parents=True)
+    shutil.copy2(
+        ROOT / ".github" / "scripts" / "prepare_bootstrap_health.py",
+        run_root / "prepare_bootstrap_health.py",
+    )
+    body = qualify.replace("/opt/idis-ci-health", mapped.as_posix())
+    if "/opt/idis-ci-health" in body:
+        raise AssertionError("qualify health root was not rewritten")
+    completed, actions = _run_loader_snippet(
+        tmp_path,
+        body,
+        image_env=_image_env_text(),
+        github={"GITHUB_RUN_ID": run_id},
+    )
+    output = completed.stdout + completed.stderr
+    _assert_no_unregistered_dataclass_failure(output)
+    assert completed.returncode != 0, output
+    assert actions.strip() == "", output + "\n" + actions
+    assert "FileNotFoundError" in output, output
+    assert run_id in output, output
+    assert "image-defaults.json" in output, output
+
+
+_H1B_PY_HEREDOC_COUNT = 12
+_NESTED_RAW_SCRIPT_COUNT = 6
+_CHECK_CALL_NAMES = frozenset({"call", "check_call", "check_output"})
+_CHECK_CALL_REJECTED_KEYWORDS = frozenset({"capture_output", "check", "input"})
+_RECEIPT_ASSIGNMENTS = frozenset(
+    {
+        "expected",
+        "linux_pin",
+        "manifest_sha256",
+        "revision",
+        "windows_receipt",
+    }
+)
+_RECEIPT_RUN_LINE = 'run = os.environ["GITHUB_RUN_ID"]'
+_OPT_MODELS = "/opt/idis-models"
+_OPT_HEALTH = "/opt/idis-ci-health"
+_MODEL_STEP_TIMEOUT_SECONDS = 300
+_MODEL_SUDO_SCRIPT = b'#!/bin/sh\nexec "$H1B_PY" "$H1B_SUDO_PY" "$@"\n'
+_WINDOWS_SUDO_SHIM = r"""
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+_Popen = subprocess.Popen
+
+
+class _SudoPopen(_Popen):
+    def __init__(self, args, *pos, **kwargs):
+        if isinstance(args, (list, tuple)) and args:
+            command = Path(str(args[0])).name.lower()
+            if command in {"sudo", "sudo.exe"}:
+                args = [sys.executable, os.environ["H1B_SUDO_PY"], *list(args)[1:]]
+        super().__init__(args, *pos, **kwargs)
+
+
+subprocess.Popen = _SudoPopen
+"""
+_MODEL_SUDO_PY = r'''
+"""Execute sudo arguments without privilege and record each argv line."""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import sys
+from pathlib import Path
+
+_OPT_PREFIXES = (
+    ("/opt/idis-models", "H1B_SUDO_MODELS"),
+    ("/opt/idis-ci-health", "H1B_SUDO_HEALTH"),
+)
+
+
+def _mapped(argument: str) -> str:
+    normalized = argument.replace("\\", "/")
+    for prefix, env_name in _OPT_PREFIXES:
+        root = os.environ.get(env_name)
+        if not root:
+            continue
+        if normalized == prefix or normalized.startswith(prefix + "/"):
+            suffix = normalized[len(prefix) :].lstrip("/")
+            destination = Path(root) / suffix if suffix else Path(root)
+            return str(destination)
+    return argument
+
+
+def _install(args: list[str]) -> None:
+    mode: int | None = None
+    directory = False
+    operands: list[str] = []
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == "-d":
+            directory = True
+            index += 1
+            continue
+        if arg == "-m" and index + 1 < len(args):
+            mode = int(args[index + 1], 8)
+            index += 2
+            continue
+        if arg in {"-o", "-g"} and index + 1 < len(args):
+            index += 2
+            continue
+        if arg.startswith("-"):
+            sys.stderr.write(f"unexpected install flag {arg}\n")
+            raise SystemExit(97)
+        operands.append(_mapped(arg))
+        index += 1
+    if directory:
+        if len(operands) != 1:
+            raise SystemExit(97)
+        path = Path(operands[0])
+        path.mkdir(parents=True, exist_ok=True)
+        if mode is not None:
+            os.chmod(path, mode)
+        return
+    if len(operands) != 2:
+        raise SystemExit(97)
+    source = Path(operands[0])
+    destination = Path(operands[1])
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, destination)
+    if mode is not None:
+        os.chmod(destination, mode)
+
+
+def _tee(args: list[str]) -> None:
+    if len(args) != 1:
+        raise SystemExit(97)
+    target = Path(_mapped(args[0]))
+    payload = sys.stdin.buffer.read()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(payload)
+    sys.stdout.buffer.write(payload)
+
+
+def _chmod(args: list[str]) -> None:
+    if len(args) != 2:
+        raise SystemExit(97)
+    os.chmod(Path(_mapped(args[1])), int(args[0], 8))
+
+
+def main() -> None:
+    recorded = ["sudo", *sys.argv[1:]]
+    log_path = Path(os.environ["H1B_SUDO_LOG"])
+    with log_path.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(recorded) + "\n")
+    args = [arg for arg in sys.argv[1:] if arg != "-n"]
+    while args and "=" in args[0] and not args[0].startswith("-"):
+        key, value = args.pop(0).split("=", 1)
+        os.environ[key] = value
+    if not args:
+        raise SystemExit(97)
+    command, rest = args[0], args[1:]
+    if command == "install":
+        _install(rest)
+        return
+    if command == "tee":
+        _tee(rest)
+        return
+    if command == "chmod":
+        _chmod(rest)
+        return
+    sys.stderr.write(f"unexpected sudo command {command}\n")
+    raise SystemExit(97)
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+def _keywords_check_call_rejects() -> frozenset[str]:
+    """Name run-only keywords that Popen, and therefore check_call, reject."""
+    popen_names = set(inspect.signature(subprocess.Popen).parameters) - {"self"}
+    rejected: set[str] = set()
+    for name, param in inspect.signature(subprocess.run).parameters.items():
+        if param.kind in {
+            inspect.Parameter.VAR_KEYWORD,
+            inspect.Parameter.VAR_POSITIONAL,
+        }:
+            continue
+        if name in popen_names or name == "timeout":
+            continue
+        rejected.add(name)
+    if rejected != _CHECK_CALL_REJECTED_KEYWORDS:
+        raise AssertionError(sorted(rejected))
+    return frozenset(rejected)
+
+
+def _container_h1b_bodies() -> list[tuple[str, str]]:
+    bodies: list[tuple[str, str]] = []
+    for step in _container_steps():
+        run = step.get("run")
+        if not isinstance(run, str):
+            continue
+        step_id = str(step.get("id") or step["name"])
+        bodies.extend((step_id, body) for body in _h1b_py_bodies(run))
+    return bodies
+
+
+def _nested_raw_scripts(body: str) -> list[str]:
+    marker = 'r"""'
+    scripts: list[str] = []
+    start = 0
+    while True:
+        found = body.find(marker, start)
+        if found < 0:
+            return scripts
+        content_at = found + len(marker)
+        end = body.find('"""', content_at)
+        if end < 0:
+            raise AssertionError("raw triple-quoted script is unterminated")
+        scripts.append(body[content_at:end])
+        start = end + len('"""')
+
+
+def _parsed_snippet(label: str, source: str, *, allow_non_python: bool) -> ast.AST | None:
+    try:
+        compile(source, label, "exec")
+    except SyntaxError:
+        if allow_non_python and "subprocess." not in source:
+            return None
+        raise
+    return ast.parse(source)
+
+
+def _rejected_keyword_uses(step_id: str, source: str, rejected: frozenset[str]) -> list[str]:
+    tree = _parsed_snippet(step_id, source, allow_non_python=":nested:" in step_id)
+    if tree is None:
+        return []
+    violations: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        func = node.func
+        if not (
+            isinstance(func.value, ast.Name)
+            and func.value.id == "subprocess"
+            and func.attr in _CHECK_CALL_NAMES
+        ):
+            continue
+        for keyword in node.keywords:
+            if keyword.arg in rejected:
+                violations.append(f"{step_id}:{node.lineno}:subprocess.{func.attr}:{keyword.arg}")
+    return violations
+
+
+def _model_verify_body() -> str:
+    bodies = _h1b_py_bodies(_by_id("model-verify")["run"])
+    if len(bodies) != 1:
+        raise AssertionError(len(bodies))
+    return bodies[0]
+
+
+def _segment(source: str, node: ast.AST) -> str:
+    segment = ast.get_source_segment(source, node)
+    if segment is None:
+        raise AssertionError("snippet source segment is missing")
+    return segment
+
+
+def _receipt_prelude(snippet: str) -> str:
+    """Bind the tail's names from the snippet text, without retyping the pins."""
+    tree = ast.parse(snippet)
+    parts: list[str] = []
+    files_rhs: str | None = None
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            imported = {alias.name for alias in node.names}
+            if imported & {"json", "os", "subprocess"}:
+                parts.append(_segment(snippet, node))
+        elif isinstance(node, ast.ImportFrom) and node.module == "pathlib":
+            parts.append(_segment(snippet, node))
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if isinstance(target, ast.Name) and target.id in _RECEIPT_ASSIGNMENTS:
+                parts.append(_segment(snippet, node))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if (
+            isinstance(target, ast.Subscript)
+            and isinstance(target.value, ast.Name)
+            and target.value.id == "files"
+        ):
+            files_rhs = _segment(snippet, node.value)
+    if files_rhs is None:
+        raise AssertionError("model-verify snippet has no files assignment")
+    parts.append("files = {}")
+    parts.append("for name, (size, digest) in expected.items():")
+    parts.append(f"    files[name] = {files_rhs}")
+    return "\n".join(parts) + "\n"
+
+
+def _receipt_tail(snippet: str) -> str:
+    index = snippet.find(_RECEIPT_RUN_LINE)
+    if index < 0:
+        raise AssertionError("model-verify snippet has no GITHUB_RUN_ID assignment")
+    return snippet[index:]
+
+
+def _install_model_sudo(tmp_path: Path) -> None:
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    sudo = bindir / "sudo"
+    sudo.write_bytes(_MODEL_SUDO_SCRIPT)
+    os.chmod(sudo, _EXECUTABLE_MODE)
+    (tmp_path / "sudo_fake.py").write_text(_MODEL_SUDO_PY, encoding="utf-8", newline="\n")
+    (tmp_path / "sudo-argv.log").write_text("", encoding="utf-8", newline="\n")
+    if sys.platform == "win32":
+        shim = tmp_path / "shim"
+        shim.mkdir()
+        (shim / "sitecustomize.py").write_text(_WINDOWS_SUDO_SHIM, encoding="utf-8", newline="\n")
+
+
+def _model_child_env(tmp_path: Path, extra: dict[str, str]) -> dict[str, str]:
+    pythonpath = [str(ROOT / "src"), str(ROOT)]
+    env = {
+        "PATH": os.pathsep.join([str(tmp_path / "bin"), os.defpath]),
+        "HOME": str(tmp_path),
+        "TMP": str(tmp_path),
+        "TEMP": str(tmp_path),
+        "H1B_PY": Path(sys.executable).as_posix(),
+        "H1B_SUDO_PY": (tmp_path / "sudo_fake.py").as_posix(),
+        "H1B_SUDO_LOG": str(tmp_path / "sudo-argv.log"),
+        "H1B_SUDO_MODELS": str(tmp_path / "opt-models"),
+        "H1B_SUDO_HEALTH": str(tmp_path / "opt-health"),
+        "PYTHONPATH": os.pathsep.join(pythonpath),
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    if sys.platform == "win32":
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+        env["WINDIR"] = os.environ.get("WINDIR", os.environ["SYSTEMROOT"])
+        env["PATHEXT"] = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+        env["PYTHONPATH"] = os.pathsep.join([str(tmp_path / "shim"), *pythonpath])
+    env.update(extra)
+    env.pop("IDIS_STRICT_DOTENV_PATH", None)
+    return env
+
+
+def _run_model_text(
+    tmp_path: Path, source: str, extra: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    _install_model_sudo(tmp_path)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(exist_ok=True)
+    script = workspace / "snippet.py"
+    script.write_text(source, encoding="utf-8", newline="\n")
+    return subprocess.run(
+        [sys.executable, os.fspath(script)],
+        cwd=workspace,
+        env=_model_child_env(tmp_path, extra),
+        capture_output=True,
+        text=True,
+        timeout=_MODEL_STEP_TIMEOUT_SECONDS,
+        check=False,
+    )
+
+
+def _sudo_invocations(tmp_path: Path) -> list[list[str]]:
+    text = (tmp_path / "sudo-argv.log").read_text(encoding="utf-8")
+    if text == "":
+        return []
+    return [json.loads(line) for line in text.splitlines()]
+
+
+def _write_sized_mismatch(path: Path, size: int) -> None:
+    with path.open("wb") as handle:
+        if size <= 0:
+            return
+        handle.seek(size - 1)
+        handle.write(b"\xff")
+    if path.is_symlink() or path.stat().st_size != size:
+        raise AssertionError(path.name)
+
+
+def _mismatched_model_tree(workspace: Path) -> None:
+    root = workspace / "model-cache" / _MODEL_REVISION
+    root.mkdir(parents=True)
+    for name, size, _digest in _MODEL_FILES:
+        _write_sized_mismatch(root / name, size)
+
+
+def _expected_model_receipt() -> dict[str, Any]:
+    return {
+        "files": {name: {"bytes": size, "sha256": digest} for name, size, digest in _MODEL_FILES},
+        "manifest_sha256": _MODEL_MANIFEST_SHA256,
+        "model_tree_fingerprint_linux": _MODEL_FINGERPRINT_LINUX,
+        "model_tree_fingerprint_windows_receipt": _MODEL_FINGERPRINT_WINDOWS,
+        "revision": _MODEL_REVISION,
+    }
+
+
+def _tree_holds_pinned_files(root: Path) -> bool:
+    if not root.is_dir():
+        return False
+    names = {path.name for path in root.iterdir()}
+    if names != {name for name, _size, _digest in _MODEL_FILES}:
+        return False
+    for name, size, digest in _MODEL_FILES:
+        path = root / name
+        if path.is_symlink() or not path.is_file() or path.stat().st_size != size:
+            return False
+        if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            return False
+    return True
+
+
+def _model_step_not_executed_reason() -> str | None:
+    system = platform.system()
+    if system != "Linux":
+        return f"platform is {system}"
+    tree = os.environ.get("IDIS_TINY_EN_TREE")
+    if tree is None:
+        return "IDIS_TINY_EN_TREE is unset"
+    root = Path(tree)
+    if not root.is_dir():
+        return "IDIS_TINY_EN_TREE is absent"
+    if not _tree_holds_pinned_files(root):
+        return "IDIS_TINY_EN_TREE does not hold the five pinned files"
+    return None
+
+
+def _assert_model_install_log(calls: list[list[str]]) -> None:
+    assert calls
+    assert all(call[:2] == ["sudo", "-n"] for call in calls), calls
+    installed = [call for call in calls if call[:5] == ["sudo", "-n", "install", "-m", "0644"]]
+    assert len(installed) == len(_MODEL_FILES), calls
+    installed_names = {Path(call[-1]).name for call in installed}
+    assert installed_names == {name for name, _size, _digest in _MODEL_FILES}
+    for call in installed:
+        assert Path(call[-2]).name == Path(call[-1]).name
+    run_root_prefix = [
+        "sudo",
+        "-n",
+        "install",
+        "-d",
+        "-m",
+        "0700",
+        "-o",
+        "1000",
+        "-g",
+        "1000",
+    ]
+    run_root = [call for call in calls if call[: len(run_root_prefix)] == run_root_prefix]
+    assert len(run_root) == 1, calls
+    chmod = [call for call in calls if call[:4] == ["sudo", "-n", "chmod", "0644"]]
+    assert len(chmod) == 1, calls
+
+
+def test_embedded_h1b_py_rejects_keywords_check_call_does_not_accept() -> None:
+    bodies = _container_h1b_bodies()
+    assert len(bodies) == _H1B_PY_HEREDOC_COUNT
+    rejected = _keywords_check_call_rejects()
+    violations: list[str] = []
+    nested_count = 0
+    for step_id, body in bodies:
+        violations.extend(_rejected_keyword_uses(step_id, body, rejected))
+        for index, nested in enumerate(_nested_raw_scripts(body), start=1):
+            nested_count += 1
+            violations.extend(_rejected_keyword_uses(f"{step_id}:nested:{index}", nested, rejected))
+    assert nested_count == _NESTED_RAW_SCRIPT_COUNT
+    assert violations == []
+
+
+def test_model_verify_hash_mismatch_exits_before_sudo(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _mismatched_model_tree(workspace)
+    run_id = f"h1b1hhash{os.getpid()}"
+    completed = _run_model_text(
+        tmp_path,
+        _model_verify_body(),
+        {"MODEL_CACHE_HIT": "true", "GITHUB_RUN_ID": run_id},
+    )
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 1, output
+    assert "Traceback" not in output, output
+    assert "TypeError" not in output, output
+    assert _sudo_invocations(tmp_path) == []
+    assert not (tmp_path / "opt-models").exists()
+    assert not (tmp_path / "opt-health").exists()
+
+
+def _receipt_literal_keys(snippet: str) -> list[str]:
+    tree = ast.parse(snippet)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(
+            isinstance(target, ast.Name) and target.id == "receipt" for target in node.targets
+        ):
+            continue
+        if not isinstance(node.value, ast.Dict):
+            break
+        keys: list[str] = []
+        for key in node.value.keys:
+            if not isinstance(key, ast.Constant) or not isinstance(key.value, str):
+                raise AssertionError("receipt key is not a string")
+            keys.append(key.value)
+        return keys
+    raise AssertionError("model-verify snippet has no receipt literal")
+
+
+def _assert_receipt_text(text: str, snippet: str) -> None:
+    expected = _expected_model_receipt()
+    inserted = {key: expected[key] for key in _receipt_literal_keys(snippet)}
+    assert text == json.dumps(inserted, sort_keys=True)
+    assert text != json.dumps(inserted, sort_keys=False)
+
+
+def test_model_verify_receipt_tail_writes_sorted_json(tmp_path: Path) -> None:
+    # Route A: the tail is the real snippet suffix, starting at the run-id line.
+    # The pins and the files-object expression come from the preceding statements.
+    snippet = _model_verify_body()
+    tail = _receipt_tail(snippet)
+    assert snippet.endswith(tail)
+    source = _receipt_prelude(snippet) + tail
+    run_id = f"h1b1hrecv{os.getpid()}"
+    completed = _run_model_text(
+        tmp_path,
+        source,
+        {"GITHUB_RUN_ID": run_id, "MODEL_CACHE_HIT": "true"},
+    )
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, output
+    assert "TypeError" not in output, output
+    receipt_path = tmp_path / "opt-health" / run_id / "model-verified.json"
+    text = receipt_path.read_text(encoding="utf-8")
+    _assert_receipt_text(text, snippet)
+    calls = _sudo_invocations(tmp_path)
+    assert all(call[:2] == ["sudo", "-n"] for call in calls), calls
+    assert [call for call in calls if call[:4] == ["sudo", "-n", "chmod", "0644"]]
+
+
+def test_model_verify_pinned_linux_tree_writes_receipt(
+    tmp_path: Path, record_property: Callable[[str, object], None]
+) -> None:
+    reason = _model_step_not_executed_reason()
+    if reason is not None:
+        if os.environ.get("IDIS_REQUIRE_MODEL_STEP") == "1":
+            pytest.fail(reason)
+        record_property("model_step", f"NOT_EXECUTED: {reason}")
+        print(f"MODEL_STEP NOT_EXECUTED: {reason}")
+        return
+    tree = Path(os.environ["IDIS_TINY_EN_TREE"])
+    workspace = tmp_path / "workspace"
+    destination = workspace / "model-cache" / _MODEL_REVISION
+    destination.mkdir(parents=True)
+    for name, _size, _digest in _MODEL_FILES:
+        target = destination / name
+        shutil.copyfile(tree / name, target)
+        if target.is_symlink():
+            raise AssertionError(name)
+    run_id = f"h1b1hmodel{os.getpid()}"
+    completed = _run_model_text(
+        tmp_path,
+        _model_verify_body(),
+        {"MODEL_CACHE_HIT": "true", "GITHUB_RUN_ID": run_id},
+    )
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, output
+    assert "TypeError" not in output, output
+    payload = json.loads(completed.stdout)
+    assert payload["phase"] == "model"
+    assert payload["code"] == "PRESENT"
+    assert payload["manifest_sha256"] == _MODEL_MANIFEST_SHA256
+    assert payload["model_tree_fingerprint_linux"] == _MODEL_FINGERPRINT_LINUX
+    assert payload["model_tree_fingerprint_windows_receipt"] == _MODEL_FINGERPRINT_WINDOWS
+    calls = _sudo_invocations(tmp_path)
+    _assert_model_install_log(calls)
+    receipt_path = tmp_path / "opt-health" / run_id / "model-verified.json"
+    text = receipt_path.read_text(encoding="utf-8")
+    _assert_receipt_text(text, _model_verify_body())
+    for name, size, _digest in _MODEL_FILES:
+        installed = tmp_path / "opt-models" / _MODEL_REVISION / name
+        assert installed.is_file()
+        assert not installed.is_symlink()
+        assert installed.stat().st_size == size
+
+
+_HOSTED_WORKSPACE = "/home/runner/work/IDIS/IDIS"
+_QUALIFY_OK = '{"code": "OK", "phase": "qualify"}'
+_HANDOFF_TIMEOUT_SECONDS = 120
+_HANDOFF_CHOWN_LOG_NAME = "chown-records.jsonl"
+_HANDOFF_OWNER_UID = 1000
+_HANDOFF_OWNER_GID = 1000
+_HANDOFF_SHIM = r"""
+import json
+import os
+import sys
+
+
+def _chown(path, uid, gid, *, follow_symlinks=True):
+    del follow_symlinks
+    recorded = {"path": os.fspath(path), "uid": uid, "gid": gid}
+    with open(os.environ["H1B_CHOWN_LOG"], "a", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(recorded, sort_keys=True) + "\n")
+
+
+os.chown = _chown
+
+if sys.platform == "win32":
+    import subprocess
+    from pathlib import Path
+
+    _Popen = subprocess.Popen
+
+    class _HandoffPopen(_Popen):
+        def __init__(self, args, *pos, **kwargs):
+            if isinstance(args, (list, tuple)) and args:
+                command = Path(str(args[0])).name.lower()
+                if command in {"docker", "docker.exe"}:
+                    args = [sys.executable, os.environ["H1B_DOCKER_PY"], *list(args)[1:]]
+                elif command in {"sudo", "sudo.exe"}:
+                    args = [sys.executable, os.environ["H1B_SUDO_PY"], *list(args)[1:]]
+            super().__init__(args, *pos, **kwargs)
+
+    subprocess.Popen = _HandoffPopen
+"""
+_HANDOFF_SUDO_PY = r'''
+"""Execute one sudo argv as the current user and record it."""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+_OPT = "/opt/idis-ci-health"
+
+
+def _mapped(argument: str) -> str:
+    root = os.environ.get("H1B_SUDO_HEALTH")
+    if not root:
+        return argument
+    normalized = argument.replace("\\", "/")
+    prefix = _OPT
+    if normalized == prefix or normalized.startswith(prefix + "/"):
+        suffix = normalized[len(prefix) :].lstrip("/")
+        destination = Path(root) / suffix if suffix else Path(root)
+        return str(destination)
+    return argument
+
+
+def _install(args: list[str]) -> None:
+    mode: int | None = None
+    directory = False
+    operands: list[str] = []
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == "-d":
+            directory = True
+            index += 1
+            continue
+        if arg == "-m" and index + 1 < len(args):
+            mode = int(args[index + 1], 8)
+            index += 2
+            continue
+        if arg in {"-o", "-g"} and index + 1 < len(args):
+            index += 2
+            continue
+        if arg.startswith("-"):
+            sys.stderr.write(f"unexpected install flag {arg}\n")
+            raise SystemExit(97)
+        operands.append(_mapped(arg))
+        index += 1
+    if directory:
+        if len(operands) != 1:
+            raise SystemExit(97)
+        path = Path(operands[0])
+        path.mkdir(parents=True, exist_ok=True)
+        if mode is not None:
+            os.chmod(path, mode)
+        return
+    if len(operands) != 2:
+        raise SystemExit(97)
+    source = Path(operands[0])
+    destination = Path(operands[1])
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, destination)
+    if mode is not None:
+        os.chmod(destination, mode)
+
+
+def _clean_env(updates: dict[str, str]) -> dict[str, str]:
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "TMP": os.environ.get("TMP", ""),
+        "TEMP": os.environ.get("TEMP", ""),
+    }
+    if sys.platform == "win32":
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+        env["WINDIR"] = os.environ.get("WINDIR", os.environ["SYSTEMROOT"])
+        env["PATHEXT"] = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+    env.update(updates)
+    return env
+
+
+def main() -> None:
+    recorded = ["sudo", *sys.argv[1:]]
+    log_path = Path(os.environ["H1B_SUDO_LOG"])
+    with log_path.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(recorded) + "\n")
+    args = [arg for arg in sys.argv[1:] if arg != "-n"]
+    if args[:2] == ["-u", "#1000"]:
+        args = args[2:]
+    updates: dict[str, str] = {}
+    while args and "=" in args[0] and not args[0].startswith("-"):
+        key, value = args.pop(0).split("=", 1)
+        updates[key] = value
+    if not args:
+        raise SystemExit(97)
+    command, rest = args[0], args[1:]
+    if command == "install":
+        _install(rest)
+        return
+    child_args = [_mapped(command), *[_mapped(arg) for arg in rest]]
+    try:
+        completed = subprocess.run(child_args, env=_clean_env(updates), check=False)
+        code = completed.returncode
+    except FileNotFoundError:
+        code = 127
+    exit_path = Path(os.environ["H1B_HANDOFF_EXIT"])
+    exit_path.write_text(str(code) + "\n", encoding="utf-8", newline="\n")
+    raise SystemExit(code)
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+def _install_handoff_toolchain(tmp_path: Path) -> None:
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    _write_executable(tmp_path / "docker_fake.py", _IMAGE_ENV_DOCKER)
+    _write_executable(tmp_path / "sudo_fake.py", _HANDOFF_SUDO_PY)
+    for name, target in (("docker", "H1B_DOCKER_PY"), ("sudo", "H1B_SUDO_PY")):
+        script = bindir / name
+        text = f'#!/bin/sh\nexec "$H1B_PY" "${target}" "$@"\n'
+        script.write_bytes(text.encode("ascii"))
+        os.chmod(script, _EXECUTABLE_MODE)
+    shim = tmp_path / "shim"
+    shim.mkdir()
+    (shim / "sitecustomize.py").write_text(_HANDOFF_SHIM, encoding="utf-8", newline="\n")
+
+
+def _handoff_env(tmp_path: Path, state: Path) -> dict[str, str]:
+    pythonpath = [str(tmp_path / "shim"), str(ROOT / "src"), str(ROOT)]
+    env: dict[str, str] = {
+        "PATH": str(tmp_path / "bin"),
+        "HOME": str(tmp_path),
+        "TMP": str(tmp_path),
+        "TEMP": str(tmp_path),
+        "H1B_PY": Path(sys.executable).as_posix(),
+        "H1B_DOCKER_PY": (tmp_path / "docker_fake.py").as_posix(),
+        "H1B_SUDO_PY": (tmp_path / "sudo_fake.py").as_posix(),
+        "H1B_SUDO_LOG": str(tmp_path / "sudo-argv.log"),
+        "H1B_HANDOFF_EXIT": str(tmp_path / "handoff-exit.txt"),
+        "H1B_SUDO_HEALTH": str(tmp_path / "opt-health"),
+        "H1B_CHOWN_LOG": str(tmp_path / _HANDOFF_CHOWN_LOG_NAME),
+        "DOCKER_FAKE_STATE": str(state),
+        "PYTHONPATH": os.pathsep.join(pythonpath),
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    if sys.platform == "win32":
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+        env["WINDIR"] = os.environ.get("WINDIR", os.environ["SYSTEMROOT"])
+        env["PATHEXT"] = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+    env.pop("IDIS_STRICT_DOTENV_PATH", None)
+    return env
+
+
+def _handoff_argv(tmp_path: Path) -> list[str]:
+    text = (tmp_path / "sudo-argv.log").read_text(encoding="utf-8")
+    calls = [json.loads(line) for line in text.splitlines() if line]
+    handoffs = [call for call in calls if call[:4] == ["sudo", "-n", "-u", "#1000"]]
+    if len(handoffs) != 1:
+        raise AssertionError(calls)
+    return handoffs[0]
+
+
+def _handoff_problems(argv: list[str], qualify_text: str) -> list[str]:
+    rendered = " ".join(argv)
+    problems: list[str] = []
+    if "/home/runner" in rendered or _HOSTED_WORKSPACE in rendered or ".github" in rendered:
+        problems.append(rendered)
+    if any(token in qualify_text for token in (".github", "GITHUB_WORKSPACE", "/home/runner")):
+        problems.append(qualify_text)
+    return problems
+
+
+def _prepare_handoff_inputs(run_root: Path) -> None:
+    model = run_root.parent / "unit-model-not-qualified"
+    model.mkdir()
+    for name in ("model.bin", "config.json", "tokenizer.json", "vocabulary.txt"):
+        (model / name).write_bytes(b"unit-test-only-not-a-runtime-model")
+    spec = importlib.util.spec_from_file_location(
+        "h1b_handoff_prepare",
+        ROOT / ".github" / "scripts" / "prepare_bootstrap_health.py",
+    )
+    if spec is None or spec.loader is None:
+        raise AssertionError("prepare_bootstrap_health.py is missing")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    module.prepare_inputs(
+        output_root=run_root / "inputs",
+        model_path=model,
+        synthetic_ci_health=True,
+        authority=module.AUTHORITY,
+    )
+
+
+def _run_start_api_outer(
+    tmp_path: Path, *, run_id: str, prepare: bool
+) -> subprocess.CompletedProcess[str]:
+    _install_handoff_toolchain(tmp_path)
+    state = tmp_path / "docker-state"
+    state.mkdir()
+    (state / "actions.log").write_text("", encoding="utf-8")
+    (state / "image-env.txt").write_text(_image_env_text(), encoding="utf-8", newline="\n")
+    workspace = tmp_path / "workspace"
+    helper_dir = workspace / ".github" / "scripts"
+    helper_dir.mkdir(parents=True)
+    shutil.copy2(
+        ROOT / ".github" / "scripts" / "prepare_bootstrap_health.py",
+        helper_dir / "prepare_bootstrap_health.py",
+    )
+    run_root = tmp_path / "opt-health" / run_id
+    run_root.mkdir(parents=True)
+    if prepare:
+        _prepare_handoff_inputs(run_root)
+    _allow, outer, _qualify = _three_loader_snippets()
+    body = outer.replace("/opt/idis-ci-health", (tmp_path / "opt-health").as_posix())
+    if "/opt/idis-ci-health" in body:
+        raise AssertionError("start-api health root was not rewritten")
+    script = workspace / "snippet.py"
+    script.write_text(body, encoding="utf-8", newline="\n")
+    env = _handoff_env(tmp_path, state)
+    env.update(
+        {
+            "GITHUB_RUN_ID": run_id,
+            "GITHUB_SHA": _REVIEWED_SHA,
+            "GITHUB_WORKSPACE": _HOSTED_WORKSPACE,
+        }
+    )
+    return subprocess.run(
+        [sys.executable, os.fspath(script)],
+        cwd=workspace,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=_HANDOFF_TIMEOUT_SECONDS,
+        check=False,
+    )
+
+
+def _assert_handoff_chown_targets(tmp_path: Path, run_id: str) -> None:
+    log_path = tmp_path / _HANDOFF_CHOWN_LOG_NAME
+    if not log_path.is_file():
+        raise AssertionError("no chown records")
+    rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+    if not rows:
+        raise AssertionError("no chown records")
+    records = [(Path(row["path"]), int(row["uid"]), int(row["gid"])) for row in rows]
+    owner = (_HANDOFF_OWNER_UID, _HANDOFF_OWNER_GID)
+    offenders = [record for record in records if (record[1], record[2]) != owner]
+    assert offenders == [], offenders
+    run_root = tmp_path / "opt-health" / run_id
+    lib = run_root / "lib"
+    published = [
+        path for path in lib.rglob("*") if path.is_file() and "__pycache__" not in path.parts
+    ]
+    assert published, os.fspath(lib)
+    directories: set[Path] = set()
+    for published_file in published:
+        current = published_file.parent
+        while current != run_root:
+            directories.add(current)
+            current = current.parent
+    required = {
+        run_root / "image-defaults.json",
+        run_root / "qualify.py",
+        *published,
+        *directories,
+    }
+    recorded_paths = {path for path, _uid, _gid in records}
+    missing = sorted(required - recorded_paths, key=lambda item: item.as_posix())
+    assert missing == [], [os.fspath(path) for path in missing]
+    assert run_root not in recorded_paths
+
+
+def test_uid1000_qualify_handoff_avoids_runner_home_and_workspace(tmp_path: Path) -> None:
+    # The hosted command was sudo -u #1000 .../home/runner/work/IDIS/IDIS/.venv/bin/python
+    # and the qualify text loaded .github/scripts/prepare_bootstrap_health.py.
+    _allow, _outer, qualify = _three_loader_snippets()
+    run_id = f"h1b1iargv{os.getpid()}"
+    completed = _run_start_api_outer(tmp_path, run_id=run_id, prepare=False)
+    argv = _handoff_argv(tmp_path)
+    problems = _handoff_problems(argv, qualify)
+    output = completed.stdout + completed.stderr
+    assert problems == [], output
+    _assert_handoff_chown_targets(tmp_path, run_id)
+
+
+def test_uid1000_qualify_handoff_runs_from_run_root_copies(tmp_path: Path) -> None:
+    # Fake sudo records argv, maps /opt/idis-ci-health, and runs the handed-off
+    # command as this user. The qualify script must print OK from the run-root
+    # copies alone. The next start-api read is object-path, which is absent.
+    run_id = f"h1b1iok{os.getpid()}"
+    completed = _run_start_api_outer(tmp_path, run_id=run_id, prepare=True)
+    output = completed.stdout + completed.stderr
+    argv = _handoff_argv(tmp_path)
+    assert _QUALIFY_OK in completed.stdout, output + "\n" + json.dumps(argv)
+    written = (tmp_path / "opt-health" / run_id / "qualify.py").read_text(encoding="utf-8")
+    assert _handoff_problems(argv, written) == [], argv
+    assert "-S" in argv, argv
+    pythonpath = next(item for item in argv if item.startswith("PYTHONPATH="))
+    assert Path(pythonpath.split("=", 1)[1]) == tmp_path / "opt-health" / run_id / "lib"
+    assert "GITHUB_WORKSPACE=" not in " ".join(argv)
+    exit_text = (tmp_path / "handoff-exit.txt").read_text(encoding="utf-8").strip()
+    assert exit_text == "0", output
+    calls = [
+        json.loads(line)
+        for line in (tmp_path / "sudo-argv.log").read_text(encoding="utf-8").splitlines()
+    ]
+    helper_install = [
+        call
+        for call in calls
+        if len(call) == 11 and call[:5] == ["sudo", "-n", "install", "-m", "0644"]
+    ]
+    destination = tmp_path / "opt-health" / run_id / "prepare_bootstrap_health.py"
+    assert len(helper_install) == 1, calls
+    call = helper_install[0]
+    assert call[:9] == [
+        "sudo",
+        "-n",
+        "install",
+        "-m",
+        "0644",
+        "-o",
+        "1000",
+        "-g",
+        "1000",
+    ]
+    assert call[9] == ".github/scripts/prepare_bootstrap_health.py"
+    assert Path(call[10]) == destination
+    assert destination.is_file()
+    _assert_handoff_chown_targets(tmp_path, run_id)

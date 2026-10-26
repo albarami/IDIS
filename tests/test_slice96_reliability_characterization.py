@@ -76,15 +76,24 @@ def test_in_memory_claim_is_tenant_scoped_and_queued_only() -> None:
     repo_a.create(run_id="r-a", deal_id=_DEAL, mode="FULL")
     repo_b.create(run_id="r-b", deal_id=_DEAL, mode="FULL")
     assert {r["run_id"] for r in repo_a.claim_queued_runs()} == {"r-a"}  # never claims tenant B
-    repo_a.try_mark_running("r-a")
+    claimed = repo_a.claim_queued_runs(
+        limit=1,
+        lease_owner_id="worker-a",
+        lease_seconds=60,
+    )
+    assert [run["run_id"] for run in claimed] == ["r-a"]
     assert repo_a.claim_queued_runs() == []  # a RUNNING run is not claimable
 
 
-def test_try_mark_running_is_single_winner() -> None:
+def test_atomic_worker_claim_is_single_winner() -> None:
     repo = InMemoryRunsRepository(_TENANT_A)
     repo.create(run_id="r1", deal_id=_DEAL, mode="FULL")
-    assert repo.try_mark_running("r1") is True  # QUEUED -> RUNNING (the claim winner)
-    assert repo.try_mark_running("r1") is False  # already RUNNING -> RUN_ALREADY_CLAIMED at the API
+    first = repo.claim_queued_runs(limit=1, lease_owner_id="worker-a", lease_seconds=60)
+    second = repo.claim_queued_runs(limit=1, lease_owner_id="worker-b", lease_seconds=60)
+    assert len(first) == 1
+    assert first[0]["lease_owner_id"] == "worker-a"
+    assert first[0]["lease_fencing_token"] == 1
+    assert second == []
 
 
 # --- (B) Retry / resume / cancel (EXISTS) ---

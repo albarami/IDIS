@@ -14,6 +14,7 @@ Environment Variables:
 """
 
 from idis.storage.errors import (
+    ObjectIntegrityError,
     ObjectNotFoundError,
     ObjectStorageError,
     PathTraversalError,
@@ -26,6 +27,7 @@ __all__ = [
     "StoredObject",
     "StoredObjectMetadata",
     "ObjectStorageError",
+    "ObjectIntegrityError",
     "ObjectNotFoundError",
     "PathTraversalError",
 ]

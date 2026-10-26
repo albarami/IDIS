@@ -30,6 +30,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_DIRECT_ACTOR_ASSIGNMENT_SQL = """
+    INSERT INTO deal_assignments (tenant_id, deal_id, assignee_type, assignee_id)
+    VALUES (CAST(:tenant_id AS uuid), CAST(:deal_id AS uuid), 'ACTOR', :assignee_id)
+    ON CONFLICT (tenant_id, deal_id, assignee_type, assignee_id) DO NOTHING
+"""
+
 
 class AbacDecisionCode(StrEnum):
     """ABAC decision codes for audit and error responses."""
@@ -315,6 +321,27 @@ class InMemoryDealAssignmentStore:
         self._deal_groups.clear()
 
 
+def add_direct_deal_assignment_in_transaction(
+    connection: Any,
+    *,
+    tenant_id: str,
+    deal_id: str,
+    actor_id: str,
+) -> None:
+    """Insert a direct actor assignment on the caller-owned transaction.
+
+    The caller must provide the request-scoped connection after establishing its
+    tenant-local RLS context. Keeping this write on that connection makes a new deal
+    and its creator assignment commit or roll back together.
+    """
+    from sqlalchemy import text
+
+    connection.execute(
+        text(_DIRECT_ACTOR_ASSIGNMENT_SQL),
+        {"tenant_id": tenant_id, "deal_id": deal_id, "assignee_id": actor_id},
+    )
+
+
 class PostgresDealAssignmentStore:
     """Durable, RLS-scoped deal assignment store (Slice98 Task 1).
 
@@ -394,11 +421,7 @@ class PostgresDealAssignmentStore:
         """Add a direct deal assignment (idempotent)."""
         self._execute(
             tenant_id,
-            """
-            INSERT INTO deal_assignments (tenant_id, deal_id, assignee_type, assignee_id)
-            VALUES (CAST(:tenant_id AS uuid), CAST(:deal_id AS uuid), 'ACTOR', :assignee_id)
-            ON CONFLICT (tenant_id, deal_id, assignee_type, assignee_id) DO NOTHING
-            """,
+            _DIRECT_ACTOR_ASSIGNMENT_SQL,
             {"tenant_id": tenant_id, "deal_id": deal_id, "assignee_id": actor_id},
         )
 

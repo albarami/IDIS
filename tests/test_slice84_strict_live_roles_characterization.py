@@ -21,18 +21,11 @@ from __future__ import annotations
 
 import inspect
 import os
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
-from idis.api.routes.runs import (
-    _build_analysis_llm_client,
-    _build_debate_role_runners,
-    _build_scoring_llm_client,
-    _run_full_analysis,
-    _run_full_debate,
-    _run_full_scoring,
-)
 from idis.debate.orchestrator import RoleRunners
 from idis.debate.roles.advocate import AdvocateRole
 from idis.debate.roles.llm_role_runner import LLMRoleRunner
@@ -43,9 +36,20 @@ from idis.services.extraction.extractors.llm_client import (
     DeterministicScoringLLMClient,
 )
 from idis.services.runs.layer2_ic_challenge import Layer2ICChallengeBlockedError
+from idis.services.runs.step_runtime.analysis import (
+    _run_full_analysis,
+    _run_full_debate,
+    _run_full_scoring,
+)
+from idis.services.runs.step_runtime.roles import (
+    _build_analysis_llm_client,
+    _build_debate_role_runners,
+    _build_scoring_llm_client,
+)
 
 # Same fake unit-test key shape used by the existing test_llm_backend_selection.py (no real key).
 _FAKE_KEY = "sk-ant-test-fake-key-for-unit-test"
+_DEAL_STAGE = "growth"
 
 
 def _env_without(*keys: str) -> dict[str, str]:
@@ -211,7 +215,7 @@ def test_scoring_summary_carries_additive_provenance() -> None:
             tenant_id="tenant-1",
             deal_id="deal-1",
             analysis_bundle=object(),
-            analysis_context=object(),
+            analysis_context=SimpleNamespace(stage=_DEAL_STAGE),
         )
     # Existing fields unchanged; provenance is additive.
     assert summary["composite_score"] == 68.5
@@ -241,7 +245,7 @@ def test_run_step_result_summary_is_open_additive_dict() -> None:
 
 
 def test_layer2_ic_challenge_has_separate_strict_pattern() -> None:
-    from idis.api.routes.runs import _run_full_layer2_ic_challenge
+    from idis.services.runs.step_runtime.layer2 import _run_full_layer2_ic_challenge
 
     # Layer 2 blocks via its own RuntimeError-based code, distinct from the Slice84 codes.
     err = Layer2ICChallengeBlockedError("LAYER2_MISSING_LIVE_MODEL_CONFIG")
@@ -254,14 +258,14 @@ def test_layer2_ic_challenge_has_separate_strict_pattern() -> None:
 
 
 def test_slice83_82_reuse_symbols_are_importable() -> None:
-    from idis.api.routes.runs import (
+    from idis.services.llm_model_health import LlmModelRole, _sanitize_request_id
+    from idis.services.prompts.registry import PromptRegistry
+    from idis.services.runs.step_runtime.roles import (
         StrictLiveExtractionError,
         _build_extraction_provenance,
         _extraction_prompt_version,
         _safe_client_request_id,
     )
-    from idis.services.llm_model_health import LlmModelRole, _sanitize_request_id
-    from idis.services.prompts.registry import PromptRegistry
 
     assert LlmModelRole.ANALYSIS.value == "analysis"
     assert LlmModelRole.DEBATE.value == "debate"

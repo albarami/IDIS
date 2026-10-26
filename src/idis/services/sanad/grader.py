@@ -205,6 +205,9 @@ def calculate_sanad_grade(
     claim: dict[str, Any] | None = None,
     documents: list[dict[str, Any]] | None = None,
     evidence_ids: set[str] | None = None,
+    *,
+    source_span_ids: set[str] | None = None,
+    claim_id: str | None = None,
 ) -> SanadGradeResult:
     """Calculate Sanad grade using v2 methodology.
 
@@ -228,6 +231,8 @@ def calculate_sanad_grade(
         claim: Optional claim dictionary for shudhudh/version drift
         documents: Optional document list for version drift detection
         evidence_ids: Optional set of valid evidence IDs
+        source_span_ids: Optional bound set of valid source span IDs
+        claim_id: Optional bound claim ID for typed claim refs
 
     Returns:
         SanadGradeResult with grade, explanation, and all component results
@@ -262,6 +267,8 @@ def calculate_sanad_grade(
         claim=claim,
         documents=documents,
         evidence_ids=evidence_ids,
+        source_span_ids=source_span_ids,
+        claim_id=claim_id,
     )
 
     claim_values = []
@@ -359,6 +366,9 @@ def grade_sanad_v2(
     claim: dict[str, Any] | None = None,
     documents: list[dict[str, Any]] | None = None,
     evidence_ids: set[str] | None = None,
+    *,
+    source_span_ids: set[str] | None = None,
+    claim_id: str | None = None,
 ) -> SanadGradeResult:
     """Public API for Sanad v2 grading.
 
@@ -370,4 +380,6 @@ def grade_sanad_v2(
         claim=claim,
         documents=documents,
         evidence_ids=evidence_ids,
+        source_span_ids=source_span_ids,
+        claim_id=claim_id,
     )

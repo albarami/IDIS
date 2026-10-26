@@ -507,7 +507,7 @@ class SanadsRepository:
             "tenant_id": str(row.tenant_id),
             "claim_id": str(row.claim_id),
             "deal_id": str(row.deal_id),
-            "primary_evidence_id": row.primary_evidence_id,
+            "primary_evidence_id": str(row.primary_evidence_id),
             "corroborating_evidence_ids": corroborating_evidence_ids or [],
             "transmission_chain": transmission_chain or [],
             "computed": computed or {},

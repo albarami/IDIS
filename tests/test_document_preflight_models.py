@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from idis.models.document_classification import DocumentSupportStatus, DocumentTriageStatus
+from idis.models.document_classification import (
+    CddDocumentCategory,
+    DocumentSupportStatus,
+    DocumentTriageStatus,
+    FddDocumentCategory,
+)
 from idis.models.document_preflight import (
     DocumentPreflightReason,
     DocumentPreflightResult,
@@ -38,6 +43,10 @@ def _decision(document_id: str = "doc-1") -> RunDocumentPreflightDecision:
                 content_hash="a" * 64,
             )
         ],
+        fdd_category=FddDocumentCategory.UNKNOWN,
+        cdd_category=CddDocumentCategory.UNKNOWN,
+        secondary_fdd_categories=[],
+        secondary_cdd_categories=[],
         methodology_target_areas=["P&L"],
     )
 
@@ -72,3 +81,22 @@ def test_document_preflight_result_summary_has_no_raw_span_text() -> None:
     assert "text_excerpt" not in str(summary)
     assert summary["eligible_document_ids"] == ["doc-1"]
     assert summary["source_spans_by_document_id"]["doc-1"][0]["span_id"] == "span-1"
+
+
+def test_document_preflight_safe_summary_has_canonical_document_order() -> None:
+    result = DocumentPreflightResult(
+        tenant_id=TENANT_ID,
+        deal_id=DEAL_ID,
+        run_id=RUN_ID,
+        status=DocumentPreflightStatus.PARTIAL,
+        decisions=[_decision("doc-2"), _decision("doc-1")],
+    )
+
+    summary = result.to_run_step_summary()
+
+    assert summary["eligible_document_ids"] == ["doc-1", "doc-2"]
+    assert [item["document_id"] for item in summary["classifications"]] == [
+        "doc-1",
+        "doc-2",
+    ]
+    assert list(summary["source_spans_by_document_id"]) == ["doc-1", "doc-2"]

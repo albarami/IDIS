@@ -145,7 +145,7 @@ class TestClaimServiceCreate:
         events = audit_sink.events
         assert len(events) == 1
         assert events[0]["event_type"] == "claim.created"
-        assert events[0]["entity_type"] == "claim"
+        assert events[0]["resource"]["resource_type"] == "claim"
         assert events[0]["tenant_id"] == SYNTHETIC_TENANT_ID
 
 
@@ -538,8 +538,8 @@ class TestClaimServiceAuditCorrelation:
 
         events = audit_sink.events
         assert len(events) == 1
-        assert events[0]["request_id"] == "req-correlation-001"
-        assert events[0]["resource_type"] == "claim"
+        assert events[0]["request"]["request_id"] == "req-correlation-001"
+        assert events[0]["resource"]["resource_type"] == "claim"
 
     def test_update_audit_includes_request_id(
         self, claim_service: ClaimService, audit_sink: InMemoryAuditSink
@@ -562,7 +562,7 @@ class TestClaimServiceAuditCorrelation:
 
         events = audit_sink.events
         assert len(events) == 1
-        assert events[0]["request_id"] == "req-correlation-002"
+        assert events[0]["request"]["request_id"] == "req-correlation-002"
 
     def test_delete_audit_includes_request_id(
         self, claim_service: ClaimService, audit_sink: InMemoryAuditSink
@@ -581,7 +581,7 @@ class TestClaimServiceAuditCorrelation:
 
         events = audit_sink.events
         assert len(events) == 1
-        assert events[0]["request_id"] == "req-correlation-003"
+        assert events[0]["request"]["request_id"] == "req-correlation-003"
 
 
 class TestClaimServiceWithSyntheticData:

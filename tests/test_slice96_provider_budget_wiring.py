@@ -12,7 +12,8 @@ bypasses the budget helper. PYTHONPATH pinned to this worktree's src.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
+from pathlib import Path
 
 import pytest
 
@@ -24,6 +25,38 @@ from idis.providers.budget import (
 from idis.services.extraction.extractors.anthropic_client import AnthropicLLMClient
 
 _TENANT = "11111111-2222-3333-4444-555555555555"
+_RUNS_PATH = Path("src/idis/api/routes/runs.py")
+_STEP_RUNTIME_DIR = Path("src/idis/services/runs/step_runtime")
+
+
+def _live_anthropic_sources() -> dict[str, str]:
+    sources = {"runs.py": _RUNS_PATH.read_text(encoding="utf-8")}
+    for path in sorted(_STEP_RUNTIME_DIR.glob("*.py")):
+        sources[path.name] = path.read_text(encoding="utf-8")
+    return sources
+
+
+def _anthropic_construction_problems(sources: Mapping[str, str]) -> tuple[str, ...]:
+    """Return problems when the live Anthropic construction count is not exactly one.
+
+    Once ``roles.py`` is present, that one site must be there and ``runs.py`` must have none.
+    """
+    problems: list[str] = []
+    total = sum(text.count("AnthropicLLMClient(") for text in sources.values())
+    if total != 1:
+        problems.append(f"expected exactly one AnthropicLLMClient( construction, found {total}")
+    if "runs.py" in sources and "roles.py" in sources:
+        runs_count = sources["runs.py"].count("AnthropicLLMClient(")
+        roles_count = sources["roles.py"].count("AnthropicLLMClient(")
+        if runs_count != 0:
+            problems.append(
+                f"expected zero AnthropicLLMClient( constructions in runs.py, found {runs_count}"
+            )
+        if roles_count != 1:
+            problems.append(
+                f"expected one AnthropicLLMClient( construction in roles.py, found {roles_count}"
+            )
+    return tuple(problems)
 
 
 class _ProviderInvoked(Exception):
@@ -52,7 +85,7 @@ def test_extraction_seam_is_capped_on_the_real_path(
     exhausted_budget: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("IDIS_EXTRACT_BACKEND", "anthropic")
-    from idis.api.routes.runs import _build_extraction_llm_client
+    from idis.services.runs.step_runtime.roles import _build_extraction_llm_client
 
     client = _build_extraction_llm_client(tenant_id=exhausted_budget)
     with pytest.raises(ProviderBudgetExceededError):
@@ -63,7 +96,7 @@ def test_analysis_seam_is_capped_on_the_real_path(
     exhausted_budget: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("IDIS_DEBATE_BACKEND", "anthropic")
-    from idis.api.routes.runs import _build_analysis_llm_client
+    from idis.services.runs.step_runtime.roles import _build_analysis_llm_client
 
     client = _build_analysis_llm_client(tenant_id=exhausted_budget)
     with pytest.raises(ProviderBudgetExceededError):
@@ -74,7 +107,7 @@ def test_scoring_seam_is_capped_on_the_real_path(
     exhausted_budget: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("IDIS_DEBATE_BACKEND", "anthropic")
-    from idis.api.routes.runs import _build_scoring_llm_client
+    from idis.services.runs.step_runtime.roles import _build_scoring_llm_client
 
     client = _build_scoring_llm_client(tenant_id=exhausted_budget)
     with pytest.raises(ProviderBudgetExceededError):
@@ -85,7 +118,7 @@ def test_debate_layer1_role_seam_is_capped_on_the_real_path(
     exhausted_budget: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("IDIS_DEBATE_BACKEND", "anthropic")
-    from idis.api.routes.runs import _build_debate_role_runners
+    from idis.services.runs.step_runtime.roles import _build_debate_role_runners
 
     runners = _build_debate_role_runners(context=None, tenant_id=exhausted_budget)
     with pytest.raises(ProviderBudgetExceededError):
@@ -93,8 +126,8 @@ def test_debate_layer1_role_seam_is_capped_on_the_real_path(
 
 
 def test_layer2_ic_challenge_seam_is_capped_on_the_real_path(exhausted_budget: str) -> None:
-    from idis.api.routes.runs import _new_budgeted_llm_client
     from idis.services.runs.layer2_ic_challenge import build_live_layer2_ic_runners
+    from idis.services.runs.step_runtime.roles import _new_budgeted_llm_client
 
     challenger = _new_budgeted_llm_client(
         model="claude-sonnet-4-20250514", max_tokens=8192, tenant_id=exhausted_budget
@@ -111,12 +144,24 @@ def test_layer2_ic_challenge_seam_is_capped_on_the_real_path(exhausted_budget: s
 
 def test_no_live_anthropic_construction_bypasses_the_budget_helper() -> None:
     # Completeness invariant: every live AnthropicLLMClient is built via _new_budgeted_llm_client
-    # (which budget-wraps it), so no live LLM seam can bypass the cap.
+    # (which budget-wraps it), so no live LLM seam can bypass the cap. The one site may live in
+    # runs.py or in step_runtime after the composition-root move.
     import inspect
 
-    from idis.api.routes import runs as runs_module
+    from idis.services.runs.step_runtime import roles as roles_module
 
-    module_src = inspect.getsource(runs_module)
-    assert module_src.count("AnthropicLLMClient(") == 1  # exactly one construction site
-    helper_src = inspect.getsource(runs_module._new_budgeted_llm_client)
+    assert _anthropic_construction_problems(_live_anthropic_sources()) == ()
+    helper_src = inspect.getsource(roles_module._new_budgeted_llm_client)
     assert "AnthropicLLMClient(" in helper_src  # ...and it lives inside the budget helper
+
+
+def test_anthropic_construction_count_rejects_a_planted_step_runtime_site() -> None:
+    """A second construction planted in synthetic step_runtime text fails the count."""
+    clean = {"runs.py": "AnthropicLLMClient(\n", "common.py": "logger\n"}
+    assert _anthropic_construction_problems(clean) == ()
+    planted = {"runs.py": "AnthropicLLMClient(\n", "common.py": "AnthropicLLMClient(\n"}
+    assert _anthropic_construction_problems(planted) != ()
+    still_in_runs = {"runs.py": "AnthropicLLMClient(\n", "roles.py": ""}
+    assert _anthropic_construction_problems(still_in_runs) != ()
+    moved = {"runs.py": "", "roles.py": "AnthropicLLMClient(\n"}
+    assert _anthropic_construction_problems(moved) == ()

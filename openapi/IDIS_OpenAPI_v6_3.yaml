@@ -24,6 +24,7 @@ tags:
   - name: Defects
   - name: Calculations
   - name: Runs
+  - name: MethodologyVersions
   - name: Debate
   - name: Human Gates
   - name: Overrides
@@ -51,10 +52,16 @@ paths:
             application/json:
               schema:
                 type: object
+                additionalProperties: false
+                required: [status, time, version, boot_id]
                 properties:
                   status: { type: string, example: ok }
                   time: { type: string, format: date-time }
                   version: { type: string, example: "6.3" }
+                  boot_id:
+                    type: string
+                    format: uuid
+                    description: Opaque per-application boot identity for restart verification.
 
   /v1/tenants/me:
     get:
@@ -294,6 +301,13 @@ paths:
       parameters:
         - $ref: "#/components/parameters/DealId"
         - $ref: "#/components/parameters/IdempotencyKey"
+        - name: X-IDIS-Source-Tree-Fingerprint
+          in: header
+          required: false
+          schema: { type: string, pattern: "^[0-9a-f]{64}$" }
+          description: >
+            Safe source-contract digest required when a signed no-substantive-content admission
+            may apply.
         - name: filename
           in: query
           required: true
@@ -341,6 +355,11 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "415":
           description: Unsupported media type
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          description: Document parsing reached a terminal fail-closed disposition
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -519,7 +538,7 @@ paths:
                     type: array
                     items:
                       type: object
-                      required: [span_id, document_id, span_type, locator]
+                      required: [span_id, document_id, span_type, locator, content_hash]
                       properties:
                         span_id:
                           type: string
@@ -535,12 +554,135 @@ paths:
                         text_excerpt:
                           type: string
                           nullable: true
+                        content_hash:
+                          type: string
+                          pattern: "^[0-9a-f]{64}$"
+                          nullable: true
                   total:
                     type: integer
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+
+  /v1/documents/{docId}/content-integrity:
+    get:
+      tags: [Documents]
+      summary: Verify durable document content integrity
+      description: >
+        Re-hashes the authenticated persistent object in bounded chunks and
+        returns only safe hash, size, version, URI-hash, and backend proof.
+        Raw URI/path and object bytes are never returned.
+      operationId: getDocumentContentIntegrity
+      parameters:
+        - $ref: "#/components/parameters/DocId"
+      responses:
+        "200":
+          description: Durable object integrity verified
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - schema_version
+                  - doc_id
+                  - content_sha256
+                  - size_bytes
+                  - uri_sha256
+                  - version_id
+                  - backend
+                  - streaming_verified
+                properties:
+                  schema_version:
+                    type: string
+                    enum: [durable-object-integrity-v1]
+                  doc_id:
+                    type: string
+                    format: uuid
+                  content_sha256:
+                    type: string
+                    pattern: "^[0-9a-f]{64}$"
+                  size_bytes:
+                    type: integer
+                    minimum: 0
+                  uri_sha256:
+                    type: string
+                    pattern: "^[0-9a-f]{64}$"
+                  version_id:
+                    type: string
+                    format: uuid
+                  backend:
+                    type: string
+                    pattern: "^[a-z0-9][a-z0-9._:+\\-]{0,127}$"
+                  streaming_verified:
+                    type: boolean
+                    enum: [true]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /v1/documents/{docId}/content:
+    get:
+      tags: [Documents]
+      summary: Stream authenticated durable document content
+      description: >
+        Streams the exact authenticated persistent object in bounded chunks.
+        Safe headers bind the response to its SHA-256, byte size, and immutable
+        object version. Storage URI, object metadata, and private filenames are
+        never emitted.
+      operationId: streamDocumentContent
+      parameters:
+        - $ref: "#/components/parameters/DocId"
+      responses:
+        "200":
+          description: Exact durable object stream
+          headers:
+            Content-Length:
+              required: true
+              schema: { type: integer, minimum: 0 }
+            X-IDIS-Content-SHA256:
+              required: true
+              schema: { type: string, pattern: "^[0-9a-f]{64}$" }
+            X-IDIS-Content-Size:
+              required: true
+              schema: { type: integer, minimum: 0 }
+            X-IDIS-Object-Version:
+              required: true
+              schema: { type: string, format: uuid }
+            X-IDIS-Stream-Contract:
+              required: true
+              schema: { type: string, enum: [durable-object-stream-v1] }
+            Cache-Control:
+              required: true
+              schema: { type: string, enum: [no-store] }
+            X-Content-Type-Options:
+              required: true
+              schema: { type: string, enum: [nosniff] }
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Access denied by compliance policy
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          description: Persistent object stream unavailable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /v1/deals/{dealId}/claims:
     get:
@@ -1041,9 +1183,13 @@ paths:
               $ref: "#/components/schemas/StartRunRequest"
             example:
               mode: "FULL"
+              strict_preflight_proof_id: "00000000-0000-4000-8000-000000000001"
               source:
                 type: "deal_documents"
                 document_ids: ["550e8400-e29b-41d4-a716-446655440000"]
+              methodology_selection:
+                commercial_dd_version_record_id: "9f8e7d6c-5b4a-43c2-9182-736455667788"
+                financial_dd_version_record_id: "1a2b3c4d-5e6f-47a8-9b0c-1d2e3f4a5b6c"
       responses:
         "202":
           description: Run started
@@ -1123,6 +1269,76 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+
+  /v1/methodology-versions/import:
+    post:
+      tags: [MethodologyVersions]
+      summary: Import the configured server-side CDD or FDD methodology source
+      operationId: importMethodologyVersion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MethodologyVersionImportRequest"
+      responses:
+        "201":
+          description: Imported immutable-source methodology version metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MethodologyVersionSafeResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /v1/methodology-versions/{methodology_version_record_id}/freeze:
+    post:
+      tags: [MethodologyVersions]
+      summary: Revalidate and freeze an imported methodology version
+      operationId: freezeMethodologyVersion
+      parameters:
+        - name: methodology_version_record_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Frozen methodology version metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MethodologyVersionSafeResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /v1/methodology-versions:
+    get:
+      tags: [MethodologyVersions]
+      summary: List safe methodology-version metadata for the current tenant
+      operationId: listMethodologyVersions
+      parameters:
+        - name: methodology_type
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/MethodologyType" }
+      responses:
+        "200":
+          description: Tenant-scoped methodology versions
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/MethodologyVersionSafeResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
   /v1/strict-readiness:
     get:
@@ -2005,6 +2221,21 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: Forbidden
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ServiceUnavailable:
+      description: Service Unavailable
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    InternalError:
+      description: Internal Server Error
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
 
   schemas:
     Error:
@@ -2133,6 +2364,15 @@ components:
         version_id: { type: string }
         ingested_at: { type: string, format: date-time }
         parse_status: { type: string, enum: [PARSED, FAILED], nullable: true }
+        terminal_disposition:
+          type: string
+          enum: [DOCUMENT_NO_SUBSTANTIVE_CONTENT_CONFIRMED]
+          nullable: true
+        parsed_doc_type:
+          type: string
+          enum: [PDF, PPTX, XLSX, DOCX, AUDIO, VIDEO, IMAGE, HTML, TEXT]
+          nullable: true
+          description: Canonical durable parsed-document type, distinct from artifact classification.
         sha256: { type: string }
         uri: { type: string }
         metadata:
@@ -2442,9 +2682,64 @@ components:
       required: [mode]
       additionalProperties: false
       properties:
-        mode: { type: string, enum: [SNAPSHOT, FULL] }
+        mode:
+          type: string
+          enum: [SNAPSHOT, FULL]
+          description: FULL requires methodology_selection; SNAPSHOT forbids it.
+        strict_preflight_proof_id:
+          type: string
+          format: uuid
+          description: Fresh one-use proof required when strict full-live FULL admission is enabled.
         source:
           $ref: "#/components/schemas/RunSource"
+        methodology_selection:
+          $ref: "#/components/schemas/RunMethodologySelectionRequest"
+          description: Required for FULL and rejected for SNAPSHOT.
+
+    RunMethodologySelectionRequest:
+      type: object
+      additionalProperties: false
+      required: [commercial_dd_version_record_id, financial_dd_version_record_id]
+      properties:
+        commercial_dd_version_record_id: { type: string, format: uuid }
+        financial_dd_version_record_id: { type: string, format: uuid }
+
+    MethodologyType:
+      type: string
+      enum: [commercial_dd, financial_dd]
+
+    MethodologyVersionImportRequest:
+      type: object
+      additionalProperties: false
+      required: [methodology_type]
+      properties:
+        methodology_type: { $ref: "#/components/schemas/MethodologyType" }
+
+    MethodologyVersionSafeResponse:
+      type: object
+      additionalProperties: false
+      required:
+        [methodology_version_record_id, methodology_version_id, methodology_type, version_label,
+         source_sha256, source_byte_count, source_contract_hash, source_trace_digest, registry_hash,
+         version_hash, question_count, source_section_count, header_row, status, imported_at,
+         frozen_at]
+      properties:
+        methodology_version_record_id: { type: string, format: uuid }
+        methodology_version_id: { type: string }
+        methodology_type: { $ref: "#/components/schemas/MethodologyType" }
+        version_label: { type: string }
+        source_sha256: { type: string, pattern: "^[0-9a-f]{64}$" }
+        source_byte_count: { type: integer, minimum: 1 }
+        source_contract_hash: { type: string, pattern: "^[0-9a-f]{64}$" }
+        source_trace_digest: { type: string, pattern: "^[0-9a-f]{64}$" }
+        registry_hash: { type: string, pattern: "^[0-9a-f]{64}$" }
+        version_hash: { type: string, pattern: "^[0-9a-f]{64}$" }
+        question_count: { type: integer, minimum: 1 }
+        source_section_count: { type: integer, minimum: 1 }
+        header_row: { type: integer, minimum: 1, nullable: true }
+        status: { type: string, enum: [IMPORTED, FROZEN] }
+        imported_at: { type: string, format: date-time }
+        frozen_at: { type: string, format: date-time, nullable: true }
 
     RunSource:
       type: object
@@ -2457,6 +2752,67 @@ components:
           minItems: 1
           items: { type: string }
 
+    SourcePackageManifestFile:
+      type: object
+      required:
+        [sequence, generated_upload_name, source_locator_sha256, content_sha256, size_bytes,
+         extension, document_id, doc_id]
+      additionalProperties: false
+      properties:
+        sequence: { type: integer, minimum: 0 }
+        generated_upload_name:
+          type: string
+          pattern: '^company-[0-9]{3}-document-[0-9]{5}\.[a-z0-9]{1,12}$'
+        source_locator_sha256: { type: string, pattern: "^[0-9a-f]{64}$" }
+        content_sha256: { type: string, pattern: "^[0-9a-f]{64}$" }
+        size_bytes: { type: integer, minimum: 0 }
+        extension: { type: string, pattern: "^[a-z0-9]{1,12}$" }
+        document_id: { type: string, format: uuid }
+        doc_id: { type: string, format: uuid }
+
+    SourcePackageManifest:
+      type: object
+      required:
+        [schema_version, company_alias, deal_alias, document_set_alias, run_alias, ledger_alias,
+         package_alias, source_tree_fingerprint, file_count, total_bytes, files,
+         manifest_sha256]
+      additionalProperties: false
+      properties:
+        schema_version: { type: string, enum: [source-package-manifest-v1] }
+        company_alias: { type: string, pattern: "^company-[0-9]{3}$" }
+        deal_alias: { type: string, pattern: "^deal-[0-9]{3}$" }
+        document_set_alias: { type: string, pattern: "^documents-[0-9]{3}$" }
+        run_alias: { type: string, pattern: "^run-[0-9]{3}$" }
+        ledger_alias: { type: string, pattern: "^ledger-[0-9]{3}$" }
+        package_alias: { type: string, pattern: "^package-[0-9]{3}$" }
+        source_tree_fingerprint: { type: string, pattern: "^[0-9a-f]{64}$" }
+        file_count: { type: integer, minimum: 1 }
+        total_bytes: { type: integer, minimum: 0 }
+        files:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/SourcePackageManifestFile" }
+        manifest_sha256: { type: string, pattern: "^[0-9a-f]{64}$" }
+
+    SourcePackageManifestSummary:
+      type: object
+      required:
+        [schema_version, company_alias, deal_alias, document_set_alias, run_alias, ledger_alias,
+         package_alias, source_tree_fingerprint, file_count, total_bytes, manifest_sha256]
+      additionalProperties: false
+      properties:
+        schema_version: { type: string, enum: [source-package-manifest-v1] }
+        company_alias: { type: string }
+        deal_alias: { type: string }
+        document_set_alias: { type: string }
+        run_alias: { type: string }
+        ledger_alias: { type: string }
+        package_alias: { type: string }
+        source_tree_fingerprint: { type: string }
+        file_count: { type: integer }
+        total_bytes: { type: integer }
+        manifest_sha256: { type: string }
+
     CreateDataRoomPackageRequest:
       type: object
       required: [document_ids]
@@ -2466,6 +2822,10 @@ components:
           type: array
           minItems: 1
           items: { type: string }
+        source_manifest:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/SourcePackageManifest"
 
     DataRoomPackageRef:
       type: object
@@ -2484,6 +2844,8 @@ components:
           type: object
           additionalProperties: { type: integer }
         created_at: { type: string }
+        source_manifest:
+          $ref: "#/components/schemas/SourcePackageManifestSummary"
 
     DataRoomPackageList:
       type: object
@@ -2499,6 +2861,7 @@ components:
       additionalProperties: false
       properties:
         file_entry_id: { type: string, format: uuid }
+        sequence: { type: integer, minimum: 0 }
         path_hash: { type: string }
         extension: { type: string, nullable: true }
         file_status: { type: string, enum: [supported, deferred, blocked] }
@@ -2529,6 +2892,8 @@ components:
           type: object
           additionalProperties: { type: integer }
         created_at: { type: string }
+        source_manifest:
+          $ref: "#/components/schemas/SourcePackageManifestSummary"
         files:
           type: array
           items: { $ref: "#/components/schemas/DataRoomPackageFileEntry" }
@@ -2589,11 +2954,16 @@ components:
     StrictReadinessReview:
       type: object
       additionalProperties: false
-      required: [required, may_proceed, blocker_count]
+      required: [required, may_proceed, blocker_count, profile_hmac_sha256]
       properties:
         required: { type: boolean }
         may_proceed: { type: boolean }
         blocker_count: { type: integer }
+        profile_hmac_sha256:
+          type: string
+          nullable: true
+          pattern: "^[0-9a-f]{64}$"
+          description: One-way identity of the strict server launch profile, null outside strict mode.
         blocking_components:
           type: array
           items: { type: string }

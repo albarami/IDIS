@@ -95,3 +95,24 @@ class StorageBackendError(ObjectStorageError):
     ) -> None:
         super().__init__(message, tenant_id=tenant_id, key=key)
         self.cause = cause
+
+
+class ObjectIntegrityError(StorageBackendError):
+    """Raised when durable object bytes cannot be proven against their metadata."""
+
+    code = "OBJECT_INTEGRITY_FAILED"
+
+    def __init__(
+        self,
+        message: str = "Stored object integrity verification failed",
+        *,
+        tenant_id: str | None = None,
+        key: str | None = None,
+        cause: Exception | None = None,
+    ) -> None:
+        super().__init__(
+            message,
+            tenant_id=tenant_id,
+            key=key,
+            cause=cause,
+        )

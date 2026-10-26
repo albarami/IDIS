@@ -11,6 +11,10 @@ Tests all six enhancements:
 
 from __future__ import annotations
 
+from typing import Any
+
+import pytest
+
 from idis.services.sanad.coi import (
     COIDefectCode,
     COISeverity,
@@ -621,3 +625,208 @@ class TestFailClosed:
         sanad = {"transmission_chain": []}
         result = calculate_sanad_grade(sanad)
         assert result.grade == "D"
+
+
+class TestIlalTypedInputRefs:
+    """Bound-context validation of canonical typed input_refs.
+
+    Canonical producers emit ``{"source_span_id": ...}`` and
+    ``{"evidence_id": ...}`` dicts; each supported key must resolve only
+    inside its own bound domain.
+    """
+
+    @staticmethod
+    def _typed_chain(input_refs: list[Any]) -> dict[str, Any]:
+        return {
+            "transmission_chain": [
+                {"node_id": "node-ingest", "input_refs": list(input_refs)},
+                {
+                    "node_id": "node-extract",
+                    "prev_node_id": "node-ingest",
+                    "input_refs": list(input_refs),
+                },
+            ]
+        }
+
+    @staticmethod
+    def _bound_kwargs() -> dict[str, Any]:
+        return {
+            "evidence_ids": {"ev-001"},
+            "source_span_ids": {"span-001"},
+            "claim_id": "claim-001",
+        }
+
+    def test_valid_canonical_typed_refs_under_bound_context(self) -> None:
+        """Canonical producer refs resolve inside their own bound domains."""
+        sanad: dict[str, Any] = {
+            "transmission_chain": [
+                {"node_id": "node-ingest", "input_refs": [{"source_span_id": "span-001"}]},
+                {
+                    "node_id": "node-extract",
+                    "prev_node_id": "node-ingest",
+                    "input_refs": [
+                        {"evidence_id": "ev-001"},
+                        {"claim_id": "claim-001"},
+                    ],
+                },
+            ]
+        }
+        defect = detect_ilal_chain_break(sanad, **self._bound_kwargs())
+        assert defect is None
+
+    def test_typed_ref_missing_from_own_domain_breaks(self) -> None:
+        """A typed value absent from its domain's bound set is a break."""
+        for ref in (
+            {"evidence_id": "ev-absent"},
+            {"source_span_id": "span-absent"},
+            {"claim_id": "claim-absent"},
+        ):
+            sanad = self._typed_chain([ref])
+            defect = detect_ilal_chain_break(sanad, **self._bound_kwargs())
+            assert defect is not None
+            assert defect.code == IlalDefectCode.ILAL_CHAIN_BREAK
+            assert defect.severity == "FATAL"
+
+    def test_typed_ref_under_wrong_domain_key_breaks(self) -> None:
+        """A real ID is still invalid when used under another domain's key."""
+        cross_domain_refs = (
+            {"source_span_id": "ev-001"},
+            {"evidence_id": "span-001"},
+            {"evidence_id": "claim-001"},
+            {"claim_id": "ev-001"},
+            {"claim_id": "span-001"},
+            {"source_span_id": "claim-001"},
+        )
+        for ref in cross_domain_refs:
+            sanad = self._typed_chain([ref])
+            defect = detect_ilal_chain_break(sanad, **self._bound_kwargs())
+            assert defect is not None
+            assert defect.code == IlalDefectCode.ILAL_CHAIN_BREAK
+
+    @pytest.mark.parametrize(
+        "ref",
+        [
+            {"node_id": "node-ingest"},
+            {"evidence_id": "ev-001", "claim_id": "claim-001"},
+            {"evidence_id": "ev-001", "unknown": "x"},
+            {},
+            {"evidence_id": None},
+            {"evidence_id": ""},
+            {"evidence_id": "  "},
+            {"evidence_id": 0},
+            {"evidence_id": True},
+            {"evidence_id": ["ev-001"]},
+            {"evidence_id": {"id": "ev-001"}},
+            None,
+            "",
+            0,
+            False,
+            ["ev-001"],
+        ],
+    )
+    def test_malformed_input_ref_entries_break(self, ref: Any) -> None:
+        """Unknown keys, ambiguous/multi-key or malformed values all break."""
+        sanad = self._typed_chain([ref])
+        defect = detect_ilal_chain_break(sanad, **self._bound_kwargs())
+        assert defect is not None
+        assert defect.code == IlalDefectCode.ILAL_CHAIN_BREAK
+        assert defect.severity == "FATAL"
+
+    def test_non_list_input_refs_container_breaks(self) -> None:
+        """A present non-list input_refs container is malformed, not skipped."""
+        sanad: dict[str, Any] = {
+            "transmission_chain": [
+                {"node_id": "node-1", "input_refs": {"evidence_id": "ev-001"}},
+            ]
+        }
+        defect = detect_ilal_chain_break(sanad, **self._bound_kwargs())
+        assert defect is not None
+        assert defect.code == IlalDefectCode.ILAL_CHAIN_BREAK
+
+    def test_typed_ref_missing_domain_context_breaks(self) -> None:
+        """Bound-path callers omitting a domain cannot validate its refs."""
+        span_sanad = self._typed_chain([{"source_span_id": "span-001"}])
+        defect = detect_ilal_chain_break(span_sanad, evidence_ids={"ev-001"})
+        assert defect is not None
+        assert defect.code == IlalDefectCode.ILAL_CHAIN_BREAK
+
+        claim_sanad = self._typed_chain([{"claim_id": "claim-001"}])
+        defect = detect_ilal_chain_break(
+            claim_sanad,
+            evidence_ids={"ev-001"},
+            source_span_ids={"span-001"},
+        )
+        assert defect is not None
+        assert defect.code == IlalDefectCode.ILAL_CHAIN_BREAK
+
+        evidence_sanad = self._typed_chain([{"evidence_id": "ev-001"}])
+        defect = detect_ilal_chain_break(
+            evidence_sanad,
+            source_span_ids={"span-001"},
+            claim_id="claim-001",
+        )
+        assert defect is not None
+        assert defect.code == IlalDefectCode.ILAL_CHAIN_BREAK
+
+    def test_legacy_scalar_refs_keep_existing_membership(self) -> None:
+        """Bare scalar refs still resolve against evidence/node membership."""
+        sanad: dict[str, Any] = {
+            "transmission_chain": [
+                {"node_id": "node-1", "input_refs": ["ev-001"]},
+                {
+                    "node_id": "node-2",
+                    "prev_node_id": "node-1",
+                    "input_refs": ["node-1"],
+                },
+            ]
+        }
+        defect = detect_ilal_chain_break(sanad, evidence_ids={"ev-001"})
+        assert defect is None
+
+        broken: dict[str, Any] = {
+            "transmission_chain": [
+                {"node_id": "node-1", "input_refs": ["ev-missing"]},
+            ]
+        }
+        defect = detect_ilal_chain_break(broken, evidence_ids={"ev-001"})
+        assert defect is not None
+        assert defect.code == IlalDefectCode.ILAL_CHAIN_BREAK
+
+    def test_unbound_legacy_context_still_skips_input_refs(self) -> None:
+        """Without any bound context, typed/scalar refs stay unchecked."""
+        sanad = self._typed_chain([{"source_span_id": "span-001"}, "anything-scalar"])
+        defect = detect_ilal_chain_break(sanad)
+        assert defect is None
+
+    def test_grader_forwards_bound_context_on_both_entries(self) -> None:
+        """calculate_sanad_grade and grade_sanad_v2 both carry the context."""
+        sanad: dict[str, Any] = {
+            "primary_source": {"source_type": "AUDITED_FINANCIAL"},
+            "transmission_chain": [
+                {"node_id": "node-ingest", "input_refs": [{"source_span_id": "span-001"}]},
+                {
+                    "node_id": "node-extract",
+                    "prev_node_id": "node-ingest",
+                    "input_refs": [{"evidence_id": "ev-001"}],
+                },
+            ],
+        }
+        bound: dict[str, Any] = {
+            "evidence_ids": {"ev-001"},
+            "source_span_ids": {"span-001"},
+            "claim_id": "claim-001",
+        }
+        for entry in (calculate_sanad_grade, grade_sanad_v2):
+            result = entry(sanad, **bound)
+            assert not any(
+                defect.code == IlalDefectCode.ILAL_CHAIN_BREAK for defect in result.ilal_defects
+            )
+            # Omitting a required domain context manufactures the same
+            # fail-closed break on both entries, not just one.
+            omitted: dict[str, Any] = {
+                key: value for key, value in bound.items() if key != "source_span_ids"
+            }
+            result = entry(sanad, **omitted)
+            assert any(
+                defect.code == IlalDefectCode.ILAL_CHAIN_BREAK for defect in result.ilal_defects
+            )

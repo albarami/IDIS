@@ -14,12 +14,12 @@ ValueStruct Types:
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date as Date
 from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, StrictBool, field_validator, model_validator
 
 
 class ValueStructType(StrEnum):
@@ -31,6 +31,8 @@ class ValueStructType(StrEnum):
     DATE = "date"
     RANGE = "range"
     TEXT = "text"
+    BOOLEAN = "boolean"
+    TABLE_ROW = "table_row"
 
 
 class Currency(StrEnum):
@@ -57,8 +59,8 @@ class TimeWindow(BaseModel):
     """Time window for value context (e.g., FY2024, Q1 2025)."""
 
     label: str = Field(..., description="Human-readable label (e.g., 'FY2024', 'Q1 2025')")
-    start_date: date | None = Field(default=None, description="Start of time window")
-    end_date: date | None = Field(default=None, description="End of time window")
+    start_date: Date | None = Field(default=None, description="Start of time window")
+    end_date: Date | None = Field(default=None, description="End of time window")
 
     model_config = {"frozen": True, "extra": "forbid"}
 
@@ -73,7 +75,7 @@ class MonetaryValue(BaseModel):
     type: Literal[ValueStructType.MONETARY] = ValueStructType.MONETARY
     amount: Decimal = Field(..., description="Monetary amount as Decimal")
     currency: Currency = Field(..., description="ISO 4217 currency code")
-    as_of: date | None = Field(default=None, description="Point-in-time for the value")
+    as_of: Date | None = Field(default=None, description="Point-in-time for the value")
     time_window: TimeWindow | None = Field(default=None, description="Time window context")
 
     @field_validator("amount", mode="before")
@@ -103,7 +105,7 @@ class PercentageValue(BaseModel):
         default=False,
         description="If True, allows values > 1.0 (for growth rates)",
     )
-    as_of: date | None = Field(default=None, description="Point-in-time for the value")
+    as_of: Date | None = Field(default=None, description="Point-in-time for the value")
     time_window: TimeWindow | None = Field(default=None, description="Time window context")
 
     @field_validator("value", mode="before")
@@ -137,7 +139,7 @@ class CountValue(BaseModel):
     type: Literal[ValueStructType.COUNT] = ValueStructType.COUNT
     value: int = Field(..., ge=0, description="Non-negative integer count")
     unit: str | None = Field(default=None, description="Unit label (e.g., 'users', 'employees')")
-    as_of: date | None = Field(default=None, description="Point-in-time for the value")
+    as_of: Date | None = Field(default=None, description="Point-in-time for the value")
 
     model_config = {"frozen": True, "extra": "forbid"}
 
@@ -149,7 +151,7 @@ class DateValue(BaseModel):
     """
 
     type: Literal[ValueStructType.DATE] = ValueStructType.DATE
-    value: date = Field(..., description="ISO date value")
+    value: Date = Field(..., description="ISO date value")
     label: str | None = Field(default=None, description="Semantic label (e.g., 'founded', 'exit')")
 
     model_config = {"frozen": True, "extra": "forbid"}
@@ -167,7 +169,7 @@ class RangeValue(BaseModel):
     max_value: Decimal | None = Field(default=None, description="Maximum value (inclusive)")
     unit: str = Field(..., description="Unit for the range (e.g., 'USD', 'users')")
     currency: Currency | None = Field(default=None, description="Currency if monetary range")
-    as_of: date | None = Field(default=None, description="Point-in-time for the range")
+    as_of: Date | None = Field(default=None, description="Point-in-time for the range")
     time_window: TimeWindow | None = Field(default=None, description="Time window context")
 
     @field_validator("min_value", "max_value", mode="before")
@@ -230,9 +232,92 @@ class TextValue(BaseModel):
     model_config = {"frozen": True, "extra": "forbid"}
 
 
+class BooleanValue(BaseModel):
+    """Boolean methodology answer with an unambiguous JSON representation."""
+
+    type: Literal[ValueStructType.BOOLEAN] = ValueStructType.BOOLEAN
+    value: StrictBool
+
+    model_config = {"frozen": True, "extra": "forbid"}
+
+
+ScalarValueStruct = Annotated[
+    MonetaryValue
+    | PercentageValue
+    | CountValue
+    | DateValue
+    | RangeValue
+    | TextValue
+    | BooleanValue,
+    Field(discriminator="type"),
+]
+
+
+class TableRowPeriod(BaseModel):
+    """Pinned period shape used by methodology table rows."""
+
+    kind: Literal["none", "as_of", "range"]
+    date: Date | None = None
+    start_date: Date | None = None
+    end_date: Date | None = None
+
+    @model_validator(mode="after")
+    def validate_period(self) -> TableRowPeriod:
+        if self.kind == "none":
+            if self.date is not None or self.start_date is not None or self.end_date is not None:
+                raise ValueError("none periods carry no date fields")
+        elif self.kind == "as_of":
+            if self.date is None or self.start_date is not None or self.end_date is not None:
+                raise ValueError("as_of table periods require only date")
+        elif self.date is not None or self.start_date is None or self.end_date is None:
+            raise ValueError("range table periods require only start_date and end_date")
+        elif self.start_date > self.end_date:
+            raise ValueError("table period start_date cannot exceed end_date")
+        return self
+
+    model_config = {"frozen": True, "extra": "forbid"}
+
+
+class TableRowColumns(BaseModel):
+    """The exact ordered semantic columns in methodology-table-contract-v1."""
+
+    row_label: str
+    metric: str
+    value: ScalarValueStruct
+    unit: str
+    period: TableRowPeriod
+
+    @field_validator("row_label", "metric", "unit")
+    @classmethod
+    def non_blank(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise ValueError("table row text fields must not be blank")
+        return normalized
+
+    model_config = {"frozen": True, "extra": "forbid"}
+
+
+class TableRowValue(BaseModel):
+    """One lossless row under the pinned methodology table contract."""
+
+    type: Literal[ValueStructType.TABLE_ROW] = ValueStructType.TABLE_ROW
+    contract_version: Literal["methodology-table-contract-v1"]
+    columns: TableRowColumns
+
+    model_config = {"frozen": True, "extra": "forbid"}
+
+
 # Union type for all ValueStruct variants
 ValueStruct = Annotated[
-    MonetaryValue | PercentageValue | CountValue | DateValue | RangeValue | TextValue,
+    MonetaryValue
+    | PercentageValue
+    | CountValue
+    | DateValue
+    | RangeValue
+    | TextValue
+    | BooleanValue
+    | TableRowValue,
     Field(discriminator="type"),
 ]
 
@@ -263,12 +348,16 @@ def parse_value_struct(data: dict) -> ValueStruct:
         ValueStructType.DATE.value: DateValue,
         ValueStructType.RANGE.value: RangeValue,
         ValueStructType.TEXT.value: TextValue,
+        ValueStructType.BOOLEAN.value: BooleanValue,
+        ValueStructType.TABLE_ROW.value: TableRowValue,
         "monetary": MonetaryValue,
         "percentage": PercentageValue,
         "count": CountValue,
         "date": DateValue,
         "range": RangeValue,
         "text": TextValue,
+        "boolean": BooleanValue,
+        "table_row": TableRowValue,
     }
 
     model_class = type_map.get(value_type)

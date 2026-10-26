@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import zipfile
 from io import BytesIO
-from pathlib import PurePath
+from pathlib import Path, PurePath
 
 from idis.parsers.base import (
     ParseError,
@@ -28,6 +28,7 @@ from idis.parsers.media import MediaConfig, parse_media
 from idis.parsers.ocr import OcrConfig
 from idis.parsers.pdf import parse_pdf
 from idis.parsers.pptx import parse_pptx
+from idis.parsers.watermark_page_classifier import WatermarkPageRuntimeConfig
 from idis.parsers.xlsx import parse_xlsx
 
 PDF_MAGIC = b"%PDF-"
@@ -104,6 +105,32 @@ def detect_format(data: bytes) -> str | None:
     return None
 
 
+def detect_format_file(path: str | Path) -> str | None:
+    """Detect supported container formats from a staged file without reading it all."""
+    resolved = Path(path)
+    try:
+        with resolved.open("rb") as source:
+            header = source.read(8)
+    except OSError:
+        return None
+    if _is_pdf(header):
+        return "PDF"
+    if header[:4] != ZIP_MAGIC:
+        return None
+    try:
+        with zipfile.ZipFile(resolved, "r") as archive:
+            names = set(archive.namelist())
+    except (OSError, zipfile.BadZipFile):
+        return None
+    if "xl/workbook.xml" in names:
+        return "XLSX"
+    if "word/document.xml" in names:
+        return "DOCX"
+    if "ppt/presentation.xml" in names:
+        return "PPTX"
+    return None
+
+
 def parse_bytes(
     data: bytes,
     filename: str | None = None,
@@ -111,6 +138,9 @@ def parse_bytes(
     limits: ParseLimits | None = None,
     ocr_config: OcrConfig | None = None,
     media_config: MediaConfig | None = None,
+    pdf_password: str | None = None,
+    source_path: str | Path | None = None,
+    watermark_page_config: WatermarkPageRuntimeConfig | None = None,
 ) -> ParseResult:
     """Parse document bytes by detecting format and dispatching to parser.
 
@@ -121,6 +151,9 @@ def parse_bytes(
         limits: Optional parsing limits (defaults to ParseLimits()).
         ocr_config: Optional explicit OCR execution config for PDF/image parsing.
         media_config: Optional explicit media transcription config for media parsing.
+        pdf_password: Optional password already resolved by content SHA-256.
+        source_path: Optional already-verified staged path for file-backed PDF OCR.
+        watermark_page_config: Explicit verified watermark classifier material.
 
     Returns:
         ParseResult from the appropriate parser, or error result for
@@ -151,7 +184,14 @@ def parse_bytes(
     detected_format = detect_format(data)
 
     if detected_format == "PDF":
-        return parse_pdf(data, limits=limits, ocr_config=ocr_config)
+        return parse_pdf(
+            data,
+            limits=limits,
+            ocr_config=ocr_config,
+            password=pdf_password,
+            source_path=source_path,
+            watermark_page_config=watermark_page_config,
+        )
 
     if detected_format == "XLSX":
         return parse_xlsx(data, limits=limits)

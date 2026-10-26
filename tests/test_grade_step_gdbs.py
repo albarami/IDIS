@@ -348,4 +348,4 @@ class TestPrebuiltSanadGrading:
         assert "sanad.graded" in event_types
 
         graded_event = next(e for e in sink.events if e["event_type"] == "sanad.graded")
-        assert graded_event["details"]["grade"] == "C"
+        assert graded_event["payload"]["safe"]["grade"] == "C"

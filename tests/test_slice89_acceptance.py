@@ -20,7 +20,6 @@ from typing import Any
 
 import pytest
 
-from idis.api.routes.runs import _run_full_graph_evidence
 from idis.audit.sink import InMemoryAuditSink
 from idis.deliverables.generator import DeliverablesGenerator
 from idis.persistence.neo4j_driver import Neo4jHealthCheck
@@ -31,6 +30,7 @@ from idis.persistence.repositories.claims import (
 )
 from idis.services.graph.retrieval import GraphRetrievalService
 from idis.services.runs.orchestrator import RunStepBlockedError
+from idis.services.runs.step_runtime.evidence import _run_full_graph_evidence
 from tests.test_deliverables_generator import (
     _TIMESTAMP,
     _make_bundle,

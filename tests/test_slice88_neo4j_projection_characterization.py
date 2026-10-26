@@ -25,12 +25,15 @@ from pathlib import Path
 
 import pytest
 
-from idis.api.routes.runs import _project_graph_evidence, _run_full_graph_evidence
 from idis.persistence.graph_consistency import GraphProjectionService
 from idis.persistence.neo4j_driver import Neo4jHealthCheck, NodeLabel
 from idis.persistence.saga import DualWriteSagaExecutor
 from idis.services.graph.retrieval import GraphRetrievalService
 from idis.services.runs.orchestrator import RunStepBlockedError
+from idis.services.runs.step_runtime.evidence import (
+    _project_graph_evidence,
+    _run_full_graph_evidence,
+)
 from tests.test_slice61_graph_visibility import (
     DEAL_ID,
     RUN_ID,

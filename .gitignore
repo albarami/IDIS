@@ -84,3 +84,10 @@ ui/.next/
 ui/out/
 ui/.env.local
 *.tsbuildinfo
+
+# Private fund-derived policy overlay: restore only from the authorized private
+# recovery repository. Exact bytes are required locally, never public Git.
+/contracts/fdd_formula_policy_v1.json
+/contracts/fdd_formula_policy_v2.json
+/docs/plans/2026-07-25-slice100-task8-fdd-formula-policy-v1-review-map.md
+/docs/plans/2026-07-25-slice100-task8-fdd-formula-policy-v2-review-map.md

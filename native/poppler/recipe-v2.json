@@ -1,0 +1,3937 @@
+{
+  "base_image": {
+    "earlier_recorded_platform_manifest_digest": "sha256:067222884359a2476ff344f92278df8fbe4792b7cf1a43d82d4a98befe8f89fb",
+    "expected_local_image_id": "sha256:063fa8a969c3aaacda2cf13fbd6a5fa9634791719cb9c13993157d6f3136b09f",
+    "local_image_architecture": "amd64",
+    "local_image_created": "2026-02-04T20:27:57.36824091Z",
+    "local_image_os": "linux",
+    "pull_required": false,
+    "reference": "python:3.11-slim-bookworm@sha256:04cd27899595a99dfe77709d96f08876bf2ee99139ee2f0fe9ac948005034e5b"
+  },
+  "builder": {
+    "B1": {
+      "config_h_defined_1": [
+        "ENABLE_LIBPNG",
+        "ENABLE_LIBJPEG",
+        "ENABLE_LIBTIFF",
+        "ENABLE_LIBOPENJPEG",
+        "HAVE_CAIRO",
+        "HAVE_DCT_DECODER",
+        "HAVE_JPX_DECODER",
+        "USE_CMS",
+        "WITH_FONTCONFIGURATION_FONTCONFIG",
+        "OPI_SUPPORT",
+        "TEXTOUT_WORD_LIST"
+      ],
+      "config_h_undefined": [
+        "ENABLE_LIBCURL",
+        "POPPLER_HAS_CURL_SUPPORT",
+        "ENABLE_NSS3",
+        "ENABLE_GPGME",
+        "ENABLE_PGP_SIGNATURES",
+        "ENABLE_SIGNATURES",
+        "ENABLE_ZLIB_UNCOMPRESS",
+        "ENABLE_RELOCATABLE",
+        "USE_FLOAT",
+        "WITH_FONTCONFIGURATION_WIN32",
+        "WITH_FONTCONFIGURATION_ANDROID"
+      ],
+      "poppler_config_h_defined_1": [
+        "ENABLE_LIBJPEG",
+        "ENABLE_LIBTIFF",
+        "ENABLE_LIBPNG",
+        "USE_CMS",
+        "USE_BOOST_HEADERS",
+        "OPI_SUPPORT",
+        "TEXTOUT_WORD_LIST"
+      ],
+      "poppler_config_h_undefined": [
+        "USE_FLOAT",
+        "POPPLER_HAS_CURL_SUPPORT"
+      ],
+      "summary_lines": {
+        "cairo output": "yes",
+        "command line utils": "yes",
+        "cpp wrapper": "no",
+        "font configuration": "fontconfig",
+        "glib wrapper": "no",
+        "qt5 wrapper": "no",
+        "qt6 wrapper": "no",
+        "use boost (Splash)": "yes",
+        "use curl": "no",
+        "use gpg": "no",
+        "use lcms2": "yes",
+        "use libjpeg": "yes",
+        "use libopenjpeg2": "yes",
+        "use libpng": "yes",
+        "use libtiff": "yes",
+        "use nss3": "no",
+        "use zlib uncompress": "no"
+      }
+    },
+    "B2": {
+      "dtags": "--disable-new-dtags (DT_RPATH, no DT_RUNPATH)",
+      "install_rpath": "/opt/idis-native/poppler-25.12.0/lib",
+      "ldconfig_registration": "NONE",
+      "probe_environment": {
+        "LC_ALL": "C.UTF-8",
+        "PATH": "/usr/bin:/bin"
+      }
+    },
+    "build_argv": [
+      "cmake",
+      "--build",
+      "/build/poppler",
+      "--parallel",
+      "4"
+    ],
+    "cap_add": [
+      "CHOWN",
+      "DAC_OVERRIDE",
+      "FOWNER",
+      "FSETID",
+      "SETGID",
+      "SETUID"
+    ],
+    "cap_policy": "cap-drop ALL, then only the capabilities dpkg/apt need to unpack packages as root; no NET_*, no SYS_ADMIN",
+    "closure": {
+      "base_changes": [
+        {
+          "base_essential": "no",
+          "base_priority": "optional",
+          "base_version": "2.36-9+deb12u13",
+          "body_version": "2.36-9+deb12u14",
+          "direction": "UPGRADE",
+          "package": "libc6"
+        },
+        {
+          "base_essential": "no",
+          "base_priority": "optional",
+          "base_version": "5.4.1-1",
+          "body_version": "5.4.1-1+deb12u2",
+          "direction": "UPGRADE",
+          "package": "liblzma5"
+        },
+        {
+          "base_essential": "no",
+          "base_priority": "optional",
+          "base_version": "10.42-1",
+          "body_version": "10.42-1+deb12u2",
+          "direction": "UPGRADE",
+          "package": "libpcre2-8-0"
+        }
+      ],
+      "roots": [
+        "binutils",
+        "cmake",
+        "file",
+        "g++-12",
+        "gcc-12",
+        "libboost-dev",
+        "libcairo2-dev",
+        "libfontconfig1-dev",
+        "libfreetype-dev",
+        "libjpeg62-turbo-dev",
+        "liblcms2-dev",
+        "libopenjp2-7-dev",
+        "libpng-dev",
+        "libtiff-dev",
+        "ninja-build",
+        "pkg-config",
+        "zlib1g-dev"
+      ],
+      "selected": [
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/b/binutils/binutils_2.40-2_amd64.deb",
+          "Package": "binutils",
+          "SHA256": "83c3e20b53e1fbd84d764c3ba27d26a0376e361ae5d7fb37120196934dd87424",
+          "Size": 64980,
+          "Version": "2.40-2",
+          "body": "acquisition/debian/bodies/83c3e20b53e1fbd84d764c3ba27d26a0376e361ae5d7fb37120196934dd87424.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/b/binutils/binutils-common_2.40-2_amd64.deb",
+          "Package": "binutils-common",
+          "SHA256": "ab314134f43a0891a48f69a9bc33d825da748fa5e0ba2bebb7a5c491b026f1a0",
+          "Size": 2486664,
+          "Version": "2.40-2",
+          "body": "acquisition/debian/bodies/ab314134f43a0891a48f69a9bc33d825da748fa5e0ba2bebb7a5c491b026f1a0.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/b/binutils/binutils-x86-64-linux-gnu_2.40-2_amd64.deb",
+          "Package": "binutils-x86-64-linux-gnu",
+          "SHA256": "2d7ea8a570d768224d7f2424abbe6f373d2154865a1fa7f56c80d43ecf492521",
+          "Size": 2245848,
+          "Version": "2.40-2",
+          "body": "acquisition/debian/bodies/2d7ea8a570d768224d7f2424abbe6f373d2154865a1fa7f56c80d43ecf492521.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/c/cmake/cmake_3.25.1-1_amd64.deb",
+          "Package": "cmake",
+          "SHA256": "257a11063855f09e48696057fdb1ba2bcf1069502e0302576831dc2fb1571d7f",
+          "Size": 8692248,
+          "Version": "3.25.1-1",
+          "body": "acquisition/debian/bodies/257a11063855f09e48696057fdb1ba2bcf1069502e0302576831dc2fb1571d7f.deb"
+        },
+        {
+          "Architecture": "all",
+          "Filename": "pool/main/c/cmake/cmake-data_3.25.1-1_all.deb",
+          "Package": "cmake-data",
+          "SHA256": "8371f9694da94fd551a3ea653e2e25d99747471ca0b48cc029bf5c792ea590a3",
+          "Size": 2026484,
+          "Version": "3.25.1-1",
+          "body": "acquisition/debian/bodies/8371f9694da94fd551a3ea653e2e25d99747471ca0b48cc029bf5c792ea590a3.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/gcc-12/cpp-12_12.2.0-14+deb12u1_amd64.deb",
+          "Package": "cpp-12",
+          "SHA256": "fedbb98e877adde83c983c6071537ea25ac52b277ac6e4637d85025949ca1454",
+          "Size": 9767788,
+          "Version": "12.2.0-14+deb12u1",
+          "body": "acquisition/debian/bodies/fedbb98e877adde83c983c6071537ea25ac52b277ac6e4637d85025949ca1454.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/f/file/file_5.44-3_amd64.deb",
+          "Package": "file",
+          "SHA256": "2c57221bf8cc0ff5d2295ececb9215cc1b9ff9040dacb152c385bba3087ab1df",
+          "Size": 42472,
+          "Version": "1:5.44-3",
+          "body": "acquisition/debian/bodies/2c57221bf8cc0ff5d2295ececb9215cc1b9ff9040dacb152c385bba3087ab1df.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/f/fontconfig/fontconfig-config_2.14.1-4_amd64.deb",
+          "Package": "fontconfig-config",
+          "SHA256": "281c66e46b95f045a0282a6c7a03b33de0e9a08d016897a759aaf4a04adfddbe",
+          "Size": 314864,
+          "Version": "2.14.1-4",
+          "body": "acquisition/debian/bodies/281c66e46b95f045a0282a6c7a03b33de0e9a08d016897a759aaf4a04adfddbe.deb"
+        },
+        {
+          "Architecture": "all",
+          "Filename": "pool/main/f/fonts-dejavu/fonts-dejavu-core_2.37-6_all.deb",
+          "Package": "fonts-dejavu-core",
+          "SHA256": "8892669e51aab4dc56682c8e39d8ddb7d70fad83c369344e1e240bf3ca22bb76",
+          "Size": 1067728,
+          "Version": "2.37-6",
+          "body": "acquisition/debian/bodies/8892669e51aab4dc56682c8e39d8ddb7d70fad83c369344e1e240bf3ca22bb76.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/gcc-12/g++-12_12.2.0-14+deb12u1_amd64.deb",
+          "Package": "g++-12",
+          "SHA256": "68b182badae4ace7d472f1393c559d3532a95a2d70817498b10bb481d2627251",
+          "Size": 10694076,
+          "Version": "12.2.0-14+deb12u1",
+          "body": "acquisition/debian/bodies/68b182badae4ace7d472f1393c559d3532a95a2d70817498b10bb481d2627251.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/gcc-12/gcc-12_12.2.0-14+deb12u1_amd64.deb",
+          "Package": "gcc-12",
+          "SHA256": "b46f33cc2ec245e435e043807038cecf4b201ef004800e9dfc1455240360e49d",
+          "Size": 19268852,
+          "Version": "12.2.0-14+deb12u1",
+          "body": "acquisition/debian/bodies/b46f33cc2ec245e435e043807038cecf4b201ef004800e9dfc1455240360e49d.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/updates/main/liba/libarchive/libarchive13_3.6.2-1+deb12u5_amd64.deb",
+          "Package": "libarchive13",
+          "SHA256": "45419b8c7646c1af12783ae31906ce2da4c465c1a948b01f8f44152d8269f403",
+          "Size": 345488,
+          "Version": "3.6.2-1+deb12u5",
+          "body": "acquisition/debian/bodies/45419b8c7646c1af12783ae31906ce2da4c465c1a948b01f8f44152d8269f403.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/gcc-12/libasan8_12.2.0-14+deb12u1_amd64.deb",
+          "Package": "libasan8",
+          "SHA256": "e7ac5d797d7d438a130674a8e463530f06aa02ecf919ca054d75eaa2f7849ec7",
+          "Size": 2192652,
+          "Version": "12.2.0-14+deb12u1",
+          "body": "acquisition/debian/bodies/e7ac5d797d7d438a130674a8e463530f06aa02ecf919ca054d75eaa2f7849ec7.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/gcc-12/libatomic1_12.2.0-14+deb12u1_amd64.deb",
+          "Package": "libatomic1",
+          "SHA256": "fbd4e154a6b444229ea002cc209df099209c0adc09102e5fd21239a3d2b55e2d",
+          "Size": 9376,
+          "Version": "12.2.0-14+deb12u1",
+          "body": "acquisition/debian/bodies/fbd4e154a6b444229ea002cc209df099209c0adc09102e5fd21239a3d2b55e2d.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/b/binutils/libbinutils_2.40-2_amd64.deb",
+          "Package": "libbinutils",
+          "SHA256": "fcf55b99e5f8a78f3c8ce9b6957f1024f394cf20c196b100d308a57e43547710",
+          "Size": 572104,
+          "Version": "2.40-2",
+          "body": "acquisition/debian/bodies/fcf55b99e5f8a78f3c8ce9b6957f1024f394cf20c196b100d308a57e43547710.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/u/util-linux/libblkid-dev_2.38.1-5+deb12u3_amd64.deb",
+          "Package": "libblkid-dev",
+          "SHA256": "c0ca156af47937b94da0b3dc7c6df45d3a054068c2fb56b63bf0531b67429615",
+          "Size": 179412,
+          "Version": "2.38.1-5+deb12u3",
+          "body": "acquisition/debian/bodies/c0ca156af47937b94da0b3dc7c6df45d3a054068c2fb56b63bf0531b67429615.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/b/boost-defaults/libboost-dev_1.74.0.3_amd64.deb",
+          "Package": "libboost-dev",
+          "SHA256": "dd0350aacf31110625f37e384a2309ebcfeeca6e8453352e43b7cb62fb0f41dc",
+          "Size": 4548,
+          "Version": "1.74.0.3",
+          "body": "acquisition/debian/bodies/dd0350aacf31110625f37e384a2309ebcfeeca6e8453352e43b7cb62fb0f41dc.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/b/boost1.74/libboost1.74-dev_1.74.0+ds1-21_amd64.deb",
+          "Package": "libboost1.74-dev",
+          "SHA256": "ba14fe04d7f138f874bd3ab3a20c4fd1e9f654e271449b8f3e48d20f942dbb93",
+          "Size": 9507888,
+          "Version": "1.74.0+ds1-21",
+          "body": "acquisition/debian/bodies/ba14fe04d7f138f874bd3ab3a20c4fd1e9f654e271449b8f3e48d20f942dbb93.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/b/brotli/libbrotli-dev_1.0.9-2+b6_amd64.deb",
+          "Package": "libbrotli-dev",
+          "SHA256": "932de11d4d9caee3300319b2fdf6ca505ca739706be48737df5e40ee90ccb6ca",
+          "Size": 286920,
+          "Version": "1.0.9-2+b6",
+          "body": "acquisition/debian/bodies/932de11d4d9caee3300319b2fdf6ca505ca739706be48737df5e40ee90ccb6ca.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/b/brotli/libbrotli1_1.0.9-2+b6_amd64.deb",
+          "Package": "libbrotli1",
+          "SHA256": "563b4caec1aa5e876bd3355b36e7a38e1484baf5a293b48d1e8bd22db786e4d7",
+          "Size": 275248,
+          "Version": "1.0.9-2+b6",
+          "body": "acquisition/debian/bodies/563b4caec1aa5e876bd3355b36e7a38e1484baf5a293b48d1e8bd22db786e4d7.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libb/libbsd/libbsd0_0.11.7-2_amd64.deb",
+          "Package": "libbsd0",
+          "SHA256": "bb31cc8b40f962a85b2cec970f7f79cc704a1ae4bad24257a822055404b2c60b",
+          "Size": 117416,
+          "Version": "0.11.7-2",
+          "body": "acquisition/debian/bodies/bb31cc8b40f962a85b2cec970f7f79cc704a1ae4bad24257a822055404b2c60b.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/glibc/libc-dev-bin_2.36-9+deb12u14_amd64.deb",
+          "Package": "libc-dev-bin",
+          "SHA256": "f61d923b703401023bec2ac3d9d1c9ad7341930fbe11736f7f5ef64b489d03c4",
+          "Size": 48056,
+          "Version": "2.36-9+deb12u14",
+          "body": "acquisition/debian/bodies/f61d923b703401023bec2ac3d9d1c9ad7341930fbe11736f7f5ef64b489d03c4.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/glibc/libc6_2.36-9+deb12u14_amd64.deb",
+          "Package": "libc6",
+          "SHA256": "ba4f88f73dbc3ae9055f3c20f4523bfdbaf1ad13ff95e258924f77d20b4fbedf",
+          "Size": 2759320,
+          "Version": "2.36-9+deb12u14",
+          "body": "acquisition/debian/bodies/ba4f88f73dbc3ae9055f3c20f4523bfdbaf1ad13ff95e258924f77d20b4fbedf.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/glibc/libc6-dev_2.36-9+deb12u14_amd64.deb",
+          "Package": "libc6-dev",
+          "SHA256": "0218fc2befcd784c1b0c6292c0a137ce89fad054efaa579ad083bee0f2c01aae",
+          "Size": 1903668,
+          "Version": "2.36-9+deb12u14",
+          "body": "acquisition/debian/bodies/0218fc2befcd784c1b0c6292c0a137ce89fad054efaa579ad083bee0f2c01aae.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/c/cairo/libcairo-gobject2_1.16.0-7_amd64.deb",
+          "Package": "libcairo-gobject2",
+          "SHA256": "5898b4c1093ff40bade7acb92affc4a5b5b76a1737cd41cfa2a09cdc2d864d4c",
+          "Size": 111752,
+          "Version": "1.16.0-7",
+          "body": "acquisition/debian/bodies/5898b4c1093ff40bade7acb92affc4a5b5b76a1737cd41cfa2a09cdc2d864d4c.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/c/cairo/libcairo-script-interpreter2_1.16.0-7_amd64.deb",
+          "Package": "libcairo-script-interpreter2",
+          "SHA256": "3f1f2782f3dfab1d119d95322bc4f2f2e9f18ada05c6f1168ded22dd2e40823d",
+          "Size": 149028,
+          "Version": "1.16.0-7",
+          "body": "acquisition/debian/bodies/3f1f2782f3dfab1d119d95322bc4f2f2e9f18ada05c6f1168ded22dd2e40823d.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/c/cairo/libcairo2_1.16.0-7_amd64.deb",
+          "Package": "libcairo2",
+          "SHA256": "927fa059f8b5791d0cd744d4e3a8c57fa872ef849ce14434dc2222ac8a076a69",
+          "Size": 574676,
+          "Version": "1.16.0-7",
+          "body": "acquisition/debian/bodies/927fa059f8b5791d0cd744d4e3a8c57fa872ef849ce14434dc2222ac8a076a69.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/c/cairo/libcairo2-dev_1.16.0-7_amd64.deb",
+          "Package": "libcairo2-dev",
+          "SHA256": "fd952dcfec073330c5c82c9ac63a4035ead4c78187cb67ad6fd818d4a2f8b145",
+          "Size": 726980,
+          "Version": "1.16.0-7",
+          "body": "acquisition/debian/bodies/fd952dcfec073330c5c82c9ac63a4035ead4c78187cb67ad6fd818d4a2f8b145.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/gcc-12/libcc1-0_12.2.0-14+deb12u1_amd64.deb",
+          "Package": "libcc1-0",
+          "SHA256": "4ee6009633003f47de98333ea7f7d8835ec563ae2ac4f30251dbfee04d75d46b",
+          "Size": 41736,
+          "Version": "12.2.0-14+deb12u1",
+          "body": "acquisition/debian/bodies/4ee6009633003f47de98333ea7f7d8835ec563ae2ac4f30251dbfee04d75d46b.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxcrypt/libcrypt-dev_4.4.33-2_amd64.deb",
+          "Package": "libcrypt-dev",
+          "SHA256": "81ccd29130f75a9e3adabc80e61921abff42f76761e1f792fa2d1bb69af7f52f",
+          "Size": 118144,
+          "Version": "1:4.4.33-2",
+          "body": "acquisition/debian/bodies/81ccd29130f75a9e3adabc80e61921abff42f76761e1f792fa2d1bb69af7f52f.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/b/binutils/libctf-nobfd0_2.40-2_amd64.deb",
+          "Package": "libctf-nobfd0",
+          "SHA256": "ef1dfcf22de41ea90ebd3d505447ccccd999e96b85aa777a1d7d981dc3b347aa",
+          "Size": 153384,
+          "Version": "2.40-2",
+          "body": "acquisition/debian/bodies/ef1dfcf22de41ea90ebd3d505447ccccd999e96b85aa777a1d7d981dc3b347aa.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/b/binutils/libctf0_2.40-2_amd64.deb",
+          "Package": "libctf0",
+          "SHA256": "3fb7b6f326be3fae4a87a3d33b9269bd06c1e4346a24bd737f265067e3b7427f",
+          "Size": 89796,
+          "Version": "2.40-2",
+          "body": "acquisition/debian/bodies/3fb7b6f326be3fae4a87a3d33b9269bd06c1e4346a24bd737f265067e3b7427f.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/c/curl/libcurl4_7.88.1-10+deb12u15_amd64.deb",
+          "Package": "libcurl4",
+          "SHA256": "3042904de01f9c4fbdcf1452b8f81abedcf2b015f9b9deba109063322b5bd68b",
+          "Size": 392184,
+          "Version": "7.88.1-10+deb12u15",
+          "body": "acquisition/debian/bodies/3042904de01f9c4fbdcf1452b8f81abedcf2b015f9b9deba109063322b5bd68b.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libd/libdeflate/libdeflate-dev_1.14-1_amd64.deb",
+          "Package": "libdeflate-dev",
+          "SHA256": "8b3fd9dc5a942a8b4bf4f91e618575842a4e9112970eebfed3c4d8bfb40b1ef5",
+          "Size": 53348,
+          "Version": "1.14-1",
+          "body": "acquisition/debian/bodies/8b3fd9dc5a942a8b4bf4f91e618575842a4e9112970eebfed3c4d8bfb40b1ef5.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libd/libdeflate/libdeflate0_1.14-1_amd64.deb",
+          "Package": "libdeflate0",
+          "SHA256": "3d4b39f94317b64a860db8a7a8b581b555124cd461fe07ec0d347edbdb9f6683",
+          "Size": 61416,
+          "Version": "1.14-1",
+          "body": "acquisition/debian/bodies/3d4b39f94317b64a860db8a7a8b581b555124cd461fe07ec0d347edbdb9f6683.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/e/elfutils/libelf1_0.188-2.1_amd64.deb",
+          "Package": "libelf1",
+          "SHA256": "619add379c606b3ac6c1a175853b918e6939598a83d8ebadf3bdfd50d10b3c8c",
+          "Size": 173796,
+          "Version": "0.188-2.1",
+          "body": "acquisition/debian/bodies/619add379c606b3ac6c1a175853b918e6939598a83d8ebadf3bdfd50d10b3c8c.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/updates/main/e/expat/libexpat1_2.5.0-1+deb12u4_amd64.deb",
+          "Package": "libexpat1",
+          "SHA256": "ed010cc41577d75ab01cccc6afa93496d9a99f1e16bd469caf58e1b81fddae80",
+          "Size": 105852,
+          "Version": "2.5.0-1+deb12u4",
+          "body": "acquisition/debian/bodies/ed010cc41577d75ab01cccc6afa93496d9a99f1e16bd469caf58e1b81fddae80.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/updates/main/e/expat/libexpat1-dev_2.5.0-1+deb12u4_amd64.deb",
+          "Package": "libexpat1-dev",
+          "SHA256": "74ed207919d0022cc081aa5b2cb982229b345e0d81a41049a1d944b903b3f90b",
+          "Size": 157084,
+          "Version": "2.5.0-1+deb12u4",
+          "body": "acquisition/debian/bodies/74ed207919d0022cc081aa5b2cb982229b345e0d81a41049a1d944b903b3f90b.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libf/libffi/libffi-dev_3.4.4-1_amd64.deb",
+          "Package": "libffi-dev",
+          "SHA256": "89fb890aee5148f4d308a46cd8980a54fd44135f068f05b38a6ad06800bf6df3",
+          "Size": 59376,
+          "Version": "3.4.4-1",
+          "body": "acquisition/debian/bodies/89fb890aee5148f4d308a46cd8980a54fd44135f068f05b38a6ad06800bf6df3.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/f/fontconfig/libfontconfig-dev_2.14.1-4_amd64.deb",
+          "Package": "libfontconfig-dev",
+          "SHA256": "74f4bbde5795e4fb4c453308bd0eb8ef45d7ade3cf11b3c18394f9e2c15d28df",
+          "Size": 408964,
+          "Version": "2.14.1-4",
+          "body": "acquisition/debian/bodies/74f4bbde5795e4fb4c453308bd0eb8ef45d7ade3cf11b3c18394f9e2c15d28df.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/f/fontconfig/libfontconfig1_2.14.1-4_amd64.deb",
+          "Package": "libfontconfig1",
+          "SHA256": "16ee38d374e064f534116dc442b086ef26f9831f1c0af7e5fb4fe4512e700649",
+          "Size": 385664,
+          "Version": "2.14.1-4",
+          "body": "acquisition/debian/bodies/16ee38d374e064f534116dc442b086ef26f9831f1c0af7e5fb4fe4512e700649.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/f/fontconfig/libfontconfig1-dev_2.14.1-4_amd64.deb",
+          "Package": "libfontconfig1-dev",
+          "SHA256": "b738296a7eaae3b5c280e29588f33f908cc05500d927d270aea747be81a3e019",
+          "Size": 267612,
+          "Version": "2.14.1-4",
+          "body": "acquisition/debian/bodies/b738296a7eaae3b5c280e29588f33f908cc05500d927d270aea747be81a3e019.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/f/freetype/libfreetype-dev_2.12.1+dfsg-5+deb12u4_amd64.deb",
+          "Package": "libfreetype-dev",
+          "SHA256": "5fa327ae78e645cff5a2aadad92ca3640abc5cee7ad5368d7551bea8930202af",
+          "Size": 566284,
+          "Version": "2.12.1+dfsg-5+deb12u4",
+          "body": "acquisition/debian/bodies/5fa327ae78e645cff5a2aadad92ca3640abc5cee7ad5368d7551bea8930202af.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/f/freetype/libfreetype6_2.12.1+dfsg-5+deb12u4_amd64.deb",
+          "Package": "libfreetype6",
+          "SHA256": "8043e479f73f29992d652e3f9dfe8b17f9780c7ea6330afe379ec5f9f188ac44",
+          "Size": 397736,
+          "Version": "2.12.1+dfsg-5+deb12u4",
+          "body": "acquisition/debian/bodies/8043e479f73f29992d652e3f9dfe8b17f9780c7ea6330afe379ec5f9f188ac44.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/gcc-12/libgcc-12-dev_12.2.0-14+deb12u1_amd64.deb",
+          "Package": "libgcc-12-dev",
+          "SHA256": "d720259380a84f2ffc6fe516eff5cbe9c8a005138e8d6a5748747ba4b3404a82",
+          "Size": 2437204,
+          "Version": "12.2.0-14+deb12u1",
+          "body": "acquisition/debian/bodies/d720259380a84f2ffc6fe516eff5cbe9c8a005138e8d6a5748747ba4b3404a82.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/glib2.0/libglib2.0-0_2.74.6-2+deb12u9_amd64.deb",
+          "Package": "libglib2.0-0",
+          "SHA256": "7ff85197685d89e150e342b29a59aab1beee400050ba7da73de81cd999ffee5a",
+          "Size": 1403216,
+          "Version": "2.74.6-2+deb12u9",
+          "body": "acquisition/debian/bodies/7ff85197685d89e150e342b29a59aab1beee400050ba7da73de81cd999ffee5a.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/glib2.0/libglib2.0-bin_2.74.6-2+deb12u9_amd64.deb",
+          "Package": "libglib2.0-bin",
+          "SHA256": "453789271a177354bc05c5f9b7cbcf1872c52ac555d1c78b46eba28b0b215061",
+          "Size": 112080,
+          "Version": "2.74.6-2+deb12u9",
+          "body": "acquisition/debian/bodies/453789271a177354bc05c5f9b7cbcf1872c52ac555d1c78b46eba28b0b215061.deb"
+        },
+        {
+          "Architecture": "all",
+          "Filename": "pool/main/g/glib2.0/libglib2.0-data_2.74.6-2+deb12u9_all.deb",
+          "Package": "libglib2.0-data",
+          "SHA256": "d98434e097009dedd2f2382c48b7debab5b14261966c0e0506a991b2496bea5f",
+          "Size": 1211164,
+          "Version": "2.74.6-2+deb12u9",
+          "body": "acquisition/debian/bodies/d98434e097009dedd2f2382c48b7debab5b14261966c0e0506a991b2496bea5f.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/glib2.0/libglib2.0-dev_2.74.6-2+deb12u9_amd64.deb",
+          "Package": "libglib2.0-dev",
+          "SHA256": "217766f170553e14884f7d67c0636b833da43c1e4a65dfe41268ba1292001ccd",
+          "Size": 1606256,
+          "Version": "2.74.6-2+deb12u9",
+          "body": "acquisition/debian/bodies/217766f170553e14884f7d67c0636b833da43c1e4a65dfe41268ba1292001ccd.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/glib2.0/libglib2.0-dev-bin_2.74.6-2+deb12u9_amd64.deb",
+          "Package": "libglib2.0-dev-bin",
+          "SHA256": "02dc46a3ab08d194e370a0d7ff0d7d92700478658948040a56290e97a030a5c5",
+          "Size": 152744,
+          "Version": "2.74.6-2+deb12u9",
+          "body": "acquisition/debian/bodies/02dc46a3ab08d194e370a0d7ff0d7d92700478658948040a56290e97a030a5c5.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/gcc-12/libgomp1_12.2.0-14+deb12u1_amd64.deb",
+          "Package": "libgomp1",
+          "SHA256": "48fec46bda7f5b1638b9e959889bfbc20491247d402d120bb152687eb48143d7",
+          "Size": 115772,
+          "Version": "12.2.0-14+deb12u1",
+          "body": "acquisition/debian/bodies/48fec46bda7f5b1638b9e959889bfbc20491247d402d120bb152687eb48143d7.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/b/binutils/libgprofng0_2.40-2_amd64.deb",
+          "Package": "libgprofng0",
+          "SHA256": "a3c4092d84f19d13caf90f3c96eec53db8819f0e3a5247434944d71ed75fa53d",
+          "Size": 812120,
+          "Version": "2.40-2",
+          "body": "acquisition/debian/bodies/a3c4092d84f19d13caf90f3c96eec53db8819f0e3a5247434944d71ed75fa53d.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libi/libice/libice-dev_1.0.10-1_amd64.deb",
+          "Package": "libice-dev",
+          "SHA256": "9d111d7e07104f7b9cc284d32e811ab01f376613f163b0580fbd7b61440ff669",
+          "Size": 67052,
+          "Version": "2:1.0.10-1",
+          "body": "acquisition/debian/bodies/9d111d7e07104f7b9cc284d32e811ab01f376613f163b0580fbd7b61440ff669.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libi/libice/libice6_1.0.10-1_amd64.deb",
+          "Package": "libice6",
+          "SHA256": "452796e565c9d42386bd59990000ae9c37d85e142e00ee2b14df0787e2bbf970",
+          "Size": 58540,
+          "Version": "2:1.0.10-1",
+          "body": "acquisition/debian/bodies/452796e565c9d42386bd59990000ae9c37d85e142e00ee2b14df0787e2bbf970.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/i/icu/libicu72_72.1-3+deb12u1_amd64.deb",
+          "Package": "libicu72",
+          "SHA256": "f7f6f99c6d7b025914df2447fc93e11d22c44c0c8bdd8b6f36691c9e7ddcef88",
+          "Size": 9376124,
+          "Version": "72.1-3+deb12u1",
+          "body": "acquisition/debian/bodies/f7f6f99c6d7b025914df2447fc93e11d22c44c0c8bdd8b6f36691c9e7ddcef88.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/i/isl/libisl23_0.25-1.1_amd64.deb",
+          "Package": "libisl23",
+          "SHA256": "ebff0b2f8b220c74224197523019366e97ee4770d464bebc48e4865114e4da0e",
+          "Size": 683060,
+          "Version": "0.25-1.1",
+          "body": "acquisition/debian/bodies/ebff0b2f8b220c74224197523019366e97ee4770d464bebc48e4865114e4da0e.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/gcc-12/libitm1_12.2.0-14+deb12u1_amd64.deb",
+          "Package": "libitm1",
+          "SHA256": "0ed5b35dfd1346cccbf065408ec789db6c44c1d0a16ae84533411dea09632979",
+          "Size": 26140,
+          "Version": "12.2.0-14+deb12u1",
+          "body": "acquisition/debian/bodies/0ed5b35dfd1346cccbf065408ec789db6c44c1d0a16ae84533411dea09632979.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/j/jansson/libjansson4_2.14-2_amd64.deb",
+          "Package": "libjansson4",
+          "SHA256": "3fc9742f9f1a37bcb9931df6074b4d1483419ef832ad5349f47323e75fc27864",
+          "Size": 40788,
+          "Version": "2.14-2",
+          "body": "acquisition/debian/bodies/3fc9742f9f1a37bcb9931df6074b4d1483419ef832ad5349f47323e75fc27864.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/j/jbigkit/libjbig-dev_2.1-6.1_amd64.deb",
+          "Package": "libjbig-dev",
+          "SHA256": "63e010c2f90fffe55eb813dba8c3f5dc6b7294667aa26e7058deaf978bb030e9",
+          "Size": 31040,
+          "Version": "2.1-6.1",
+          "body": "acquisition/debian/bodies/63e010c2f90fffe55eb813dba8c3f5dc6b7294667aa26e7058deaf978bb030e9.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/j/jbigkit/libjbig0_2.1-6.1_amd64.deb",
+          "Package": "libjbig0",
+          "SHA256": "6b07c77b700a615642888a82ba92a7e7c429d04b9c8669c62b2263f15c4c4059",
+          "Size": 31704,
+          "Version": "2.1-6.1",
+          "body": "acquisition/debian/bodies/6b07c77b700a615642888a82ba92a7e7c429d04b9c8669c62b2263f15c4c4059.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libj/libjpeg-turbo/libjpeg62-turbo_2.1.5-2_amd64.deb",
+          "Package": "libjpeg62-turbo",
+          "SHA256": "95ec30140789a342add8f8371ed018924de51b539056522b66f207b25cba9cad",
+          "Size": 166332,
+          "Version": "1:2.1.5-2",
+          "body": "acquisition/debian/bodies/95ec30140789a342add8f8371ed018924de51b539056522b66f207b25cba9cad.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libj/libjpeg-turbo/libjpeg62-turbo-dev_2.1.5-2_amd64.deb",
+          "Package": "libjpeg62-turbo-dev",
+          "SHA256": "10485411f751c24472c43b28fe24ab6389fedb027d496bbc2c831496f750ab01",
+          "Size": 289644,
+          "Version": "1:2.1.5-2",
+          "body": "acquisition/debian/bodies/10485411f751c24472c43b28fe24ab6389fedb027d496bbc2c831496f750ab01.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libj/libjsoncpp/libjsoncpp25_1.9.5-4_amd64.deb",
+          "Package": "libjsoncpp25",
+          "SHA256": "4ab06b9ce67470579be3112bf2b6b314012f93bfff619580b93a902d6b1221c5",
+          "Size": 78572,
+          "Version": "1.9.5-4",
+          "body": "acquisition/debian/bodies/4ab06b9ce67470579be3112bf2b6b314012f93bfff619580b93a902d6b1221c5.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/l/lcms2/liblcms2-2_2.14-2+deb12u1_amd64.deb",
+          "Package": "liblcms2-2",
+          "SHA256": "333efe13d165b8a98194d95e72fd10b502ebbee4dc2eb43fc2ab83e2b53e5f17",
+          "Size": 153540,
+          "Version": "2.14-2+deb12u1",
+          "body": "acquisition/debian/bodies/333efe13d165b8a98194d95e72fd10b502ebbee4dc2eb43fc2ab83e2b53e5f17.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/l/lcms2/liblcms2-dev_2.14-2+deb12u1_amd64.deb",
+          "Package": "liblcms2-dev",
+          "SHA256": "848222a1e0e4153cdd17f3846a9f672ef9be4de78b741d1931b98a2fb974c895",
+          "Size": 1815336,
+          "Version": "2.14-2+deb12u1",
+          "body": "acquisition/debian/bodies/848222a1e0e4153cdd17f3846a9f672ef9be4de78b741d1931b98a2fb974c895.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/o/openldap/libldap-2.5-0_2.5.13+dfsg-5_amd64.deb",
+          "Package": "libldap-2.5-0",
+          "SHA256": "4b6c30f6554149c594628d945edc6003f0eea8d0cc1341638c0e71375db147ed",
+          "Size": 183248,
+          "Version": "2.5.13+dfsg-5",
+          "body": "acquisition/debian/bodies/4b6c30f6554149c594628d945edc6003f0eea8d0cc1341638c0e71375db147ed.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/l/lerc/liblerc-dev_4.0.0+ds-2_amd64.deb",
+          "Package": "liblerc-dev",
+          "SHA256": "4071e713e4d856bcaceb9cb8a8a00de65edcad1153470bd012ab9f3ce0df1140",
+          "Size": 174732,
+          "Version": "4.0.0+ds-2",
+          "body": "acquisition/debian/bodies/4071e713e4d856bcaceb9cb8a8a00de65edcad1153470bd012ab9f3ce0df1140.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/l/lerc/liblerc4_4.0.0+ds-2_amd64.deb",
+          "Package": "liblerc4",
+          "SHA256": "771f5c47ca69f24ca61e4be0c98c5912b182ce442f921697d17a472f3ded5c9c",
+          "Size": 170368,
+          "Version": "4.0.0+ds-2",
+          "body": "acquisition/debian/bodies/771f5c47ca69f24ca61e4be0c98c5912b182ce442f921697d17a472f3ded5c9c.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/gcc-12/liblsan0_12.2.0-14+deb12u1_amd64.deb",
+          "Package": "liblsan0",
+          "SHA256": "d234ab339c0ba31a4fb44e2334cf5a8d15b87f2c2f9e74fadfaa877f92dcf22a",
+          "Size": 969300,
+          "Version": "12.2.0-14+deb12u1",
+          "body": "acquisition/debian/bodies/d234ab339c0ba31a4fb44e2334cf5a8d15b87f2c2f9e74fadfaa877f92dcf22a.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/updates/main/x/xz-utils/liblzma-dev_5.4.1-1+deb12u2_amd64.deb",
+          "Package": "liblzma-dev",
+          "SHA256": "8fba549e7a6819bb5758fc9b7d601a82963e6cdc222043d06a989312604bbc55",
+          "Size": 260400,
+          "Version": "5.4.1-1+deb12u2",
+          "body": "acquisition/debian/bodies/8fba549e7a6819bb5758fc9b7d601a82963e6cdc222043d06a989312604bbc55.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/updates/main/x/xz-utils/liblzma5_5.4.1-1+deb12u2_amd64.deb",
+          "Package": "liblzma5",
+          "SHA256": "3d8c29c8c21ec6007635e1b2591edf98b771c9572a085968f47452b33040f384",
+          "Size": 205796,
+          "Version": "5.4.1-1+deb12u2",
+          "body": "acquisition/debian/bodies/3d8c29c8c21ec6007635e1b2591edf98b771c9572a085968f47452b33040f384.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/l/lzo2/liblzo2-2_2.10-2_amd64.deb",
+          "Package": "liblzo2-2",
+          "SHA256": "4f08e092c76e425295a498cd547dc9b8f6a595473f3020ab8c96309b29872636",
+          "Size": 56912,
+          "Version": "2.10-2",
+          "body": "acquisition/debian/bodies/4f08e092c76e425295a498cd547dc9b8f6a595473f3020ab8c96309b29872636.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/f/file/libmagic-mgc_5.44-3_amd64.deb",
+          "Package": "libmagic-mgc",
+          "SHA256": "bad01673ba5dfb9b5db4f3ae6a71f18d492cb6801eab45ad3c7d483c0a1f6ad2",
+          "Size": 304888,
+          "Version": "1:5.44-3",
+          "body": "acquisition/debian/bodies/bad01673ba5dfb9b5db4f3ae6a71f18d492cb6801eab45ad3c7d483c0a1f6ad2.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/f/file/libmagic1_5.44-3_amd64.deb",
+          "Package": "libmagic1",
+          "SHA256": "a241c2adc7438a7e217f32544028489981768a349d3e48673392703255c7b88e",
+          "Size": 103752,
+          "Version": "1:5.44-3",
+          "body": "acquisition/debian/bodies/a241c2adc7438a7e217f32544028489981768a349d3e48673392703255c7b88e.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/u/util-linux/libmount-dev_2.38.1-5+deb12u3_amd64.deb",
+          "Package": "libmount-dev",
+          "SHA256": "697afed24fbad876b86efe5104f0b5303a6394b9d0227682992654232a13fd4f",
+          "Size": 22568,
+          "Version": "2.38.1-5+deb12u3",
+          "body": "acquisition/debian/bodies/697afed24fbad876b86efe5104f0b5303a6394b9d0227682992654232a13fd4f.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/m/mpclib3/libmpc3_1.3.1-1_amd64.deb",
+          "Package": "libmpc3",
+          "SHA256": "d7f79544790e44f9b0c8cb9034a18c58d37f8702a15f32539050718679e52f80",
+          "Size": 51480,
+          "Version": "1.3.1-1",
+          "body": "acquisition/debian/bodies/d7f79544790e44f9b0c8cb9034a18c58d37f8702a15f32539050718679e52f80.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/m/mpfr4/libmpfr6_4.2.0-1_amd64.deb",
+          "Package": "libmpfr6",
+          "SHA256": "37b7a2b4e78890b6a074777f27b96c84f58e81558ba08410c2b6c0ca4a4ad77b",
+          "Size": 700900,
+          "Version": "4.2.0-1",
+          "body": "acquisition/debian/bodies/37b7a2b4e78890b6a074777f27b96c84f58e81558ba08410c2b6c0ca4a4ad77b.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/n/nghttp2/libnghttp2-14_1.52.0-1+deb12u3_amd64.deb",
+          "Package": "libnghttp2-14",
+          "SHA256": "5a5736cee57e51c1baed869979e6ecdbc6495e939e33203d6cfe3b6e5a149e3f",
+          "Size": 72404,
+          "Version": "1.52.0-1+deb12u3",
+          "body": "acquisition/debian/bodies/5a5736cee57e51c1baed869979e6ecdbc6495e939e33203d6cfe3b6e5a149e3f.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libn/libnsl/libnsl-dev_1.3.0-2_amd64.deb",
+          "Package": "libnsl-dev",
+          "SHA256": "bb81a188c119cd7fdebae723cbc95887b6c549b2fe4fb7e268a9c8846444da99",
+          "Size": 66436,
+          "Version": "1.3.0-2",
+          "body": "acquisition/debian/bodies/bb81a188c119cd7fdebae723cbc95887b6c549b2fe4fb7e268a9c8846444da99.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/o/openjpeg2/libopenjp2-7_2.5.0-2+deb12u3_amd64.deb",
+          "Package": "libopenjp2-7",
+          "SHA256": "a127e2f1741d66bdddb6393a718e3cbec327d53f88c89b859b1f8d73f64cf635",
+          "Size": 189312,
+          "Version": "2.5.0-2+deb12u3",
+          "body": "acquisition/debian/bodies/a127e2f1741d66bdddb6393a718e3cbec327d53f88c89b859b1f8d73f64cf635.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/o/openjpeg2/libopenjp2-7-dev_2.5.0-2+deb12u3_amd64.deb",
+          "Package": "libopenjp2-7-dev",
+          "SHA256": "44ce2873f2c7deac3db2962984cf90d54f266249ef993e14438f98013b6279c2",
+          "Size": 262888,
+          "Version": "2.5.0-2+deb12u3",
+          "body": "acquisition/debian/bodies/44ce2873f2c7deac3db2962984cf90d54f266249ef993e14438f98013b6279c2.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/updates/main/p/pcre2/libpcre2-16-0_10.42-1+deb12u2_amd64.deb",
+          "Package": "libpcre2-16-0",
+          "SHA256": "466b6ef0a7788ac6a754e727ec43e3e1c45602baa0ecf103af6ba8a2665b7c4f",
+          "Size": 245456,
+          "Version": "10.42-1+deb12u2",
+          "body": "acquisition/debian/bodies/466b6ef0a7788ac6a754e727ec43e3e1c45602baa0ecf103af6ba8a2665b7c4f.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/updates/main/p/pcre2/libpcre2-32-0_10.42-1+deb12u2_amd64.deb",
+          "Package": "libpcre2-32-0",
+          "SHA256": "159c10b6a650cac30de79f93189e7bfdcbc42088ec1e7049a08477e4e93be223",
+          "Size": 234736,
+          "Version": "10.42-1+deb12u2",
+          "body": "acquisition/debian/bodies/159c10b6a650cac30de79f93189e7bfdcbc42088ec1e7049a08477e4e93be223.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/updates/main/p/pcre2/libpcre2-8-0_10.42-1+deb12u2_amd64.deb",
+          "Package": "libpcre2-8-0",
+          "SHA256": "d2f7edfcc7689b9e0761c2742cc824ac86a20768bc5e8057818dc6875291fe76",
+          "Size": 261628,
+          "Version": "10.42-1+deb12u2",
+          "body": "acquisition/debian/bodies/d2f7edfcc7689b9e0761c2742cc824ac86a20768bc5e8057818dc6875291fe76.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/updates/main/p/pcre2/libpcre2-dev_10.42-1+deb12u2_amd64.deb",
+          "Package": "libpcre2-dev",
+          "SHA256": "420595d97c946994ea72f38ac1103d8bcc1b10385f3d2a2fe2627c52d2beed6e",
+          "Size": 752192,
+          "Version": "10.42-1+deb12u2",
+          "body": "acquisition/debian/bodies/420595d97c946994ea72f38ac1103d8bcc1b10385f3d2a2fe2627c52d2beed6e.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/updates/main/p/pcre2/libpcre2-posix3_10.42-1+deb12u2_amd64.deb",
+          "Package": "libpcre2-posix3",
+          "SHA256": "54592f2ac58497ed96dfdac341a05473fcd29296320b0910dc21a8c73f5947bd",
+          "Size": 55620,
+          "Version": "10.42-1+deb12u2",
+          "body": "acquisition/debian/bodies/54592f2ac58497ed96dfdac341a05473fcd29296320b0910dc21a8c73f5947bd.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/p/pixman/libpixman-1-0_0.42.2-1_amd64.deb",
+          "Package": "libpixman-1-0",
+          "SHA256": "9ed75ef81b6b1eba9e1357f8b0ce01d31112b0e07b2b685bee2cf627a8932892",
+          "Size": 545588,
+          "Version": "0.42.2-1",
+          "body": "acquisition/debian/bodies/9ed75ef81b6b1eba9e1357f8b0ce01d31112b0e07b2b685bee2cf627a8932892.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/p/pixman/libpixman-1-dev_0.42.2-1_amd64.deb",
+          "Package": "libpixman-1-dev",
+          "SHA256": "4430a914164274a5c81e979f786bb84895f680b8fe041dfcf4c6bfa521183122",
+          "Size": 563848,
+          "Version": "0.42.2-1",
+          "body": "acquisition/debian/bodies/4430a914164274a5c81e979f786bb84895f680b8fe041dfcf4c6bfa521183122.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/p/pkgconf/libpkgconf3_1.8.1-1_amd64.deb",
+          "Package": "libpkgconf3",
+          "SHA256": "da01fb901123ae498c36387a32240e09e1f2866810146c5a574273f7eaf31093",
+          "Size": 36084,
+          "Version": "1.8.1-1",
+          "body": "acquisition/debian/bodies/da01fb901123ae498c36387a32240e09e1f2866810146c5a574273f7eaf31093.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/updates/main/libp/libpng1.6/libpng-dev_1.6.39-2+deb12u6_amd64.deb",
+          "Package": "libpng-dev",
+          "SHA256": "229112e7be58431e38e9c536a646bdeccc470d705b71e3286a97e567182e2643",
+          "Size": 360564,
+          "Version": "1.6.39-2+deb12u6",
+          "body": "acquisition/debian/bodies/229112e7be58431e38e9c536a646bdeccc470d705b71e3286a97e567182e2643.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/updates/main/libp/libpng1.6/libpng16-16_1.6.39-2+deb12u6_amd64.deb",
+          "Package": "libpng16-16",
+          "SHA256": "940b91d40d51c825de7f7aa133aecff1ffa25a91f12cb6aa6926c9ad55cd640c",
+          "Size": 277048,
+          "Version": "1.6.39-2+deb12u6",
+          "body": "acquisition/debian/bodies/940b91d40d51c825de7f7aa133aecff1ffa25a91f12cb6aa6926c9ad55cd640c.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/p/procps/libproc2-0_4.0.2-3_amd64.deb",
+          "Package": "libproc2-0",
+          "SHA256": "e82ba5d01929eafb8b9954606a3c38b0332a987c2b3432388b4ee7365e54deae",
+          "Size": 62804,
+          "Version": "2:4.0.2-3",
+          "body": "acquisition/debian/bodies/e82ba5d01929eafb8b9954606a3c38b0332a987c2b3432388b4ee7365e54deae.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libp/libpsl/libpsl5_0.21.2-1_amd64.deb",
+          "Package": "libpsl5",
+          "SHA256": "4f0d35610204e4e754b057748719744114621f2f6f4202d846c314860a981afb",
+          "Size": 58684,
+          "Version": "0.21.2-1",
+          "body": "acquisition/debian/bodies/4f0d35610204e4e754b057748719744114621f2f6f4202d846c314860a981afb.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libp/libpthread-stubs/libpthread-stubs0-dev_0.4-1_amd64.deb",
+          "Package": "libpthread-stubs0-dev",
+          "SHA256": "54632f160e1e8a43656a87195a547391038c4ca0f53291b849cd4457ba5dfde9",
+          "Size": 5344,
+          "Version": "0.4-1",
+          "body": "acquisition/debian/bodies/54632f160e1e8a43656a87195a547391038c4ca0f53291b849cd4457ba5dfde9.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/p/python3-defaults/libpython3-stdlib_3.11.2-1+b1_amd64.deb",
+          "Package": "libpython3-stdlib",
+          "SHA256": "4e58891d5c951a1e360ed9eaa814413cb5e84deadce3f08e801ac680434c786e",
+          "Size": 9312,
+          "Version": "3.11.2-1+b1",
+          "body": "acquisition/debian/bodies/4e58891d5c951a1e360ed9eaa814413cb5e84deadce3f08e801ac680434c786e.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/updates/main/p/python3.11/libpython3.11-minimal_3.11.2-6+deb12u9_amd64.deb",
+          "Package": "libpython3.11-minimal",
+          "SHA256": "69f41cfa3f4ba17284e538f843069d7529c53c207d2ae17a5b02785944870e33",
+          "Size": 820928,
+          "Version": "3.11.2-6+deb12u9",
+          "body": "acquisition/debian/bodies/69f41cfa3f4ba17284e538f843069d7529c53c207d2ae17a5b02785944870e33.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/updates/main/p/python3.11/libpython3.11-stdlib_3.11.2-6+deb12u9_amd64.deb",
+          "Package": "libpython3.11-stdlib",
+          "SHA256": "10f13e000ee757f5f2d2d3569f9e30546214a0c850acd78695feae373bfa3e53",
+          "Size": 1798408,
+          "Version": "3.11.2-6+deb12u9",
+          "body": "acquisition/debian/bodies/10f13e000ee757f5f2d2d3569f9e30546214a0c850acd78695feae373bfa3e53.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/gcc-12/libquadmath0_12.2.0-14+deb12u1_amd64.deb",
+          "Package": "libquadmath0",
+          "SHA256": "3f0c9a4c730da2fdab001cae596625438598fd2996d29d888feeb4c1cdc9011f",
+          "Size": 144616,
+          "Version": "12.2.0-14+deb12u1",
+          "body": "acquisition/debian/bodies/3f0c9a4c730da2fdab001cae596625438598fd2996d29d888feeb4c1cdc9011f.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/r/rhash/librhash0_1.4.3-3_amd64.deb",
+          "Package": "librhash0",
+          "SHA256": "d9ba48a51fd4734aaaf3a75fd94b6352a02f9eaa88d3bec84cd0b5d3090f9d2a",
+          "Size": 134112,
+          "Version": "1.4.3-3",
+          "body": "acquisition/debian/bodies/d9ba48a51fd4734aaaf3a75fd94b6352a02f9eaa88d3bec84cd0b5d3090f9d2a.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/r/rtmpdump/librtmp1_2.4+20151223.gitfa8646d.1-2+b2_amd64.deb",
+          "Package": "librtmp1",
+          "SHA256": "e1f69020dc2c466e421ec6a58406b643be8b5c382abf0f8989011c1d3df91c87",
+          "Size": 60824,
+          "Version": "2.4+20151223.gitfa8646d.1-2+b2",
+          "body": "acquisition/debian/bodies/e1f69020dc2c466e421ec6a58406b643be8b5c382abf0f8989011c1d3df91c87.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/c/cyrus-sasl2/libsasl2-2_2.1.28+dfsg-10_amd64.deb",
+          "Package": "libsasl2-2",
+          "SHA256": "11ee190ad39f8d7af441d2c8347388b9449434c73acc67b4b372445ac4152efa",
+          "Size": 59712,
+          "Version": "2.1.28+dfsg-10",
+          "body": "acquisition/debian/bodies/11ee190ad39f8d7af441d2c8347388b9449434c73acc67b4b372445ac4152efa.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/c/cyrus-sasl2/libsasl2-modules-db_2.1.28+dfsg-10_amd64.deb",
+          "Package": "libsasl2-modules-db",
+          "SHA256": "3ac4fd6cbe3b3b06e68d24b931bf3eb9385b42f15604a37ed25310e948ca0ee6",
+          "Size": 20336,
+          "Version": "2.1.28+dfsg-10",
+          "body": "acquisition/debian/bodies/3ac4fd6cbe3b3b06e68d24b931bf3eb9385b42f15604a37ed25310e948ca0ee6.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libs/libselinux/libselinux1-dev_3.4-1+b6_amd64.deb",
+          "Package": "libselinux1-dev",
+          "SHA256": "efd67cd1c09a19bb1f33a53bfa30e703cecee0345f66ba727a7cc64c34656206",
+          "Size": 156780,
+          "Version": "3.4-1+b6",
+          "body": "acquisition/debian/bodies/efd67cd1c09a19bb1f33a53bfa30e703cecee0345f66ba727a7cc64c34656206.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libs/libsepol/libsepol-dev_3.4-2.1_amd64.deb",
+          "Package": "libsepol-dev",
+          "SHA256": "c3822443d3c829727813f8c84746506944deff1f5f2dd4fb00f90bb5929ffa89",
+          "Size": 351496,
+          "Version": "3.4-2.1",
+          "body": "acquisition/debian/bodies/c3822443d3c829727813f8c84746506944deff1f5f2dd4fb00f90bb5929ffa89.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libs/libsm/libsm-dev_1.2.3-1_amd64.deb",
+          "Package": "libsm-dev",
+          "SHA256": "2ff8641d3217dc1a0f26514f5d8de2009669423a4aa0db46b3df564a8b367026",
+          "Size": 37956,
+          "Version": "2:1.2.3-1",
+          "body": "acquisition/debian/bodies/2ff8641d3217dc1a0f26514f5d8de2009669423a4aa0db46b3df564a8b367026.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libs/libsm/libsm6_1.2.3-1_amd64.deb",
+          "Package": "libsm6",
+          "SHA256": "22a420890489023346f30fecef14ea900a0788e7bf959ef826aabb83944fccfb",
+          "Size": 35108,
+          "Version": "2:1.2.3-1",
+          "body": "acquisition/debian/bodies/22a420890489023346f30fecef14ea900a0788e7bf959ef826aabb83944fccfb.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/updates/main/libs/libssh2/libssh2-1_1.10.0-3+deb12u1_amd64.deb",
+          "Package": "libssh2-1",
+          "SHA256": "fff72a194e493f88e100a2567e22472bb4ab828d429c2956965c6f2f134f1b3a",
+          "Size": 175976,
+          "Version": "1.10.0-3+deb12u1",
+          "body": "acquisition/debian/bodies/fff72a194e493f88e100a2567e22472bb4ab828d429c2956965c6f2f134f1b3a.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/gcc-12/libstdc++-12-dev_12.2.0-14+deb12u1_amd64.deb",
+          "Package": "libstdc++-12-dev",
+          "SHA256": "d28def6c23630432b57cb38a4c2fd67a79d4e0484027386ca6e8d6005c3d7a73",
+          "Size": 2047292,
+          "Version": "12.2.0-14+deb12u1",
+          "body": "acquisition/debian/bodies/d28def6c23630432b57cb38a4c2fd67a79d4e0484027386ca6e8d6005c3d7a73.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/t/tiff/libtiff-dev_4.5.0-6+deb12u4_amd64.deb",
+          "Package": "libtiff-dev",
+          "SHA256": "3872494f724cfd3cef0f99377629ca4057c59b15e5699f1612ad78591aa6a6a2",
+          "Size": 456336,
+          "Version": "4.5.0-6+deb12u4",
+          "body": "acquisition/debian/bodies/3872494f724cfd3cef0f99377629ca4057c59b15e5699f1612ad78591aa6a6a2.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/t/tiff/libtiff6_4.5.0-6+deb12u4_amd64.deb",
+          "Package": "libtiff6",
+          "SHA256": "255cd1d9f204355c366638ee21756234a8d43c03a3de18a5af6cdd94765b5053",
+          "Size": 316172,
+          "Version": "4.5.0-6+deb12u4",
+          "body": "acquisition/debian/bodies/255cd1d9f204355c366638ee21756234a8d43c03a3de18a5af6cdd94765b5053.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/t/tiff/libtiffxx6_4.5.0-6+deb12u4_amd64.deb",
+          "Package": "libtiffxx6",
+          "SHA256": "ecd8e86d689b21c6e9ab435fd81962a1cebb02161f3d37066aea57b33846205d",
+          "Size": 144124,
+          "Version": "4.5.0-6+deb12u4",
+          "body": "acquisition/debian/bodies/ecd8e86d689b21c6e9ab435fd81962a1cebb02161f3d37066aea57b33846205d.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libt/libtirpc/libtirpc-dev_1.3.3+ds-1_amd64.deb",
+          "Package": "libtirpc-dev",
+          "SHA256": "03326473eed54ffa27efae19aa5d6aeb402930968f869f318445513093691d55",
+          "Size": 191428,
+          "Version": "1.3.3+ds-1",
+          "body": "acquisition/debian/bodies/03326473eed54ffa27efae19aa5d6aeb402930968f869f318445513093691d55.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/gcc-12/libtsan2_12.2.0-14+deb12u1_amd64.deb",
+          "Package": "libtsan2",
+          "SHA256": "06906663d644a75a1a836382ecd80b61461129c06f02935ce408b25809f6c958",
+          "Size": 2196972,
+          "Version": "12.2.0-14+deb12u1",
+          "body": "acquisition/debian/bodies/06906663d644a75a1a836382ecd80b61461129c06f02935ce408b25809f6c958.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/gcc-12/libubsan1_12.2.0-14+deb12u1_amd64.deb",
+          "Package": "libubsan1",
+          "SHA256": "744f52adf00ffd45d44806b1c7e802a36bd27e479c9bc8457128fde357faa530",
+          "Size": 883056,
+          "Version": "12.2.0-14+deb12u1",
+          "body": "acquisition/debian/bodies/744f52adf00ffd45d44806b1c7e802a36bd27e479c9bc8457128fde357faa530.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libu/libuv1/libuv1_1.44.2-1+deb12u1_amd64.deb",
+          "Package": "libuv1",
+          "SHA256": "204f0e13354b44e6d19317887a53dab6f26696e8d95838db970b81f2a393f7fd",
+          "Size": 135616,
+          "Version": "1.44.2-1+deb12u1",
+          "body": "acquisition/debian/bodies/204f0e13354b44e6d19317887a53dab6f26696e8d95838db970b81f2a393f7fd.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libw/libwebp/libwebp-dev_1.2.4-0.2+deb12u1_amd64.deb",
+          "Package": "libwebp-dev",
+          "SHA256": "a9d07a8423e462babc947dd5745875a58c450fd5ca5c4493dbabe17387f97d89",
+          "Size": 400448,
+          "Version": "1.2.4-0.2+deb12u1",
+          "body": "acquisition/debian/bodies/a9d07a8423e462babc947dd5745875a58c450fd5ca5c4493dbabe17387f97d89.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libw/libwebp/libwebp7_1.2.4-0.2+deb12u1_amd64.deb",
+          "Package": "libwebp7",
+          "SHA256": "7259b7ce46444694ce536360ad53acb68eb3b47a7ff81d7b1b8a3939b2ac9918",
+          "Size": 285512,
+          "Version": "1.2.4-0.2+deb12u1",
+          "body": "acquisition/debian/bodies/7259b7ce46444694ce536360ad53acb68eb3b47a7ff81d7b1b8a3939b2ac9918.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libw/libwebp/libwebpdemux2_1.2.4-0.2+deb12u1_amd64.deb",
+          "Package": "libwebpdemux2",
+          "SHA256": "7d622d3cd1413fe55a2d3baaa32e0dfeba88bc511b1058dbe64562e2a9d7c176",
+          "Size": 99408,
+          "Version": "1.2.4-0.2+deb12u1",
+          "body": "acquisition/debian/bodies/7d622d3cd1413fe55a2d3baaa32e0dfeba88bc511b1058dbe64562e2a9d7c176.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libw/libwebp/libwebpmux3_1.2.4-0.2+deb12u1_amd64.deb",
+          "Package": "libwebpmux3",
+          "SHA256": "cc7d04d56ff8112ef5ed94050b0a440a9b4cea9d1d6f97e2a4016c8cc042c2f1",
+          "Size": 109492,
+          "Version": "1.2.4-0.2+deb12u1",
+          "body": "acquisition/debian/bodies/cc7d04d56ff8112ef5ed94050b0a440a9b4cea9d1d6f97e2a4016c8cc042c2f1.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libx11/libx11-6_1.8.4-2+deb12u2_amd64.deb",
+          "Package": "libx11-6",
+          "SHA256": "d88c973e79fd9b65838d77624142952757e47a6eb1a58602acf0911cf35989f4",
+          "Size": 759544,
+          "Version": "2:1.8.4-2+deb12u2",
+          "body": "acquisition/debian/bodies/d88c973e79fd9b65838d77624142952757e47a6eb1a58602acf0911cf35989f4.deb"
+        },
+        {
+          "Architecture": "all",
+          "Filename": "pool/main/libx/libx11/libx11-data_1.8.4-2+deb12u2_all.deb",
+          "Package": "libx11-data",
+          "SHA256": "987a848aeb1c358e4186368871b0526f10bb14c6b53214ab3bf8b69abb830191",
+          "Size": 291884,
+          "Version": "2:1.8.4-2+deb12u2",
+          "body": "acquisition/debian/bodies/987a848aeb1c358e4186368871b0526f10bb14c6b53214ab3bf8b69abb830191.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libx11/libx11-dev_1.8.4-2+deb12u2_amd64.deb",
+          "Package": "libx11-dev",
+          "SHA256": "8493220d4309af1907a1f2f6eeb204c8103dafcc368394fbc4a0858c28612ff9",
+          "Size": 836976,
+          "Version": "2:1.8.4-2+deb12u2",
+          "body": "acquisition/debian/bodies/8493220d4309af1907a1f2f6eeb204c8103dafcc368394fbc4a0858c28612ff9.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxau/libxau-dev_1.0.9-1_amd64.deb",
+          "Package": "libxau-dev",
+          "SHA256": "d1a7f5d484e0879b3b2e8d512894744505e53d078712ce65903fef2ecfd824bb",
+          "Size": 22912,
+          "Version": "1:1.0.9-1",
+          "body": "acquisition/debian/bodies/d1a7f5d484e0879b3b2e8d512894744505e53d078712ce65903fef2ecfd824bb.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxau/libxau6_1.0.9-1_amd64.deb",
+          "Package": "libxau6",
+          "SHA256": "679db1c4579ec7c61079adeaae8528adeb2e4bf5465baa6c56233b995d714750",
+          "Size": 19720,
+          "Version": "1:1.0.9-1",
+          "body": "acquisition/debian/bodies/679db1c4579ec7c61079adeaae8528adeb2e4bf5465baa6c56233b995d714750.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxcb/libxcb-render0_1.15-1_amd64.deb",
+          "Package": "libxcb-render0",
+          "SHA256": "29c32cc76be9393f409378be79a0f534b9f07dea06ae52fa80a7f27e298de239",
+          "Size": 115012,
+          "Version": "1.15-1",
+          "body": "acquisition/debian/bodies/29c32cc76be9393f409378be79a0f534b9f07dea06ae52fa80a7f27e298de239.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxcb/libxcb-render0-dev_1.15-1_amd64.deb",
+          "Package": "libxcb-render0-dev",
+          "SHA256": "eabdcd126833ed7f5016196c10dab72b894f75431d63ff35d2d5c8c3eada3246",
+          "Size": 118360,
+          "Version": "1.15-1",
+          "body": "acquisition/debian/bodies/eabdcd126833ed7f5016196c10dab72b894f75431d63ff35d2d5c8c3eada3246.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxcb/libxcb-shm0_1.15-1_amd64.deb",
+          "Package": "libxcb-shm0",
+          "SHA256": "c1afcef29dc78b95c475159b181b28b1dedaf1d5aa06efd2fa6d90c73bfbe0e5",
+          "Size": 105472,
+          "Version": "1.15-1",
+          "body": "acquisition/debian/bodies/c1afcef29dc78b95c475159b181b28b1dedaf1d5aa06efd2fa6d90c73bfbe0e5.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxcb/libxcb-shm0-dev_1.15-1_amd64.deb",
+          "Package": "libxcb-shm0-dev",
+          "SHA256": "bed1448eb87d6b5d7236e74d71c9d16a2fa5a4c36f2268d6b7204eb829a066b6",
+          "Size": 106628,
+          "Version": "1.15-1",
+          "body": "acquisition/debian/bodies/bed1448eb87d6b5d7236e74d71c9d16a2fa5a4c36f2268d6b7204eb829a066b6.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxcb/libxcb1_1.15-1_amd64.deb",
+          "Package": "libxcb1",
+          "SHA256": "fdc61332a3892168f3cc9cfa1fe9cf11a91dc3e0acacbc47cbc50ebaa234cc71",
+          "Size": 144052,
+          "Version": "1.15-1",
+          "body": "acquisition/debian/bodies/fdc61332a3892168f3cc9cfa1fe9cf11a91dc3e0acacbc47cbc50ebaa234cc71.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxcb/libxcb1-dev_1.15-1_amd64.deb",
+          "Package": "libxcb1-dev",
+          "SHA256": "c078c024114fdada06d3158af1771d7ed8763ab434cfbcbe6a334aa8a9cae358",
+          "Size": 180776,
+          "Version": "1.15-1",
+          "body": "acquisition/debian/bodies/c078c024114fdada06d3158af1771d7ed8763ab434cfbcbe6a334aa8a9cae358.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxdmcp/libxdmcp-dev_1.1.2-3_amd64.deb",
+          "Package": "libxdmcp-dev",
+          "SHA256": "c6733e5f6463afd261998e408be6eb37f24ce0a64b63bed50a87ddb18ebc1699",
+          "Size": 42158,
+          "Version": "1:1.1.2-3",
+          "body": "acquisition/debian/bodies/c6733e5f6463afd261998e408be6eb37f24ce0a64b63bed50a87ddb18ebc1699.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxdmcp/libxdmcp6_1.1.2-3_amd64.deb",
+          "Package": "libxdmcp6",
+          "SHA256": "ecb8536f5fb34543b55bb9dc5f5b14c9dbb4150a7bddb3f2287b7cab6e9d25ef",
+          "Size": 26344,
+          "Version": "1:1.1.2-3",
+          "body": "acquisition/debian/bodies/ecb8536f5fb34543b55bb9dc5f5b14c9dbb4150a7bddb3f2287b7cab6e9d25ef.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxext/libxext-dev_1.3.4-1+b1_amd64.deb",
+          "Package": "libxext-dev",
+          "SHA256": "591456aba90eeed7a1c1b044d469fd7704bf7d83af9dc574bbe2efc4a2fd1dba",
+          "Size": 106884,
+          "Version": "2:1.3.4-1+b1",
+          "body": "acquisition/debian/bodies/591456aba90eeed7a1c1b044d469fd7704bf7d83af9dc574bbe2efc4a2fd1dba.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxext/libxext6_1.3.4-1+b1_amd64.deb",
+          "Package": "libxext6",
+          "SHA256": "504b7be9d7df4f6f4519e8dd4d6f9d03a9fb911a78530fa23a692fba3058cba6",
+          "Size": 52932,
+          "Version": "2:1.3.4-1+b1",
+          "body": "acquisition/debian/bodies/504b7be9d7df4f6f4519e8dd4d6f9d03a9fb911a78530fa23a692fba3058cba6.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxml2/libxml2_2.9.14+dfsg-1.3~deb12u6_amd64.deb",
+          "Package": "libxml2",
+          "SHA256": "4460e39dda10a815881374217cde08474747cfa018358cd8612c14b390eff53b",
+          "Size": 688760,
+          "Version": "2.9.14+dfsg-1.3~deb12u6",
+          "body": "acquisition/debian/bodies/4460e39dda10a815881374217cde08474747cfa018358cd8612c14b390eff53b.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxrender/libxrender-dev_0.9.10-1.1_amd64.deb",
+          "Package": "libxrender-dev",
+          "SHA256": "51be2e92b7bb9a81f8dbcad7a0086a58c779761c17f8aa13893b843bced0ae9b",
+          "Size": 41072,
+          "Version": "1:0.9.10-1.1",
+          "body": "acquisition/debian/bodies/51be2e92b7bb9a81f8dbcad7a0086a58c779761c17f8aa13893b843bced0ae9b.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxrender/libxrender1_0.9.10-1.1_amd64.deb",
+          "Package": "libxrender1",
+          "SHA256": "b2a6d160578f359220101947c8d67059b44704a251e688de1d0b744fefedfd1a",
+          "Size": 33228,
+          "Version": "1:0.9.10-1.1",
+          "body": "acquisition/debian/bodies/b2a6d160578f359220101947c8d67059b44704a251e688de1d0b744fefedfd1a.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libz/libzstd/libzstd-dev_1.5.4+dfsg2-5_amd64.deb",
+          "Package": "libzstd-dev",
+          "SHA256": "5d079cf5f96b724c97a611630ea428a1ebe793746db7bbf6e1455803b962b4ea",
+          "Size": 353844,
+          "Version": "1.5.4+dfsg2-5",
+          "body": "acquisition/debian/bodies/5d079cf5f96b724c97a611630ea428a1ebe793746db7bbf6e1455803b962b4ea.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/updates/main/l/linux/linux-libc-dev_6.1.187-1_amd64.deb",
+          "Package": "linux-libc-dev",
+          "SHA256": "ebcd139c31438e19f161bcf277a38708402ddd0e3acbe208cbbb27bff1c52bb9",
+          "Size": 2356824,
+          "Version": "6.1.187-1",
+          "body": "acquisition/debian/bodies/ebcd139c31438e19f161bcf277a38708402ddd0e3acbe208cbbb27bff1c52bb9.deb"
+        },
+        {
+          "Architecture": "all",
+          "Filename": "pool/main/m/media-types/media-types_10.0.0_all.deb",
+          "Package": "media-types",
+          "SHA256": "aaa46dcb3b39948ae2e0fdb72cfcb2f48c0b59f19785a3da8045c05eb19955dd",
+          "Size": 26136,
+          "Version": "10.0.0",
+          "body": "acquisition/debian/bodies/aaa46dcb3b39948ae2e0fdb72cfcb2f48c0b59f19785a3da8045c05eb19955dd.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/n/ninja-build/ninja-build_1.11.1-2~deb12u1_amd64.deb",
+          "Package": "ninja-build",
+          "SHA256": "e75fe14ee81334f52efe955aaaddac07d26f117bac60488ea19ea7a8b564e62c",
+          "Size": 134996,
+          "Version": "1.11.1-2~deb12u1",
+          "body": "acquisition/debian/bodies/e75fe14ee81334f52efe955aaaddac07d26f117bac60488ea19ea7a8b564e62c.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/p/pkgconf/pkg-config_1.8.1-1_amd64.deb",
+          "Package": "pkg-config",
+          "SHA256": "312b2bdeff4671f8e0d589c124554890e944dd083061e9ad6f129bc76a970765",
+          "Size": 13688,
+          "Version": "1.8.1-1",
+          "body": "acquisition/debian/bodies/312b2bdeff4671f8e0d589c124554890e944dd083061e9ad6f129bc76a970765.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/p/pkgconf/pkgconf_1.8.1-1_amd64.deb",
+          "Package": "pkgconf",
+          "SHA256": "4e3ce982b5fedc6c6119268435504a64f5ffcc6d93aaecaea902d816eba1215f",
+          "Size": 25892,
+          "Version": "1.8.1-1",
+          "body": "acquisition/debian/bodies/4e3ce982b5fedc6c6119268435504a64f5ffcc6d93aaecaea902d816eba1215f.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/p/pkgconf/pkgconf-bin_1.8.1-1_amd64.deb",
+          "Package": "pkgconf-bin",
+          "SHA256": "8fb5a8f83e46ad04b4cf02651ceec56c0611a335cf0d30780d859a95d0400174",
+          "Size": 29472,
+          "Version": "1.8.1-1",
+          "body": "acquisition/debian/bodies/8fb5a8f83e46ad04b4cf02651ceec56c0611a335cf0d30780d859a95d0400174.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/p/procps/procps_4.0.2-3_amd64.deb",
+          "Package": "procps",
+          "SHA256": "d9d0e75779cb79af869181f17b93c5c263a2b89cac6a0193c436160a4483ddc1",
+          "Size": 708712,
+          "Version": "2:4.0.2-3",
+          "body": "acquisition/debian/bodies/d9d0e75779cb79af869181f17b93c5c263a2b89cac6a0193c436160a4483ddc1.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/p/python3-defaults/python3_3.11.2-1+b1_amd64.deb",
+          "Package": "python3",
+          "SHA256": "33f6dafbd1a6902d9063172ec7dbd4b2225e12009e0d7ec5c933a72c2f5f3b74",
+          "Size": 26300,
+          "Version": "3.11.2-1+b1",
+          "body": "acquisition/debian/bodies/33f6dafbd1a6902d9063172ec7dbd4b2225e12009e0d7ec5c933a72c2f5f3b74.deb"
+        },
+        {
+          "Architecture": "all",
+          "Filename": "pool/main/p/python3-stdlib-extensions/python3-distutils_3.11.2-3_all.deb",
+          "Package": "python3-distutils",
+          "SHA256": "a620b555f301860a08e30534c7e6f7d79818e5e1977bfec39a612e7003074318",
+          "Size": 130936,
+          "Version": "3.11.2-3",
+          "body": "acquisition/debian/bodies/a620b555f301860a08e30534c7e6f7d79818e5e1977bfec39a612e7003074318.deb"
+        },
+        {
+          "Architecture": "all",
+          "Filename": "pool/main/p/python3-stdlib-extensions/python3-lib2to3_3.11.2-3_all.deb",
+          "Package": "python3-lib2to3",
+          "SHA256": "4e7f5e01e49a0622d10db3d0995666a6ead6a369cd127a996e9a4f9e91696a51",
+          "Size": 76284,
+          "Version": "3.11.2-3",
+          "body": "acquisition/debian/bodies/4e7f5e01e49a0622d10db3d0995666a6ead6a369cd127a996e9a4f9e91696a51.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/p/python3-defaults/python3-minimal_3.11.2-1+b1_amd64.deb",
+          "Package": "python3-minimal",
+          "SHA256": "30f9618670e686d781afbfc713eb0830c29d2819e9cb2a0488800dad6bb99faa",
+          "Size": 26312,
+          "Version": "3.11.2-1+b1",
+          "body": "acquisition/debian/bodies/30f9618670e686d781afbfc713eb0830c29d2819e9cb2a0488800dad6bb99faa.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/updates/main/p/python3.11/python3.11_3.11.2-6+deb12u9_amd64.deb",
+          "Package": "python3.11",
+          "SHA256": "4facf334e0e0830a87013852f8c3a1cfee11ad702f72f240adf9ad5b9a334e7c",
+          "Size": 575032,
+          "Version": "3.11.2-6+deb12u9",
+          "body": "acquisition/debian/bodies/4facf334e0e0830a87013852f8c3a1cfee11ad702f72f240adf9ad5b9a334e7c.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/updates/main/p/python3.11/python3.11-minimal_3.11.2-6+deb12u9_amd64.deb",
+          "Package": "python3.11-minimal",
+          "SHA256": "b5f855ab922dfcd5d1a3223b2118c3dae13ffc7751b0cd5dc24740386323a33a",
+          "Size": 2054684,
+          "Version": "3.11.2-6+deb12u9",
+          "body": "acquisition/debian/bodies/b5f855ab922dfcd5d1a3223b2118c3dae13ffc7751b0cd5dc24740386323a33a.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/r/rpcsvc-proto/rpcsvc-proto_1.4.3-1_amd64.deb",
+          "Package": "rpcsvc-proto",
+          "SHA256": "32ac0692694f8a34cc90c895f4fc739680fb2ef0e2d4870a68833682bf1c81a3",
+          "Size": 63268,
+          "Version": "1.4.3-1",
+          "body": "acquisition/debian/bodies/32ac0692694f8a34cc90c895f4fc739680fb2ef0e2d4870a68833682bf1c81a3.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/u/util-linux/uuid-dev_2.38.1-5+deb12u3_amd64.deb",
+          "Package": "uuid-dev",
+          "SHA256": "d66c5719adc05b6f5cbac926e093846c865f0b1a2095e6d781df8a7ce1f34cbf",
+          "Size": 39972,
+          "Version": "2.38.1-5+deb12u3",
+          "body": "acquisition/debian/bodies/d66c5719adc05b6f5cbac926e093846c865f0b1a2095e6d781df8a7ce1f34cbf.deb"
+        },
+        {
+          "Architecture": "all",
+          "Filename": "pool/main/x/xorg/x11-common_7.7+23_all.deb",
+          "Package": "x11-common",
+          "SHA256": "fc97c2f4495eb33a77501c7960928c0d2001e5c4b2aa438f1713e2082c23bacd",
+          "Size": 252272,
+          "Version": "1:7.7+23",
+          "body": "acquisition/debian/bodies/fc97c2f4495eb33a77501c7960928c0d2001e5c4b2aa438f1713e2082c23bacd.deb"
+        },
+        {
+          "Architecture": "all",
+          "Filename": "pool/main/x/xorgproto/x11proto-core-dev_2022.1-1_all.deb",
+          "Package": "x11proto-core-dev",
+          "SHA256": "5fb73f674e174e766f489039f4e321bd6062986a8306643d71a07e4cc2e4edf7",
+          "Size": 3528,
+          "Version": "2022.1-1",
+          "body": "acquisition/debian/bodies/5fb73f674e174e766f489039f4e321bd6062986a8306643d71a07e4cc2e4edf7.deb"
+        },
+        {
+          "Architecture": "all",
+          "Filename": "pool/main/x/xorgproto/x11proto-dev_2022.1-1_all.deb",
+          "Package": "x11proto-dev",
+          "SHA256": "3cab66a6591774188a568f9b54c4e7956f18da76e0e0fc4a779db5f6bcc3f148",
+          "Size": 598924,
+          "Version": "2022.1-1",
+          "body": "acquisition/debian/bodies/3cab66a6591774188a568f9b54c4e7956f18da76e0e0fc4a779db5f6bcc3f148.deb"
+        },
+        {
+          "Architecture": "all",
+          "Filename": "pool/main/x/xorg-sgml-doctools/xorg-sgml-doctools_1.11-1.1_all.deb",
+          "Package": "xorg-sgml-doctools",
+          "SHA256": "168345058319094e475a87ace66f5fb6ae802109650ea8434d672117982b5d0a",
+          "Size": 22064,
+          "Version": "1:1.11-1.1",
+          "body": "acquisition/debian/bodies/168345058319094e475a87ace66f5fb6ae802109650ea8434d672117982b5d0a.deb"
+        },
+        {
+          "Architecture": "all",
+          "Filename": "pool/main/x/xtrans/xtrans-dev_1.4.0-1_all.deb",
+          "Package": "xtrans-dev",
+          "SHA256": "9ce1af9464faee0c679348dd11cdf63934c12e734a64e0903692b0cb5af38e06",
+          "Size": 98740,
+          "Version": "1.4.0-1",
+          "body": "acquisition/debian/bodies/9ce1af9464faee0c679348dd11cdf63934c12e734a64e0903692b0cb5af38e06.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/z/zlib/zlib1g-dev_1.2.13.dfsg-1_amd64.deb",
+          "Package": "zlib1g-dev",
+          "SHA256": "f9ce531f60cbd5df37996af9370e0171be96902a17ec2bdbd8d62038c354094f",
+          "Size": 916272,
+          "Version": "1:1.2.13.dfsg-1",
+          "body": "acquisition/debian/bodies/f9ce531f60cbd5df37996af9370e0171be96902a17ec2bdbd8d62038c354094f.deb"
+        }
+      ],
+      "selected_bytes": 131090606,
+      "selected_count": 159,
+      "unresolved": []
+    },
+    "configure_argv": [
+      "cmake",
+      "-S",
+      "/inputs/poppler-25.12.0",
+      "-B",
+      "/build/poppler",
+      "-G",
+      "Ninja",
+      "-DCMAKE_INSTALL_PREFIX=/opt/idis-native/poppler-25.12.0",
+      "-DCMAKE_INSTALL_LIBDIR=lib",
+      "-DCMAKE_BUILD_TYPE=Release",
+      "-DCMAKE_C_COMPILER=/usr/bin/gcc-12",
+      "-DCMAKE_CXX_COMPILER=/usr/bin/g++-12",
+      "-DBUILD_SHARED_LIBS=ON",
+      "-DENABLE_UTILS=ON",
+      "-DENABLE_CPP=OFF",
+      "-DENABLE_GLIB=OFF",
+      "-DENABLE_GOBJECT_INTROSPECTION=OFF",
+      "-DENABLE_QT5=OFF",
+      "-DENABLE_QT6=OFF",
+      "-DBUILD_GTK_TESTS=OFF",
+      "-DBUILD_QT5_TESTS=OFF",
+      "-DBUILD_QT6_TESTS=OFF",
+      "-DBUILD_CPP_TESTS=OFF",
+      "-DBUILD_MANUAL_TESTS=OFF",
+      "-DENABLE_BOOST=ON",
+      "-DENABLE_LIBOPENJPEG=openjpeg2",
+      "-DENABLE_DCTDECODER=libjpeg",
+      "-DENABLE_LCMS=ON",
+      "-DENABLE_LIBTIFF=ON",
+      "-DENABLE_NSS3=OFF",
+      "-DENABLE_GPGME=OFF",
+      "-DENABLE_LIBCURL=OFF",
+      "-DRUN_GPERF_IF_PRESENT=OFF",
+      "-DFONT_CONFIGURATION=fontconfig",
+      "-DUSE_FLOAT=OFF",
+      "-DENABLE_ZLIB_UNCOMPRESS=OFF",
+      "-DWITH_PNG=ON",
+      "-DWITH_Cairo=ON",
+      "-DCMAKE_REQUIRE_FIND_PACKAGE_PNG=ON",
+      "-DCMAKE_REQUIRE_FIND_PACKAGE_Cairo=ON",
+      "-DCMAKE_REQUIRE_FIND_PACKAGE_JPEG=ON",
+      "-DCMAKE_INSTALL_RPATH=/opt/idis-native/poppler-25.12.0/lib",
+      "-DCMAKE_INSTALL_RPATH_USE_LINK_PATH=OFF",
+      "-DCMAKE_BUILD_WITH_INSTALL_RPATH=OFF",
+      "-DCMAKE_EXE_LINKER_FLAGS=-Wl,--disable-new-dtags",
+      "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--disable-new-dtags",
+      "-DCMAKE_C_FLAGS=-ffile-prefix-map=/inputs/poppler-25.12.0=.",
+      "-DCMAKE_CXX_FLAGS=-ffile-prefix-map=/inputs/poppler-25.12.0=.",
+      "-DTESTDATADIR=/nonexistent"
+    ],
+    "cpus": 4,
+    "driver": "build_poppler.py",
+    "environment": {
+      "DEBIAN_FRONTEND": "noninteractive",
+      "HOME": "/root",
+      "LANG": "C.UTF-8",
+      "LC_ALL": "C.UTF-8",
+      "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "SOURCE_DATE_EPOCH": "1764547200",
+      "TZ": "UTC"
+    },
+    "features_explicitly_not_built": [
+      "Qt5/Qt6/GLib/C++ wrappers and their tests",
+      "NSS and GPG PDF signature backends (bookworm GPGME 1.18 < required 1.19)",
+      "libcurl HTTP input",
+      "gperf regeneration (release pregenerated sources kept)"
+    ],
+    "features_required_on": [
+      "Splash double precision",
+      "Cairo output",
+      "fontconfig+freetype",
+      "libjpeg DCT",
+      "libpng",
+      "libtiff",
+      "OpenJPEG2 JPX",
+      "LCMS2 colour management",
+      "Boost headers",
+      "zlib",
+      "command line utils"
+    ],
+    "install_argv": [
+      "cmake",
+      "--install",
+      "/build/poppler"
+    ],
+    "install_method": "apt-get -y --no-install-recommends install <exactly the selected local .deb paths>; dpkg status before/after diffed; any package outside the selection, or any base change outside base_changes, stops the run",
+    "memory": "6g",
+    "mounts": [
+      {
+        "readonly": true,
+        "source": "builder",
+        "target": "/inputs/recipe"
+      },
+      {
+        "readonly": true,
+        "source": "source/poppler-25.12.0",
+        "target": "/inputs/poppler-25.12.0"
+      },
+      {
+        "readonly": true,
+        "source": "acquisition/debian",
+        "target": "/inputs/debian"
+      }
+    ],
+    "network": "none",
+    "output_tar_name": "poppler-25.12.0-linux-amd64.tar",
+    "probe_tools": [
+      "pdftoppm",
+      "pdfinfo",
+      "pdftotext",
+      "pdftocairo"
+    ],
+    "timeout_seconds": 14400,
+    "tmpfs": [
+      "/build:rw,exec,nosuid,nodev,size=3g",
+      "/tmp:rw,exec,nosuid,nodev,size=1g"
+    ]
+  },
+  "debian": {
+    "expiry_rule": "an InRelease whose Valid-Until has passed at build time stops the run; no Check-Valid-Until override",
+    "indexes": {
+      "bookworm": {
+        "InRelease_sha256": "77737fa4b34f2693e982cc9ee35736816c35a7778fc2d326cc1bbf5b301fe1aa",
+        "Packages_xz_bytes": 8790396,
+        "Packages_xz_sha256": "9e0b5aabb2465b3d2e7a7fe27f9913846277833f7a2826e7767acccff5b588c5",
+        "fields": {
+          "Architectures": "all amd64 arm64 armel armhf i386 mips64el mipsel ppc64el s390x",
+          "Codename": "bookworm",
+          "Date": "Sat, 11 Jul 2026 10:16:37 UTC",
+          "Label": "Debian",
+          "Origin": "Debian",
+          "Suite": "oldstable"
+        }
+      },
+      "bookworm-security": {
+        "InRelease_sha256": "74739c16b036126292b6e4f4e64b49504083c39941b8dd729eafff9e621fec5b",
+        "Packages_xz_bytes": 352788,
+        "Packages_xz_sha256": "da61bf9cd0638354e45ebd6faf355f541e4f82399b4c456a66924b1c84f672f0",
+        "fields": {
+          "Architectures": "amd64 arm64 armhf i386 ppc64el",
+          "Codename": "bookworm-security",
+          "Date": "Fri, 16 Oct 2026 21:02:20 UTC",
+          "Label": "Debian-Security",
+          "Origin": "Debian",
+          "Suite": "oldstable-security",
+          "Valid-Until": "Fri, 23 Oct 2026 21:02:20 UTC"
+        }
+      },
+      "bookworm-updates": {
+        "InRelease_sha256": "2f780e8d031114ca6ef9828032f0f6b15aedf91f48b1e98555bbdf20d70ed66a",
+        "Packages_xz_bytes": 6924,
+        "Packages_xz_sha256": "87e7e94047fb7fb6f4ceecc7022d4bee55b66031cc2a7666d3196f3e0aabb846",
+        "fields": {
+          "Architectures": "all amd64 arm64 armel armhf i386 mips64el mipsel ppc64el s390x",
+          "Codename": "bookworm-updates",
+          "Date": "Sat, 17 Oct 2026 02:11:38 UTC",
+          "Label": "Debian",
+          "Origin": "Debian",
+          "Suite": "oldstable-updates"
+        }
+      }
+    },
+    "keyring": "/usr/share/keyrings/debian-archive-keyring.gpg from the base image (debian-archive-keyring 2023.3+deb12u2); gpgv verification inside the container is mandatory before install",
+    "suites": [
+      "bookworm",
+      "bookworm-updates",
+      "bookworm-security"
+    ]
+  },
+  "drivers": {
+    "assemble_runtime.py": {
+      "bytes": 14559,
+      "sha256": "d5657443e2aa13fe6038e81d4525a4b51d296290b915c0dd13c565febba67b07"
+    },
+    "build_poppler.py": {
+      "bytes": 24141,
+      "sha256": "7dda0bf2e6f9904c06d40449134f2726cab007eb397189701b35fb8044a5254d"
+    },
+    "host_run_stage.py": {
+      "bytes": 7406,
+      "sha256": "e188fa196386ad4070205c112bd428532037be61950f4d1edc643f38521a2385"
+    }
+  },
+  "earlier_opus_recipe_review": {
+    "B1": "PNG and Cairo could silently disappear -> forced REQUIRED finds + fail-closed generated-header and summary checks",
+    "B2": "no install RPATH -> explicit DT_RPATH to the prefix lib dir, --disable-new-dtags, ldd/readelf proof, no ldconfig registration",
+    "B3": "mixed builder/runtime vector and base libc pins -> separate closures; runtime has zero base changes; builder base changes explicit and compile-stage only",
+    "bytes": 10695,
+    "path": "C:\\Projects\\IDIS\\IDIS-implementation-batch-20261016\\.local_reports\\codex-cir04-20261017\\cir04h2a-recipe-review.json",
+    "session": "6589be56-5378-48b4-9c51-6171526e5807 (claude-opus-5-5)",
+    "sha256": "2552e6661e0fea65b1889bdd4292952725c6448b116ad97c255518cc3f52240e",
+    "verdict": "PASS_FOR_NEXT_BOUNDED_DEPENDENCY_QUALIFICATION; no build authorized; B1-B3 required"
+  },
+  "expected_base_inventory": {
+    "adduser": "3.134",
+    "apt": "2.6.1",
+    "base-files": "12.4+deb12u13",
+    "base-passwd": "3.6.1",
+    "bash": "5.2.15-2+b10",
+    "bsdutils": "1:2.38.1-5+deb12u3",
+    "ca-certificates": "20230311+deb12u1",
+    "coreutils": "9.1-1",
+    "dash": "0.5.12-2",
+    "debconf": "1.5.82",
+    "debian-archive-keyring": "2023.3+deb12u2",
+    "debianutils": "5.7-0.5~deb12u1",
+    "diffutils": "1:3.8-4",
+    "dpkg": "1.21.22",
+    "e2fsprogs": "1.47.0-2+b2",
+    "findutils": "4.9.0-4",
+    "gcc-12-base": "12.2.0-14+deb12u1",
+    "gpgv": "2.2.40-1.1+deb12u2",
+    "grep": "3.8-5",
+    "gzip": "1.12-1",
+    "hostname": "3.23+nmu1",
+    "init-system-helpers": "1.65.2+deb12u1",
+    "libacl1": "2.3.1-3",
+    "libapt-pkg6.0": "2.6.1",
+    "libattr1": "1:2.5.1-4",
+    "libaudit-common": "1:3.0.9-1",
+    "libaudit1": "1:3.0.9-1",
+    "libblkid1": "2.38.1-5+deb12u3",
+    "libbz2-1.0": "1.0.8-5+b1",
+    "libc-bin": "2.36-9+deb12u13",
+    "libc6": "2.36-9+deb12u13",
+    "libcap-ng0": "0.8.3-1+b3",
+    "libcap2": "1:2.66-4+deb12u2+b2",
+    "libcom-err2": "1.47.0-2+b2",
+    "libcrypt1": "1:4.4.33-2",
+    "libdb5.3": "5.3.28+dfsg2-1",
+    "libdebconfclient0": "0.270",
+    "libext2fs2": "1.47.0-2+b2",
+    "libffi8": "3.4.4-1",
+    "libgcc-s1": "12.2.0-14+deb12u1",
+    "libgcrypt20": "1.10.1-3",
+    "libgdbm6": "1.23-3",
+    "libgmp10": "2:6.2.1+dfsg1-1.1",
+    "libgnutls30": "3.7.9-2+deb12u5",
+    "libgpg-error0": "1.46-1",
+    "libgssapi-krb5-2": "1.20.1-2+deb12u4",
+    "libhogweed6": "3.8.1-2",
+    "libidn2-0": "2.3.3-1+b1",
+    "libk5crypto3": "1.20.1-2+deb12u4",
+    "libkeyutils1": "1.6.3-2",
+    "libkrb5-3": "1.20.1-2+deb12u4",
+    "libkrb5support0": "1.20.1-2+deb12u4",
+    "liblz4-1": "1.9.4-1",
+    "liblzma5": "5.4.1-1",
+    "libmd0": "1.0.4-2",
+    "libmount1": "2.38.1-5+deb12u3",
+    "libncursesw6": "6.4-4",
+    "libnettle8": "3.8.1-2",
+    "libnsl2": "1.3.0-2",
+    "libp11-kit0": "0.24.1-2",
+    "libpam-modules": "1.5.2-6+deb12u2",
+    "libpam-modules-bin": "1.5.2-6+deb12u2",
+    "libpam-runtime": "1.5.2-6+deb12u2",
+    "libpam0g": "1.5.2-6+deb12u2",
+    "libpcre2-8-0": "10.42-1",
+    "libreadline8": "8.2-1.3",
+    "libseccomp2": "2.5.4-1+deb12u1",
+    "libselinux1": "3.4-1+b6",
+    "libsemanage-common": "3.4-1",
+    "libsemanage2": "3.4-1+b5",
+    "libsepol2": "3.4-2.1",
+    "libsmartcols1": "2.38.1-5+deb12u3",
+    "libsqlite3-0": "3.40.1-2+deb12u2",
+    "libss2": "1.47.0-2+b2",
+    "libssl3": "3.0.18-1~deb12u2",
+    "libstdc++6": "12.2.0-14+deb12u1",
+    "libsystemd0": "252.39-1~deb12u1",
+    "libtasn1-6": "4.19.0-2+deb12u1",
+    "libtinfo6": "6.4-4",
+    "libtirpc-common": "1.3.3+ds-1",
+    "libtirpc3": "1.3.3+ds-1",
+    "libudev1": "252.39-1~deb12u1",
+    "libunistring2": "1.0-2",
+    "libuuid1": "2.38.1-5+deb12u3",
+    "libxxhash0": "0.8.1-1",
+    "libzstd1": "1.5.4+dfsg2-5",
+    "login": "1:4.13+dfsg1-1+deb12u2",
+    "logsave": "1.47.0-2+b2",
+    "mawk": "1.3.4.20200120-3.1",
+    "mount": "2.38.1-5+deb12u3",
+    "ncurses-base": "6.4-4",
+    "ncurses-bin": "6.4-4",
+    "netbase": "6.4",
+    "openssl": "3.0.18-1~deb12u2",
+    "passwd": "1:4.13+dfsg1-1+deb12u2",
+    "perl-base": "5.36.0-7+deb12u3",
+    "readline-common": "8.2-1.3",
+    "sed": "4.9-1",
+    "sysvinit-utils": "3.06-4",
+    "tar": "1.34+dfsg-1.2+deb12u1",
+    "tzdata": "2025b-0+deb12u2",
+    "usr-is-merged": "37~deb12u1",
+    "util-linux": "2.38.1-5+deb12u3",
+    "util-linux-extra": "2.38.1-5+deb12u3",
+    "zlib1g": "1:1.2.13.dfsg-1"
+  },
+  "expected_base_inventory_source": {
+    "package_count": 105,
+    "path": "C:\\Projects\\IDIS\\.local_reports\\cir04h2a-20261017\\qualification-v1\\base-attempt3\\dpkg-inventory.stdout",
+    "sha256": "dc809a53112cd715ca52d49df1bcaf5f05db86d223fa27137bb445fa59c9925e"
+  },
+  "inputs": {
+    "extracted_regular_files": 849,
+    "key_source_files": {
+      "CMakeLists.txt": {
+        "bytes": 35019,
+        "sha256": "517d0632c267df7d022724cbaf08a6ded2868bca9cf079988e588e59f71d984c"
+      },
+      "COPYING": {
+        "bytes": 17987,
+        "sha256": "ab15fd526bd8dd18a9e77ebc139656bf4d33e97fc7238cd11bf60e2b9b8666c6"
+      },
+      "COPYING3": {
+        "bytes": 35147,
+        "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+      },
+      "INSTALL": {
+        "bytes": 2613,
+        "sha256": "b09e10441115ec79987c06b3bf92d67ac76bfcd8e70f80f3ae33f57a7afc3193"
+      },
+      "README.md": {
+        "bytes": 4702,
+        "sha256": "3a6d2dfa541596d6aac3eb0ea67cdfba1d015681e4c8283e6989c7bfb48f9d8a"
+      },
+      "cmake/modules/MacroOptionalFindPackage.cmake": {
+        "bytes": 1959,
+        "sha256": "14ae786f4ebbf5e7425d7f32c7ff961ed4fc7a814c466cd75c2d42077694f600"
+      },
+      "cmake/modules/PopplerMacros.cmake": {
+        "bytes": 8577,
+        "sha256": "28bdfa475ce82708dea0c3ad0ec8401b10cbb0f1b4effea00220e2851d6aa896"
+      },
+      "utils/CMakeLists.txt": {
+        "bytes": 5192,
+        "sha256": "ccdb774844684e330cb1c423a731443d03babb652f3f440d2fb23d5aad724758"
+      }
+    },
+    "model_revision": "0d3d19a32d3338f10357c0889762bd8d64bbdeba",
+    "model_tree_fingerprint_idis_algorithm": "47e043de5fce0c94a30e264cb503f65ccb69cf03b6db296fa14e937a0ab81aea",
+    "receipts": {
+      "asset-rehash.json": {
+        "bytes": 5687,
+        "sha256": "5908cd4178594b58fba028b7d7d22aa16e6b4544d3617d02d0a1cc2530822bdc"
+      },
+      "closure-design-v2.json": {
+        "bytes": 166142,
+        "sha256": "e1633118fb8853a2d83b72e5f80107ba9228916d441cf7c840017ecd99433514"
+      },
+      "closure-design.json": {
+        "bytes": 119233,
+        "sha256": "c54f78178c88f1cfab736b8ea07f22472717b4e80e7a1a7cf3cb0df4c8665599"
+      },
+      "debian-bodies-rehash.json": {
+        "bytes": 321281,
+        "sha256": "d4a8400cdbc39a18e17b2a59aab319f467e787ec7a1cdddb1897ea35fa17be00"
+      },
+      "debian-indexes.json": {
+        "bytes": 5361,
+        "sha256": "ae61ba45668ebe78129f738f01e52de89d0a1f85359bc0a3748fa426283f6e83"
+      },
+      "extracted-source-manifest.json": {
+        "bytes": 143446,
+        "sha256": "97dcc5726a5f7087400dde51cd07ad0920161db0a11ba201531517de5e96f287"
+      },
+      "preparation-command.log": {
+        "bytes": 4133,
+        "sha256": "c7b31c03f683e874b63f5f0d4c30538d726544ff77139c5c8c6b294d29c26617"
+      },
+      "reuse-provenance.json": {
+        "bytes": 5568,
+        "sha256": "16df463be8174cf0a73a17b4af55b124dd94c6d42bd4d61e1f2321e1abec4177"
+      }
+    },
+    "source_archive_bytes": 1992456,
+    "source_archive_sha256": "c18b40eb36b1a0c5b86e29ca054bf0770304583da4f2cdd42fe86eca6a20de48"
+  },
+  "never": [
+    "registry push",
+    "product binding",
+    "docs/go-live edits by this session",
+    "canonical Windows identity changes",
+    "paid or live provider calls",
+    "LD_LIBRARY_PATH-dependent loading in the runtime"
+  ],
+  "owned_label": "idis-cir04h2a-20261017",
+  "platform": "linux/amd64",
+  "poppler_version": "25.12.0",
+  "qualification_plan_next_freeze": {
+    "frozen_separately": true,
+    "renderer_and_text": "in the committed runtime image, --read-only --network none, controlled child environment (explicit nonempty read-only library path, no LD_PRELOAD/LD_AUDIT, no CWD lookup); deterministic synthetic PDFs generated by a hashed script; pdftoppm -png at every admitted DPI (200,150,120,96,72) with expected pixel geometry ceil(points*dpi/72.0) per axis; repeated renders must hash-equal; pdftotext must return the embedded text; pdfinfo version/geometry; negatives: injected LD_LIBRARY_PATH/LD_PRELOAD, trailing/empty path component, CWD library substitution, wrong-version binary, post-admission byte drift",
+    "stt": "in idis-cir-deps:20261016 (sha256:f7e7f6e397ed\u2026, project pinned .[dev] venv /opt/cir-venv), --network none, model tree mounted read-only, no HF tokens; completeness (model.bin, config.json, tokenizer.json, vocabulary.txt) and IDIS fingerprint 47e043de\u2026 before WhisperModel; WhisperModel(device=cpu, compute_type=int8, cpu_threads=4, num_workers=1, local_files_only=True); transcribe(fixture, language=en, beam_size=1, vad_filter=False); normalize per media_health.normalize_stt_health_phrase; exact phrase 'media health check one two three'; wall time against the 30 s default timeout; negatives: missing tokenizer.json must fail closed (transport denial and attempted-invocation observation recorded separately)",
+    "tesseract_ffmpeg": "binary and loaded-library identities, tessdata eng.traineddata bytes and licence, --version strings, from the committed runtime image"
+  },
+  "recipe_version": 2,
+  "runtime": {
+    "B3_rule": "zero base-package changes; any change to a base-preinstalled package stops the run",
+    "cap_add": [
+      "CHOWN",
+      "DAC_OVERRIDE",
+      "FOWNER",
+      "FSETID",
+      "SETGID",
+      "SETUID"
+    ],
+    "closure": {
+      "base_changes": [],
+      "roots": [
+        "libcairo2",
+        "libfontconfig1",
+        "libfreetype6",
+        "libjpeg62-turbo",
+        "liblcms2-2",
+        "libopenjp2-7",
+        "libpng16-16",
+        "libtiff6",
+        "poppler-data",
+        "fonts-dejavu-core",
+        "tesseract-ocr",
+        "tesseract-ocr-eng",
+        "ffmpeg"
+      ],
+      "selected": [
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/f/ffmpeg/ffmpeg_5.1.9-0+deb12u1_amd64.deb",
+          "Package": "ffmpeg",
+          "SHA256": "2ba8ead87657c123ce6de2de5ecdbc1fb4ead9a4b317b85b8ec41e16c890fe01",
+          "Size": 1821764,
+          "Version": "7:5.1.9-0+deb12u1",
+          "body": "acquisition/debian/bodies/2ba8ead87657c123ce6de2de5ecdbc1fb4ead9a4b317b85b8ec41e16c890fe01.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/f/fontconfig/fontconfig_2.14.1-4_amd64.deb",
+          "Package": "fontconfig",
+          "SHA256": "010e57c24a983eecc39aab8a84219a716c10901e03bacd1927331388656f890f",
+          "Size": 449212,
+          "Version": "2.14.1-4",
+          "body": "acquisition/debian/bodies/010e57c24a983eecc39aab8a84219a716c10901e03bacd1927331388656f890f.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/f/fontconfig/fontconfig-config_2.14.1-4_amd64.deb",
+          "Package": "fontconfig-config",
+          "SHA256": "281c66e46b95f045a0282a6c7a03b33de0e9a08d016897a759aaf4a04adfddbe",
+          "Size": 314864,
+          "Version": "2.14.1-4",
+          "body": "acquisition/debian/bodies/281c66e46b95f045a0282a6c7a03b33de0e9a08d016897a759aaf4a04adfddbe.deb"
+        },
+        {
+          "Architecture": "all",
+          "Filename": "pool/main/f/fonts-dejavu/fonts-dejavu-core_2.37-6_all.deb",
+          "Package": "fonts-dejavu-core",
+          "SHA256": "8892669e51aab4dc56682c8e39d8ddb7d70fad83c369344e1e240bf3ca22bb76",
+          "Size": 1067728,
+          "Version": "2.37-6",
+          "body": "acquisition/debian/bodies/8892669e51aab4dc56682c8e39d8ddb7d70fad83c369344e1e240bf3ca22bb76.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/updates/main/a/aom/libaom3_3.6.0-1+deb12u3_amd64.deb",
+          "Package": "libaom3",
+          "SHA256": "0d306f250a365d5309f0f616c5327ebe7cb80cc48332dd3a7fe18c036056f874",
+          "Size": 1851316,
+          "Version": "3.6.0-1+deb12u3",
+          "body": "acquisition/debian/bodies/0d306f250a365d5309f0f616c5327ebe7cb80cc48332dd3a7fe18c036056f874.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/updates/main/liba/libarchive/libarchive13_3.6.2-1+deb12u5_amd64.deb",
+          "Package": "libarchive13",
+          "SHA256": "45419b8c7646c1af12783ae31906ce2da4c465c1a948b01f8f44152d8269f403",
+          "Size": 345488,
+          "Version": "3.6.2-1+deb12u5",
+          "body": "acquisition/debian/bodies/45419b8c7646c1af12783ae31906ce2da4c465c1a948b01f8f44152d8269f403.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/a/alsa-lib/libasound2_1.2.8-1+b1_amd64.deb",
+          "Package": "libasound2",
+          "SHA256": "44c77b076a7b11ae99712439022d822245b1994c435da564ebd320bb676faf4c",
+          "Size": 361788,
+          "Version": "1.2.8-1+b1",
+          "body": "acquisition/debian/bodies/44c77b076a7b11ae99712439022d822245b1994c435da564ebd320bb676faf4c.deb"
+        },
+        {
+          "Architecture": "all",
+          "Filename": "pool/main/a/alsa-lib/libasound2-data_1.2.8-1_all.deb",
+          "Package": "libasound2-data",
+          "SHA256": "fe0780d2d3674b2977e0acb0d48b448ad72ba1642564b7dc537f55e839984c2d",
+          "Size": 20488,
+          "Version": "1.2.8-1",
+          "body": "acquisition/debian/bodies/fe0780d2d3674b2977e0acb0d48b448ad72ba1642564b7dc537f55e839984c2d.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/updates/main/liba/libass/libass9_0.17.1-1+deb12u1_amd64.deb",
+          "Package": "libass9",
+          "SHA256": "8bfab4725e6f7d96e076992fe43ec3619a965ac2b5888bf1824c9d3b2080229a",
+          "Size": 107156,
+          "Version": "1:0.17.1-1+deb12u1",
+          "body": "acquisition/debian/bodies/8bfab4725e6f7d96e076992fe43ec3619a965ac2b5888bf1824c9d3b2080229a.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/liba/libasyncns/libasyncns0_0.8-6+b3_amd64.deb",
+          "Package": "libasyncns0",
+          "SHA256": "cadaff99f4178b1f580331045621b363abaaefc994e78eecba1857774a3cead2",
+          "Size": 12920,
+          "Version": "0.8-6+b3",
+          "body": "acquisition/debian/bodies/cadaff99f4178b1f580331045621b363abaaefc994e78eecba1857774a3cead2.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/liba/libavc1394/libavc1394-0_0.5.4-5_amd64.deb",
+          "Package": "libavc1394-0",
+          "SHA256": "f96e824b1a7e8d9ae1254c51dfaea40cdde45072be68e2025eb109faba10f3dc",
+          "Size": 19928,
+          "Version": "0.5.4-5",
+          "body": "acquisition/debian/bodies/f96e824b1a7e8d9ae1254c51dfaea40cdde45072be68e2025eb109faba10f3dc.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/f/ffmpeg/libavcodec59_5.1.9-0+deb12u1_amd64.deb",
+          "Package": "libavcodec59",
+          "SHA256": "a1c6cfeefe7437ad3ff999d3dad39edb9cfd4d2068a944243fa4f313470b59b1",
+          "Size": 5229272,
+          "Version": "7:5.1.9-0+deb12u1",
+          "body": "acquisition/debian/bodies/a1c6cfeefe7437ad3ff999d3dad39edb9cfd4d2068a944243fa4f313470b59b1.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/f/ffmpeg/libavdevice59_5.1.9-0+deb12u1_amd64.deb",
+          "Package": "libavdevice59",
+          "SHA256": "d14e0e21ee3b18be7324db7ab1a98e42acdca61095cad8df4cbda96c514d0705",
+          "Size": 123480,
+          "Version": "7:5.1.9-0+deb12u1",
+          "body": "acquisition/debian/bodies/d14e0e21ee3b18be7324db7ab1a98e42acdca61095cad8df4cbda96c514d0705.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/f/ffmpeg/libavfilter8_5.1.9-0+deb12u1_amd64.deb",
+          "Package": "libavfilter8",
+          "SHA256": "9df19ac34117740af851af569c3df05c16e20a319cedd832eafb9abde950c384",
+          "Size": 3713384,
+          "Version": "7:5.1.9-0+deb12u1",
+          "body": "acquisition/debian/bodies/9df19ac34117740af851af569c3df05c16e20a319cedd832eafb9abde950c384.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/f/ffmpeg/libavformat59_5.1.9-0+deb12u1_amd64.deb",
+          "Package": "libavformat59",
+          "SHA256": "35216a7786f2bde3c9c00ffa0574ed27c63cb231726aa03ae3664a36946ef01c",
+          "Size": 1113960,
+          "Version": "7:5.1.9-0+deb12u1",
+          "body": "acquisition/debian/bodies/35216a7786f2bde3c9c00ffa0574ed27c63cb231726aa03ae3664a36946ef01c.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/f/ffmpeg/libavutil57_5.1.9-0+deb12u1_amd64.deb",
+          "Package": "libavutil57",
+          "SHA256": "3e2c42d9e7235c96cb0329dbe3c13377faaa5aba81ac2d6f3cf54fcd978c9a5f",
+          "Size": 372712,
+          "Version": "7:5.1.9-0+deb12u1",
+          "body": "acquisition/debian/bodies/3e2c42d9e7235c96cb0329dbe3c13377faaa5aba81ac2d6f3cf54fcd978c9a5f.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/l/lapack/libblas3_3.11.0-2_amd64.deb",
+          "Package": "libblas3",
+          "SHA256": "9aae8058b8d02b800bdafc5b340614df1442a2d2abbc2d351947c0fdd67aa08a",
+          "Size": 148592,
+          "Version": "3.11.0-2",
+          "body": "acquisition/debian/bodies/9aae8058b8d02b800bdafc5b340614df1442a2d2abbc2d351947c0fdd67aa08a.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libb/libbluray/libbluray2_1.3.4-1_amd64.deb",
+          "Package": "libbluray2",
+          "SHA256": "41781aa7af257a7c5083b2b9c4564e02a760361ce332dbc1313ffcf6a0958993",
+          "Size": 137684,
+          "Version": "1:1.3.4-1",
+          "body": "acquisition/debian/bodies/41781aa7af257a7c5083b2b9c4564e02a760361ce332dbc1313ffcf6a0958993.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/b/brotli/libbrotli1_1.0.9-2+b6_amd64.deb",
+          "Package": "libbrotli1",
+          "SHA256": "563b4caec1aa5e876bd3355b36e7a38e1484baf5a293b48d1e8bd22db786e4d7",
+          "Size": 275248,
+          "Version": "1.0.9-2+b6",
+          "body": "acquisition/debian/bodies/563b4caec1aa5e876bd3355b36e7a38e1484baf5a293b48d1e8bd22db786e4d7.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libb/libbs2b/libbs2b0_3.1.0+dfsg-7_amd64.deb",
+          "Package": "libbs2b0",
+          "SHA256": "f8629228d3aab164423b2e4304ac82787157a240ec2f3b33eebd31236322dcca",
+          "Size": 11512,
+          "Version": "3.1.0+dfsg-7",
+          "body": "acquisition/debian/bodies/f8629228d3aab164423b2e4304ac82787157a240ec2f3b33eebd31236322dcca.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libb/libbsd/libbsd0_0.11.7-2_amd64.deb",
+          "Package": "libbsd0",
+          "SHA256": "bb31cc8b40f962a85b2cec970f7f79cc704a1ae4bad24257a822055404b2c60b",
+          "Size": 117416,
+          "Version": "0.11.7-2",
+          "body": "acquisition/debian/bodies/bb31cc8b40f962a85b2cec970f7f79cc704a1ae4bad24257a822055404b2c60b.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libc/libcaca/libcaca0_0.99.beta20-3+deb12u1_amd64.deb",
+          "Package": "libcaca0",
+          "SHA256": "27ea6ccb669d30aef5da73e6f8e1e722752d8c9e20fbf603978ff48992b5e02a",
+          "Size": 200964,
+          "Version": "0.99.beta20-3+deb12u1",
+          "body": "acquisition/debian/bodies/27ea6ccb669d30aef5da73e6f8e1e722752d8c9e20fbf603978ff48992b5e02a.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/c/cairo/libcairo-gobject2_1.16.0-7_amd64.deb",
+          "Package": "libcairo-gobject2",
+          "SHA256": "5898b4c1093ff40bade7acb92affc4a5b5b76a1737cd41cfa2a09cdc2d864d4c",
+          "Size": 111752,
+          "Version": "1.16.0-7",
+          "body": "acquisition/debian/bodies/5898b4c1093ff40bade7acb92affc4a5b5b76a1737cd41cfa2a09cdc2d864d4c.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/c/cairo/libcairo2_1.16.0-7_amd64.deb",
+          "Package": "libcairo2",
+          "SHA256": "927fa059f8b5791d0cd744d4e3a8c57fa872ef849ce14434dc2222ac8a076a69",
+          "Size": 574676,
+          "Version": "1.16.0-7",
+          "body": "acquisition/debian/bodies/927fa059f8b5791d0cd744d4e3a8c57fa872ef849ce14434dc2222ac8a076a69.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libc/libcdio-paranoia/libcdio-cdda2_10.2+2.0.1-1_amd64.deb",
+          "Package": "libcdio-cdda2",
+          "SHA256": "eac7c87ae7118d29d55d497c8a3873dd1c0c062dd3df06ca74a4710ddcb950d9",
+          "Size": 20884,
+          "Version": "10.2+2.0.1-1",
+          "body": "acquisition/debian/bodies/eac7c87ae7118d29d55d497c8a3873dd1c0c062dd3df06ca74a4710ddcb950d9.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libc/libcdio-paranoia/libcdio-paranoia2_10.2+2.0.1-1_amd64.deb",
+          "Package": "libcdio-paranoia2",
+          "SHA256": "ef0610a344c1548c386868d7480bb4a7fc69b5bfb459e99df4c8f96c658c0088",
+          "Size": 20380,
+          "Version": "10.2+2.0.1-1",
+          "body": "acquisition/debian/bodies/ef0610a344c1548c386868d7480bb4a7fc69b5bfb459e99df4c8f96c658c0088.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libc/libcdio/libcdio19_2.1.0-4_amd64.deb",
+          "Package": "libcdio19",
+          "SHA256": "c54f3910d77d933366cc8fde4a4a30681152d80a9e6df0231594dd8b2f5a048d",
+          "Size": 203440,
+          "Version": "2.1.0-4",
+          "body": "acquisition/debian/bodies/c54f3910d77d933366cc8fde4a4a30681152d80a9e6df0231594dd8b2f5a048d.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/c/chromaprint/libchromaprint1_1.5.1-2+b1_amd64.deb",
+          "Package": "libchromaprint1",
+          "SHA256": "2008659c3790890782feaa531134c5b20d96f9ad4a71d519b9de4450ff704fa7",
+          "Size": 40960,
+          "Version": "1.5.1-2+b1",
+          "body": "acquisition/debian/bodies/2008659c3790890782feaa531134c5b20d96f9ad4a71d519b9de4450ff704fa7.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/c/cjson/libcjson1_1.7.15-1+deb12u4_amd64.deb",
+          "Package": "libcjson1",
+          "SHA256": "ae043c62e2740072f3c5cc0324ec36659331208f2155de74c89a24801627338c",
+          "Size": 23180,
+          "Version": "1.7.15-1+deb12u4",
+          "body": "acquisition/debian/bodies/ae043c62e2740072f3c5cc0324ec36659331208f2155de74c89a24801627338c.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/c/codec2/libcodec2-1.0_1.0.5-1_amd64.deb",
+          "Package": "libcodec2-1.0",
+          "SHA256": "5f91673bc70e10496389d061a7f01f27f7f0d9090de56cce7ba21b9c461163d9",
+          "Size": 8170904,
+          "Version": "1.0.5-1",
+          "body": "acquisition/debian/bodies/5f91673bc70e10496389d061a7f01f27f7f0d9090de56cce7ba21b9c461163d9.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/c/curl/libcurl4_7.88.1-10+deb12u15_amd64.deb",
+          "Package": "libcurl4",
+          "SHA256": "3042904de01f9c4fbdcf1452b8f81abedcf2b015f9b9deba109063322b5bd68b",
+          "Size": 392184,
+          "Version": "7.88.1-10+deb12u15",
+          "body": "acquisition/debian/bodies/3042904de01f9c4fbdcf1452b8f81abedcf2b015f9b9deba109063322b5bd68b.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libd/libdatrie/libdatrie1_0.2.13-2+b1_amd64.deb",
+          "Package": "libdatrie1",
+          "SHA256": "f021f193384929989b2dfd19f606a8cebe54b5f209fe387fc40683e810e01ebe",
+          "Size": 43320,
+          "Version": "0.2.13-2+b1",
+          "body": "acquisition/debian/bodies/f021f193384929989b2dfd19f606a8cebe54b5f209fe387fc40683e810e01ebe.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/d/dav1d/libdav1d6_1.0.0-2+deb12u1_amd64.deb",
+          "Package": "libdav1d6",
+          "SHA256": "197f08108242177aeae4c04aac11825c39b7d18598191ab769f910687ccb387f",
+          "Size": 513432,
+          "Version": "1.0.0-2+deb12u1",
+          "body": "acquisition/debian/bodies/197f08108242177aeae4c04aac11825c39b7d18598191ab769f910687ccb387f.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/d/dbus/libdbus-1-3_1.14.10-1~deb12u1_amd64.deb",
+          "Package": "libdbus-1-3",
+          "SHA256": "18ee0ce5fab9f7b671e87da1e9fa18660e36e04a3402f24bdb8635e0ba1d35f6",
+          "Size": 201240,
+          "Version": "1.14.10-1~deb12u1",
+          "body": "acquisition/debian/bodies/18ee0ce5fab9f7b671e87da1e9fa18660e36e04a3402f24bdb8635e0ba1d35f6.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libd/libdc1394/libdc1394-25_2.2.6-4_amd64.deb",
+          "Package": "libdc1394-25",
+          "SHA256": "5476bc64555a11b4fd60a97c1e5cf0516f94ae3de4570ecad2da2379794378c2",
+          "Size": 109364,
+          "Version": "2.2.6-4",
+          "body": "acquisition/debian/bodies/5476bc64555a11b4fd60a97c1e5cf0516f94ae3de4570ecad2da2379794378c2.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libd/libdecor-0/libdecor-0-0_0.1.1-2_amd64.deb",
+          "Package": "libdecor-0-0",
+          "SHA256": "e58d66cbd2e27703c80f4e89c25fe7619db0ca0175d1077850b838023e115904",
+          "Size": 14564,
+          "Version": "0.1.1-2",
+          "body": "acquisition/debian/bodies/e58d66cbd2e27703c80f4e89c25fe7619db0ca0175d1077850b838023e115904.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libd/libdeflate/libdeflate0_1.14-1_amd64.deb",
+          "Package": "libdeflate0",
+          "SHA256": "3d4b39f94317b64a860db8a7a8b581b555124cd461fe07ec0d347edbdb9f6683",
+          "Size": 61416,
+          "Version": "1.14-1",
+          "body": "acquisition/debian/bodies/3d4b39f94317b64a860db8a7a8b581b555124cd461fe07ec0d347edbdb9f6683.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libd/libdrm/libdrm-amdgpu1_2.4.114-1+b1_amd64.deb",
+          "Package": "libdrm-amdgpu1",
+          "SHA256": "b75a71e96f1faac0f131ac657e09efcbe8968eef62cc34b8abfcff2ff9f0cccd",
+          "Size": 20864,
+          "Version": "2.4.114-1+b1",
+          "body": "acquisition/debian/bodies/b75a71e96f1faac0f131ac657e09efcbe8968eef62cc34b8abfcff2ff9f0cccd.deb"
+        },
+        {
+          "Architecture": "all",
+          "Filename": "pool/main/libd/libdrm/libdrm-common_2.4.114-1_all.deb",
+          "Package": "libdrm-common",
+          "SHA256": "32f9664138b38b224383c6986457d5ad2ec8efd559b1a0ce7749405f7a451aad",
+          "Size": 7112,
+          "Version": "2.4.114-1",
+          "body": "acquisition/debian/bodies/32f9664138b38b224383c6986457d5ad2ec8efd559b1a0ce7749405f7a451aad.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libd/libdrm/libdrm-intel1_2.4.114-1+b1_amd64.deb",
+          "Package": "libdrm-intel1",
+          "SHA256": "b0e39318d14c07f4d85668b6da7f66a1341addf87a47d785c34d5a8b393f544c",
+          "Size": 64032,
+          "Version": "2.4.114-1+b1",
+          "body": "acquisition/debian/bodies/b0e39318d14c07f4d85668b6da7f66a1341addf87a47d785c34d5a8b393f544c.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libd/libdrm/libdrm-nouveau2_2.4.114-1+b1_amd64.deb",
+          "Package": "libdrm-nouveau2",
+          "SHA256": "ba59bb9ec6e1baf59fc4d4eb095a524e40d045af2413dad9d28df517005388b6",
+          "Size": 19064,
+          "Version": "2.4.114-1+b1",
+          "body": "acquisition/debian/bodies/ba59bb9ec6e1baf59fc4d4eb095a524e40d045af2413dad9d28df517005388b6.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libd/libdrm/libdrm-radeon1_2.4.114-1+b1_amd64.deb",
+          "Package": "libdrm-radeon1",
+          "SHA256": "2da3a9233187f995ad5a3e6db3d37252ea7209f0ca9605484d03478ebcc15feb",
+          "Size": 21848,
+          "Version": "2.4.114-1+b1",
+          "body": "acquisition/debian/bodies/2da3a9233187f995ad5a3e6db3d37252ea7209f0ca9605484d03478ebcc15feb.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libd/libdrm/libdrm2_2.4.114-1+b1_amd64.deb",
+          "Package": "libdrm2",
+          "SHA256": "be18fb670797ba32da9628cf3e8acd83160d8db8c8dd842501dd8e401c3b5371",
+          "Size": 37472,
+          "Version": "2.4.114-1+b1",
+          "body": "acquisition/debian/bodies/be18fb670797ba32da9628cf3e8acd83160d8db8c8dd842501dd8e401c3b5371.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libe/libedit/libedit2_3.1-20221030-2_amd64.deb",
+          "Package": "libedit2",
+          "SHA256": "1cf14abf2716d3279db12d0657a5737cf70074a1e71d3bdf73206625e3c89ce6",
+          "Size": 92992,
+          "Version": "3.1-20221030-2",
+          "body": "acquisition/debian/bodies/1cf14abf2716d3279db12d0657a5737cf70074a1e71d3bdf73206625e3c89ce6.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/e/elfutils/libelf1_0.188-2.1_amd64.deb",
+          "Package": "libelf1",
+          "SHA256": "619add379c606b3ac6c1a175853b918e6939598a83d8ebadf3bdfd50d10b3c8c",
+          "Size": 173796,
+          "Version": "0.188-2.1",
+          "body": "acquisition/debian/bodies/619add379c606b3ac6c1a175853b918e6939598a83d8ebadf3bdfd50d10b3c8c.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libe/libepoxy/libepoxy0_1.5.10-1_amd64.deb",
+          "Package": "libepoxy0",
+          "SHA256": "050cbedc9c2a5cce976151c720a3817f2103a01e6ac255bdd6f2c6a7509b04c3",
+          "Size": 189092,
+          "Version": "1.5.10-1",
+          "body": "acquisition/debian/bodies/050cbedc9c2a5cce976151c720a3817f2103a01e6ac255bdd6f2c6a7509b04c3.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/updates/main/e/expat/libexpat1_2.5.0-1+deb12u4_amd64.deb",
+          "Package": "libexpat1",
+          "SHA256": "ed010cc41577d75ab01cccc6afa93496d9a99f1e16bd469caf58e1b81fddae80",
+          "Size": 105852,
+          "Version": "2.5.0-1+deb12u4",
+          "body": "acquisition/debian/bodies/ed010cc41577d75ab01cccc6afa93496d9a99f1e16bd469caf58e1b81fddae80.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/f/flac/libflac12_1.4.2+ds-2_amd64.deb",
+          "Package": "libflac12",
+          "SHA256": "4d8431c274eef13ec9ee2c0bf988c34b4342367dec053b7f69a432525be5b1fe",
+          "Size": 198124,
+          "Version": "1.4.2+ds-2",
+          "body": "acquisition/debian/bodies/4d8431c274eef13ec9ee2c0bf988c34b4342367dec053b7f69a432525be5b1fe.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/f/flite/libflite1_2.2-5_amd64.deb",
+          "Package": "libflite1",
+          "SHA256": "bfa8c591f1b47730b30b372ec38e02918a1c9795eada67684e1746390ad2f061",
+          "Size": 12823776,
+          "Version": "2.2-5",
+          "body": "acquisition/debian/bodies/bfa8c591f1b47730b30b372ec38e02918a1c9795eada67684e1746390ad2f061.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/f/fontconfig/libfontconfig1_2.14.1-4_amd64.deb",
+          "Package": "libfontconfig1",
+          "SHA256": "16ee38d374e064f534116dc442b086ef26f9831f1c0af7e5fb4fe4512e700649",
+          "Size": 385664,
+          "Version": "2.14.1-4",
+          "body": "acquisition/debian/bodies/16ee38d374e064f534116dc442b086ef26f9831f1c0af7e5fb4fe4512e700649.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/f/freetype/libfreetype6_2.12.1+dfsg-5+deb12u4_amd64.deb",
+          "Package": "libfreetype6",
+          "SHA256": "8043e479f73f29992d652e3f9dfe8b17f9780c7ea6330afe379ec5f9f188ac44",
+          "Size": 397736,
+          "Version": "2.12.1+dfsg-5+deb12u4",
+          "body": "acquisition/debian/bodies/8043e479f73f29992d652e3f9dfe8b17f9780c7ea6330afe379ec5f9f188ac44.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/f/fribidi/libfribidi0_1.0.8-2.1_amd64.deb",
+          "Package": "libfribidi0",
+          "SHA256": "87fce56627aab7b2968501d370aa3ed6d1c792119efa765e71a690bdfe570e62",
+          "Size": 64952,
+          "Version": "1.0.8-2.1",
+          "body": "acquisition/debian/bodies/87fce56627aab7b2968501d370aa3ed6d1c792119efa765e71a690bdfe570e62.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/m/mesa/libgbm1_22.3.6-1+deb12u2_amd64.deb",
+          "Package": "libgbm1",
+          "SHA256": "4323840f2b7b3e108990848529125d99c0956ae5a854c1e0568ed08c8faeaa2e",
+          "Size": 38132,
+          "Version": "22.3.6-1+deb12u2",
+          "body": "acquisition/debian/bodies/4323840f2b7b3e108990848529125d99c0956ae5a854c1e0568ed08c8faeaa2e.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/gdk-pixbuf/libgdk-pixbuf-2.0-0_2.42.10+dfsg-1+deb12u4_amd64.deb",
+          "Package": "libgdk-pixbuf-2.0-0",
+          "SHA256": "19673127f2530deb7cf637c688a4e16384e6887627296e16b8169038928cadc3",
+          "Size": 138972,
+          "Version": "2.42.10+dfsg-1+deb12u4",
+          "body": "acquisition/debian/bodies/19673127f2530deb7cf637c688a4e16384e6887627296e16b8169038928cadc3.deb"
+        },
+        {
+          "Architecture": "all",
+          "Filename": "pool/main/g/gdk-pixbuf/libgdk-pixbuf2.0-common_2.42.10+dfsg-1+deb12u4_all.deb",
+          "Package": "libgdk-pixbuf2.0-common",
+          "SHA256": "0f3df073ca7eed5564ea3faceff819d94932d924c56474f1e42799a8017a2d30",
+          "Size": 306756,
+          "Version": "2.42.10+dfsg-1+deb12u4",
+          "body": "acquisition/debian/bodies/0f3df073ca7eed5564ea3faceff819d94932d924c56474f1e42799a8017a2d30.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/gcc-12/libgfortran5_12.2.0-14+deb12u1_amd64.deb",
+          "Package": "libgfortran5",
+          "SHA256": "63d38775d20c425c1f00914b52167ae0e3b4639facdb0aa734877279fb716fbb",
+          "Size": 792696,
+          "Version": "12.2.0-14+deb12u1",
+          "body": "acquisition/debian/bodies/63d38775d20c425c1f00914b52167ae0e3b4639facdb0aa734877279fb716fbb.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/giflib/libgif7_5.2.1-2.5+deb12u1_amd64.deb",
+          "Package": "libgif7",
+          "SHA256": "9131bc6c90b3d9695c8b1811ca2f42a65f3611aaba10d71a5c7ad14f04a3ab71",
+          "Size": 42956,
+          "Version": "5.2.1-2.5+deb12u1",
+          "body": "acquisition/debian/bodies/9131bc6c90b3d9695c8b1811ca2f42a65f3611aaba10d71a5c7ad14f04a3ab71.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libg/libglvnd/libgl1_1.6.0-1_amd64.deb",
+          "Package": "libgl1",
+          "SHA256": "6f89b1702c48e9a2437bb3c1ffac8e1ab2d828fc28b3d14b2eecd4cc19b2c790",
+          "Size": 88448,
+          "Version": "1.6.0-1",
+          "body": "acquisition/debian/bodies/6f89b1702c48e9a2437bb3c1ffac8e1ab2d828fc28b3d14b2eecd4cc19b2c790.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/m/mesa/libgl1-mesa-dri_22.3.6-1+deb12u2_amd64.deb",
+          "Package": "libgl1-mesa-dri",
+          "SHA256": "350e4263aaacd521f6f757951262b57c003930edaf0419508f2c5675317577fe",
+          "Size": 7239704,
+          "Version": "22.3.6-1+deb12u2",
+          "body": "acquisition/debian/bodies/350e4263aaacd521f6f757951262b57c003930edaf0419508f2c5675317577fe.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/m/mesa/libglapi-mesa_22.3.6-1+deb12u2_amd64.deb",
+          "Package": "libglapi-mesa",
+          "SHA256": "2db5b13a6b7f4042f9a417ad7fa4338b6c47528dc64d7f89cfd5e53d07d76bc4",
+          "Size": 35900,
+          "Version": "22.3.6-1+deb12u2",
+          "body": "acquisition/debian/bodies/2db5b13a6b7f4042f9a417ad7fa4338b6c47528dc64d7f89cfd5e53d07d76bc4.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/glib2.0/libglib2.0-0_2.74.6-2+deb12u9_amd64.deb",
+          "Package": "libglib2.0-0",
+          "SHA256": "7ff85197685d89e150e342b29a59aab1beee400050ba7da73de81cd999ffee5a",
+          "Size": 1403216,
+          "Version": "2.74.6-2+deb12u9",
+          "body": "acquisition/debian/bodies/7ff85197685d89e150e342b29a59aab1beee400050ba7da73de81cd999ffee5a.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libg/libglvnd/libglvnd0_1.6.0-1_amd64.deb",
+          "Package": "libglvnd0",
+          "SHA256": "b6da5b153dd62d8b5e5fbe25242db1fc05c068707c365db49abda8c2427c75f8",
+          "Size": 51820,
+          "Version": "1.6.0-1",
+          "body": "acquisition/debian/bodies/b6da5b153dd62d8b5e5fbe25242db1fc05c068707c365db49abda8c2427c75f8.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/m/mesa/libglx-mesa0_22.3.6-1+deb12u2_amd64.deb",
+          "Package": "libglx-mesa0",
+          "SHA256": "88e7ffa61f1a0a86c30736ad7657ab4774c9b711bbaff76cef0bd32ffb85ec90",
+          "Size": 147676,
+          "Version": "22.3.6-1+deb12u2",
+          "body": "acquisition/debian/bodies/88e7ffa61f1a0a86c30736ad7657ab4774c9b711bbaff76cef0bd32ffb85ec90.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libg/libglvnd/libglx0_1.6.0-1_amd64.deb",
+          "Package": "libglx0",
+          "SHA256": "95f568df73dedf43ae66834a75502112e0d4f3ad7124f3dbfa790b739383b896",
+          "Size": 34384,
+          "Version": "1.6.0-1",
+          "body": "acquisition/debian/bodies/95f568df73dedf43ae66834a75502112e0d4f3ad7124f3dbfa790b739383b896.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/game-music-emu/libgme0_0.6.3-6_amd64.deb",
+          "Package": "libgme0",
+          "SHA256": "3c6fc5488f702cc728ff25420cabd33688861de435e8a188aee6b75d8ed423bd",
+          "Size": 129956,
+          "Version": "0.6.3-6",
+          "body": "acquisition/debian/bodies/3c6fc5488f702cc728ff25420cabd33688861de435e8a188aee6b75d8ed423bd.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/gcc-12/libgomp1_12.2.0-14+deb12u1_amd64.deb",
+          "Package": "libgomp1",
+          "SHA256": "48fec46bda7f5b1638b9e959889bfbc20491247d402d120bb152687eb48143d7",
+          "Size": 115772,
+          "Version": "12.2.0-14+deb12u1",
+          "body": "acquisition/debian/bodies/48fec46bda7f5b1638b9e959889bfbc20491247d402d120bb152687eb48143d7.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/graphite2/libgraphite2-3_1.3.14-1+deb12u1_amd64.deb",
+          "Package": "libgraphite2-3",
+          "SHA256": "c19a7f6ba9298db7eef041ae27b08985f2c02009e418063f8bccdb5bc5e858dc",
+          "Size": 74564,
+          "Version": "1.3.14-1+deb12u1",
+          "body": "acquisition/debian/bodies/c19a7f6ba9298db7eef041ae27b08985f2c02009e418063f8bccdb5bc5e858dc.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libg/libgsm/libgsm1_1.0.22-1_amd64.deb",
+          "Package": "libgsm1",
+          "SHA256": "1116dc3dbd0f5e7f6becebd5d5a9a9cbd40fc268f7a3e3f6863dd4a26627627a",
+          "Size": 30940,
+          "Version": "1.0.22-1",
+          "body": "acquisition/debian/bodies/1116dc3dbd0f5e7f6becebd5d5a9a9cbd40fc268f7a3e3f6863dd4a26627627a.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/h/harfbuzz/libharfbuzz0b_6.0.0+dfsg-3_amd64.deb",
+          "Package": "libharfbuzz0b",
+          "SHA256": "bfce132b7ee67b9c2d2166075b1936a25c8cc6866b6a049f99b8e94baa916e71",
+          "Size": 1945396,
+          "Version": "6.0.0+dfsg-3",
+          "body": "acquisition/debian/bodies/bfce132b7ee67b9c2d2166075b1936a25c8cc6866b6a049f99b8e94baa916e71.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/h/highway/libhwy1_1.0.3-3+deb12u1_amd64.deb",
+          "Package": "libhwy1",
+          "SHA256": "58db3098074f192d32784cf2d070f82d4e26b10d54bc723830a6b9a43be5013b",
+          "Size": 347628,
+          "Version": "1.0.3-3+deb12u1",
+          "body": "acquisition/debian/bodies/58db3098074f192d32784cf2d070f82d4e26b10d54bc723830a6b9a43be5013b.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/i/icu/libicu72_72.1-3+deb12u1_amd64.deb",
+          "Package": "libicu72",
+          "SHA256": "f7f6f99c6d7b025914df2447fc93e11d22c44c0c8bdd8b6f36691c9e7ddcef88",
+          "Size": 9376124,
+          "Version": "72.1-3+deb12u1",
+          "body": "acquisition/debian/bodies/f7f6f99c6d7b025914df2447fc93e11d22c44c0c8bdd8b6f36691c9e7ddcef88.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libi/libiec61883/libiec61883-0_1.2.0-6+b1_amd64.deb",
+          "Package": "libiec61883-0",
+          "SHA256": "98d5901dc67a2df54ddfe8d417b0e2a9e47278b7614339f7522ef0b2bd709444",
+          "Size": 30480,
+          "Version": "1.2.0-6+b1",
+          "body": "acquisition/debian/bodies/98d5901dc67a2df54ddfe8d417b0e2a9e47278b7614339f7522ef0b2bd709444.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/j/jackd2/libjack-jackd2-0_1.9.21~dfsg-3_amd64.deb",
+          "Package": "libjack-jackd2-0",
+          "SHA256": "1502e202d207aeb52a36ca8bc098d4bae3b8724c78db7de52d3d905f5959b997",
+          "Size": 281492,
+          "Version": "1.9.21~dfsg-3",
+          "body": "acquisition/debian/bodies/1502e202d207aeb52a36ca8bc098d4bae3b8724c78db7de52d3d905f5959b997.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/j/jbigkit/libjbig0_2.1-6.1_amd64.deb",
+          "Package": "libjbig0",
+          "SHA256": "6b07c77b700a615642888a82ba92a7e7c429d04b9c8669c62b2263f15c4c4059",
+          "Size": 31704,
+          "Version": "2.1-6.1",
+          "body": "acquisition/debian/bodies/6b07c77b700a615642888a82ba92a7e7c429d04b9c8669c62b2263f15c4c4059.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libj/libjpeg-turbo/libjpeg62-turbo_2.1.5-2_amd64.deb",
+          "Package": "libjpeg62-turbo",
+          "SHA256": "95ec30140789a342add8f8371ed018924de51b539056522b66f207b25cba9cad",
+          "Size": 166332,
+          "Version": "1:2.1.5-2",
+          "body": "acquisition/debian/bodies/95ec30140789a342add8f8371ed018924de51b539056522b66f207b25cba9cad.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/j/jpeg-xl/libjxl0.7_0.7.0-10+deb12u1_amd64.deb",
+          "Package": "libjxl0.7",
+          "SHA256": "19e747c8b509af924d5d2b1602e9eb68ff60a93576e07e0dfd55ca1f857fdf65",
+          "Size": 1045736,
+          "Version": "0.7.0-10+deb12u1",
+          "body": "acquisition/debian/bodies/19e747c8b509af924d5d2b1602e9eb68ff60a93576e07e0dfd55ca1f857fdf65.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/l/lapack/liblapack3_3.11.0-2_amd64.deb",
+          "Package": "liblapack3",
+          "SHA256": "4cb4ba9c36ee0242d91c8bcd69286db59a6a0c86f8c522b72f5eb0053e127d7d",
+          "Size": 2322744,
+          "Version": "3.11.0-2",
+          "body": "acquisition/debian/bodies/4cb4ba9c36ee0242d91c8bcd69286db59a6a0c86f8c522b72f5eb0053e127d7d.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/l/lcms2/liblcms2-2_2.14-2+deb12u1_amd64.deb",
+          "Package": "liblcms2-2",
+          "SHA256": "333efe13d165b8a98194d95e72fd10b502ebbee4dc2eb43fc2ab83e2b53e5f17",
+          "Size": 153540,
+          "Version": "2.14-2+deb12u1",
+          "body": "acquisition/debian/bodies/333efe13d165b8a98194d95e72fd10b502ebbee4dc2eb43fc2ab83e2b53e5f17.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/o/openldap/libldap-2.5-0_2.5.13+dfsg-5_amd64.deb",
+          "Package": "libldap-2.5-0",
+          "SHA256": "4b6c30f6554149c594628d945edc6003f0eea8d0cc1341638c0e71375db147ed",
+          "Size": 183248,
+          "Version": "2.5.13+dfsg-5",
+          "body": "acquisition/debian/bodies/4b6c30f6554149c594628d945edc6003f0eea8d0cc1341638c0e71375db147ed.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/l/leptonlib/liblept5_1.82.0-3+b3_amd64.deb",
+          "Package": "liblept5",
+          "SHA256": "cddc18cffc38bb1839f2b5336822646b34dafc5dd40468b658d26c20e0eb97af",
+          "Size": 1049560,
+          "Version": "1.82.0-3+b3",
+          "body": "acquisition/debian/bodies/cddc18cffc38bb1839f2b5336822646b34dafc5dd40468b658d26c20e0eb97af.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/l/lerc/liblerc4_4.0.0+ds-2_amd64.deb",
+          "Package": "liblerc4",
+          "SHA256": "771f5c47ca69f24ca61e4be0c98c5912b182ce442f921697d17a472f3ded5c9c",
+          "Size": 170368,
+          "Version": "4.0.0+ds-2",
+          "body": "acquisition/debian/bodies/771f5c47ca69f24ca61e4be0c98c5912b182ce442f921697d17a472f3ded5c9c.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/l/lilv/liblilv-0-0_0.24.14-1_amd64.deb",
+          "Package": "liblilv-0-0",
+          "SHA256": "a28222c34d51cd28f69af9fc95eab77369b4daf98ae35328407864661e72a3d0",
+          "Size": 49424,
+          "Version": "0.24.14-1",
+          "body": "acquisition/debian/bodies/a28222c34d51cd28f69af9fc95eab77369b4daf98ae35328407864661e72a3d0.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/l/llvm-toolchain-15/libllvm15_15.0.6-4+b1_amd64.deb",
+          "Package": "libllvm15",
+          "SHA256": "9f0751109ba89e65b1313a4f3e34a29977a0db6fa30ed475e2c6bd555fa9e866",
+          "Size": 23115156,
+          "Version": "1:15.0.6-4+b1",
+          "body": "acquisition/debian/bodies/9f0751109ba89e65b1313a4f3e34a29977a0db6fa30ed475e2c6bd555fa9e866.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/m/mbedtls/libmbedcrypto7_2.28.3-1_amd64.deb",
+          "Package": "libmbedcrypto7",
+          "SHA256": "af3295f80abf7e6ba2cba419134e29bde04192bf3614622ee53ce49de8d02abe",
+          "Size": 277112,
+          "Version": "2.28.3-1",
+          "body": "acquisition/debian/bodies/af3295f80abf7e6ba2cba419134e29bde04192bf3614622ee53ce49de8d02abe.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/i/intel-mediasdk/libmfx1_22.5.4-1_amd64.deb",
+          "Package": "libmfx1",
+          "SHA256": "19754c2ad5cf13015ebe8e1bd7fbc412ca410d810c036b167ba2b0d9bee36926",
+          "Size": 3219328,
+          "Version": "22.5.4-1",
+          "body": "acquisition/debian/bodies/19754c2ad5cf13015ebe8e1bd7fbc412ca410d810c036b167ba2b0d9bee36926.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/l/lame/libmp3lame0_3.100-6_amd64.deb",
+          "Package": "libmp3lame0",
+          "SHA256": "b1292c749172e7623547ecf684da57d3ec6ca22109f08b11bbb9e6be6e6beb95",
+          "Size": 364932,
+          "Version": "3.100-6",
+          "body": "acquisition/debian/bodies/b1292c749172e7623547ecf684da57d3ec6ca22109f08b11bbb9e6be6e6beb95.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/m/mpg123/libmpg123-0_1.31.2-1+deb12u1_amd64.deb",
+          "Package": "libmpg123-0",
+          "SHA256": "a10ad0d59995b859797a5f20d2833672051d0b2c7dab4c71f2e79258b2e3f631",
+          "Size": 146980,
+          "Version": "1.31.2-1+deb12u1",
+          "body": "acquisition/debian/bodies/a10ad0d59995b859797a5f20d2833672051d0b2c7dab4c71f2e79258b2e3f631.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libm/libmysofa/libmysofa1_1.3.1~dfsg0-1_amd64.deb",
+          "Package": "libmysofa1",
+          "SHA256": "c4bd2b6d4352be2c0595974e4f62c2d16cfcde83b722be8fc96c0aee3e49c904",
+          "Size": 1157800,
+          "Version": "1.3.1~dfsg0-1",
+          "body": "acquisition/debian/bodies/c4bd2b6d4352be2c0595974e4f62c2d16cfcde83b722be8fc96c0aee3e49c904.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/n/nghttp2/libnghttp2-14_1.52.0-1+deb12u3_amd64.deb",
+          "Package": "libnghttp2-14",
+          "SHA256": "5a5736cee57e51c1baed869979e6ecdbc6495e939e33203d6cfe3b6e5a149e3f",
+          "Size": 72404,
+          "Version": "1.52.0-1+deb12u3",
+          "body": "acquisition/debian/bodies/5a5736cee57e51c1baed869979e6ecdbc6495e939e33203d6cfe3b6e5a149e3f.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/n/norm/libnorm1_1.5.9+dfsg-2_amd64.deb",
+          "Package": "libnorm1",
+          "SHA256": "a6388c8d460e86c7b76b08e82ecb09894d1d9c53b488850fb39702af85b6d159",
+          "Size": 220860,
+          "Version": "1.5.9+dfsg-2",
+          "body": "acquisition/debian/bodies/a6388c8d460e86c7b76b08e82ecb09894d1d9c53b488850fb39702af85b6d159.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/n/numactl/libnuma1_2.0.16-1_amd64.deb",
+          "Package": "libnuma1",
+          "SHA256": "639e1ab6bd66ead40db8a22c332d7199679fa22db261cac34444eb8eb4c17dda",
+          "Size": 20964,
+          "Version": "2.0.16-1",
+          "body": "acquisition/debian/bodies/639e1ab6bd66ead40db8a22c332d7199679fa22db261cac34444eb8eb4c17dda.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libo/libogg/libogg0_1.3.5-3_amd64.deb",
+          "Package": "libogg0",
+          "SHA256": "f67acb0477aed0354f411172e37af338f3ac6bd4f3766134a2cf5539884b5a28",
+          "Size": 23412,
+          "Version": "1.3.5-3",
+          "body": "acquisition/debian/bodies/f67acb0477aed0354f411172e37af338f3ac6bd4f3766134a2cf5539884b5a28.deb"
+        },
+        {
+          "Architecture": "all",
+          "Filename": "pool/main/o/openal-soft/libopenal-data_1.19.1-2_all.deb",
+          "Package": "libopenal-data",
+          "SHA256": "695a650803f885459994bb921132d956c2b693759572005351a5b13773c754cd",
+          "Size": 170228,
+          "Version": "1:1.19.1-2",
+          "body": "acquisition/debian/bodies/695a650803f885459994bb921132d956c2b693759572005351a5b13773c754cd.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/o/openal-soft/libopenal1_1.19.1-2_amd64.deb",
+          "Package": "libopenal1",
+          "SHA256": "b027d29d37786e4dacb21a7268e911566efb09f5a20facc66c57dd22a7c31e83",
+          "Size": 500936,
+          "Version": "1:1.19.1-2",
+          "body": "acquisition/debian/bodies/b027d29d37786e4dacb21a7268e911566efb09f5a20facc66c57dd22a7c31e83.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/o/openjpeg2/libopenjp2-7_2.5.0-2+deb12u3_amd64.deb",
+          "Package": "libopenjp2-7",
+          "SHA256": "a127e2f1741d66bdddb6393a718e3cbec327d53f88c89b859b1f8d73f64cf635",
+          "Size": 189312,
+          "Version": "2.5.0-2+deb12u3",
+          "body": "acquisition/debian/bodies/a127e2f1741d66bdddb6393a718e3cbec327d53f88c89b859b1f8d73f64cf635.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libo/libopenmpt/libopenmpt0_0.6.9-1_amd64.deb",
+          "Package": "libopenmpt0",
+          "SHA256": "69c1de4890044359551e4874b230f7ff8b0568687988582ba996d41af602d711",
+          "Size": 693200,
+          "Version": "0.6.9-1",
+          "body": "acquisition/debian/bodies/69c1de4890044359551e4874b230f7ff8b0568687988582ba996d41af602d711.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/o/opus/libopus0_1.3.1-3_amd64.deb",
+          "Package": "libopus0",
+          "SHA256": "c172e212f9039e741916aa8e12f3670d1e049dc0c16685325641288c2d83faa7",
+          "Size": 195192,
+          "Version": "1.3.1-3",
+          "body": "acquisition/debian/bodies/c172e212f9039e741916aa8e12f3670d1e049dc0c16685325641288c2d83faa7.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/p/pango1.0/libpango-1.0-0_1.50.12+ds-1_amd64.deb",
+          "Package": "libpango-1.0-0",
+          "SHA256": "851720de07441ae6bb6a7f51fc0f2edb4db7aa6f25b5bf1bf7b72dcab8947b7f",
+          "Size": 211788,
+          "Version": "1.50.12+ds-1",
+          "body": "acquisition/debian/bodies/851720de07441ae6bb6a7f51fc0f2edb4db7aa6f25b5bf1bf7b72dcab8947b7f.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/p/pango1.0/libpangocairo-1.0-0_1.50.12+ds-1_amd64.deb",
+          "Package": "libpangocairo-1.0-0",
+          "SHA256": "96695f9cdd3bf346e3555cf0aa158e23a36114d6dec203b00ab4e93f1b77aab9",
+          "Size": 34184,
+          "Version": "1.50.12+ds-1",
+          "body": "acquisition/debian/bodies/96695f9cdd3bf346e3555cf0aa158e23a36114d6dec203b00ab4e93f1b77aab9.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/p/pango1.0/libpangoft2-1.0-0_1.50.12+ds-1_amd64.deb",
+          "Package": "libpangoft2-1.0-0",
+          "SHA256": "78da3f494109f6e7a39c4626aaae7571c600c5854cecda0bc0c902224986a63b",
+          "Size": 47384,
+          "Version": "1.50.12+ds-1",
+          "body": "acquisition/debian/bodies/78da3f494109f6e7a39c4626aaae7571c600c5854cecda0bc0c902224986a63b.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libp/libpciaccess/libpciaccess0_0.17-2_amd64.deb",
+          "Package": "libpciaccess0",
+          "SHA256": "4025f3608cf431c163efb94fdc553e7b93e16b8f0d741ea87762e19025ffc80e",
+          "Size": 51384,
+          "Version": "0.17-2",
+          "body": "acquisition/debian/bodies/4025f3608cf431c163efb94fdc553e7b93e16b8f0d741ea87762e19025ffc80e.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libp/libpgm/libpgm-5.3-0_5.3.128~dfsg-2_amd64.deb",
+          "Package": "libpgm-5.3-0",
+          "SHA256": "3f124acd98fb6d9d78dff583061736bcb738d102f3bd1e0afca4c0f0435534af",
+          "Size": 160892,
+          "Version": "5.3.128~dfsg-2",
+          "body": "acquisition/debian/bodies/3f124acd98fb6d9d78dff583061736bcb738d102f3bd1e0afca4c0f0435534af.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/p/pixman/libpixman-1-0_0.42.2-1_amd64.deb",
+          "Package": "libpixman-1-0",
+          "SHA256": "9ed75ef81b6b1eba9e1357f8b0ce01d31112b0e07b2b685bee2cf627a8932892",
+          "Size": 545588,
+          "Version": "0.42.2-1",
+          "body": "acquisition/debian/bodies/9ed75ef81b6b1eba9e1357f8b0ce01d31112b0e07b2b685bee2cf627a8932892.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libp/libplacebo/libplacebo208_4.208.0-3_amd64.deb",
+          "Package": "libplacebo208",
+          "SHA256": "f6ecc008ec62532ae51510fba32d388eb8d8bdef56ae6f11eb2511d58edcabd5",
+          "Size": 2238596,
+          "Version": "4.208.0-3",
+          "body": "acquisition/debian/bodies/f6ecc008ec62532ae51510fba32d388eb8d8bdef56ae6f11eb2511d58edcabd5.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/updates/main/libp/libpng1.6/libpng16-16_1.6.39-2+deb12u6_amd64.deb",
+          "Package": "libpng16-16",
+          "SHA256": "940b91d40d51c825de7f7aa133aecff1ffa25a91f12cb6aa6926c9ad55cd640c",
+          "Size": 277048,
+          "Version": "1.6.39-2+deb12u6",
+          "body": "acquisition/debian/bodies/940b91d40d51c825de7f7aa133aecff1ffa25a91f12cb6aa6926c9ad55cd640c.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/p/pocketsphinx/libpocketsphinx3_0.8+5prealpha+1-15_amd64.deb",
+          "Package": "libpocketsphinx3",
+          "SHA256": "6236ee6b8e542cc55e6da15f00e56ff06ef743d7e91c57e0180d07c642b0bc2e",
+          "Size": 125308,
+          "Version": "0.8+5prealpha+1-15",
+          "body": "acquisition/debian/bodies/6236ee6b8e542cc55e6da15f00e56ff06ef743d7e91c57e0180d07c642b0bc2e.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/f/ffmpeg/libpostproc56_5.1.9-0+deb12u1_amd64.deb",
+          "Package": "libpostproc56",
+          "SHA256": "c6ea1be8d11ee56ae2c9ae749edc2f38a3baaa949f882affdb859e1f69e6a168",
+          "Size": 103396,
+          "Version": "7:5.1.9-0+deb12u1",
+          "body": "acquisition/debian/bodies/c6ea1be8d11ee56ae2c9ae749edc2f38a3baaa949f882affdb859e1f69e6a168.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libp/libpsl/libpsl5_0.21.2-1_amd64.deb",
+          "Package": "libpsl5",
+          "SHA256": "4f0d35610204e4e754b057748719744114621f2f6f4202d846c314860a981afb",
+          "Size": 58684,
+          "Version": "0.21.2-1",
+          "body": "acquisition/debian/bodies/4f0d35610204e4e754b057748719744114621f2f6f4202d846c314860a981afb.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/p/pulseaudio/libpulse0_16.1+dfsg1-2+b1_amd64.deb",
+          "Package": "libpulse0",
+          "SHA256": "7b2c5403cb726312219aad678becc6d6adcee1d8694fdffce0b6ec15ae010831",
+          "Size": 273952,
+          "Version": "16.1+dfsg1-2+b1",
+          "body": "acquisition/debian/bodies/7b2c5403cb726312219aad678becc6d6adcee1d8694fdffce0b6ec15ae010831.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/gcc-12/libquadmath0_12.2.0-14+deb12u1_amd64.deb",
+          "Package": "libquadmath0",
+          "SHA256": "3f0c9a4c730da2fdab001cae596625438598fd2996d29d888feeb4c1cdc9011f",
+          "Size": 144616,
+          "Version": "12.2.0-14+deb12u1",
+          "body": "acquisition/debian/bodies/3f0c9a4c730da2fdab001cae596625438598fd2996d29d888feeb4c1cdc9011f.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/updates/main/libr/librabbitmq/librabbitmq4_0.11.0-1+deb12u3_amd64.deb",
+          "Package": "librabbitmq4",
+          "SHA256": "da461d734bf8a1d6a6d9c20e5d68d552aac7e87aa75274c7766c81bb0ca79017",
+          "Size": 41780,
+          "Version": "0.11.0-1+deb12u3",
+          "body": "acquisition/debian/bodies/da461d734bf8a1d6a6d9c20e5d68d552aac7e87aa75274c7766c81bb0ca79017.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/r/rust-rav1e/librav1e0_0.5.1-6_amd64.deb",
+          "Package": "librav1e0",
+          "SHA256": "c266adb3545b0b8ff6450dbd09f85f19361bf5bc9290ddf2e869f040cb9725b7",
+          "Size": 763348,
+          "Version": "0.5.1-6",
+          "body": "acquisition/debian/bodies/c266adb3545b0b8ff6450dbd09f85f19361bf5bc9290ddf2e869f040cb9725b7.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libr/libraw1394/libraw1394-11_2.1.2-2_amd64.deb",
+          "Package": "libraw1394-11",
+          "SHA256": "d8cb92f085d3b32ca23e31b2bf45f66d678f585fef8f8b85510bd41b8ff966ee",
+          "Size": 41064,
+          "Version": "2.1.2-2",
+          "body": "acquisition/debian/bodies/d8cb92f085d3b32ca23e31b2bf45f66d678f585fef8f8b85510bd41b8ff966ee.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libr/librist/librist4_0.2.7+dfsg-1_amd64.deb",
+          "Package": "librist4",
+          "SHA256": "dddb27f19810bc0bfe8e0d252e3a5c0dbf43bd7f2996756f42e2833bed6dbe5e",
+          "Size": 73880,
+          "Version": "0.2.7+dfsg-1",
+          "body": "acquisition/debian/bodies/dddb27f19810bc0bfe8e0d252e3a5c0dbf43bd7f2996756f42e2833bed6dbe5e.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libr/librsvg/librsvg2-2_2.54.7+dfsg-1~deb12u1_amd64.deb",
+          "Package": "librsvg2-2",
+          "SHA256": "090f2ffbedb57727ee9b264e6ea6e66fe09773629739dd406931264b1bf14dc8",
+          "Size": 2620240,
+          "Version": "2.54.7+dfsg-1~deb12u1",
+          "body": "acquisition/debian/bodies/090f2ffbedb57727ee9b264e6ea6e66fe09773629739dd406931264b1bf14dc8.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/r/rtmpdump/librtmp1_2.4+20151223.gitfa8646d.1-2+b2_amd64.deb",
+          "Package": "librtmp1",
+          "SHA256": "e1f69020dc2c466e421ec6a58406b643be8b5c382abf0f8989011c1d3df91c87",
+          "Size": 60824,
+          "Version": "2.4+20151223.gitfa8646d.1-2+b2",
+          "body": "acquisition/debian/bodies/e1f69020dc2c466e421ec6a58406b643be8b5c382abf0f8989011c1d3df91c87.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/r/rubberband/librubberband2_3.1.2+dfsg0-1_amd64.deb",
+          "Package": "librubberband2",
+          "SHA256": "8bc1426b30a522886ce936b4f6b12c05dcd953b092d263cd58f20dd73fae4d74",
+          "Size": 136976,
+          "Version": "3.1.2+dfsg0-1",
+          "body": "acquisition/debian/bodies/8bc1426b30a522886ce936b4f6b12c05dcd953b092d263cd58f20dd73fae4d74.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libs/libsamplerate/libsamplerate0_0.2.2-3_amd64.deb",
+          "Package": "libsamplerate0",
+          "SHA256": "72fe6d068ea3107115576d678a8b4f064ff736f1659777666ff056609c310fa2",
+          "Size": 952104,
+          "Version": "0.2.2-3",
+          "body": "acquisition/debian/bodies/72fe6d068ea3107115576d678a8b4f064ff736f1659777666ff056609c310fa2.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/c/cyrus-sasl2/libsasl2-2_2.1.28+dfsg-10_amd64.deb",
+          "Package": "libsasl2-2",
+          "SHA256": "11ee190ad39f8d7af441d2c8347388b9449434c73acc67b4b372445ac4152efa",
+          "Size": 59712,
+          "Version": "2.1.28+dfsg-10",
+          "body": "acquisition/debian/bodies/11ee190ad39f8d7af441d2c8347388b9449434c73acc67b4b372445ac4152efa.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/c/cyrus-sasl2/libsasl2-modules-db_2.1.28+dfsg-10_amd64.deb",
+          "Package": "libsasl2-modules-db",
+          "SHA256": "3ac4fd6cbe3b3b06e68d24b931bf3eb9385b42f15604a37ed25310e948ca0ee6",
+          "Size": 20336,
+          "Version": "2.1.28+dfsg-10",
+          "body": "acquisition/debian/bodies/3ac4fd6cbe3b3b06e68d24b931bf3eb9385b42f15604a37ed25310e948ca0ee6.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libs/libsdl2/libsdl2-2.0-0_2.26.5+dfsg-1_amd64.deb",
+          "Package": "libsdl2-2.0-0",
+          "SHA256": "9f97f2ccf78573d5327ba34c9553952520f9d4da5af2b390d919eabdac69c546",
+          "Size": 629460,
+          "Version": "2.26.5+dfsg-1",
+          "body": "acquisition/debian/bodies/9f97f2ccf78573d5327ba34c9553952520f9d4da5af2b390d919eabdac69c546.deb"
+        },
+        {
+          "Architecture": "all",
+          "Filename": "pool/main/l/lm-sensors/libsensors-config_3.6.0-7.1_all.deb",
+          "Package": "libsensors-config",
+          "SHA256": "7f3c9fbd822858a9e30335e4a7f66c9468962eb26cd375b93bc8b789660bf02f",
+          "Size": 14252,
+          "Version": "1:3.6.0-7.1",
+          "body": "acquisition/debian/bodies/7f3c9fbd822858a9e30335e4a7f66c9468962eb26cd375b93bc8b789660bf02f.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/l/lm-sensors/libsensors5_3.6.0-7.1_amd64.deb",
+          "Package": "libsensors5",
+          "SHA256": "b7eb91dce728fbb9203aec8b22637303b29821c3384e5f78a8ff348b4e44efe3",
+          "Size": 34160,
+          "Version": "1:3.6.0-7.1",
+          "body": "acquisition/debian/bodies/b7eb91dce728fbb9203aec8b22637303b29821c3384e5f78a8ff348b4e44efe3.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/s/serd/libserd-0-0_0.30.16-1_amd64.deb",
+          "Package": "libserd-0-0",
+          "SHA256": "9fcf641b2e5e2b6705638a735692ad78c2e55bf4452636da1de80df17cd52fc8",
+          "Size": 47456,
+          "Version": "0.30.16-1",
+          "body": "acquisition/debian/bodies/9fcf641b2e5e2b6705638a735692ad78c2e55bf4452636da1de80df17cd52fc8.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/s/shine/libshine3_3.1.1-2_amd64.deb",
+          "Package": "libshine3",
+          "SHA256": "6b09f0d577f515feffc071048218a26cdde5346d6e2661f861009897db0204d2",
+          "Size": 23636,
+          "Version": "3.1.1-2",
+          "body": "acquisition/debian/bodies/6b09f0d577f515feffc071048218a26cdde5346d6e2661f861009897db0204d2.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/s/slang2/libslang2_2.3.3-3_amd64.deb",
+          "Package": "libslang2",
+          "SHA256": "5b3cecc829ef229125b340ccd2ca45ced75d24e9aa191912105016b1af94413f",
+          "Size": 554316,
+          "Version": "2.3.3-3",
+          "body": "acquisition/debian/bodies/5b3cecc829ef229125b340ccd2ca45ced75d24e9aa191912105016b1af94413f.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/s/snappy/libsnappy1v5_1.1.9-3_amd64.deb",
+          "Package": "libsnappy1v5",
+          "SHA256": "a2ec50d0f92864e7524c96352bc2c62221126ee1ef58f77af7bf369c60b6e98f",
+          "Size": 25964,
+          "Version": "1.1.9-3",
+          "body": "acquisition/debian/bodies/a2ec50d0f92864e7524c96352bc2c62221126ee1ef58f77af7bf369c60b6e98f.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libs/libsndfile/libsndfile1_1.2.0-1+deb12u1_amd64.deb",
+          "Package": "libsndfile1",
+          "SHA256": "02dc3f08fe8476e82e005f412e3b7289ff641180f33a9be8073f4bde61c85e8e",
+          "Size": 196540,
+          "Version": "1.2.0-1+deb12u1",
+          "body": "acquisition/debian/bodies/02dc3f08fe8476e82e005f412e3b7289ff641180f33a9be8073f4bde61c85e8e.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/s/sndio/libsndio7.0_1.9.0-0.3+b2_amd64.deb",
+          "Package": "libsndio7.0",
+          "SHA256": "c4cc979126cc558549db25d42e2849a9d5dcdf7928e0ece69c38c374021a078b",
+          "Size": 27312,
+          "Version": "1.9.0-0.3+b2",
+          "body": "acquisition/debian/bodies/c4cc979126cc558549db25d42e2849a9d5dcdf7928e0ece69c38c374021a078b.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libs/libsodium/libsodium23_1.0.18-1+deb12u1_amd64.deb",
+          "Package": "libsodium23",
+          "SHA256": "bceae6943d6e11fb53ec3f81d9630ec9ed03e51f89364902b05ebe402ae946ec",
+          "Size": 162044,
+          "Version": "1.0.18-1+deb12u1",
+          "body": "acquisition/debian/bodies/bceae6943d6e11fb53ec3f81d9630ec9ed03e51f89364902b05ebe402ae946ec.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/s/sord/libsord-0-0_0.16.14+git221008-1_amd64.deb",
+          "Package": "libsord-0-0",
+          "SHA256": "aa791ccd64deb45a39eba2798904b8ae93e3454d59a0fd1d1cf4da7577f0e6f7",
+          "Size": 20820,
+          "Version": "0.16.14+git221008-1",
+          "body": "acquisition/debian/bodies/aa791ccd64deb45a39eba2798904b8ae93e3454d59a0fd1d1cf4da7577f0e6f7.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libs/libsoxr/libsoxr0_0.1.3-4_amd64.deb",
+          "Package": "libsoxr0",
+          "SHA256": "73a9f1a290da86562333430517c3f44282f17fcbeefcc2ba7f8abbc2e686f6f3",
+          "Size": 77812,
+          "Version": "0.1.3-4",
+          "body": "acquisition/debian/bodies/73a9f1a290da86562333430517c3f44282f17fcbeefcc2ba7f8abbc2e686f6f3.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/s/speex/libspeex1_1.2.1-2_amd64.deb",
+          "Package": "libspeex1",
+          "SHA256": "0b6f64c60624c87dcd12e58fae56882355908822d077a718022aad888ade0e1e",
+          "Size": 54564,
+          "Version": "1.2.1-2",
+          "body": "acquisition/debian/bodies/0b6f64c60624c87dcd12e58fae56882355908822d077a718022aad888ade0e1e.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/s/sphinxbase/libsphinxbase3_0.8+5prealpha+1-16_amd64.deb",
+          "Package": "libsphinxbase3",
+          "SHA256": "53d6c1be6a6ee167741f2a31861ad0f2a41c1bc4eef9405e1773d7c22b03ad7f",
+          "Size": 118480,
+          "Version": "0.8+5prealpha+1-16",
+          "body": "acquisition/debian/bodies/53d6c1be6a6ee167741f2a31861ad0f2a41c1bc4eef9405e1773d7c22b03ad7f.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/s/sratom/libsratom-0-0_0.6.14-1_amd64.deb",
+          "Package": "libsratom-0-0",
+          "SHA256": "d17581d7c34d01cdf1407f2eef63994ef6fdf8522bd9a06ca286ca6090e13b28",
+          "Size": 17740,
+          "Version": "0.6.14-1",
+          "body": "acquisition/debian/bodies/d17581d7c34d01cdf1407f2eef63994ef6fdf8522bd9a06ca286ca6090e13b28.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/s/srt/libsrt1.5-gnutls_1.5.1-1+deb12u1_amd64.deb",
+          "Package": "libsrt1.5-gnutls",
+          "SHA256": "7a785222cd985b93b675252c0a3510cfcd920f0d531ab674fd4b4878d6646581",
+          "Size": 313060,
+          "Version": "1.5.1-1+deb12u1",
+          "body": "acquisition/debian/bodies/7a785222cd985b93b675252c0a3510cfcd920f0d531ab674fd4b4878d6646581.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libs/libssh/libssh-gcrypt-4_0.10.6-0+deb12u2_amd64.deb",
+          "Package": "libssh-gcrypt-4",
+          "SHA256": "f2af148e039fed6620c8ba24328a434f9ecb1adb5b735c04d2d41a432ca3553d",
+          "Size": 219948,
+          "Version": "0.10.6-0+deb12u2",
+          "body": "acquisition/debian/bodies/f2af148e039fed6620c8ba24328a434f9ecb1adb5b735c04d2d41a432ca3553d.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/updates/main/libs/libssh2/libssh2-1_1.10.0-3+deb12u1_amd64.deb",
+          "Package": "libssh2-1",
+          "SHA256": "fff72a194e493f88e100a2567e22472bb4ab828d429c2956965c6f2f134f1b3a",
+          "Size": 175976,
+          "Version": "1.10.0-3+deb12u1",
+          "body": "acquisition/debian/bodies/fff72a194e493f88e100a2567e22472bb4ab828d429c2956965c6f2f134f1b3a.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/s/svt-av1/libsvtav1enc1_1.4.1+dfsg-1_amd64.deb",
+          "Package": "libsvtav1enc1",
+          "SHA256": "e0f6e357f327e80f26438dcda9c9304c43e2f3343359c6a5075d0b10ddfdb05d",
+          "Size": 2121284,
+          "Version": "1.4.1+dfsg-1",
+          "body": "acquisition/debian/bodies/e0f6e357f327e80f26438dcda9c9304c43e2f3343359c6a5075d0b10ddfdb05d.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/f/ffmpeg/libswresample4_5.1.9-0+deb12u1_amd64.deb",
+          "Package": "libswresample4",
+          "SHA256": "255406cbb7589751bc5b67efdbc21be01130b9551f5eff2dfe6db2f3e4888a6d",
+          "Size": 106844,
+          "Version": "7:5.1.9-0+deb12u1",
+          "body": "acquisition/debian/bodies/255406cbb7589751bc5b67efdbc21be01130b9551f5eff2dfe6db2f3e4888a6d.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/f/ffmpeg/libswscale6_5.1.9-0+deb12u1_amd64.deb",
+          "Package": "libswscale6",
+          "SHA256": "9ed5ebab74fc46bfb72f1e4d4cd7769cc98ac67a3320551958f8a507747df450",
+          "Size": 224696,
+          "Version": "7:5.1.9-0+deb12u1",
+          "body": "acquisition/debian/bodies/9ed5ebab74fc46bfb72f1e4d4cd7769cc98ac67a3320551958f8a507747df450.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/t/tesseract/libtesseract5_5.3.0-2_amd64.deb",
+          "Package": "libtesseract5",
+          "SHA256": "19b1719f30235eaf209866b219d4dbdd4dddd813758a8d5b9715c78c40702ff1",
+          "Size": 1278876,
+          "Version": "5.3.0-2",
+          "body": "acquisition/debian/bodies/19b1719f30235eaf209866b219d4dbdd4dddd813758a8d5b9715c78c40702ff1.deb"
+        },
+        {
+          "Architecture": "all",
+          "Filename": "pool/main/libt/libthai/libthai-data_0.1.29-1_all.deb",
+          "Package": "libthai-data",
+          "SHA256": "eed65a75269411e47d7b393d82bc30471da5c499e9f311abbfd8c54ca1a42d9e",
+          "Size": 176200,
+          "Version": "0.1.29-1",
+          "body": "acquisition/debian/bodies/eed65a75269411e47d7b393d82bc30471da5c499e9f311abbfd8c54ca1a42d9e.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libt/libthai/libthai0_0.1.29-1_amd64.deb",
+          "Package": "libthai0",
+          "SHA256": "37cd66bef851ea0e4af807797ba3ad14d43226f7c4954c1d0a19478e11815bae",
+          "Size": 57468,
+          "Version": "0.1.29-1",
+          "body": "acquisition/debian/bodies/37cd66bef851ea0e4af807797ba3ad14d43226f7c4954c1d0a19478e11815bae.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libt/libtheora/libtheora0_1.1.1+dfsg.1-16.1+deb12u1_amd64.deb",
+          "Package": "libtheora0",
+          "SHA256": "72739e29f804cbe10a207f546dfec44a340d31bb03f6a503ab6df0cdaf8a148e",
+          "Size": 153548,
+          "Version": "1.1.1+dfsg.1-16.1+deb12u1",
+          "body": "acquisition/debian/bodies/72739e29f804cbe10a207f546dfec44a340d31bb03f6a503ab6df0cdaf8a148e.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/t/tiff/libtiff6_4.5.0-6+deb12u4_amd64.deb",
+          "Package": "libtiff6",
+          "SHA256": "255cd1d9f204355c366638ee21756234a8d43c03a3de18a5af6cdd94765b5053",
+          "Size": 316172,
+          "Version": "4.5.0-6+deb12u4",
+          "body": "acquisition/debian/bodies/255cd1d9f204355c366638ee21756234a8d43c03a3de18a5af6cdd94765b5053.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/t/twolame/libtwolame0_0.4.0-2_amd64.deb",
+          "Package": "libtwolame0",
+          "SHA256": "279802de79d682a671cdb11295abb5cd2d21da5bee6ceefa44324c70a29365b1",
+          "Size": 51080,
+          "Version": "0.4.0-2",
+          "body": "acquisition/debian/bodies/279802de79d682a671cdb11295abb5cd2d21da5bee6ceefa44324c70a29365b1.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libu/libudfread/libudfread0_1.1.2-1_amd64.deb",
+          "Package": "libudfread0",
+          "SHA256": "93169ca95de3825c5ebda01db79f800fa1c5c4820ac5c760e1234e590d7b4c7b",
+          "Size": 16476,
+          "Version": "1.1.2-1",
+          "body": "acquisition/debian/bodies/93169ca95de3825c5ebda01db79f800fa1c5c4820ac5c760e1234e590d7b4c7b.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libu/libusb-1.0/libusb-1.0-0_1.0.26-1_amd64.deb",
+          "Package": "libusb-1.0-0",
+          "SHA256": "0a8a6c4a7d944538f2820cbde2a313f2fe6f94c21ffece9e6f372fc2ab8072e1",
+          "Size": 62592,
+          "Version": "2:1.0.26-1",
+          "body": "acquisition/debian/bodies/0a8a6c4a7d944538f2820cbde2a313f2fe6f94c21ffece9e6f372fc2ab8072e1.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libv/libva/libva-drm2_2.17.0-1_amd64.deb",
+          "Package": "libva-drm2",
+          "SHA256": "dc0a0cadbdc001df3d89855d8054aacb332a731f98c7741ce580492b0e01e605",
+          "Size": 16352,
+          "Version": "2.17.0-1",
+          "body": "acquisition/debian/bodies/dc0a0cadbdc001df3d89855d8054aacb332a731f98c7741ce580492b0e01e605.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libv/libva/libva-x11-2_2.17.0-1_amd64.deb",
+          "Package": "libva-x11-2",
+          "SHA256": "95db1ecd8c2d1c3f99a750f1b2d9ba1959b7cd9cbd7eabfc1b8a86a095b379a6",
+          "Size": 21036,
+          "Version": "2.17.0-1",
+          "body": "acquisition/debian/bodies/95db1ecd8c2d1c3f99a750f1b2d9ba1959b7cd9cbd7eabfc1b8a86a095b379a6.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libv/libva/libva2_2.17.0-1_amd64.deb",
+          "Package": "libva2",
+          "SHA256": "e6acf0c4071c01df7c35d18a97768047294dc43d252caae9ccddc1e507456695",
+          "Size": 69192,
+          "Version": "2.17.0-1",
+          "body": "acquisition/debian/bodies/e6acf0c4071c01df7c35d18a97768047294dc43d252caae9ccddc1e507456695.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libv/libvdpau/libvdpau1_1.5-2_amd64.deb",
+          "Package": "libvdpau1",
+          "SHA256": "517039c1bfbfc453c4b952a068a1b02b77bf46bbf7af882ad877a581bf2c0e21",
+          "Size": 26144,
+          "Version": "1.5-2",
+          "body": "acquisition/debian/bodies/517039c1bfbfc453c4b952a068a1b02b77bf46bbf7af882ad877a581bf2c0e21.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libv/libvidstab/libvidstab1.1_1.1.0-2+b1_amd64.deb",
+          "Package": "libvidstab1.1",
+          "SHA256": "5e0750b6eb5ad8d71e8241c38b0d757e42ee6f9eb6f6dfea64005c5ad4975a39",
+          "Size": 37764,
+          "Version": "1.1.0-2+b1",
+          "body": "acquisition/debian/bodies/5e0750b6eb5ad8d71e8241c38b0d757e42ee6f9eb6f6dfea64005c5ad4975a39.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libv/libvorbis/libvorbis0a_1.3.7-1_amd64.deb",
+          "Package": "libvorbis0a",
+          "SHA256": "01c14f9d1109650077a4c5c337c285476a6932d4d448f5a190c2b845724dbf21",
+          "Size": 93028,
+          "Version": "1.3.7-1",
+          "body": "acquisition/debian/bodies/01c14f9d1109650077a4c5c337c285476a6932d4d448f5a190c2b845724dbf21.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libv/libvorbis/libvorbisenc2_1.3.7-1_amd64.deb",
+          "Package": "libvorbisenc2",
+          "SHA256": "75dd4d6f904c7db82f5112e60d8efea9e81dfedf94e970c5da7af2b3d81643c0",
+          "Size": 80568,
+          "Version": "1.3.7-1",
+          "body": "acquisition/debian/bodies/75dd4d6f904c7db82f5112e60d8efea9e81dfedf94e970c5da7af2b3d81643c0.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libv/libvorbis/libvorbisfile3_1.3.7-1_amd64.deb",
+          "Package": "libvorbisfile3",
+          "SHA256": "68f84034ae1c9fa0ab6a45f5b6c406a50faae4421f0d78874260aefa2df68efc",
+          "Size": 26084,
+          "Version": "1.3.7-1",
+          "body": "acquisition/debian/bodies/68f84034ae1c9fa0ab6a45f5b6c406a50faae4421f0d78874260aefa2df68efc.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libv/libvpx/libvpx7_1.12.0-1+deb12u5_amd64.deb",
+          "Package": "libvpx7",
+          "SHA256": "7d8fada67fc9e11a08304499fe5beb7f809194d284202b9c9f1a0b8e54b90db4",
+          "Size": 1003444,
+          "Version": "1.12.0-1+deb12u5",
+          "body": "acquisition/debian/bodies/7d8fada67fc9e11a08304499fe5beb7f809194d284202b9c9f1a0b8e54b90db4.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/v/vulkan-loader/libvulkan1_1.3.239.0-1_amd64.deb",
+          "Package": "libvulkan1",
+          "SHA256": "622f28b807ba55a1f5ad1622ff83aa2c5b11fedbec074850e04c10a8f28b43d3",
+          "Size": 116232,
+          "Version": "1.3.239.0-1",
+          "body": "acquisition/debian/bodies/622f28b807ba55a1f5ad1622ff83aa2c5b11fedbec074850e04c10a8f28b43d3.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/w/wayland/libwayland-client0_1.21.0-1_amd64.deb",
+          "Package": "libwayland-client0",
+          "SHA256": "1f002d028b8b79eec9847c636d8886d10dfe8c884cc2bebe18086b1391c5a28d",
+          "Size": 28320,
+          "Version": "1.21.0-1",
+          "body": "acquisition/debian/bodies/1f002d028b8b79eec9847c636d8886d10dfe8c884cc2bebe18086b1391c5a28d.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/w/wayland/libwayland-cursor0_1.21.0-1_amd64.deb",
+          "Package": "libwayland-cursor0",
+          "SHA256": "0b684467ec795024fcaae99ea4384959cc4052b2da5adec38c9b76dfed9bcf41",
+          "Size": 14376,
+          "Version": "1.21.0-1",
+          "body": "acquisition/debian/bodies/0b684467ec795024fcaae99ea4384959cc4052b2da5adec38c9b76dfed9bcf41.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/w/wayland/libwayland-egl1_1.21.0-1_amd64.deb",
+          "Package": "libwayland-egl1",
+          "SHA256": "cb4225f0e15e00a3570d4cbc288c87ff477d73e741c3f1c5a6d47cf350d45378",
+          "Size": 8640,
+          "Version": "1.21.0-1",
+          "body": "acquisition/debian/bodies/cb4225f0e15e00a3570d4cbc288c87ff477d73e741c3f1c5a6d47cf350d45378.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/w/wayland/libwayland-server0_1.21.0-1_amd64.deb",
+          "Package": "libwayland-server0",
+          "SHA256": "df0396221d7b794496a687ec61fae82b6465648bc0ab6501ba0a5ed7f56eb8d6",
+          "Size": 35876,
+          "Version": "1.21.0-1",
+          "body": "acquisition/debian/bodies/df0396221d7b794496a687ec61fae82b6465648bc0ab6501ba0a5ed7f56eb8d6.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libw/libwebp/libwebp7_1.2.4-0.2+deb12u1_amd64.deb",
+          "Package": "libwebp7",
+          "SHA256": "7259b7ce46444694ce536360ad53acb68eb3b47a7ff81d7b1b8a3939b2ac9918",
+          "Size": 285512,
+          "Version": "1.2.4-0.2+deb12u1",
+          "body": "acquisition/debian/bodies/7259b7ce46444694ce536360ad53acb68eb3b47a7ff81d7b1b8a3939b2ac9918.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libw/libwebp/libwebpmux3_1.2.4-0.2+deb12u1_amd64.deb",
+          "Package": "libwebpmux3",
+          "SHA256": "cc7d04d56ff8112ef5ed94050b0a440a9b4cea9d1d6f97e2a4016c8cc042c2f1",
+          "Size": 109492,
+          "Version": "1.2.4-0.2+deb12u1",
+          "body": "acquisition/debian/bodies/cc7d04d56ff8112ef5ed94050b0a440a9b4cea9d1d6f97e2a4016c8cc042c2f1.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libx11/libx11-6_1.8.4-2+deb12u2_amd64.deb",
+          "Package": "libx11-6",
+          "SHA256": "d88c973e79fd9b65838d77624142952757e47a6eb1a58602acf0911cf35989f4",
+          "Size": 759544,
+          "Version": "2:1.8.4-2+deb12u2",
+          "body": "acquisition/debian/bodies/d88c973e79fd9b65838d77624142952757e47a6eb1a58602acf0911cf35989f4.deb"
+        },
+        {
+          "Architecture": "all",
+          "Filename": "pool/main/libx/libx11/libx11-data_1.8.4-2+deb12u2_all.deb",
+          "Package": "libx11-data",
+          "SHA256": "987a848aeb1c358e4186368871b0526f10bb14c6b53214ab3bf8b69abb830191",
+          "Size": 291884,
+          "Version": "2:1.8.4-2+deb12u2",
+          "body": "acquisition/debian/bodies/987a848aeb1c358e4186368871b0526f10bb14c6b53214ab3bf8b69abb830191.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libx11/libx11-xcb1_1.8.4-2+deb12u2_amd64.deb",
+          "Package": "libx11-xcb1",
+          "SHA256": "f5da45e1d881a793250a96613f28c471a248877f1a0f18a5c90e2a620a76c898",
+          "Size": 192356,
+          "Version": "2:1.8.4-2+deb12u2",
+          "body": "acquisition/debian/bodies/f5da45e1d881a793250a96613f28c471a248877f1a0f18a5c90e2a620a76c898.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/x/x264/libx264-164_0.164.3095+gitbaee400-3_amd64.deb",
+          "Package": "libx264-164",
+          "SHA256": "2b9f0d79ab1dccc10c24963c1debaf5a37d839bdba369ac358deefd1a7d56a12",
+          "Size": 547148,
+          "Version": "2:0.164.3095+gitbaee400-3",
+          "body": "acquisition/debian/bodies/2b9f0d79ab1dccc10c24963c1debaf5a37d839bdba369ac358deefd1a7d56a12.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/x/x265/libx265-199_3.5-2+b1_amd64.deb",
+          "Package": "libx265-199",
+          "SHA256": "9cd87d1b0c56f34f51bcbe8bdb55ebb45dd08ce6c0c6ff2dc77378bac3f64cc0",
+          "Size": 1150056,
+          "Version": "3.5-2+b1",
+          "body": "acquisition/debian/bodies/9cd87d1b0c56f34f51bcbe8bdb55ebb45dd08ce6c0c6ff2dc77378bac3f64cc0.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxau/libxau6_1.0.9-1_amd64.deb",
+          "Package": "libxau6",
+          "SHA256": "679db1c4579ec7c61079adeaae8528adeb2e4bf5465baa6c56233b995d714750",
+          "Size": 19720,
+          "Version": "1:1.0.9-1",
+          "body": "acquisition/debian/bodies/679db1c4579ec7c61079adeaae8528adeb2e4bf5465baa6c56233b995d714750.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxcb/libxcb-dri2-0_1.15-1_amd64.deb",
+          "Package": "libxcb-dri2-0",
+          "SHA256": "ef4959aa9e09a0d38d1de432e747585129d5d2dc1d84c8b6b3d2ffc3708b5805",
+          "Size": 106792,
+          "Version": "1.15-1",
+          "body": "acquisition/debian/bodies/ef4959aa9e09a0d38d1de432e747585129d5d2dc1d84c8b6b3d2ffc3708b5805.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxcb/libxcb-dri3-0_1.15-1_amd64.deb",
+          "Package": "libxcb-dri3-0",
+          "SHA256": "02699b144b9467de8636d27a76984b8f4e7b66e2d25d96df2b9677be86ee9a29",
+          "Size": 106676,
+          "Version": "1.15-1",
+          "body": "acquisition/debian/bodies/02699b144b9467de8636d27a76984b8f4e7b66e2d25d96df2b9677be86ee9a29.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxcb/libxcb-glx0_1.15-1_amd64.deb",
+          "Package": "libxcb-glx0",
+          "SHA256": "1bce55fc292d93fa5f7fa50f84cef99ec29be70d0ffe98e86b8008e59f4a34fa",
+          "Size": 122392,
+          "Version": "1.15-1",
+          "body": "acquisition/debian/bodies/1bce55fc292d93fa5f7fa50f84cef99ec29be70d0ffe98e86b8008e59f4a34fa.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxcb/libxcb-present0_1.15-1_amd64.deb",
+          "Package": "libxcb-present0",
+          "SHA256": "89383e627a4d17b9390d609b2459481bfd2029566367b43068586769e418b6e5",
+          "Size": 105420,
+          "Version": "1.15-1",
+          "body": "acquisition/debian/bodies/89383e627a4d17b9390d609b2459481bfd2029566367b43068586769e418b6e5.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxcb/libxcb-randr0_1.15-1_amd64.deb",
+          "Package": "libxcb-randr0",
+          "SHA256": "f86e3d8ff8622871008833e9d064919b7a6237399c903c59fc330ff00f199ff5",
+          "Size": 116680,
+          "Version": "1.15-1",
+          "body": "acquisition/debian/bodies/f86e3d8ff8622871008833e9d064919b7a6237399c903c59fc330ff00f199ff5.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxcb/libxcb-render0_1.15-1_amd64.deb",
+          "Package": "libxcb-render0",
+          "SHA256": "29c32cc76be9393f409378be79a0f534b9f07dea06ae52fa80a7f27e298de239",
+          "Size": 115012,
+          "Version": "1.15-1",
+          "body": "acquisition/debian/bodies/29c32cc76be9393f409378be79a0f534b9f07dea06ae52fa80a7f27e298de239.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxcb/libxcb-shape0_1.15-1_amd64.deb",
+          "Package": "libxcb-shape0",
+          "SHA256": "e0d0e31db4d72e2f7246d40edc6bd75e0249ae3138839e60a268db7da40a6ae2",
+          "Size": 105768,
+          "Version": "1.15-1",
+          "body": "acquisition/debian/bodies/e0d0e31db4d72e2f7246d40edc6bd75e0249ae3138839e60a268db7da40a6ae2.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxcb/libxcb-shm0_1.15-1_amd64.deb",
+          "Package": "libxcb-shm0",
+          "SHA256": "c1afcef29dc78b95c475159b181b28b1dedaf1d5aa06efd2fa6d90c73bfbe0e5",
+          "Size": 105472,
+          "Version": "1.15-1",
+          "body": "acquisition/debian/bodies/c1afcef29dc78b95c475159b181b28b1dedaf1d5aa06efd2fa6d90c73bfbe0e5.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxcb/libxcb-sync1_1.15-1_amd64.deb",
+          "Package": "libxcb-sync1",
+          "SHA256": "3366ce715220d38dd0148b78a8e738137bade25ef7eec0698850c6f66800844f",
+          "Size": 108692,
+          "Version": "1.15-1",
+          "body": "acquisition/debian/bodies/3366ce715220d38dd0148b78a8e738137bade25ef7eec0698850c6f66800844f.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxcb/libxcb-xfixes0_1.15-1_amd64.deb",
+          "Package": "libxcb-xfixes0",
+          "SHA256": "d744a7ebad2cbcf301c96cd6a1ab3ee856e436fc7be5cff5b7c28ac2ac181a64",
+          "Size": 109368,
+          "Version": "1.15-1",
+          "body": "acquisition/debian/bodies/d744a7ebad2cbcf301c96cd6a1ab3ee856e436fc7be5cff5b7c28ac2ac181a64.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxcb/libxcb1_1.15-1_amd64.deb",
+          "Package": "libxcb1",
+          "SHA256": "fdc61332a3892168f3cc9cfa1fe9cf11a91dc3e0acacbc47cbc50ebaa234cc71",
+          "Size": 144052,
+          "Version": "1.15-1",
+          "body": "acquisition/debian/bodies/fdc61332a3892168f3cc9cfa1fe9cf11a91dc3e0acacbc47cbc50ebaa234cc71.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxcursor/libxcursor1_1.2.1-1_amd64.deb",
+          "Package": "libxcursor1",
+          "SHA256": "49e167048661be4c614fff81429e9eaef38e54ef1d2150a5d2a8c53919217529",
+          "Size": 40904,
+          "Version": "1:1.2.1-1",
+          "body": "acquisition/debian/bodies/49e167048661be4c614fff81429e9eaef38e54ef1d2150a5d2a8c53919217529.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxdmcp/libxdmcp6_1.1.2-3_amd64.deb",
+          "Package": "libxdmcp6",
+          "SHA256": "ecb8536f5fb34543b55bb9dc5f5b14c9dbb4150a7bddb3f2287b7cab6e9d25ef",
+          "Size": 26344,
+          "Version": "1:1.1.2-3",
+          "body": "acquisition/debian/bodies/ecb8536f5fb34543b55bb9dc5f5b14c9dbb4150a7bddb3f2287b7cab6e9d25ef.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxext/libxext6_1.3.4-1+b1_amd64.deb",
+          "Package": "libxext6",
+          "SHA256": "504b7be9d7df4f6f4519e8dd4d6f9d03a9fb911a78530fa23a692fba3058cba6",
+          "Size": 52932,
+          "Version": "2:1.3.4-1+b1",
+          "body": "acquisition/debian/bodies/504b7be9d7df4f6f4519e8dd4d6f9d03a9fb911a78530fa23a692fba3058cba6.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxfixes/libxfixes3_6.0.0-2_amd64.deb",
+          "Package": "libxfixes3",
+          "SHA256": "1cd616396ff2ecae77e6e8b5b7695d414f0146de2d147837a2a02165f99e1a2c",
+          "Size": 22684,
+          "Version": "1:6.0.0-2",
+          "body": "acquisition/debian/bodies/1cd616396ff2ecae77e6e8b5b7695d414f0146de2d147837a2a02165f99e1a2c.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxi/libxi6_1.8-1+b1_amd64.deb",
+          "Package": "libxi6",
+          "SHA256": "6c2fb5f241b311788990122c6e693915867cd8ed9d6da2e3524aec7ed3cdb4c0",
+          "Size": 84208,
+          "Version": "2:1.8-1+b1",
+          "body": "acquisition/debian/bodies/6c2fb5f241b311788990122c6e693915867cd8ed9d6da2e3524aec7ed3cdb4c0.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxkbcommon/libxkbcommon0_1.5.0-1_amd64.deb",
+          "Package": "libxkbcommon0",
+          "SHA256": "e3fe045b9a33a101de1c5a912a4a10928db055c3f68930f47eccbb44d7c7d54e",
+          "Size": 106108,
+          "Version": "1.5.0-1",
+          "body": "acquisition/debian/bodies/e3fe045b9a33a101de1c5a912a4a10928db055c3f68930f47eccbb44d7c7d54e.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxml2/libxml2_2.9.14+dfsg-1.3~deb12u6_amd64.deb",
+          "Package": "libxml2",
+          "SHA256": "4460e39dda10a815881374217cde08474747cfa018358cd8612c14b390eff53b",
+          "Size": 688760,
+          "Version": "2.9.14+dfsg-1.3~deb12u6",
+          "body": "acquisition/debian/bodies/4460e39dda10a815881374217cde08474747cfa018358cd8612c14b390eff53b.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxrandr/libxrandr2_1.5.2-2+b1_amd64.deb",
+          "Package": "libxrandr2",
+          "SHA256": "e2e10b672085ddf1d294cd689ed21bde5899325fd13626c2614b7d7b2d49a808",
+          "Size": 39240,
+          "Version": "2:1.5.2-2+b1",
+          "body": "acquisition/debian/bodies/e2e10b672085ddf1d294cd689ed21bde5899325fd13626c2614b7d7b2d49a808.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxrender/libxrender1_0.9.10-1.1_amd64.deb",
+          "Package": "libxrender1",
+          "SHA256": "b2a6d160578f359220101947c8d67059b44704a251e688de1d0b744fefedfd1a",
+          "Size": 33228,
+          "Version": "1:0.9.10-1.1",
+          "body": "acquisition/debian/bodies/b2a6d160578f359220101947c8d67059b44704a251e688de1d0b744fefedfd1a.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxshmfence/libxshmfence1_1.3-1_amd64.deb",
+          "Package": "libxshmfence1",
+          "SHA256": "1a38142e40e3d32dc4f9a326bf5617363b7d9b4bb762fdcdd262f2192092024d",
+          "Size": 8820,
+          "Version": "1.3-1",
+          "body": "acquisition/debian/bodies/1a38142e40e3d32dc4f9a326bf5617363b7d9b4bb762fdcdd262f2192092024d.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxss/libxss1_1.2.3-1_amd64.deb",
+          "Package": "libxss1",
+          "SHA256": "85cce16368f08a878fa892fbc54520fc654d00769cde6d300b8b802734a993c0",
+          "Size": 17812,
+          "Version": "1:1.2.3-1",
+          "body": "acquisition/debian/bodies/85cce16368f08a878fa892fbc54520fc654d00769cde6d300b8b802734a993c0.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxv/libxv1_1.0.11-1.1_amd64.deb",
+          "Package": "libxv1",
+          "SHA256": "9ea0a9dc1ec12fff84e744ee4cd3e8eee7dc3d1e5141f61b09276a25cf1d6f00",
+          "Size": 24760,
+          "Version": "2:1.0.11-1.1",
+          "body": "acquisition/debian/bodies/9ea0a9dc1ec12fff84e744ee4cd3e8eee7dc3d1e5141f61b09276a25cf1d6f00.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/x/xvidcore/libxvidcore4_1.3.7-1_amd64.deb",
+          "Package": "libxvidcore4",
+          "SHA256": "048e4d456992c7f593564e8ad1cecfc4be0464bfb1fc7a8908a643d59d9fbe81",
+          "Size": 242136,
+          "Version": "2:1.3.7-1",
+          "body": "acquisition/debian/bodies/048e4d456992c7f593564e8ad1cecfc4be0464bfb1fc7a8908a643d59d9fbe81.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libx/libxxf86vm/libxxf86vm1_1.1.4-1+b2_amd64.deb",
+          "Package": "libxxf86vm1",
+          "SHA256": "6f4ca916aaec26d7000fa7f58de3f71119309ab7590ce1f517abfe1825a676c7",
+          "Size": 20820,
+          "Version": "1:1.1.4-1+b2",
+          "body": "acquisition/debian/bodies/6f4ca916aaec26d7000fa7f58de3f71119309ab7590ce1f517abfe1825a676c7.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/z/z3/libz3-4_4.8.12-3.1_amd64.deb",
+          "Package": "libz3-4",
+          "SHA256": "6221ca25ad5abcfbe1965801029d85a88b4775320384b4b716de8fab7a4d2f7a",
+          "Size": 7216172,
+          "Version": "4.8.12-3.1",
+          "body": "acquisition/debian/bodies/6221ca25ad5abcfbe1965801029d85a88b4775320384b4b716de8fab7a4d2f7a.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/z/zimg/libzimg2_3.0.4+ds1-1_amd64.deb",
+          "Package": "libzimg2",
+          "SHA256": "61c902185365b5d6a2615f97e7c9baecdfb8e53b6c318396da3022c5b2e8734a",
+          "Size": 227000,
+          "Version": "3.0.4+ds1-1",
+          "body": "acquisition/debian/bodies/61c902185365b5d6a2615f97e7c9baecdfb8e53b6c318396da3022c5b2e8734a.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/z/zeromq3/libzmq5_4.3.4-6_amd64.deb",
+          "Package": "libzmq5",
+          "SHA256": "45eaea8e29e6ff981943bc88906b1c6e29643b4a781eed9bc139f5af633c97c6",
+          "Size": 273448,
+          "Version": "4.3.4-6",
+          "body": "acquisition/debian/bodies/45eaea8e29e6ff981943bc88906b1c6e29643b4a781eed9bc139f5af633c97c6.deb"
+        },
+        {
+          "Architecture": "all",
+          "Filename": "pool/main/z/zvbi/libzvbi-common_0.2.41-1+deb12u1_all.deb",
+          "Package": "libzvbi-common",
+          "SHA256": "2115a125736144bc46bec2c185a24e4fd67b392f1b069950f4f45f11633de0e1",
+          "Size": 69944,
+          "Version": "0.2.41-1+deb12u1",
+          "body": "acquisition/debian/bodies/2115a125736144bc46bec2c185a24e4fd67b392f1b069950f4f45f11633de0e1.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/z/zvbi/libzvbi0_0.2.41-1+deb12u1_amd64.deb",
+          "Package": "libzvbi0",
+          "SHA256": "b16e63009c643c71136fefa227c77e6d88609a2ac273091b43ce363d1dedf492",
+          "Size": 274608,
+          "Version": "0.2.41-1+deb12u1",
+          "body": "acquisition/debian/bodies/b16e63009c643c71136fefa227c77e6d88609a2ac273091b43ce363d1dedf492.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/o/ocl-icd/ocl-icd-libopencl1_2.3.1-1_amd64.deb",
+          "Package": "ocl-icd-libopencl1",
+          "SHA256": "ddd8509c0430545173752bed272c7f44f8b5f7d125265b20456207aaefbb52c8",
+          "Size": 43016,
+          "Version": "2.3.1-1",
+          "body": "acquisition/debian/bodies/ddd8509c0430545173752bed272c7f44f8b5f7d125265b20456207aaefbb52c8.deb"
+        },
+        {
+          "Architecture": "all",
+          "Filename": "pool/main/p/poppler-data/poppler-data_0.4.12-1_all.deb",
+          "Package": "poppler-data",
+          "SHA256": "7951512a24fc4ea05c246a0f9891dd1ec9844a886de6550ebd8c50e57db5441d",
+          "Size": 1601364,
+          "Version": "0.4.12-1",
+          "body": "acquisition/debian/bodies/7951512a24fc4ea05c246a0f9891dd1ec9844a886de6550ebd8c50e57db5441d.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/s/shared-mime-info/shared-mime-info_2.2-1_amd64.deb",
+          "Package": "shared-mime-info",
+          "SHA256": "dd026add873483566faefebbd8779a1e5e14ab2e44682ebfe238c3828a2b936b",
+          "Size": 728896,
+          "Version": "2.2-1",
+          "body": "acquisition/debian/bodies/dd026add873483566faefebbd8779a1e5e14ab2e44682ebfe238c3828a2b936b.deb"
+        },
+        {
+          "Architecture": "amd64",
+          "Filename": "pool/main/t/tesseract/tesseract-ocr_5.3.0-2_amd64.deb",
+          "Package": "tesseract-ocr",
+          "SHA256": "311fed91c7311cfee54c28a0f21d700377b8131a9d114628d36d2563f99e1730",
+          "Size": 402216,
+          "Version": "5.3.0-2",
+          "body": "acquisition/debian/bodies/311fed91c7311cfee54c28a0f21d700377b8131a9d114628d36d2563f99e1730.deb"
+        },
+        {
+          "Architecture": "all",
+          "Filename": "pool/main/t/tesseract-lang/tesseract-ocr-eng_4.1.0-2_all.deb",
+          "Package": "tesseract-ocr-eng",
+          "SHA256": "9242d054563262398f8cf41fbd96fcc72f9dde70db16de18539882a6cff74f9d",
+          "Size": 1593640,
+          "Version": "1:4.1.0-2",
+          "body": "acquisition/debian/bodies/9242d054563262398f8cf41fbd96fcc72f9dde70db16de18539882a6cff74f9d.deb"
+        },
+        {
+          "Architecture": "all",
+          "Filename": "pool/main/t/tesseract-lang/tesseract-ocr-osd_4.1.0-2_all.deb",
+          "Package": "tesseract-ocr-osd",
+          "SHA256": "72cc0ba5a04e4d38e5d7901ae2f0319f4941fddaa4a77d1a86110909c036bacb",
+          "Size": 2992152,
+          "Version": "1:4.1.0-2",
+          "body": "acquisition/debian/bodies/72cc0ba5a04e4d38e5d7901ae2f0319f4941fddaa4a77d1a86110909c036bacb.deb"
+        },
+        {
+          "Architecture": "all",
+          "Filename": "pool/main/x/xorg/x11-common_7.7+23_all.deb",
+          "Package": "x11-common",
+          "SHA256": "fc97c2f4495eb33a77501c7960928c0d2001e5c4b2aa438f1713e2082c23bacd",
+          "Size": 252272,
+          "Version": "1:7.7+23",
+          "body": "acquisition/debian/bodies/fc97c2f4495eb33a77501c7960928c0d2001e5c4b2aa438f1713e2082c23bacd.deb"
+        },
+        {
+          "Architecture": "all",
+          "Filename": "pool/main/x/xkeyboard-config/xkb-data_2.35.1-1_all.deb",
+          "Package": "xkb-data",
+          "SHA256": "28a79c61b785f403da93af58c39aed13c022032935e3e54362c6707169cfe982",
+          "Size": 763516,
+          "Version": "2.35.1-1",
+          "body": "acquisition/debian/bodies/28a79c61b785f403da93af58c39aed13c022032935e3e54362c6707169cfe982.deb"
+        }
+      ],
+      "selected_bytes": 141462384,
+      "selected_count": 209,
+      "unresolved": []
+    },
+    "committed_image": "idis-cir04h2a-20261017/runtime:qualify (local only, labelled idis-cir04h2a-20261017=runtime; never pushed)",
+    "cpus": 2,
+    "driver": "assemble_runtime.py",
+    "environment": {
+      "DEBIAN_FRONTEND": "noninteractive",
+      "HOME": "/root",
+      "LANG": "C.UTF-8",
+      "LC_ALL": "C.UTF-8",
+      "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "SOURCE_DATE_EPOCH": "1764547200",
+      "TZ": "UTC"
+    },
+    "memory": "2g",
+    "mounts": [
+      {
+        "readonly": true,
+        "source": "builder",
+        "target": "/inputs/recipe"
+      },
+      {
+        "readonly": true,
+        "source": "acquisition/debian",
+        "target": "/inputs/debian"
+      },
+      {
+        "readonly": true,
+        "source": "output/builder",
+        "target": "/inputs/build"
+      }
+    ],
+    "network": "none",
+    "timeout_seconds": 3600,
+    "tmpfs": [
+      "/tmp:rw,exec,nosuid,nodev,size=512m"
+    ]
+  },
+  "scope": "CIR-04H2a_FROZEN_BUILDER_RECIPE_V2_NOT_YET_EXECUTED",
+  "supersedes": {
+    "reason": "v1 required HAVE_LIBZ to be defined in the generated config.h; Poppler 25.12.0's CMake never set()s HAVE_LIBZ (config.h.cmake only carries the cmakedefine stub), so that entry would have produced a false fail-closed stop. v2 removes HAVE_LIBZ from B1.config_h_defined_1; zlib remains REQUIRED by CMake itself (find_package(ZLIB REQUIRED)). No other change.",
+    "v1_sha256": "e0ac7694c681ba3896d2b06f8ce96698b30e78823a6879909520b73db433eafc"
+  },
+  "utc": "2026-10-18T03:43:50.938307+00:00"
+}

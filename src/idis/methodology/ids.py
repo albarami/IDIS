@@ -21,10 +21,12 @@ def generate_methodology_question_id(
     row_number: int | None,
     line_item: str,
     question_text: str,
+    source_hash: str | None = None,
 ) -> str:
     """Generate a stable methodology question ID from source trace fields."""
     seed = "|".join(
         [
+            source_hash or "",
             methodology_type.value,
             normalize_text(section),
             normalize_text(sheet_or_section),
@@ -33,5 +35,10 @@ def generate_methodology_question_id(
             normalize_text(question_text),
         ]
     )
-    digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
+    digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()
+    # Preserve the historical compact ID shape for callers without an artifact
+    # binding.  Imported workbooks use the complete digest so their identity is
+    # never based on a truncated source-artifact hash.
+    if source_hash is None:
+        digest = digest[:16]
     return f"mq_{methodology_type.value}_{digest}"

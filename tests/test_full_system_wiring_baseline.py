@@ -6,9 +6,18 @@ ingest real data rooms, call external APIs, or require live infrastructure.
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
+import pytest
 from scripts.audit_full_system_wiring import collect_wiring_inventory, render_report
+
+_FROZEN_RELOAD_SYMBOLS = (
+    "_load_worker_preflight_corpus",
+    "load_document_preflight_corpus_for_deal",
+    "selected_document_ids=tuple(source.document_ids)",
+    "require_frozen=True",
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -59,14 +68,14 @@ def test_full_system_report_renders_phase_2_1_canonical_truthfulness() -> None:
 
 
 def test_full_system_inventory_detects_phase_2_2_methodology_foundation() -> None:
-    """Methodology components are detected without claiming extraction planning."""
+    """Methodology components include Task 5's durable persistence foundation."""
     inventory = collect_wiring_inventory(REPO_ROOT)
 
     assert inventory["methodology_registry_models"].status in {"WIRED", "PARTIAL"}
     assert inventory["fdd_synthetic_excel_importer"].status == "PARTIAL"
     assert inventory["commercial_dd_template"].status == "PARTIAL"
     assert inventory["methodology_coverage_service"].status == "PARTIAL"
-    assert inventory["methodology_postgres_persistence"].status in {"NOT_FOUND", "DEFERRED"}
+    assert inventory["methodology_postgres_persistence"].status == "PARTIAL"
     assert inventory["methodology_run_integration"].status == "PARTIAL"
 
 
@@ -371,7 +380,8 @@ def test_full_system_inventory_detects_slice_21_single_document_upload_boundary(
 
     assert upload.status == "PARTIAL"
     assert any("application/octet-stream" in item for item in upload.evidence)
-    assert any("IngestionService.ingest_bytes" in item for item in upload.evidence)
+    # Task 4 moves authenticated intake to the bounded staged-file API.
+    assert any("IngestionService.ingest_file" in item for item in upload.evidence)
     assert upload.metadata["public_api_accepts_folder_upload"] is False
     assert upload.metadata["safe_response_exposes_content_b64"] is False
     assert upload.metadata["durable_package_table_added"] is False
@@ -397,6 +407,27 @@ def test_full_system_inventory_detects_slice_22_api_upload_to_selected_run_smoke
     assert smoke.metadata["layer2_execution_performed"] is False
     assert any("smoke boundary only" in gap for gap in smoke.gaps)
     assert any("folder/data-room upload remains deferred" in gap for gap in smoke.gaps)
+
+
+@pytest.mark.parametrize("absent_symbol", _FROZEN_RELOAD_SYMBOLS)
+def test_run_source_detectors_stay_deferred_without_frozen_reload_or_legacy_filter(
+    absent_symbol: str,
+) -> None:
+    """Each frozen-reload symbol is necessary; removing it alone leaves DEFERRED."""
+    from scripts.audit_full_system_wiring import (
+        _api_upload_to_selected_run_smoke,
+        _load_relevant_files,
+        _production_run_source_contract,
+    )
+
+    files = _load_relevant_files(REPO_ROOT)
+    worker_text = files["src/idis/pipeline/worker.py"]
+    assert absent_symbol in worker_text
+    assert "filter_preflight_corpus_by_run_source" not in worker_text
+    files["src/idis/pipeline/worker.py"] = worker_text.replace(absent_symbol, "SYMBOL_ABSENT")
+
+    assert _production_run_source_contract(REPO_ROOT, files).status == "DEFERRED"
+    assert _api_upload_to_selected_run_smoke(files).status == "DEFERRED"
 
 
 def test_full_system_inventory_detects_slice_24_to_28_upload_full_run_wiring() -> None:
@@ -507,16 +538,25 @@ def test_full_system_report_does_not_overstate_extraction_task_planning_wiring()
 
 
 def test_full_system_inventory_detects_phase_2_5_execution_foundation() -> None:
-    """Phase 2.5 synthetic execution exists while live integration remains deferred."""
+    """Task 6 exposes durable execution storage without claiming Gate-A proof."""
     inventory = collect_wiring_inventory(REPO_ROOT)
 
     assert inventory["methodology_extraction_execution_models"].status in {"WIRED", "PARTIAL"}
     assert inventory["methodology_extraction_task_executor"].status == "PARTIAL"
     assert inventory["methodology_extraction_execution_audit_contract"].status == "PARTIAL"
-    assert inventory["methodology_extraction_postgres_persistence"].status in {
-        "NOT_FOUND",
-        "DEFERRED",
-    }
+    persistence = inventory["methodology_extraction_postgres_persistence"]
+    # Slice100 migration 0037 deliberately advances this historical baseline to PARTIAL.
+    assert persistence.status == "PARTIAL"
+    assert any("0037_durable_methodology_extraction.py" in item for item in persistence.evidence)
+    assert any(
+        "methodology_extraction_attempts" in item
+        and "methodology_extraction_results" in item
+        and "tenant-scoped" in item
+        for item in persistence.evidence
+    )
+    assert any("Gate A" in item for item in persistence.gaps)
+    assert "intentionally deferred" not in persistence.summary
+    assert all("No Phase 2.5" not in item for item in persistence.evidence)
     assert inventory["methodology_extraction_api_integration"].status in {
         "NOT_FOUND",
         "DEFERRED",
@@ -893,3 +933,172 @@ def test_full_system_report_does_not_overstate_phase_2_9_wiring() -> None:
     assert "claim verdict/action promotion is not wired" in report.lower()
     assert "coverage updates are not wired" in report.lower()
     assert "claim-sanad link boundary is fully wired into production runs" not in report
+
+
+_COMPOSITION_ROOT_GAP = (
+    "service-layer composition root still imports route-private helpers (Phase 2.1)"
+)
+_RAG_DEFINITION_PREFIX = "def _run_full_rag_evidence("
+_RAG_REEXPORT_LINE = (
+    "from idis.services.runs.step_runtime.evidence import _run_full_rag_evidence  # noqa: F401\n"
+)
+_EVIDENCE_REPO_NEEDLES = (
+    "get_evidence_repository(db_conn, tenant_id)",
+    "evidence_repo=evidence_repo",
+)
+_RUNS_TEXT_KEY = "src/idis/api/routes/runs.py"
+_STEP_RUNTIME_TEXT_PREFIX = "src/idis/services/runs/step_runtime/"
+
+
+def _count_build_run_context_route_imports(tree: ast.AST) -> int:
+    """Count idis.api.routes names imported in build_run_context, excluding nested defs."""
+    for node in getattr(tree, "body", []):
+        if isinstance(node, ast.FunctionDef) and node.name == "build_run_context":
+            return _route_import_name_count(node)
+    raise AssertionError("build_run_context is missing from steps.py")
+
+
+def _route_import_name_count(function: ast.AST) -> int:
+    skipped = _nested_scope_ids(function)
+    count = 0
+    for node in ast.walk(function):
+        if id(node) in skipped:
+            continue
+        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("idis.api.routes"):
+            count += len(node.names)
+        elif isinstance(node, ast.Import):
+            count += sum(1 for alias in node.names if alias.name.startswith("idis.api.routes"))
+    return count
+
+
+def _nested_scope_ids(function: ast.AST) -> set[int]:
+    skipped: set[int] = set()
+    for node in ast.walk(function):
+        if node is function:
+            continue
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            for inner in ast.walk(node):
+                skipped.add(id(inner))
+    return skipped
+
+
+def _live_route_private_import_count() -> int:
+    steps_path = REPO_ROOT / "src/idis/services/runs/steps.py"
+    tree = ast.parse(steps_path.read_text(encoding="utf-8"))
+    return _count_build_run_context_route_imports(tree)
+
+
+def test_run_pipeline_composition_root_is_wired_when_route_imports_are_gone() -> None:
+    """The composition root is WIRED when the live route-private import count is zero."""
+    from scripts.audit_full_system_wiring import (
+        _load_relevant_files,
+        _run_pipeline_composition_root,
+    )
+
+    expected_count = _live_route_private_import_count()
+    item = collect_wiring_inventory(REPO_ROOT)["run_pipeline_composition_root"]
+    evidence = (
+        "steps.build_run_context function-local import block names "
+        f"{expected_count} route-private imports"
+    )
+
+    assert expected_count == 0
+    assert item.status == "WIRED"
+    assert item.metadata["route_private_import_count"] == expected_count
+    assert evidence in item.evidence
+    assert _COMPOSITION_ROOT_GAP not in item.gaps
+
+    files = _load_relevant_files(REPO_ROOT)
+    steps_key = "src/idis/services/runs/steps.py"
+    assert (
+        _run_pipeline_composition_root(files).metadata["route_private_import_count"]
+        == expected_count
+    )
+    files[steps_key] = files[steps_key].replace(
+        '    is_full = mode == "FULL"\n',
+        "    from idis.api.routes.runs import _planted_route_private_helper\n"
+        '    is_full = mode == "FULL"\n',
+        1,
+    )
+    planted = _run_pipeline_composition_root(files)
+    assert planted.status == "PARTIAL"
+    assert planted.metadata["route_private_import_count"] == 1
+    assert "1 route-private imports" in planted.evidence[0]
+    assert _COMPOSITION_ROOT_GAP in planted.gaps
+
+
+def test_rag_full_run_wiring_present_rejects_reexport_without_definition() -> None:
+    """A re-export of _run_full_rag_evidence must not satisfy the FULL RAG check."""
+    from scripts.audit_full_system_wiring import (
+        _load_relevant_files,
+        _rag_full_run_wiring_present,
+    )
+
+    files = _load_relevant_files(REPO_ROOT)
+    assert _rag_full_run_wiring_present(files) is True
+
+    reexport_only = dict(files)
+    reexport_only[_RUNS_TEXT_KEY] = _RAG_REEXPORT_LINE
+    evidence_key = f"{_STEP_RUNTIME_TEXT_PREFIX}evidence.py"
+    reexport_only[evidence_key] = reexport_only.get(evidence_key, "").replace(
+        "def _run_full_rag_evidence(",
+        "def _rag_evidence_definition_absent(",
+    )
+    assert _rag_full_run_wiring_present(reexport_only) is False
+
+
+def test_rag_full_run_wiring_present_accepts_definition_in_runs_or_step_runtime() -> None:
+    """The RAG definition counts in runs.py or in step_runtime text."""
+    from scripts.audit_full_system_wiring import (
+        _load_relevant_files,
+        _rag_full_run_wiring_present,
+    )
+
+    files = _load_relevant_files(REPO_ROOT)
+    runs_text = files[_RUNS_TEXT_KEY]
+    evidence_text = files.get(f"{_STEP_RUNTIME_TEXT_PREFIX}evidence.py", "")
+    definition_lines = runs_text.splitlines() + evidence_text.splitlines()
+    assert any(line.lstrip().startswith(_RAG_DEFINITION_PREFIX) for line in definition_lines)
+    assert _rag_full_run_wiring_present(files) is True
+
+    moved = dict(files)
+    moved[_RUNS_TEXT_KEY] = runs_text.replace("_run_full_rag_evidence", "RAG_EVIDENCE_NAME_ABSENT")
+    moved[f"{_STEP_RUNTIME_TEXT_PREFIX}evidence.py"] = (
+        "def _run_full_rag_evidence(ctx):\n    return None\n"
+    )
+    assert _rag_full_run_wiring_present(moved) is True
+
+
+def test_default_upload_ingestion_needles_match_runs_or_step_runtime_text() -> None:
+    """Upload evidence-repo needles count in runs.py or in step_runtime text."""
+    from scripts.audit_full_system_wiring import (
+        _default_upload_ingestion_wiring,
+        _load_relevant_files,
+    )
+
+    files = _load_relevant_files(REPO_ROOT)
+
+    def wired(snapshot: dict[str, str]) -> bool:
+        return (
+            _default_upload_ingestion_wiring(snapshot).metadata["evidence_repo_wired_to_postgres"]
+            is True
+        )
+
+    assert wired(files) is True
+
+    stripped = dict(files)
+    for key, text in list(stripped.items()):
+        normalized = key.replace("\\", "/")
+        if normalized == _RUNS_TEXT_KEY or normalized.startswith(_STEP_RUNTIME_TEXT_PREFIX):
+            for needle in _EVIDENCE_REPO_NEEDLES:
+                text = text.replace(needle, "NEEDLE_ABSENT")
+            stripped[key] = text
+    assert wired(stripped) is False
+
+    moved = dict(stripped)
+    moved[f"{_STEP_RUNTIME_TEXT_PREFIX}snapshot.py"] = (
+        "def _run_snapshot_extraction():\n"
+        "    repo = get_evidence_repository(db_conn, tenant_id)\n"
+        "    pipeline = ExtractionPipeline(evidence_repo=evidence_repo)\n"
+    )
+    assert wired(moved) is True

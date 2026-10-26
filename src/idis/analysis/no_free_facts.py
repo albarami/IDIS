@@ -4,11 +4,16 @@ Deterministic validator enforcing grounding per TDD §10.3:
 - All claim_ids must exist in the claim registry
 - All calc_ids must exist in the calc registry
 - All enrichment refs must exist with complete provenance (provider_id + source_id)
+- Structured section claim_refs/calc_refs, when supplied, must be string
+  lists whose members exist in the same registries
 
 Fail-closed: any ungrounded reference causes rejection.
 """
 
 from __future__ import annotations
+
+import json
+from typing import Any
 
 from idis.analysis.models import AgentReport, AnalysisContext, EnrichmentRef
 from idis.validators.schema_validator import ValidationError, ValidationResult
@@ -69,6 +74,8 @@ class AnalysisNoFreeFactsValidator:
             )
         )
 
+        errors.extend(self._validate_analysis_sections(report.analysis_sections, ctx))
+
         if errors:
             return ValidationResult.fail(errors)
         return ValidationResult.success()
@@ -110,6 +117,66 @@ class AnalysisNoFreeFactsValidator:
                     )
                 )
         return errors
+
+    def _validate_analysis_sections(
+        self,
+        sections: dict[str, Any],
+        ctx: AnalysisContext,
+    ) -> list[ValidationError]:
+        """Validate supplied claim_refs/calc_refs in structured sections.
+
+        Only mapping values are inspected; plain narrative strings and
+        sections without the reference fields keep membership behavior.
+        """
+        errors: list[ValidationError] = []
+        for key, section in sections.items():
+            if not isinstance(section, dict):
+                continue
+            section_path = f"$.analysis_sections[{json.dumps(key)}]"
+            errors.extend(self._validate_section_refs(section, "claim_refs", ctx, section_path))
+            errors.extend(self._validate_section_refs(section, "calc_refs", ctx, section_path))
+        return errors
+
+    def _validate_section_refs(
+        self,
+        section: dict[str, Any],
+        field: str,
+        ctx: AnalysisContext,
+        section_path: str,
+    ) -> list[ValidationError]:
+        """Validate one supplied section ref field as a string list.
+
+        A supplied field that is not a real list fails at the field path;
+        a non-string member fails at its index with the bounded section
+        code. Known-shaped lists reuse the registry membership helpers.
+        """
+        if field not in section:
+            return []
+        refs = section[field]
+        field_path = f"{section_path}.{field}"
+        if not isinstance(refs, list):
+            return [
+                ValidationError(
+                    code="NFF_INVALID_SECTION_REFERENCE",
+                    message=f"Section reference field '{field}' must be a list of strings",
+                    path=field_path,
+                )
+            ]
+        errors: list[ValidationError] = []
+        for i, member in enumerate(refs):
+            if not isinstance(member, str):
+                errors.append(
+                    ValidationError(
+                        code="NFF_INVALID_SECTION_REFERENCE",
+                        message=(f"Section reference field '{field}' entry must be a string"),
+                        path=f"{field_path}[{i}]",
+                    )
+                )
+        if errors:
+            return errors
+        if field == "claim_refs":
+            return self._validate_claim_ids(refs, ctx, field_path)
+        return self._validate_calc_ids(refs, ctx, field_path)
 
     def _validate_enrichment_refs(
         self,

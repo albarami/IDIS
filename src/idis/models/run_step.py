@@ -239,3 +239,23 @@ class RunStep(BaseModel):
     error_message: str | None = None
     retry_count: int = 0
     result_summary: dict[str, Any] = Field(default_factory=dict)
+    pipeline_contract_version: str = Field(
+        default="legacy-opaque-v1",
+        min_length=1,
+        frozen=True,
+    )
+    pipeline_contract_hash: str = Field(
+        default="6365adbfe07f1818fe9e8e634587feb59a6bda5238b625481940d9ea9efce723",
+        pattern=r"^[0-9a-f]{64}$",
+        frozen=True,
+    )
+    semantic_rule_version: str = Field(
+        default="legacy-step-semantic-v1",
+        min_length=1,
+        frozen=True,
+    )
+    semantic_rule_hash: str = Field(
+        default="4e743bd1264e407e40e48404a6ba081c111b1426bb798b09fb471085b98a18af",
+        pattern=r"^[0-9a-f]{64}$",
+        frozen=True,
+    )

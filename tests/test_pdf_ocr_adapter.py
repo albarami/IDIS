@@ -85,7 +85,7 @@ class AdapterSpecificFailure(Exception):
     """Adapter-specific test failure that must not escape parsing."""
 
 
-def test_ocr_disabled_keeps_no_text_pdf_as_no_text_extracted() -> None:
+def test_ocr_disabled_fails_image_pdf_as_ocr_unavailable() -> None:
     adapter = RecordingOcrAdapter([OcrPageText(page_number=1, text="OCR SHOULD NOT RUN")])
 
     result = parse_pdf(
@@ -94,7 +94,8 @@ def test_ocr_disabled_keeps_no_text_pdf_as_no_text_extracted() -> None:
     )
 
     assert result.success is False
-    assert [error.code for error in result.errors] == [ParseErrorCode.NO_TEXT_EXTRACTED]
+    # Task 4: an identified OCR requirement must expose the unavailable runtime.
+    assert [error.code for error in result.errors] == [ParseErrorCode.OCR_UNAVAILABLE]
     assert adapter.calls == []
 
 

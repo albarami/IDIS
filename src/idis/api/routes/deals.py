@@ -10,6 +10,10 @@ import uuid
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
+from idis.api.abac import (
+    add_direct_deal_assignment_in_transaction,
+    get_manageable_deal_assignment_store,
+)
 from idis.api.auth import RequireTenantContext
 from idis.persistence.repositories.deals import (
     DealsRepository,
@@ -81,6 +85,7 @@ def create_deal(
     """
     deal_id = str(uuid.uuid4())
     repo = _get_repository(request, tenant_ctx.tenant_id)
+    db_conn = getattr(request.state, "db_conn", None)
 
     deal_data = repo.create(
         deal_id=deal_id,
@@ -90,6 +95,25 @@ def create_deal(
         stage=request_body.stage,
         tags=request_body.tags,
     )
+
+    try:
+        if db_conn is not None:
+            add_direct_deal_assignment_in_transaction(
+                db_conn,
+                tenant_id=tenant_ctx.tenant_id,
+                deal_id=deal_id,
+                actor_id=tenant_ctx.actor_id,
+            )
+        else:
+            get_manageable_deal_assignment_store().add_assignment(
+                tenant_ctx.tenant_id,
+                deal_id,
+                tenant_ctx.actor_id,
+            )
+    except Exception:
+        if db_conn is None:
+            repo.delete(deal_id)
+        raise
 
     # Set audit resource_id for middleware correlation
     request.state.audit_resource_id = deal_id

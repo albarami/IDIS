@@ -142,7 +142,9 @@ class TestUnknownProviderFailClosed:
         svc, sink = _build_service()
         with pytest.raises(EnrichmentServiceError):
             svc.enrich(provider_id="nonexistent", request=_make_request())
-        failed_events = [e for e in sink.events if e["event_type"] == "enrichment.failed"]
+        failed_events = [
+            e for e in sink.events if e["event_type"] == "integration.enrichment.failed"
+        ]
         assert len(failed_events) == 1
 
 
@@ -224,7 +226,9 @@ class TestCacheIntegration:
         svc.enrich(provider_id="cached_prov", request=req)
         svc.enrich(provider_id="cached_prov", request=req)
 
-        cache_hit_events = [e for e in sink.events if e["event_type"] == "enrichment.cache_hit"]
+        cache_hit_events = [
+            e for e in sink.events if e["event_type"] == "integration.enrichment.cache_hit"
+        ]
         assert len(cache_hit_events) == 1
 
 
@@ -236,8 +240,8 @@ class TestAuditFlow:
         svc.enrich(provider_id="fake_green", request=_make_request())
 
         event_types = [e["event_type"] for e in sink.events]
-        assert "enrichment.started" in event_types
-        assert "enrichment.completed" in event_types
+        assert "integration.enrichment.started" in event_types
+        assert "integration.enrichment.completed" in event_types
 
     def test_provider_failure_emits_failed(self) -> None:
         connector = _FakeConnector(
@@ -250,7 +254,7 @@ class TestAuditFlow:
         assert result.status == EnrichmentStatus.ERROR
 
         event_types = [e["event_type"] for e in sink.events]
-        assert "enrichment.failed" in event_types
+        assert "integration.enrichment.failed" in event_types
 
 
 class TestAuditFailureFatal:
@@ -282,7 +286,7 @@ class TestAuditFailureFatal:
 
         with pytest.raises(EnrichmentServiceError) as exc_info:
             svc.enrich(provider_id="fake_green", request=_make_request())
-        assert "audit emission failed" in str(exc_info.value)
+        assert "AUDIT_FAILURE" in str(exc_info.value)
 
 
 class TestListProviders:

@@ -11,20 +11,19 @@ the operation being observed. Formal fail-closed audit remains the orchestrator'
 from __future__ import annotations
 
 import logging
-import uuid
-from datetime import UTC, datetime
 from typing import Any
 
+from idis.audit.canonical import HttpMethod, build_canonical_audit_event
 from idis.audit.sink import AuditSink
 
 logger = logging.getLogger(__name__)
 
 # Runtime-control observability event types (safe, stable strings).
-RUN_CLAIMED = "run.claimed"
-RUN_CANCELLED = "run.cancelled"
-RUN_QUEUE_OBSERVED = "run.queue.observed"
-RATE_LIMIT_DENIED = "rate_limit.denied"
-IDEMPOTENCY_CLEANUP = "idempotency.cleanup"
+RUN_CLAIMED = "worker.run_claimed_observed"
+RUN_CANCELLED = "worker.run_cancelled_observed"
+RUN_QUEUE_OBSERVED = "worker.queue_observed"
+RATE_LIMIT_DENIED = "auth.rate_limit.denied"
+IDEMPOTENCY_CLEANUP = "integration.idempotency.cleanup"
 RETENTION_SWEEP_COMPLETED = "retention.sweep.completed"
 
 
@@ -34,6 +33,13 @@ def emit_run_signal(
     event_type: str,
     tenant_id: str,
     details: dict[str, Any],
+    actor_id: str = "idis-runtime-observer",
+    request_id: str | None = None,
+    resource_type: str | None = None,
+    resource_id: str | None = None,
+    method: HttpMethod = "POST",
+    path: str = "/internal/runtime-signals",
+    status_code: int = 200,
 ) -> None:
     """Emit a safe-shape observability event to ``audit_sink``, best-effort.
 
@@ -49,16 +55,38 @@ def emit_run_signal(
     """
     if audit_sink is None:
         return
-    event = {
-        "event_id": str(uuid.uuid4()),
-        "occurred_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-        "tenant_id": tenant_id,
-        "event_type": event_type,
-        "severity": "LOW",
-        "summary": event_type,
-        "payload": {"safe": dict(details)},
-    }
     try:
+        inferred_resource_type = resource_type
+        inferred_resource_id = resource_id
+        if inferred_resource_id is None and details.get("run_id"):
+            inferred_resource_type = "run"
+            inferred_resource_id = str(details["run_id"])
+        elif inferred_resource_id is None and details.get("sweep_id"):
+            inferred_resource_type = "retention_sweep"
+            inferred_resource_id = str(details["sweep_id"])
+        if inferred_resource_id is None:
+            inferred_resource_type = "integration"
+            inferred_resource_id = {
+                RUN_QUEUE_OBSERVED: "run-queue",
+                IDEMPOTENCY_CLEANUP: "idempotency-store",
+                RATE_LIMIT_DENIED: "api-rate-limiter",
+            }.get(event_type, "runtime-observer")
+
+        event = build_canonical_audit_event(
+            tenant_id=tenant_id,
+            event_type=event_type,
+            severity="LOW",
+            summary=f"Runtime signal recorded: {event_type}",
+            actor_id=actor_id,
+            request_id=request_id or f"{event_type}:{inferred_resource_id}",
+            method=method,
+            path=path,
+            status_code=status_code,
+            resource_type=inferred_resource_type or "integration",
+            resource_id=inferred_resource_id,
+            safe=details,
+            refs=[f"resource:{inferred_resource_id}"],
+        )
         audit_sink.emit(event)
-    except Exception as exc:  # observability is best-effort; never break the observed operation
-        logger.warning("observability signal %s failed to emit: %s", event_type, str(exc))
+    except Exception:  # observability is explicitly best-effort; never break the observed operation
+        logger.warning("observability signal %s failed to emit", event_type)

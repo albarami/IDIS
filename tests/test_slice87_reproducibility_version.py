@@ -23,7 +23,6 @@ from typing import Any
 import pytest
 
 from idis.analysis.models import AnalysisCalcReference, AnalysisContext
-from idis.api.routes.runs import _build_analysis_calc_registry
 from idis.calc.engine import CalcEngine, CalcIntegrityError, InputGradeInfo
 from idis.calc.formulas.core import register_core_formulas, resolve_formula_version
 from idis.calc.formulas.registry import FormulaRegistry
@@ -33,6 +32,7 @@ from idis.persistence.repositories.calculations import (
     InMemoryCalculationsRepository,
     clear_in_memory_calculations_store,
 )
+from idis.services.runs.step_runtime.analysis import _build_analysis_calc_registry
 from idis.storage.filesystem_store import FilesystemObjectStore
 from tests.test_slice59_product_export_bundle import RecordingDeliverablesRepository
 

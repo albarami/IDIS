@@ -12,12 +12,12 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import BaseModel, Field, field_validator
 
-from idis.audit.sink import AuditSink, InMemoryAuditSink
+from idis.audit.canonical import build_canonical_audit_event
+from idis.audit.sink import AuditSink, AuditSinkError, InMemoryAuditSink
 from idis.persistence.repositories.claims import (
     DefectsRepository,
     InMemoryDefectsRepository,
@@ -137,6 +137,23 @@ class CureDefectInput(BaseModel):
     request_id: str | None = Field(default=None, description="Request correlation ID")
 
 
+class DefectCreateWriter(Protocol):
+    """Only new OPEN defects; waiver/cure/read behavior is not injectable."""
+
+    def create(
+        self,
+        *,
+        defect_id: str,
+        claim_id: str | None,
+        deal_id: str | None,
+        defect_type: str,
+        severity: str,
+        description: str,
+        cure_protocol: str,
+        status: str = "OPEN",
+    ) -> dict[str, Any]: ...
+
+
 class DefectService:
     """Service layer for defect operations with waiver/cure workflow.
 
@@ -154,6 +171,7 @@ class DefectService:
         tenant_id: str,
         db_conn: Connection | None = None,
         audit_sink: AuditSink | None = None,
+        create_writer: DefectCreateWriter | None = None,
     ) -> None:
         """Initialize DefectService with tenant context.
 
@@ -165,6 +183,7 @@ class DefectService:
         self._tenant_id = tenant_id
         self._db_conn = db_conn
         self._audit_sink = audit_sink or InMemoryAuditSink()
+        self._create_writer = create_writer
 
         if db_conn is not None:
             self._defects_repo: DefectsRepository | InMemoryDefectsRepository = DefectsRepository(
@@ -187,41 +206,40 @@ class DefectService:
         request_id: str | None = None,
     ) -> None:
         """Emit an audit event for defect operations with request correlation."""
-        event: dict[str, Any] = {
-            "event_id": str(uuid.uuid4()),
-            "occurred_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-            "tenant_id": self._tenant_id,
-            "event_type": event_type,
-            "severity": severity,
-            "resource": {
-                "resource_type": "defect",
-                "resource_id": defect_id,
-            },
-            "actor": {
-                "actor_type": "SERVICE",
-                "actor_id": "defect_service",
-                "roles": ["INTEGRATION_SERVICE"],
-                "ip": "internal",
-                "user_agent": "DefectService",
-            },
-            "request": {
-                "request_id": request_id or str(uuid.uuid4()),
-                "method": "SERVICE",
-                "path": "/internal/defects",
-                "status_code": 200,
-            },
-            "summary": f"{event_type} for defect {defect_id}",
-            "payload": {
-                "hashes": [],
-                "refs": [f"defect_id:{defect_id}"],
-            },
+        source = details or {}
+        human_actor = source.get("waived_by") or source.get("cured_by")
+        safe: dict[str, object] = {
+            key: source[key]
+            for key in ("defect_type", "severity", "claim_id", "previous_status")
+            if key in source
         }
-        if details:
-            event["payload"]["details"] = details
+        event = build_canonical_audit_event(
+            tenant_id=self._tenant_id,
+            event_type=event_type,
+            severity=severity,
+            summary=f"Defect mutation recorded: {event_type}",
+            actor_id=str(human_actor or "idis-defect-service"),
+            actor_type="HUMAN" if human_actor else "SERVICE",
+            request_id=request_id or f"{event_type}:{defect_id}",
+            method="POST",
+            path=f"/internal/defects/{defect_id}",
+            status_code=200,
+            resource_type="defect",
+            resource_id=defect_id,
+            safe=safe,
+            refs=[f"claim_id:{source['claim_id']}"] if source.get("claim_id") else [],
+        )
         try:
+            db_conn = getattr(self, "_db_conn", None)
+            emit_in_tx = getattr(self._audit_sink, "emit_in_tx", None)
+            if db_conn is not None and callable(emit_in_tx):
+                emit_in_tx(db_conn, event)
+                return
             self._audit_sink.emit(event)
-        except Exception as e:
-            logger.warning("Failed to emit audit event: %s", e)
+        except AuditSinkError:
+            raise
+        except Exception as exc:
+            raise AuditSinkError("Defect audit emission failed") from exc
 
     def create(self, input_data: CreateDefectInput) -> dict[str, Any]:
         """Create a new defect with severity matrix enforcement.
@@ -235,7 +253,8 @@ class DefectService:
         defect_id = str(uuid.uuid4())
         severity = input_data.severity or get_severity_for_type(input_data.defect_type)
 
-        defect_data = self._defects_repo.create(
+        writer = self._create_writer if self._create_writer is not None else self._defects_repo
+        defect_data = writer.create(
             defect_id=defect_id,
             claim_id=input_data.claim_id,
             deal_id=input_data.deal_id,

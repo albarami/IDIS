@@ -29,6 +29,7 @@ from idis.evaluation.types import (
     LoadResult,
     SuiteId,
     SuiteResult,
+    deal_stage_for_request,
 )
 
 _DOCUMENT_EXTENSIONS = frozenset({"pdf", "xlsx", "docx", "pptx", "txt"})
@@ -292,6 +293,8 @@ def _execute_case(
     dataset_root: Path,
     shared_store_dir: Path | None = None,
     http_timeout: float | None = None,
+    *,
+    deal_stage: str | None,
 ) -> CaseResult:
     """Execute a single case via the IDIS API.
 
@@ -311,6 +314,7 @@ def _execute_case(
     Returns:
         CaseResult with status, errors, metrics, and timing.
     """
+    stage = deal_stage_for_request(deal_stage)
     start_time = time.monotonic()
     metrics: dict[str, object] = {}
     auth_headers = _build_headers(api_key)
@@ -320,7 +324,7 @@ def _execute_case(
         with httpx.Client(timeout=effective_timeout) as client:
             create_resp = client.post(
                 f"{base_url}/v1/deals",
-                json={"name": case.deal_key, "company_name": case.deal_key},
+                json={"name": case.deal_key, "company_name": case.deal_key, "stage": stage},
                 headers=auth_headers,
             )
             if create_resp.status_code != 201:
@@ -474,6 +478,7 @@ def run_suite(
     dataset_root: Path,
     suite: SuiteId,
     *,
+    deal_stage: str | None,
     mode: Literal["validate", "execute"] = "validate",
     base_url: str | None = None,
     api_key: str | None = None,
@@ -502,12 +507,16 @@ def run_suite(
     Returns:
         SuiteResult with status, cases, and metrics
 
+    ``deal_stage`` is required and has no default. It is checked before any
+    dataset read or HTTP request.
+
     Exit code semantics:
         PASS (0): All validations/executions succeeded
         FAIL (1): Validation or execution errors
         BLOCKED (2): Execution blocked due to missing dependencies
     """
     started_at = SuiteResult.now_iso()
+    resolved_stage = deal_stage_for_request(deal_stage)
 
     if suite not in VALID_SUITE_IDS:
         finished_at = SuiteResult.now_iso()
@@ -556,6 +565,7 @@ def run_suite(
             shared_store_dir=shared_store_dir,
             http_timeout=http_timeout,
             pre_case_fn=pre_case_fn,
+            deal_stage=resolved_stage,
         )
 
 
@@ -613,6 +623,8 @@ def _run_execute_mode(
     shared_store_dir: Path | None = None,
     http_timeout: float | None = None,
     pre_case_fn: Callable[[], None] | None = None,
+    *,
+    deal_stage: str,
 ) -> SuiteResult:
     """Run execute mode (attempts API calls)."""
     blockers: list[str] = []
@@ -655,6 +667,7 @@ def _run_execute_mode(
                 dataset_root,
                 shared_store_dir=shared_store_dir,
                 http_timeout=http_timeout,
+                deal_stage=deal_stage,
             )
         else:
             case_result = CaseResult(

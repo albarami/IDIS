@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useLayoutEffect, useState, useCallback, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
 import Link from "next/link";
 import Header from "@/components/Header";
@@ -14,10 +14,17 @@ import {
   type TruthDashboard,
   type Deliverable,
   type HumanGate,
+  type MethodologyVersionSafe,
   type SanadGrade,
   IDISApiError,
 } from "@/lib/idis";
 import { generateRequestId } from "@/lib/requestId";
+
+// Commit-synchronous effect: its create and cleanup run during the commit
+// phase, before queued passive work and before any promise continuation can
+// interleave. Falls back to useEffect on the server, where no commit exists.
+const useCommitPhaseEffect: typeof useEffect =
+  typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 export default function TruthDashboardPage() {
   const router = useRouter();
@@ -32,8 +39,28 @@ export default function TruthDashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [errorRequestId, setErrorRequestId] = useState<string | undefined>(undefined);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [loadedDealId, setLoadedDealId] = useState<string | null>(null);
+  const [catalog, setCatalog] = useState<{
+    dealId: string;
+    versions: MethodologyVersionSafe[];
+  } | null>(null);
+  const [methodologyLoading, setMethodologyLoading] = useState(true);
+  const [methodologyError, setMethodologyError] = useState<string | null>(null);
+  const [methodologyErrorRequestId, setMethodologyErrorRequestId] = useState<
+    string | undefined
+  >(undefined);
+  const [cddSelection, setCddSelection] = useState("");
+  const [fddSelection, setFddSelection] = useState("");
+  const [runError, setRunError] = useState<string | null>(null);
+  const [runErrorRequestId, setRunErrorRequestId] = useState<string | undefined>(undefined);
+
+  // Live launch-subject generation. Bumped whenever the current deal changes or
+  // the page unmounts, so the terminal effects of async work started for a
+  // superseded subject cannot commit state, navigate, or install errors.
+  const launchGenRef = useRef(0);
 
   const fetchData = useCallback(async () => {
+    const gen = launchGenRef.current;
     try {
       const [dealData, dashboardData, deliverablesData, gatesData] = await Promise.all([
         idis.deals.get(dealId),
@@ -42,8 +69,10 @@ export default function TruthDashboardPage() {
         idis.humanGates.list(dealId, { limit: 50 }),
       ]);
 
+      if (gen !== launchGenRef.current) return;
       setDeal(dealData);
       setDashboard(dashboardData);
+      setLoadedDealId(dealId);
 
       // Deterministic sorting for deliverables
       const sortedDeliverables = [...deliverablesData.items].sort((a, b) => {
@@ -61,6 +90,7 @@ export default function TruthDashboardPage() {
       });
       setHumanGates(sortedGates);
     } catch (err) {
+      if (gen !== launchGenRef.current) return;
       if (err instanceof IDISApiError && err.status === 401) {
         router.push("/login");
         return;
@@ -72,31 +102,135 @@ export default function TruthDashboardPage() {
         setError(err instanceof Error ? err.message : "Failed to load data");
       }
     } finally {
-      setLoading(false);
+      if (gen === launchGenRef.current) setLoading(false);
     }
   }, [dealId, router]);
+
+  // Generation invalidation is commit-synchronous so a stale continuation of a
+  // superseded launch can never run in the commit-before-passive interval. No
+  // state update may live here: a layout-phase setState forces a sync re-render
+  // whose work entry flushes this commit's pending passive effects early.
+  useCommitPhaseEffect(() => {
+    launchGenRef.current += 1;
+    return () => {
+      launchGenRef.current += 1;
+    };
+  }, [dealId]);
+
+  useEffect(() => {
+    // A pending operation belongs to the superseded subject; its stale finally
+    // is guarded, so release the current page's operation state here instead.
+    setActionLoading(null);
+  }, [dealId]);
 
   useEffect(() => {
     fetchData();
   }, [fetchData]);
 
+  // Load the tenant methodology catalog independently of the dashboard so a
+  // catalog failure cannot erase already-loaded deal content. The effect is
+  // keyed on dealId; the committed catalog is owned by the deal it was loaded
+  // for, and a stale or out-of-order response for a previous generation is
+  // discarded instead of reinstalling old choices.
+  useEffect(() => {
+    const gen = launchGenRef.current;
+    setCddSelection("");
+    setFddSelection("");
+    setRunError(null);
+    setRunErrorRequestId(undefined);
+    setCatalog(null);
+    setMethodologyLoading(true);
+    setMethodologyError(null);
+    setMethodologyErrorRequestId(undefined);
+    idis.methodology
+      .list()
+      .then((versions) => {
+        if (gen !== launchGenRef.current) return;
+        setCatalog({ dealId, versions });
+      })
+      .catch((err: unknown) => {
+        if (gen !== launchGenRef.current) return;
+        if (err instanceof IDISApiError && err.status === 401) {
+          router.push("/login");
+          return;
+        }
+        if (err instanceof IDISApiError) {
+          setMethodologyError(err.message);
+          setMethodologyErrorRequestId(err.requestId);
+        } else {
+          setMethodologyError(
+            err instanceof Error ? err.message : "Failed to load methodology versions"
+          );
+        }
+      })
+      .finally(() => {
+        if (gen === launchGenRef.current) setMethodologyLoading(false);
+      });
+  }, [dealId, router]);
+
+  // Launch readiness is owned by the current deal and generation: the loaded
+  // subject and the ready catalog must both belong to this deal, and the
+  // explicit pair must be distinct records from the eligible FROZEN families.
+  const loadedSubjectIsCurrent = loadedDealId === dealId;
+  const catalogIsCurrent = catalog !== null && catalog.dealId === dealId;
+  const catalogVersions = catalogIsCurrent ? catalog.versions : [];
+  const frozenCdd = catalogVersions.filter(
+    (v) => v.methodology_type === "commercial_dd" && v.status === "FROZEN"
+  );
+  const frozenFdd = catalogVersions.filter(
+    (v) => v.methodology_type === "financial_dd" && v.status === "FROZEN"
+  );
+  const methodologySelected =
+    loadedSubjectIsCurrent &&
+    catalogIsCurrent &&
+    cddSelection !== "" &&
+    fddSelection !== "" &&
+    cddSelection !== fddSelection &&
+    frozenCdd.some((v) => v.methodology_version_record_id === cddSelection) &&
+    frozenFdd.some((v) => v.methodology_version_record_id === fddSelection);
+
   async function handleStartRun() {
+    if (actionLoading !== null || !methodologySelected) return;
+    const gen = launchGenRef.current;
+    const commercialId = cddSelection;
+    const financialId = fddSelection;
+
     setActionLoading("run");
+    setRunError(null);
+    setRunErrorRequestId(undefined);
     try {
-      const result = await idis.runs.start(dealId, { mode: "FULL" }, generateRequestId());
+      const result = await idis.runs.start(
+        dealId,
+        {
+          mode: "FULL",
+          methodology_selection: {
+            commercial_dd_version_record_id: commercialId,
+            financial_dd_version_record_id: financialId,
+          },
+        },
+        generateRequestId()
+      );
+      if (gen !== launchGenRef.current) return;
       router.push(`/runs/${result.run_id}`);
     } catch (err) {
+      if (gen !== launchGenRef.current) return;
       if (err instanceof IDISApiError && err.status === 401) {
         router.push("/login");
         return;
       }
-      alert(err instanceof Error ? err.message : "Failed to start run");
+      if (err instanceof IDISApiError) {
+        setRunError(err.message);
+        setRunErrorRequestId(err.requestId);
+      } else {
+        alert(err instanceof Error ? err.message : "Failed to start run");
+      }
     } finally {
-      setActionLoading(null);
+      if (gen === launchGenRef.current) setActionLoading(null);
     }
   }
 
   async function handleStartDebate() {
+    const gen = launchGenRef.current;
     setActionLoading("debate");
     try {
       const result = await idis.debate.start(
@@ -104,31 +238,35 @@ export default function TruthDashboardPage() {
         { protocol_version: "v1" },
         generateRequestId()
       );
+      if (gen !== launchGenRef.current) return;
       router.push(`/runs/${result.run_id}`);
     } catch (err) {
+      if (gen !== launchGenRef.current) return;
       if (err instanceof IDISApiError && err.status === 401) {
         router.push("/login");
         return;
       }
       alert(err instanceof Error ? err.message : "Failed to start debate");
     } finally {
-      setActionLoading(null);
+      if (gen === launchGenRef.current) setActionLoading(null);
     }
   }
 
   async function handleGenerateDeliverable(type: string) {
+    const gen = launchGenRef.current;
     setActionLoading(`deliverable-${type}`);
     try {
       await idis.deliverables.generate(dealId, { deliverable_type: type }, generateRequestId());
-      await fetchData(); // Refresh data
+      if (gen === launchGenRef.current) await fetchData(); // Refresh data
     } catch (err) {
+      if (gen !== launchGenRef.current) return;
       if (err instanceof IDISApiError && err.status === 401) {
         router.push("/login");
         return;
       }
       alert(err instanceof Error ? err.message : "Failed to generate deliverable");
     } finally {
-      setActionLoading(null);
+      if (gen === launchGenRef.current) setActionLoading(null);
     }
   }
 
@@ -206,7 +344,7 @@ export default function TruthDashboardPage() {
             <div className="flex gap-2 mt-1">
               <button
                 onClick={handleStartRun}
-                disabled={actionLoading !== null}
+                disabled={actionLoading !== null || !methodologySelected}
                 className="px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
               >
                 {actionLoading === "run" ? "..." : "Run"}
@@ -219,6 +357,101 @@ export default function TruthDashboardPage() {
                 {actionLoading === "debate" ? "..." : "Debate"}
               </button>
             </div>
+          </div>
+        </div>
+
+        {/* FULL run methodology selection */}
+        <div className="bg-white shadow rounded-lg mb-8">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h2 className="text-lg font-medium text-gray-900">Run Methodology</h2>
+          </div>
+          <div className="p-6">
+            <p className="text-sm text-gray-500 mb-4">
+              A FULL run requires explicit frozen commercial and financial methodology versions.
+            </p>
+            {methodologyLoading ? (
+              <div className="text-sm text-gray-500">Loading methodology versions...</div>
+            ) : methodologyError ? (
+              <ErrorCallout
+                title="Methodology catalog unavailable"
+                message={methodologyError}
+                requestId={methodologyErrorRequestId}
+              />
+            ) : !catalogIsCurrent ? (
+              <div className="text-sm text-gray-500">Loading methodology versions...</div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label
+                    htmlFor="cdd-methodology"
+                    className="block text-sm font-medium text-gray-700"
+                  >
+                    Commercial DD methodology (FROZEN)
+                  </label>
+                  <select
+                    id="cdd-methodology"
+                    value={cddSelection}
+                    onChange={(e) => setCddSelection(e.target.value)}
+                    disabled={actionLoading !== null}
+                    className="mt-1 block w-full rounded border border-gray-300 px-3 py-2 text-sm"
+                  >
+                    <option value="">Select frozen commercial DD version</option>
+                    {frozenCdd.map((v) => (
+                      <option
+                        key={v.methodology_version_record_id}
+                        value={v.methodology_version_record_id}
+                      >
+                        {v.version_label} ({v.methodology_version_id})
+                      </option>
+                    ))}
+                  </select>
+                  {frozenCdd.length === 0 && (
+                    <p className="mt-1 text-xs text-gray-500">
+                      No frozen commercial DD versions available
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <label
+                    htmlFor="fdd-methodology"
+                    className="block text-sm font-medium text-gray-700"
+                  >
+                    Financial DD methodology (FROZEN)
+                  </label>
+                  <select
+                    id="fdd-methodology"
+                    value={fddSelection}
+                    onChange={(e) => setFddSelection(e.target.value)}
+                    disabled={actionLoading !== null}
+                    className="mt-1 block w-full rounded border border-gray-300 px-3 py-2 text-sm"
+                  >
+                    <option value="">Select frozen financial DD version</option>
+                    {frozenFdd.map((v) => (
+                      <option
+                        key={v.methodology_version_record_id}
+                        value={v.methodology_version_record_id}
+                      >
+                        {v.version_label} ({v.methodology_version_id})
+                      </option>
+                    ))}
+                  </select>
+                  {frozenFdd.length === 0 && (
+                    <p className="mt-1 text-xs text-gray-500">
+                      No frozen financial DD versions available
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+            {runError !== null && (
+              <div className="mt-4">
+                <ErrorCallout
+                  title="Failed to start run"
+                  message={runError}
+                  requestId={runErrorRequestId}
+                />
+              </div>
+            )}
           </div>
         </div>
 

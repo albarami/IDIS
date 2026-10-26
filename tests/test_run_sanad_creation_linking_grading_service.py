@@ -14,7 +14,7 @@ from idis.models.claim_materialization import (
     RunScopedMaterializedClaim,
     RunScopedMaterializedClaimShell,
 )
-from idis.models.defect import Defect, DefectSeverity
+from idis.models.defect import Defect, DefectSeverity, DefectType
 from idis.models.evidence_item import EvidenceItem, SourceGrade, VerificationStatus
 from idis.models.evidence_item_materialization import (
     RunScopedEvidenceItemRecord,
@@ -170,6 +170,40 @@ def test_creates_links_and_grades_one_sanad_from_claim_and_evidence() -> None:
     assert "claim_text" not in summary_json
     assert "value_struct" not in summary_json
     assert "sheet-001" not in summary_json
+
+
+def test_valid_typed_input_refs_do_not_manufacture_chain_break() -> None:
+    """Real producer typed refs return through service.run without a false break.
+
+    The canonical chain carries {"source_span_id": ...} and
+    {"evidence_id": ...} input refs; each resolves inside its own bound
+    domain, so no ILAL_CHAIN_BREAK/BROKEN_CHAIN defect may be emitted.
+    """
+    result, sanads, links, grades, defects = _service().run(
+        tenant_id=TENANT_ID,
+        deal_id=DEAL_ID,
+        run_id=RUN_ID,
+        materialized_claims=[_claim()],
+        evidence_items=[_evidence()],
+        source_provenance=[
+            RunScopedEvidenceProvenanceRef(
+                document_id="doc-001",
+                source_span_id="span-001",
+                locator=None,
+            )
+        ],
+    )
+
+    assert result.status == MethodologySanadMaterializationStatus.COMPLETED
+    assert len(sanads) == 1
+
+    chain = sanads[0].sanad.transmission_chain
+    assert chain[0].input_refs == [{"source_span_id": "span-001"}]
+    assert chain[1].input_refs == [{"evidence_id": "evidence-001"}]
+
+    assert "ilal_chain_break" not in grades[0].grade_reason_codes
+    assert grades[0].fatal_defect_count == 0
+    assert all(defect.defect.defect_type != DefectType.BROKEN_CHAIN for defect in defects)
 
 
 def test_deterministic_chain_ids_timestamps_and_id_only_refs_are_stable() -> None:

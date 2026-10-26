@@ -118,7 +118,8 @@ def _preflight_summary(
                 "reason_codes": ["partial"],
                 "warning_codes": ["warning-safe"],
                 "fdd_category": fdd_category,
-                "cdd_category": None,
+                # Legacy shape may omit only secondary arrays; primaries remain explicit.
+                "cdd_category": "unknown",
                 "methodology_target_areas": ["Highly Sensitive Arbitrary Section"],
                 "usable_for_methodology_extraction": usable,
             }

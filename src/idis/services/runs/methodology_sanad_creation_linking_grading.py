@@ -336,6 +336,8 @@ class CanonicalRunMethodologySanadCreationLinkingGradingService:
                 sources=sources,
                 claim=claim_for_grader(claim),
                 evidence_ids=set(evidence_ids),
+                source_span_ids=set(source_span_ids),
+                claim_id=claim_id,
             )
         except Exception as exc:  # noqa: BLE001 - fail closed on third-party grader errors.
             raise SanadMaterializationError(
